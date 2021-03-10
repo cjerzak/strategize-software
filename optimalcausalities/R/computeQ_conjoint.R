@@ -1,4 +1,4 @@
-#' computeQ_lda
+#' computeQ_conjoint
 #'
 #' Implements ...
 #'
@@ -10,9 +10,7 @@
 #'
 #' @section References:
 #' \itemize{
-#' \item Kosuke Imai, Rohit  Working Paper.
-#' \emph{An Improved Method of Automated Nonparametric Content Analysis for Social Science}.
-#' \url{https://gking.harvard.edu/words}
+#' \item Kosuke, Rohit, Connor.  Working Paper.
 #' }
 #'
 #' @examples
@@ -24,4 +22,9 @@
 #'
 #' @import
 #' @export
-function_ <- function()
+computeQ_conjoint <- function(theta,  FactorsMat, Yobs, log_pr_w = NULL){
+    1 + 2
+
+
+
+}
