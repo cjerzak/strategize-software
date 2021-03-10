@@ -10,9 +10,7 @@
 #'
 #' @section References:
 #' \itemize{
-#' \item Kosuke Imai, Rohit  Working Paper.
-#' \emph{An Improved Method of Automated Nonparametric Content Analysis for Social Science}.
-#' \url{https://gking.harvard.edu/words}
+#' \item Kosuke Imai, Rohit, Connor
 #' }
 #'
 #' @examples
@@ -24,4 +22,7 @@
 #'
 #' @import
 #' @export
-function_ <- function()
+computeQ_lda <- function(a){
+  a + 1
+
+}
