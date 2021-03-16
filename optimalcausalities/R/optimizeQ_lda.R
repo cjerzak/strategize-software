@@ -23,7 +23,7 @@
 #' @export
 
 
-optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,DTM_MAT,
+optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                       n_fold = 3,YOBS, PI_MAT,DOC_LIST,TERMS_MAT, SE_UB = sd(YOBS)/10,
                       nboot = 10,trim_q=1,
                       maxWt = 1e10,maxWt_hajek = NULL,
@@ -115,54 +115,36 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,DTM_MAT,
     marginalB = apply(marginalB,2,max) #+ 0.1*apply(marginalB,2,sd)
     marginalB = round(marginalB*ModalDocLength,0L)
     marginalB[is.na(marginalB)] <- 0
-    #log_treatCombs = lchoose(nWords,ModalDocLength)
-    #marginalB_allocationLeft = sort(marginalB,decreasing = T)
-    #log_treatCombs = 0; for(jfi in 1:ModalDocLength){
-    #log_treatCombs <- log_treatCombs + log(length(marginalB_allocationLeft[marginalB_allocationLeft>0]))
-    #marginalB_allocationLeft[marginalB_allocationLeft>0][1] <- marginalB_allocationLeft[marginalB_allocationLeft>0][1] - 1}
-    #https://sublinear.info/index.php?title=Open_Problems:100
-    #log_treatCombs = lchoose(nWords+ModalDocLength-1,ModalDocLength)
     prW_log_tmp = PrWGivenPi_fxn(doc_indices = DOC_LIST, pi_mat = PI_MAT, terms_posterior = TERMS_MAT, log_=T)
-    #https://www.awebb.info/probability/2017/05/18/cross-entropy-and-log-likelihood.html
-    #https://stats.stackexchange.com/questions/346137/how-to-compute-joint-entropy-of-high-dimensional-data
-    #https://www.mdpi.com/1099-4300/8/3/169  -> effective sample size + entropy
-    #http://talks.cam.ac.uk/talk/index/114322
     ##https://socialsciences.mcmaster.ca/magee/761_762/other%20material/M-estimation.pdf
     ##m estimation theory
-    log_treatCombs_UB0 <- nWords*ModalDocLength #permutations
-    log_treatCombs_UB1 <- -mean(prW_log_tmp) #negative per example log liklihood
-    log_treatCombs_UB2 <- lchoose(nWords+ModalDocLength-1,ModalDocLength)#combinations w/replacement
-    log_treatCombs_LB0 <- lchoose(nWords,ModalDocLength)#combinations, no replacement
-    #https://math.stackexchange.com/questions/68995/number-of-combinations-with-repetitions-constrained
-    N_fxn <- function(t1,t2){ choose(t1 + t2 - 1, t2 - 1) }
-    A__ <- 0 #sum of lower bounds
-    b_vec <- marginalB;a_vec <- rep(0,times=length(b_vec))
-    k__ <- ModalDocLength
-    #choose(nWords+ModalDocLength-1,nWords-1)==choose(nWords+ModalDocLength-1,ModalDocLength)
-    Component_S_dim0 <- sum( (-1)^0*N_fxn(k__- A__ - 1*0,  nWords))
-    Component_S_dim1 <- sum( (-1)^1 * sapply(1:nWords,function(ze){
-      N_fxn(k__ - A__ - (1 + b_vec[ze] - a_vec[ze]),  nWords)
-    }) )
-    PairsGrid <- t(combn(1:nWords,2))
-    Component_S_dim2 <- sum( (-1)^2 * apply(PairsGrid,1,function(zee){
-      N_fxn(  k__ - A__ -
-                (1+b_vec[zee[1]] - a_vec[zee[1]]) -
-                (1+b_vec[zee[2]] - a_vec[zee[2]]),
-              nWords)
-    }))
-    log_treatCombs_Approx <- log( Component_S_dim0 + Component_S_dim1 + Component_S_dim2)
-    log_treatCombs <- c(log_treatCombs_UB0,
-                        log_treatCombs_UB1,
-                        log_treatCombs_UB2,
-                        log_treatCombs_Approx)
-    print(  log_treatCombs )
-    log_treatCombs <- min( log_treatCombs )
+    log_treatCombs_fromEntropy <- - mean(prW_log_tmp) #negative per example log liklihood
+    #combinations with replacement, with less over-counting
+    {
+      N_fxn <- function(t1,t2){ choose(t1 + t2 - 1, t2 - 1) }
+      A__ <- 0 #sum of lower bounds
+      b_vec <- marginalB;a_vec <- rep(0,times=length(b_vec))
+      k__ <- ModalDocLength
+      #choose(nWords+ModalDocLength-1,nWords-1)==choose(nWords+ModalDocLength-1,ModalDocLength)
+      Component_S_dim0 <- sum( (-1)^0*N_fxn(k__- A__ - 1*0,  nWords))
+      Component_S_dim1 <- sum( (-1)^1 * sapply(1:nWords,function(ze){
+        N_fxn(k__ - A__ - (1 + b_vec[ze] - a_vec[ze]),  nWords)
+      }) )
+      PairsGrid <- t(combn(1:nWords,2))
+      Component_S_dim2 <- sum( (-1)^2 * apply(PairsGrid,1,function(zee){
+        N_fxn(  k__ - A__ -
+                  (1+b_vec[zee[1]] - a_vec[zee[1]]) -
+                  (1+b_vec[zee[2]] - a_vec[zee[2]]),
+                nWords)
+      }))
+      log_treatCombs_fromCombinatorics <- log( Component_S_dim0 + Component_S_dim1 + Component_S_dim2)
+    }
+    log_treatCombs <- min(c(log_treatCombs_fromCombinatorics,log_treatCombs_fromEntropy))
 
-    #https://math.stackexchange.com/questions/474741/formula-for-combinations-with-replacement
     myRho <- NULL;logSE_LB <- -Inf;logSE_UB = log(SE_UB)#log(sd(Yobs)* (1/length(DATA_SPLIT1)^0.25))
     initVec_empiricalMean <- initVec;
     initVec_flat <- initVec;initVec_flat[] <- 0
-    logSE_orig <- computeQse_lda(THETA__ = toSimplex_f(initVec_empiricalMean),
+    logSE_meanPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_empiricalMean),
                                  INDICES_ = DATA_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
                                  D_INDICES_U = d_indices_u_split1,
@@ -173,7 +155,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,DTM_MAT,
                                  MARGINAL_BOUNDS = marginalB,
                                  LOG_TREATCOMBS=log_treatCombs,
                                  YOBS = Yobs,log =T)
-    logSE_flat <- computeQse_lda(THETA__ = toSimplex_f(initVec_flat),
+    logSE_flatPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_flat),
                                  INDICES_ = DATA_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
                                  D_INDICES_U = d_indices_u_split1,
@@ -184,14 +166,15 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,DTM_MAT,
                                  MARGINAL_BOUNDS = marginalB,
                                  LOG_TREATCOMBS=log_treatCombs,
                                  YOBS = Yobs,log=T)
-    if(logSE_flat < logSE_UB){initVec <- initVec_flat}
-    if(logSE_orig < logSE_UB){initVec <- initVec_empiricalMean}
-    if(logSE_orig > logSE_UB & logSE_flat > logSE_UB){stop("LDA model not regularized enough\n
+    if(logSE_flatPi < logSE_UB){initVec <- initVec_flat}
+    if(logSE_meanPi < logSE_UB){initVec <- initVec_empiricalMean}
+    if(logSE_meanPi > logSE_UB & logSE_flatPi > logSE_UB){stop("LDA model not regularized enough\n
                                                            Initial values violate SE bound!")}
     #initVec[] <- 0;
     my_ep = 0.005#
     LB_VEC <- c(logSE_LB, rep(my_ep,times = 1+length(initVec)))
     UB_VEC <- c(logSE_UB, rep(1-my_ep,times = 1+length(initVec)))
+    browser()
     if(T == T){
       print("Doing warm start")
       nloptr_sol <- optim_max_raw <- ((rsolnp_results <- nloptr::nloptr(x0 = initVec ,
