@@ -162,8 +162,6 @@ computeQ_lda <- function(theta=NULL,
   Qhat_se <- NULL
   if(computeSE){
     browser()
-    logSEBound_fxn
-
   }
 
   return( list(Q_mean     = mean(Q_vec,na.rm=T),
