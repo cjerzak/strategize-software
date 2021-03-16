@@ -177,8 +177,9 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     my_ep = 0.005#
     LB_VEC <- c(logSE_LB, rep(my_ep,times = 1+length(initVec)))
     UB_VEC <- c(logSE_UB, rep(1-my_ep,times = 1+length(initVec)))
-    if(T == T){
-      print("Doing warm start")
+
+    # COBYLA algorithm
+    {
       nloptr_sol <- optim_max_raw <- ((rsolnp_results <- nloptr::nloptr(x0 = initVec ,
                                                                         eval_f =  function(ze){
                                                                           my_value = minThis_max(clip2(ze),
@@ -186,10 +187,8 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                                                                                  DOC_INDICES_U = doc_indices_u_split1,
                                                                                                  D_INDICES_U = d_indices_u_split1, PEN_VAL = 0)
                                                                           return(my_value)},
-                                                                        #opts = list("algorithm"="NLOPT_LD_SLSQP", "ftol_abs" = 0.001),
-                                                                        opts = list("algorithm"="NLOPT_LN_AUGLAG","ftol_abs" = 0.0001,
-                                                                                    "local_opts"=list("algorithm"="NLOPT_LN_COBYLA")),
-                                                                        #opts = list("algorithm"="NLOPT_LN_COBYLA",
+                                                                        #opts = list("algorithm"="NLOPT_LN_AUGLAG","ftol_abs" = 0.0001,"local_opts"=list("algorithm"="NLOPT_LN_COBYLA")),
+                                                                        opts = list("algorithm"="NLOPT_LN_COBYLA"),
                                                                         lb = rep(-2,length(initVec)),
                                                                         ub = rep(2,length(initVec)),
                                                                         eval_g_ineq = function(theta_){
@@ -219,7 +218,6 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
 
     # augmented lagrangian optimization
     {
-      print( initVec )
       optim_max_raw <- clip2((rsolnp_results <- Rsolnp::solnp(pars = initVec ,
                                                               fun =  function(ze){
                                                                 my_value = minThis_max(clip2(ze),
