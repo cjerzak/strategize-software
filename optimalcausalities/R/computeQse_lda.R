@@ -53,8 +53,8 @@ computeQse_lda = function(THETA__,INDICES_, DOC_INDICES_U, D_INDICES_U,
     MY_WTS__ = prop.table(exp(NUM__ - LOG_PR_W  ))
     scaleFactor = sum(YOBS[INDICES_]^2 * MY_WTS__)
     upperBound_se_VE_log = (log(scaleFactor) + LOG_TREATCOMBS + log_maxProb - log(length(INDICES_)))
-    upperBound_se_EV_log = (var(YOBS[INDICES_]) + LOG_TREATCOMBS + log_maxProb - log(length(INDICES_)))
-    upperBound_se_ <- 0.5*matrixStats::logSumExp(c(upperBound_se_EV_log,upperBound_se_VE_log))
+    upperBound_se_EV_log = (log(var(YOBS[INDICES_])) + LOG_TREATCOMBS + log_maxProb - log(length(INDICES_)))
+    upperBound_se_ <- 0.5*matrixStats::logSumExp(c(upperBound_se_EV_log,upperBound_se_VE_log))#0.5 for sqrt
     if(returnLog == F){upperBound_se_ <- exp(upperBound_se_) }
     return( upperBound_se_ )
   }
