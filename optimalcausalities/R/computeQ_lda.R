@@ -20,7 +20,6 @@
 #' #Geneate data
 #' x <- rnorm(100)
 #'
-#' @import
 #' @export
 
 computeQ_lda <- function(theta=NULL,
