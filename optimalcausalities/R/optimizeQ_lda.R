@@ -27,7 +27,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                       n_fold = 3,YOBS, PI_MAT,DOC_LIST,TERMS_MAT, SE_UB = sd(YOBS)/10,
                       nboot = 10,trim_q=1,
                       maxWt = 1e10,maxWt_hajek = NULL,
-                      computeSEs = T, doMax = T,alphaLevel=0.05){
+                      computeSEs = T, doMax = T,alphaLevel=0.05, openBrowser=F){
   if(is.null(DATA_SPLIT2)){DATA_SPLIT2 <- DATA_SPLIT1}
   smoothWts = F; hajek = T;tol= 10^(-3)
   boot_max_lower <- boot_max_lower <- boot_max_upper <- optim_max_SEs_mEst <- list()
@@ -144,7 +144,6 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     myRho <- NULL;logSE_LB <- -Inf;logSE_UB = log(SE_UB)#log(sd(Yobs)* (1/length(DATA_SPLIT1)^0.25))
     initVec_empiricalMean <- initVec;
     initVec_flat <- initVec;initVec_flat[] <- 0
-    browser()
     logSE_meanPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_empiricalMean),
                                  INDICES_ = DATA_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
@@ -175,7 +174,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     my_ep = 0.005#
     LB_VEC <- c(logSE_LB, rep(my_ep,times = 1+length(initVec)))
     UB_VEC <- c(logSE_UB, rep(1-my_ep,times = 1+length(initVec)))
-    browser()
+    if(openBrowser){browser()}
     if(T == T){
       print("Doing warm start")
       nloptr_sol <- optim_max_raw <- ((rsolnp_results <- nloptr::nloptr(x0 = initVec ,
