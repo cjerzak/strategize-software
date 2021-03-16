@@ -1,4 +1,4 @@
-#' computeQ_lda
+#' computeQ_conjoint
 #'
 #' Implements ...
 #'
@@ -20,10 +20,9 @@
 #' #Geneate data
 #' x <- rnorm(100)
 #'
-#' @import
 #' @export
 
-computeQ_lda <- function(a){
+optimizeQ_conjoint <- function(FactorMatrix,SE_bound){
   a + 1
 
 }

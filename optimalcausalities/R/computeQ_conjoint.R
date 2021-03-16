@@ -20,11 +20,8 @@
 #' #Geneate data
 #' x <- rnorm(100)
 #'
-#' @import
 #' @export
 computeQ_conjoint <- function(theta,  FactorsMat, Yobs, log_pr_w = NULL){
     1 + 2
-
-
 
 }
