@@ -144,6 +144,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     myRho <- NULL;logSE_LB <- -Inf;logSE_UB = log(SE_UB)#log(sd(Yobs)* (1/length(DATA_SPLIT1)^0.25))
     initVec_empiricalMean <- initVec;
     initVec_flat <- initVec;initVec_flat[] <- 0
+    browser()
     logSE_meanPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_empiricalMean),
                                  INDICES_ = DATA_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
@@ -387,3 +388,4 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                             "CV_path" = cv_path)
   return(OPTIMALITY_RESULTS)
 }
+
