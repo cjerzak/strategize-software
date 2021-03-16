@@ -154,7 +154,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                  MODAL_DOC_LEN = ModalDocLength,
                                  MARGINAL_BOUNDS = marginalB,
                                  LOG_TREATCOMBS=log_treatCombs,
-                                 YOBS = Yobs,log =T)
+                                 YOBS = Yobs,returnLog=T)
     logSE_flatPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_flat),
                                  INDICES_ = DATA_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
@@ -165,7 +165,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                  MODAL_DOC_LEN = ModalDocLength,
                                  MARGINAL_BOUNDS = marginalB,
                                  LOG_TREATCOMBS=log_treatCombs,
-                                 YOBS = Yobs,log=T)
+                                 YOBS = Yobs,returnLog=T)
     if(logSE_flatPi < logSE_UB){initVec <- initVec_flat}
     if(logSE_meanPi < logSE_UB){initVec <- initVec_empiricalMean}
     if(logSE_meanPi > logSE_UB & logSE_flatPi > logSE_UB){stop("LDA model not regularized enough\n
@@ -202,7 +202,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                                                                                                     MODAL_DOC_LEN = ModalDocLength,
                                                                                                                     MARGINAL_BOUNDS = marginalB,
                                                                                                                     LOG_TREATCOMBS=log_treatCombs,
-                                                                                                                    YOBS = Yobs,log=T)
+                                                                                                                    YOBS = Yobs,returnLog=T)
                                                                           constrainThis_ <- c(upperBound_variance_log, theta__)
                                                                           lessThan0_vec <- c(LB_VEC - constrainThis_,
                                                                                              constrainThis_ - UB_VEC) #<= 0
@@ -246,7 +246,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                                                                                           MODAL_DOC_LEN = ModalDocLength,
                                                                                                           MARGINAL_BOUNDS = marginalB,
                                                                                                           LOG_TREATCOMBS=log_treatCombs,
-                                                                                                          YOBS = Yobs,log=T)
+                                                                                                          YOBS = Yobs,returnLog=T)
                                                                 return( c(upperBound_variance_log, theta__)  )  },
                                                               ineqLB = LB_VEC,  ineqUB = UB_VEC))$pars)
     }
@@ -260,7 +260,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                               MODAL_DOC_LEN = ModalDocLength,
                               MARGINAL_BOUNDS = marginalB,
                               LOG_TREATCOMBS=log_treatCombs,
-                              YOBS = Yobs,log=T))
+                              YOBS = Yobs,returnLog=T))
     if(mySE > exp(logSE_UB)){ stop("LDA Regularization Not Strong Enough, \n Variance Bound Not Satisfied at Initialization") }
     if(rsolnp_results$convergence != 0){warning(sprintf("Convergence not established at tol = %.6f",tol))}
     optim_max <- toSimplex_f(optim_max_raw)
@@ -292,7 +292,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                     MODAL_DOC_LEN = ModalDocLength,
                                     MARGINAL_BOUNDS = marginalB,
                                     LOG_TREATCOMBS=log_treatCombs,
-                                    YOBS = Yobs,log=T)
+                                    YOBS = Yobs,returnLog=T)
           constrainThese_ <- c(logSE__, theta__)
           tmp_mat = cbind(LB_VEC - constrainThese_, constrainThese_ - UB_VEC )
           LowerUpperCloserToViolated = apply(tmp_mat,1,which.max)
@@ -352,7 +352,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                               MODAL_DOC_LEN = ModalDocLength,
                               MARGINAL_BOUNDS = marginalB,
                               LOG_TREATCOMBS=log_treatCombs,
-                              YOBS = Yobs,log=T))
+                              YOBS = Yobs,returnLog=T))
 
   splitForSEObs <- "1"
   SE_split = exp(computeQse_lda(THETA__ = optim_max,
@@ -365,7 +365,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                 MODAL_DOC_LEN = ModalDocLength,
                                 MARGINAL_BOUNDS = marginalB,
                                 LOG_TREATCOMBS=log_treatCombs,
-                                YOBS = Yobs,log=T))
+                                YOBS = Yobs,returnLog=T))
   Q_interval <- c(Qest_raw - 1.64*SE_obs,Qest_raw + 1.64*SE_obs)
   Q_interval_split <- c(Qest_split - 1.64*SE_split,Qest_split + 1.64*SE_split)
 
