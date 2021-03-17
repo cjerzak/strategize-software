@@ -23,7 +23,7 @@
 #' @export
 
 optimizeQ_conjoint <- function(FactorsMat, Yobs,
-                               assignmentProbList, se_ub, INDICES_SPLIT1, INDICES_SPLIT2=NULL,
+                               assignmentProbList, se_ub, INDICES_SPLIT1=NULL, INDICES_SPLIT2=NULL,
                                computeSEs = F,
                                hajek = T,doMax=T,quiet=T){
   if(is.null(INDICES_SPLIT1)){
@@ -42,7 +42,7 @@ optimizeQ_conjoint <- function(FactorsMat, Yobs,
         length(assignmentProbList[[ze]]) })
     ))
 
-  # get denominator so we don't need to recompute it
+    # get denominator so we don't need to recompute it
     low_pr_w    <-   as.vector(computeQ_conjoint(FactorsMat = FactorsMat, Yobs=Yobs,
                                   hypotheticalProbList = assignmentProbList,
                                   assignmentProbList = assignmentProbList,
@@ -59,8 +59,7 @@ optimizeQ_conjoint <- function(FactorsMat, Yobs,
     add0_after_indices <- which(!duplicated(add0_after_indices)) - 1
     add0_after_indices <- add0_after_indices[-1]
 
-
-    log_se_ub <- se_ub
+    log_se_ub <- log(se_ub)
     my_ep = 0.005#
     UB_VEC <- LB_VEC <- unlist(assignmentProbList)
     UB_VEC[] <- 1 - my_ep
@@ -80,10 +79,10 @@ optimizeQ_conjoint <- function(FactorsMat, Yobs,
       vec_a <- c(0,vec_a)
       names(vec_a) <- all_names
       list_ <- split(vec_a,f = splitIndices)
-      list_ <- lapply(list_,function(x){x[1]<-0;x}) #set first entry to 1 before applying softmax
       list_ <- lapply(list_,toSimplex) #bring to simplex
       return(list_)
     }
+    vec2list_noTransform <- function(vec_){return( split(vec_,f = splitIndices) )}; #test: sum(abs(unlist(vec2list(theta_init))-unlist(assignmentProbList)))
     optim_max_hajek <- (rsolnp_results <- Rsolnp::solnp(pars = theta_init,
                                         fun =  function(theta_){
                                           Qhat <- computeQ_conjoint(FactorsMat = FactorsMat1_numeric,
@@ -133,8 +132,8 @@ optimizeQ_conjoint <- function(FactorsMat, Yobs,
     Q_interval_split <- c(Qhat_split$Qest - 1.64*Qse_split, Qhat_split$Qest + 1.64*Qse_split)
 
     if(computeSEs == T){
-      INDICES_mEst <- INDICES_SPLIT2; FactorsMat_ <- FactorsMat2_numeric
-      #INDICES_mEst <- INDICES_SPLIT1; FactorsMat_ <- FactorsMat1_numeric
+      #INDICES_mEst <- INDICES_SPLIT2; FactorsMat_ <- FactorsMat2_numeric
+      INDICES_mEst <- INDICES_SPLIT1; FactorsMat_ <- FactorsMat1_numeric
       library(geex); ex_eeFUN_max <- function(data){
         function(theta){ with(data, {
           my_grad = ((c(rootSolve::gradient(f = function(x){
@@ -164,16 +163,40 @@ optimizeQ_conjoint <- function(FactorsMat, Yobs,
         estFUN = ex_eeFUN_max, data  = data.frame(),
         compute_roots = F, roots = optim_max_hajek)
       m_mean_max = attributes(mEst_max)$estimates
-      optim_max_mEst <- toSimplex(c(entry1_v,m_mean_max))
       m_cov_max  = attributes(mEst_max)$vcov
 
-      ensure0t1 <- function(ze){ ze[ze<0] <- 0; ze[ze>1] <- 1;ze}
-      optim_max_SEs_mEst = msm::deltamethod(my_list,
+      #save.image("~/Downloads/tmpWorkspace.rdata")
+
+      vec_ <- 1:length(m_mean_max)
+      vec_a <- rep(vec_, (1:2)[(1:length(vec_) %in% add0_after_indices) + 1])
+      vec_a[add0_after_indices + 1:length(add0_after_indices)] <- "x"
+      vec_a <- c("x",vec_a)
+      transformation_list <- strsplit(paste(vec_a,collapse=" "),split= "x")[[1]][-1]
+      transformation_list <- sapply(transformation_list,function(ze){
+        zee <- strsplit(ze,split = ' ')[[1]]
+        zee <- zee[zee!=""]
+        my_string <- sapply(zee,function(k__){
+        sprintf("~exp(x%s)/(exp(0)+%s)",
+                k__,
+                paste( paste(paste("exp(x",zee,sep=""),")",sep=''),collapse="+"))
+        })
+        return( my_string)
+        })
+      transformation_list <- unlist(transformation_list)
+      transformation_list = sapply(transformation_list,function(ze){as.formula(ze)})
+      transformation_list <- sapply(transformation_list,list)
+      names(transformation_list) <- paste("x",1:length(transformation_list),sep="")
+      optim_max_SEs_mEst = msm::deltamethod(transformation_list,
                                             mean = m_mean_max,
                                             cov  = m_cov_max)
-      lowerList <- vec2list(ensure0t1(unlist(hypotheticalProbList) - 1.68*optim_max_SEs_mEst))
-      upperList <- vec2list(ensure0t1(unlist(hypotheticalProbList) + 1.68*optim_max_SEs_mEst))
-      seList <- vec2list(optim_max_SEs_mEst)
+      plot(optim_max_SEs_mEst,log="y")
+      vec_a <- rep(optim_max_SEs_mEst, (1:2)[(1:length(optim_max_SEs_mEst) %in% add0_after_indices) + 1])
+      vec_a[add0_after_indices + 1:length(add0_after_indices)] <- NA
+      optim_max_SEs_mEst <- c(NA,vec_a)
+      ensure0t1 <- function(ze){ ze[ze<0] <- 0; ze[ze>1] <- 1;ze}
+      lowerList <- vec2list_noTransform(ensure0t1(unlist(hypotheticalProbList) - 1.68*optim_max_SEs_mEst))
+      upperList <- vec2list_noTransform(ensure0t1(unlist(hypotheticalProbList) + 1.68*optim_max_SEs_mEst))
+      seList <- vec2list_noTransform(optim_max_SEs_mEst)
       names(upperList) <- names(lowerList) <- names(seList) <- names( assignmentProbList )
     }
 
