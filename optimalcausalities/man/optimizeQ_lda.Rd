@@ -5,8 +5,8 @@
 \title{computeQ_lda}
 \usage{
 optimizeQ_lda(
-  DATA_SPLIT1,
-  DATA_SPLIT2 = NULL,
+  INDICES_SPLIT1 = NULL,
+  INDICES_SPLIT2 = NULL,
   DTM_MAT,
   n_fold = 3,
   YOBS,
@@ -20,7 +20,8 @@ optimizeQ_lda(
   maxWt_hajek = NULL,
   computeSEs = T,
   doMax = T,
-  alphaLevel = 0.05
+  alphaLevel = 0.05,
+  openBrowser = F
 )
 }
 \arguments{

@@ -4,7 +4,14 @@
 \alias{computeQ_conjoint}
 \title{computeQ_conjoint}
 \usage{
-computeQ_conjoint(theta, FactorsMat, Yobs, log_pr_w = NULL)
+computeQ_conjoint(
+  FactorsMat,
+  Yobs,
+  hypotheticalProbList,
+  assignmentProbList,
+  log_pr_w = NULL,
+  hajek = T
+)
 }
 \arguments{
 \item{dfm}{'document-feature matrix'. A list ...}

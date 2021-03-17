@@ -4,7 +4,18 @@
 \alias{optimizeQ_conjoint}
 \title{computeQ_conjoint}
 \usage{
-optimizeQ_conjoint(FactorMatrix, SE_bound)
+optimizeQ_conjoint(
+  FactorsMat,
+  Yobs,
+  assignmentProbList,
+  se_ub,
+  INDICES_SPLIT1,
+  INDICES_SPLIT2 = NULL,
+  computeSEs = F,
+  hajek = T,
+  doMax = T,
+  quiet = T
+)
 }
 \arguments{
 \item{dfm}{'document-feature matrix'. A list ...}
