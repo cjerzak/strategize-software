@@ -4,7 +4,16 @@
 \alias{computeQse_conjoint}
 \title{computeQse_conjoint}
 \usage{
-computeQse_conjoint(theta, FactorMatrix, log_pr_w = NULL)
+computeQse_conjoint(
+  FactorsMat,
+  Yobs,
+  hypotheticalProbList,
+  assignmentProbList,
+  log_pr_w = NULL,
+  hajek = T,
+  returnLog = T,
+  log_treatment_combs
+)
 }
 \arguments{
 \item{dfm}{'document-feature matrix'. A list ...}

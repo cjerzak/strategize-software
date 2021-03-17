@@ -16,7 +16,7 @@ computeQse_lda(
   TERMS_MAT_INPUT,
   LOG_TREATCOMBS,
   YOBS,
-  log = T,
+  returnLog = T,
   LOG_PR_W = NULL
 )
 }
