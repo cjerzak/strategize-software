@@ -23,15 +23,19 @@
 #' @export
 
 
-optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
+optimizeQ_lda = function(INDICES_SPLIT1=NULL,INDICES_SPLIT2=NULL,  DTM_MAT,
                       n_fold = 3,YOBS, PI_MAT,DOC_LIST,TERMS_MAT, SE_UB = sd(YOBS)/10,
                       nboot = 10,trim_q=1,
                       maxWt = 1e10,maxWt_hajek = NULL,
                       computeSEs = T, doMax = T,alphaLevel=0.05, openBrowser=F){
-  if(is.null(DATA_SPLIT2)){DATA_SPLIT2 <- DATA_SPLIT1}
+  if(is.null(INDICES_SPLIT1)){
+    DENOTE_SPLIT = sample(1:2,length(Yobs),prob=c(1,1),replace=T)
+    INDICES_SPLIT1 <- which(DENOTE_SPLIT==1)
+    INDICES_SPLIT2 <- which(DENOTE_SPLIT==2)
+  }
   smoothWts = F; hajek = T;tol= 10^(-3)
   boot_max_lower <- boot_max_lower <- boot_max_upper <- optim_max_SEs_mEst <- list()
-  Q_interval <- maxVal_est <- boot_max_lower <- boot_max_upper <-cv_average_vec <- boot_max <- cv_path <- list()
+  Q_interval <- maxVal_est <- boot_max_lower <- boot_max_upper <- boot_max  <- list()
 
   # Columns coerced to integers for fast execution
   if(all(colnames(TERMS_MAT) != 1:ncol(TERMS_MAT))){
@@ -39,12 +43,12 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     colnames(TERMS_MAT) <- 1:ncol(TERMS_MAT)
   }
 
-  doc_indices_u_split1 = unlist(DOC_LIST[DATA_SPLIT1],recursive = F)
-  L_tmp = DOC_LIST[DATA_SPLIT1]
+  doc_indices_u_split1 = unlist(DOC_LIST[INDICES_SPLIT1],recursive = F)
+  L_tmp = DOC_LIST[INDICES_SPLIT1]
   d_indices_u_split1 = unlist(sapply(1:length(L_tmp), function(se){list(rep(se,length(L_tmp[[se]])))}))
 
-  doc_indices_u_split2 = unlist(DOC_LIST[DATA_SPLIT2],recursive = F)
-  L_tmp = DOC_LIST[DATA_SPLIT2]
+  doc_indices_u_split2 = unlist(DOC_LIST[INDICES_SPLIT2],recursive = F)
+  L_tmp = DOC_LIST[INDICES_SPLIT2]
   d_indices_u_split2 = unlist(sapply(1:length(L_tmp), function(se){list(rep(se,length(L_tmp[[se]])))})); rm(L_tmp)
 
   RET_MAT_MIN <- RET_MAT_MAX <- NULL;
@@ -142,11 +146,11 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     log_treatCombs <- min(c(log_treatCombs_fromCombinatorics,log_treatCombs_fromEntropy))
 
     if(openBrowser){browser()}
-    myRho <- NULL;logSE_LB <- -Inf;logSE_UB = log(SE_UB)#log(sd(Yobs)* (1/length(DATA_SPLIT1)^0.25))
+    myRho <- NULL;logSE_LB <- -Inf;logSE_UB = log(SE_UB)#log(sd(Yobs)* (1/length(INDICES_SPLIT1)^0.25))
     initVec_empiricalMean <- initVec;
     initVec_flat <- initVec;initVec_flat[] <- 0
     logSE_meanPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_empiricalMean),
-                                 INDICES_ = DATA_SPLIT1,
+                                 INDICES_ = INDICES_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
                                  D_INDICES_U = d_indices_u_split1,
                                  TERMS_MAT_INPUT = TERMS_MAT,
@@ -158,7 +162,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                  LOG_TREATCOMBS=log_treatCombs,
                                  YOBS = Yobs,returnLog=T)
     logSE_flatPi <- computeQse_lda(THETA__ = toSimplex_f(initVec_flat),
-                                 INDICES_ = DATA_SPLIT1,
+                                 INDICES_ = INDICES_SPLIT1,
                                  DOC_INDICES_U = doc_indices_u_split1,
                                  D_INDICES_U = d_indices_u_split1,
                                  TERMS_MAT_INPUT = TERMS_MAT,
@@ -183,7 +187,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
       nloptr_sol <- optim_max_raw <- ((rsolnp_results <- nloptr::nloptr(x0 = initVec ,
                                                                         eval_f =  function(ze){
                                                                           my_value = minThis_max(clip2(ze),
-                                                                                                 INDICES = c(DATA_SPLIT1),
+                                                                                                 INDICES = c(INDICES_SPLIT1),
                                                                                                  DOC_INDICES_U = doc_indices_u_split1,
                                                                                                  D_INDICES_U = d_indices_u_split1, PEN_VAL = 0)
                                                                           return(my_value)},
@@ -194,7 +198,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                                                         eval_g_ineq = function(theta_){
                                                                           theta__ = toSimplex_f(theta_)
                                                                           upperBound_variance_log <- computeQse_lda(THETA__ = theta__,
-                                                                                                                    INDICES_ = DATA_SPLIT1,
+                                                                                                                    INDICES_ = INDICES_SPLIT1,
                                                                                                                     DOC_INDICES_U = doc_indices_u_split1,
                                                                                                                     D_INDICES_U = d_indices_u_split1,
                                                                                                                     TERMS_MAT_INPUT = TERMS_MAT,
@@ -221,7 +225,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
       optim_max_raw <- clip2((rsolnp_results <- Rsolnp::solnp(pars = initVec ,
                                                               fun =  function(ze){
                                                                 my_value = minThis_max(clip2(ze),
-                                                                                       INDICES = c(DATA_SPLIT1),
+                                                                                       INDICES = c(INDICES_SPLIT1),
                                                                                        DOC_INDICES_U = doc_indices_u_split1,#doc_indices_u_split1,
                                                                                        D_INDICES_U = d_indices_u_split1,
                                                                                        PEN_VAL = 0)
@@ -230,7 +234,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                                               ineqfun = function(theta_){
                                                                 theta__ = toSimplex_f(theta_)
                                                                 upperBound_variance_log <- computeQse_lda(THETA__ = theta__,
-                                                                                                          INDICES_ = DATA_SPLIT1,
+                                                                                                          INDICES_ = INDICES_SPLIT1,
                                                                                                           DOC_INDICES_U = doc_indices_u_split1,
                                                                                                           D_INDICES_U = d_indices_u_split1,
                                                                                                           TERMS_MAT_INPUT = TERMS_MAT,
@@ -245,7 +249,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                                                               ineqLB = LB_VEC,  ineqUB = UB_VEC))$pars)
     }
     mySE = exp(computeQse_lda(THETA__ = toSimplex_f(rsolnp_results$pars),
-                              INDICES_ = DATA_SPLIT1,
+                              INDICES_ = INDICES_SPLIT1,
                               DOC_INDICES_U = doc_indices_u_split1,
                               D_INDICES_U = d_indices_u_split1,
                               TERMS_MAT_INPUT = TERMS_MAT,
@@ -260,10 +264,10 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
     optim_max <- toSimplex_f(optim_max_raw)
 
     print(sprintf("InSamp Value: %.3f, OutSamp Value: %.3f",
-                  minThis_max(clip2(optim_max_raw), INDICES = c(DATA_SPLIT1),
+                  minThis_max(clip2(optim_max_raw), INDICES = c(INDICES_SPLIT1),
                               DOC_INDICES_U = doc_indices_u_split1,
                               D_INDICES_U = d_indices_u_split1, PEN_VAL = 0),
-                  minThis_max(clip2(optim_max_raw), INDICES = c(DATA_SPLIT2),
+                  minThis_max(clip2(optim_max_raw), INDICES = c(INDICES_SPLIT2),
                               DOC_INDICES_U = doc_indices_u_split2,
                               D_INDICES_U = d_indices_u_split2, PEN_VAL = 0)))
     optim_max_raw = list("optim_max_raw"=optim_max_raw,"par"=optim_max_raw)
@@ -273,11 +277,11 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
   if(computeSEs == T){
     library(geex); ex_eeFUN_max <- function(data){
       function(theta){ with(data, {
-        DATA_SPLIT_USE = DATA_SPLIT1
+        DATA_SPLIT_USE = INDICES_SPLIT1
         my_grad = ((c(rootSolve::gradient(f = function(x){
           theta__ <- toSimplex_f(x)
           logSE__ <- computeQse_lda(THETA__ = theta__,
-                                    INDICES_ = DATA_SPLIT1,
+                                    INDICES_ = INDICES_SPLIT1,
                                     DOC_INDICES_U = doc_indices_u_split1,
                                     D_INDICES_U = d_indices_u_split1,
                                     TERMS_MAT_INPUT = TERMS_MAT,
@@ -314,24 +318,24 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
   }
 
   Qest_raw = computeQ_lda(theta   = optim_max,
-                          Yobs     = YOBS[DATA_SPLIT1],
-                          pi_mat    = PI_MAT[,DATA_SPLIT1],
-                          doc_words = DOC_LIST[DATA_SPLIT1],
+                          Yobs     = YOBS[INDICES_SPLIT1],
+                          pi_mat    = PI_MAT[,INDICES_SPLIT1],
+                          doc_words = DOC_LIST[INDICES_SPLIT1],
                           term_mat  = TERMS_MAT,
                           smoothWts = smoothWts, trim_q = trim_q,
                           maxWt = maxWt, maxWt_hajek = maxWt_hajek)
-  names(Qest_raw$Q_wts_hajek) <- DATA_SPLIT1
+  names(Qest_raw$Q_wts_hajek) <- INDICES_SPLIT1
   wts_raw <- Qest_raw$Q_wts_hajek
   Qest_raw = Qest_raw$Qhat*(1-hajek) + Qest_raw$Qhat_hajek*(hajek)
 
   Qest_split = computeQ_lda(theta   = optim_max,
-                            Yobs     = YOBS[DATA_SPLIT2],
-                            pi_mat    = PI_MAT[,DATA_SPLIT2],
-                            doc_words = DOC_LIST[DATA_SPLIT2],
+                            Yobs     = YOBS[INDICES_SPLIT2],
+                            pi_mat    = PI_MAT[,INDICES_SPLIT2],
+                            doc_words = DOC_LIST[INDICES_SPLIT2],
                             term_mat  = TERMS_MAT,
                             smoothWts = smoothWts, trim_q = trim_q,
                             maxWt = maxWt, maxWt_hajek = maxWt_hajek)
-  names(Qest_split$Q_wts_hajek) <- DATA_SPLIT2
+  names(Qest_split$Q_wts_hajek) <- INDICES_SPLIT2
   hist(Qest_split$Q_wts_hajek,main = "Histogram of Weights")
   wts_split <- Qest_split$Q_wts_hajek
   Qest_split = Qest_split$Qhat*(1-hajek) + Qest_split$Qhat_hajek*(hajek)
@@ -379,9 +383,7 @@ optimizeQ_lda = function(DATA_SPLIT1,DATA_SPLIT2=NULL,  DTM_MAT,
                             "SE_Q" = SE_obs,
                             "SE_Q_split" = SE_split,
                             "Q_wts_raw"=wts_raw,
-                            "Q_wts_split"=wts_split,
-                            "CV_diagnostics"=cv_average_vec,
-                            "CV_path" = cv_path)
+                            "Q_wts_split"=wts_split)
   return(OPTIMALITY_RESULTS)
 }
 

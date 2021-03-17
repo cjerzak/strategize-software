@@ -21,12 +21,12 @@
 #' x <- rnorm(100)
 #'
 #' @export
+
 computeQ_conjoint <- function(FactorsMat, Yobs,
                               hypotheticalProbList,
                               assignmentProbList,
                               log_pr_w = NULL,
                               hajek = T){
-    names(theta_) <-  names(AssignmentProbVec); theta_[set0_values] <- 0
     if(is.null(log_pr_w)){
       log_pr_w = rowSums(log(
         sapply(1:ncol(FactorsMat),function(ze){
@@ -38,11 +38,12 @@ computeQ_conjoint <- function(FactorsMat, Yobs,
         (hypotheticalProbList[[ze]][ FactorsMat[,ze] ] ) })
     ))
 
-    my_wts = trim_fxn(exp(log_pr_new   - log_pr_w  ))
+    my_wts = exp(log_pr_new   - log_pr_w  )
     if(hajek == T){ my_wts <- my_wts / sum(my_wts);Qest = sum(Yobs * my_wts )   }
     if(hajek == F){Qest <- mean(Yobs * my_wts )   }
 
     return(list("Qest"=Qest,
                 "Qest_se"=NULL,
-                "Q_wts"=my_wts))
+                "Q_wts"=my_wts,
+                "log_pr_w"=log_pr_w))
 }
