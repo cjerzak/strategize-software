@@ -30,8 +30,6 @@ computeQ_conjoint <- function(FactorsMat,
                               INDICES_SPLIT1=NULL, INDICES_SPLIT2=NULL,
                               computeSEs = F, openBrowser = F,
                               hajek = T,doMax=T,quiet=T){
-
-  browser()
   if(!is.null(hypotheticalProbList)){
     Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat,
                                        Yobs=Yobs,
@@ -44,8 +42,12 @@ computeQ_conjoint <- function(FactorsMat,
                                 assignmentProbList=assignmentProbList, returnLog = F,
                                 hypotheticalProbList=hypotheticalProbList)
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
+    RETURN_LIST <-   list("Q_point"=Qhat$Qest,
+                          "Q_se" = Qse,
+                          "Q_interval" = Q_interval)
   }
 
+  if(is.null(hypotheticalProbList)){
   if(is.null(INDICES_SPLIT1)){
     DENOTE_SPLIT = sample(1:2,length(Yobs),prob=c(1,1),replace=T)
     INDICES_SPLIT1 <- which(DENOTE_SPLIT==1)
@@ -263,20 +265,18 @@ computeQ_conjoint <- function(FactorsMat,
       names(upperList) <- names(lowerList) <- names(seList) <- names( assignmentProbList )
     }
 
-    RESULTS_LIST = list("OptimalProbabilities"=hypotheticalProbList,
+    RETURN_LIST = list("OptimalProbabilities"=hypotheticalProbList,
                               "OptimalProbabilities_se" = seList,
                               "OptimalProbabilities_lb"=lowerList,
                               "OptimalProbabilities_ub"=upperList,
-                              "AverageOutcomeAtOptimal"=Qhat$Qest,
-                              "SE_Q" = Qse,
+                              "Q_point"=Qhat$Qest,
+                              "Q_se" = Qse,
                               "Q_interval" = Q_interval,
-                              "AverageOutcomeAtOptimal_split"=Qhat_split$Qest,
                               "Q_wts_raw" = Qhat$Q_wts,
+                              "Q_point_split"=Qhat_split$Qest,
+                              "Q_se_split" = Qse_split,
                               "Q_interval_split" = Q_interval_split,
-                              "SE_Q_split" = Qse_split,
                               "Q_wts_split" = Qhat_split$Q_wts)
-
-
-    return(RESULTS_LIST)
-
+  }
+  return(RETURN_LIST)
 }
