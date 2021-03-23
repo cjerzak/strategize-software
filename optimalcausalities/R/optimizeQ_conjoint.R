@@ -31,14 +31,14 @@ computeQ_conjoint <- function(FactorsMat, Yobs,
                                hajek = T,doMax=T,quiet=T){
 
   if(!is.null(hypotheticalProbList)){
-    Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
+    Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat,
                                        Yobs=Yobs,
-                                       log_pr_w = low_pr_w,
+                                       log_pr_w = NULL,
                                        assignmentProbList = assignmentProbList,
                                        hypotheticalProbList = hypotheticalProbList, hajek = T)
-    SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat1_numeric,
+    SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat,
                                 Yobs=Yobs,
-                                log_pr_w = low_pr_w,log_treatment_combs = log_treatment_combs,
+                                log_pr_w = NULL,log_treatment_combs = NULL,
                                 assignmentProbList=assignmentProbList, returnLog = F,
                                 hypotheticalProbList=hypotheticalProbList)
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
