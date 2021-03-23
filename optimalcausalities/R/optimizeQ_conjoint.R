@@ -22,7 +22,7 @@
 #'
 #' @export
 
-optimizeQ_conjoint <- function(FactorsMat, Yobs,
+computeQ_conjoint <- function(FactorsMat, Yobs,
                                assignmentProbList,
                                hypotheticalProbList = NULL,
                                se_ub,
