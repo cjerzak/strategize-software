@@ -12,7 +12,7 @@ computeQse_conjoint(
   log_pr_w = NULL,
   hajek = T,
   returnLog = T,
-  log_treatment_combs
+  log_treatment_combs = NULL
 )
 }
 \arguments{
