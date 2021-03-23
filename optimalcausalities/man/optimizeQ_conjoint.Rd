@@ -8,10 +8,12 @@ optimizeQ_conjoint(
   FactorsMat,
   Yobs,
   assignmentProbList,
+  hypotheticalProbList = NULL,
   se_ub,
-  INDICES_SPLIT1,
+  INDICES_SPLIT1 = NULL,
   INDICES_SPLIT2 = NULL,
   computeSEs = F,
+  openBrowser = F,
   hajek = T,
   doMax = T,
   quiet = T

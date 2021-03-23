@@ -29,7 +29,14 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
                                 log_pr_w = NULL,
                                 hajek = T,
                                 returnLog = T,
-                                log_treatment_combs){
+                                log_treatment_combs=NULL){
+
+  if(is.null(log_treatment_combs)){
+  log_treatment_combs  <- sum(log(
+      sapply(1:ncol(FactorsMat),function(ze){
+        length(assignmentProbList[[ze]]) }) ))
+  }
+
   if(is.null(log_pr_w)){
     log_pr_w = rowSums(log(
       sapply(1:ncol(FactorsMat),function(ze){
