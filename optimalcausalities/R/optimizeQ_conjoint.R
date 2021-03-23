@@ -30,6 +30,7 @@ computeQ_conjoint <- function(FactorsMat, Yobs,
                                computeSEs = F, openBrowser = F,
                                hajek = T,doMax=T,quiet=T){
 
+  browser()
   if(!is.null(hypotheticalProbList)){
     Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat,
                                        Yobs=Yobs,
