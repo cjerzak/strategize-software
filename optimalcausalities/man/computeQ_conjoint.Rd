@@ -12,7 +12,7 @@ computeQ_conjoint(
   se_ub = NULL,
   split1_indices = NULL,
   split2_indices = NULL,
-  computeSEs = F,
+  computeThetaSEs = F,
   openBrowser = F,
   hajek = T,
   findMax = T,

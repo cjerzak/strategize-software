@@ -23,8 +23,7 @@
 #' @export
 
 
-computeQ_lda = function( DTM_MAT,
-                      hypotheticalTopicProportion = NULL,
+computeQ_lda = function( hypotheticalTopicProportion = NULL,
                       n_fold = 3,Yobs,
                       topicProportions,
                       documents_list,
@@ -32,12 +31,13 @@ computeQ_lda = function( DTM_MAT,
                       se_ub = sd(Yobs)/10,
                       split2_indices=NULL,
                       split1_indices=NULL,
-                      computeSEs = T, findMax = T,
+                      computeThetaSEs = T, findMax = T,
                       nboot = 10,trim_q=1,
                       maxWt = 1e10,maxWt_hajek = NULL,
                       alphaLevel=0.05, openBrowser=F){
   if(!is.null(hypotheticalTopicProportion)){
-    Qest_raw = computeQ_lda_internall(theta   = optim_max,
+    browser()
+    Qest_raw = computeQ_lda_internal(theta   = optim_max,
                                       Yobs     = Yobs[split2_indices],
                                       pi_mat    = topicProportions[,split2_indices],
                                       doc_words = documents_list[split2_indices],
@@ -78,12 +78,12 @@ if(is.null(hypotheticalTopicProportion)){
     colnames(wordTopicDistributions) <- 1:ncol(wordTopicDistributions)
   }
 
-  doc_indices_u_split1 = unlist(documents_list[split2_indices],recursive = F)
-  L_tmp = documents_list[split2_indices]
+  doc_indices_u_split1 = unlist(documents_list[split1_indices],recursive = F)
+  L_tmp = documents_list[split1_indices]
   d_indices_u_split1 = unlist(sapply(1:length(L_tmp), function(se){list(rep(se,length(L_tmp[[se]])))}))
 
-  doc_indices_u_split2 = unlist(documents_list[split1_indices],recursive = F)
-  L_tmp = documents_list[split1_indices]
+  doc_indices_u_split2 = unlist(documents_list[split2_indices],recursive = F)
+  L_tmp = documents_list[split2_indices]
   d_indices_u_split2 = unlist(sapply(1:length(L_tmp), function(se){list(rep(se,length(L_tmp[[se]])))})); rm(L_tmp)
 
   RET_MAT_MIN <- RET_MAT_MAX <- NULL;
@@ -102,7 +102,7 @@ if(is.null(hypotheticalTopicProportion)){
   # for delta method
   initilizer = function(){return(initVec)}
 
-  log_pr_w <- computeQ_lda_internall(theta  = MeanTopicProportion,
+  log_pr_w <- computeQ_lda_internal(theta  = MeanTopicProportion,
                            Yobs     = Yobs,
                            pi_mat    = topicProportions,
                            doc_words = documents_list,
@@ -127,7 +127,7 @@ if(is.null(hypotheticalTopicProportion)){
     if(!findMax){
       minThis_max =  function(theta_,INDICES,PEN_VALUE,DOC_INDICES_U, D_INDICES_U){
         theta_ = toSimplex_f(theta_)
-        rez_ = computeQ_lda_internall(theta   = theta_,
+        rez_ = computeQ_lda_internal(theta   = theta_,
                             Yobs     = Yobs[INDICES],
                             pi_mat    = topicProportions[,INDICES],
                             doc_words = documents_list[INDICES],
@@ -150,9 +150,16 @@ if(is.null(hypotheticalTopicProportion)){
     ModalDocLength = density(unlist(lapply(documents_list,length)))
     ModalDocLength = round(ModalDocLength$x[which.max(ModalDocLength$y)],0L)
     usedWords = unique(unlist(lapply(documents_list,function(ze){names(ze[!duplicated(ze)])})))
-    browser()
-    marginalB = t(apply(DTM_MAT[rowSums(DTM_MAT)>0,usedWords],1,function(ze){ze/sum(ze)}))
-    marginalB = apply(marginalB,2,max) #+ 0.1*apply(marginalB,2,sd)
+
+    zerosVec_ <- unique(unlist(lapply(documents_list,function(ze){unique(names(ze))})))
+    zerosVec <- rep(0,times=length( zerosVec_ )); names(zerosVec) <-zerosVec_
+    marginalB <- lapply(documents_list,function(ze){
+      my_tab <- prop.table(table( names(ze )))
+      zerosVec[names(my_tab)] <- my_tab
+      return(zerosVec)
+    })
+    marginalB <- do.call(rbind,marginalB)
+    marginalB = apply(marginalB,2,max) + 0.5*apply(marginalB,2,sd)
     marginalB = round(marginalB*ModalDocLength,0L)
     marginalB[is.na(marginalB)] <- 0
     prW_log_tmp = PrWGivenPi_fxn(doc_indices = documents_list, pi_mat = topicProportions, terms_posterior = wordTopicDistributions, log_=T)
@@ -310,7 +317,7 @@ if(is.null(hypotheticalTopicProportion)){
     }
 
   # asymptotic se's
-  if(computeSEs == T){
+  if(computeThetaSEs == T){
     library(geex); ex_eeFUN_max <- function(data){
       function(theta){ with(data, {
         DATA_SPLIT_USE = split2_indices
@@ -353,7 +360,7 @@ if(is.null(hypotheticalTopicProportion)){
                                           cov  = m_cov_max) #cov is inverse of ?negative? hessian
   }
 
-  Qest_raw = computeQ_lda_internall(theta   = optim_max,
+  Qest_raw = computeQ_lda_internal(theta   = optim_max,
                           Yobs     = Yobs[split2_indices],
                           pi_mat    = topicProportions[,split2_indices],
                           doc_words = documents_list[split2_indices],
@@ -364,7 +371,7 @@ if(is.null(hypotheticalTopicProportion)){
   wts_raw <- Qest_raw$Q_wts_hajek
   Qest_raw = Qest_raw$Qhat*(1-hajek) + Qest_raw$Qhat_hajek*(hajek)
 
-  Qest_split = computeQ_lda_internall(theta   = optim_max,
+  Qest_split = computeQ_lda_internal(theta   = optim_max,
                             Yobs     = Yobs[split1_indices],
                             pi_mat    = topicProportions[,split1_indices],
                             doc_words = documents_list[split1_indices],
@@ -378,7 +385,7 @@ if(is.null(hypotheticalTopicProportion)){
 
   splitForSEObs <- "1"
   SE_obs = exp(computeQse_lda(THETA__ = optim_max,
-                              INDICES_ = eval(parse(text=sprintf("DATA_SPLIT%s",splitForSEObs))),
+                              INDICES_ = eval(parse(text=sprintf("split%s_indices",splitForSEObs))),
                               DOC_INDICES_U = eval(parse(text=sprintf("doc_indices_u_split%s",splitForSEObs))),
                               D_INDICES_U = eval(parse(text=sprintf("d_indices_u_split%s",splitForSEObs))),
                               TERMS_MAT_INPUT = wordTopicDistributions,
@@ -392,7 +399,7 @@ if(is.null(hypotheticalTopicProportion)){
 
   splitForSEObs <- "1"
   SE_split = exp(computeQse_lda(THETA__ = optim_max,
-                                INDICES_ = eval(parse(text=sprintf("DATA_SPLIT%s",splitForSEObs))),
+                                INDICES_ = eval(parse(text=sprintf("split%s_indices",splitForSEObs))),
                                 DOC_INDICES_U = eval(parse(text=sprintf("doc_indices_u_split%s",splitForSEObs))),
                                 D_INDICES_U = eval(parse(text=sprintf("d_indices_u_split%s",splitForSEObs))),
                                 TERMS_MAT_INPUT = wordTopicDistributions,
@@ -405,7 +412,6 @@ if(is.null(hypotheticalTopicProportion)){
                                 YOBS = Yobs,returnLog=T))
   Q_interval <- c(Qest_raw - 1.64*SE_obs,Qest_raw + 1.64*SE_obs)
   Q_interval_split <- c(Qest_split - 1.64*SE_split,Qest_split + 1.64*SE_split)
-
 
   names(optim_max_SEs_mEst) <- NULL
   RETURN_LIST = list("ThetaStar"=c(optim_max),
