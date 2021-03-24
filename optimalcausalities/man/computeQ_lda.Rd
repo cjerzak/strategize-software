@@ -6,15 +6,16 @@
 \usage{
 computeQ_lda(
   DTM_MAT,
+  hypotheticalTopicProportion = NULL,
   n_fold = 3,
   Yobs,
   topicProportions,
-  document_list,
+  documents_list,
   wordTopicDistributions,
   se_ub = sd(Yobs)/10,
   split2_indices = NULL,
   split1_indices = NULL,
-  computeSEs = T,
+  computeThetaSEs = T,
   findMax = T,
   nboot = 10,
   trim_q = 1,
