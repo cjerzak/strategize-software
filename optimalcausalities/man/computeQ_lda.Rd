@@ -5,26 +5,23 @@
 \title{computeQ_lda}
 \usage{
 computeQ_lda(
-  theta = NULL,
-  term_mat,
+  DTM_MAT,
+  n_fold = 3,
   Yobs,
-  doc_words,
-  dtm = NULL,
-  pi_mat = NULL,
-  alpha_mat = NULL,
-  log_pr_w = NULL,
-  computeSE = F,
+  topicProportions,
+  document_list,
+  wordTopicDistributions,
+  se_ub = sd(Yobs)/10,
+  split2_indices = NULL,
+  split1_indices = NULL,
+  computeSEs = T,
+  findMax = T,
+  nboot = 10,
   trim_q = 1,
-  quiet = T,
-  iters = 100,
-  smoothWts = F,
-  TreatFxn = NULL,
   maxWt = 1e+10,
   maxWt_hajek = NULL,
-  term_mat_TRUE = NULL,
-  doc_indices_u = NULL,
-  d_indices_u = NULL,
-  diagnostics = F
+  alphaLevel = 0.05,
+  openBrowser = F
 )
 }
 \arguments{
@@ -41,7 +38,7 @@ Implements ...
 \section{References}{
 
 \itemize{
-\item Kosuke, Rohit, Connor.  Working Paper.
+\item Kosuke Imai, Rohit, Connor
 }
 }
 
