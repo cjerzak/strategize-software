@@ -1,27 +1,3 @@
-#' computeQse_lda
-#'
-#' Implements ...
-#'
-#' @param dfm 'document-feature matrix'. A list ...
-
-#' @return A list consiting of \itemize{
-#'   \item Items.
-#' }
-#'
-#' @section References:
-#' \itemize{
-#' \item Kosuke, Rohit, Connor.  Working Paper.
-#' }
-#'
-#' @examples
-#' #set seed
-#' set.seed(1)
-#'
-#' #Geneate data
-#' x <- rnorm(100)
-#'
-#' @export
-
 computeQse_lda = function(THETA__,INDICES_, DOC_INDICES_U, D_INDICES_U,
                             PI_MAT_INPUT,MARGINAL_BOUNDS,DOC_LIST,
                             MODAL_DOC_LEN,
@@ -41,19 +17,18 @@ computeQse_lda = function(THETA__,INDICES_, DOC_INDICES_U, D_INDICES_U,
 
     # Perform weighting to obtain scaling factor
     THETA_MAT_ = PI_MAT_INPUT; THETA_MAT_[] <- THETA__
-    NUM__ = PrWGivenPi_fxn(doc_indices     = DOC_LIST[INDICES_],
+    NUM__ = logPrWGivenPi_fxn(doc_indices     = DOC_LIST[INDICES_],
                            pi_mat = THETA_MAT_[,INDICES_],
                            terms_posterior = TERMS_MAT_INPUT,
                            doc_indices_u = DOC_INDICES_U,
-                           d_indices_u = D_INDICES_U,
-                           log_=T)
+                           d_indices_u = D_INDICES_U)
     if(!is.null(LOG_PR_W)){ LOG_PR_W <- LOG_PR_W[INDICES_] }
     if(is.null(LOG_PR_W)){
-      LOG_PR_W <- PrWGivenPi_fxn(doc_indices     = DOC_LIST[INDICES_],
+      LOG_PR_W <- logPrWGivenPi_fxn(doc_indices     = DOC_LIST[INDICES_],
                              pi_mat = PI_MAT_INPUT[,INDICES_],
                              terms_posterior = TERMS_MAT_INPUT,
                              doc_indices_u = DOC_INDICES_U,
-                             d_indices_u = D_INDICES_U, log_=T)
+                             d_indices_u = D_INDICES_U)
     }
     scaleFactor = sum(YOBS[INDICES_]^2 * prop.table(exp(NUM__ - LOG_PR_W  ))  )
 

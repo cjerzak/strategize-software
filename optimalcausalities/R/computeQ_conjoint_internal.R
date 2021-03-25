@@ -2,7 +2,8 @@ computeQ_conjoint_internal <- function(FactorsMat, Yobs,
                               hypotheticalProbList,
                               assignmentProbList,
                               log_pr_w = NULL,
-                              hajek = T){
+                              hajek = T,
+                              computeLB  = F){
     if(is.null(log_pr_w)){
       log_pr_w = rowSums(log(
         sapply(1:ncol(FactorsMat),function(ze){
@@ -14,8 +15,24 @@ computeQ_conjoint_internal <- function(FactorsMat, Yobs,
         hypotheticalProbList[[ze]][ FactorsMat[,ze] ]  })
     ))
     my_wts = exp(  log_pr_new   - log_pr_w  )
-    if(hajek == T){ my_wts <- my_wts / sum(my_wts);Qest = sum(Yobs * my_wts )   }
-    if(hajek == F){ Qest <- mean(Yobs * my_wts )   }
+    if(hajek == T){
+      my_wts <- my_wts / sum(my_wts);
+      if(computeLB == F){ Qest = sum(Yobs * my_wts )  }
+      if(computeLB == T){
+        minValue <- min(Yobs)
+        Yobs_nonZero <- Yobs + (abs(minValue) + 1)*(minValue <= 0)
+        #Qest <- exp(1/length(Yobs)*sum(log(Yobs_nonZero)+log(my_wts)))
+        Qest <- sum(log(Yobs_nonZero)+log(my_wts))
+      }
+    }
+    if(hajek == F){
+      if(computeLB == F){ Qest <- mean(Yobs * my_wts )   }
+      if(computeLB == T){
+        minValue <- min(Yobs)
+        Yobs_nonZero <- Yobs + (abs(minValue) + 1)*(minValue <= 0)
+        Qest <- mean(log(Yobs_nonZero)+log(my_wts))
+      }
+    }
 
     return(list("Qest"=Qest,
                 "Qest_se"=NULL,

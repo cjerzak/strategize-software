@@ -29,7 +29,8 @@ computeQ_conjoint <- function(FactorsMat,
                               se_ub = NULL,
                               split1_indices=NULL, split2_indices=NULL,
                               computeThetaSEs = F, openBrowser = F,
-                              hajek = T,findMax=T,quiet=T){
+                              hajek = T,findMax=T,quiet=T,
+                              optimizeLB = T){
   if(!is.null(hypotheticalProbList)){
     Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat,
                                        Yobs=Yobs,
@@ -112,6 +113,7 @@ computeQ_conjoint <- function(FactorsMat,
                                                                                                         Yobs=Yobs[split1_indices],
                                                                                                         log_pr_w = low_pr_w[split1_indices],
                                                                                                         assignmentProbList = assignmentProbList,
+                                                                                                        computeLB = optimizeLB,
                                                                                                         hypotheticalProbList = vec2list(theta_),
                                                                                                         hajek = T)$Qest; if(findMax == T){Qhat <- -1*Qhat} #remember, solnp minimizes
                                                                               #print( Qhat )
@@ -141,7 +143,7 @@ computeQ_conjoint <- function(FactorsMat,
 
     # augmented lagrangian
     {
-    myDelta <- NULL;  myRho <- 1;  tol <- 0.0005;
+    myDelta <- 0.001;  myRho <- 1;  tol <- 0.0002;
     optim_max_hajek <- (rsolnp_results <- Rsolnp::solnp(pars = theta_init,
                                         fun =  function(theta_){
                                           Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
@@ -149,8 +151,10 @@ computeQ_conjoint <- function(FactorsMat,
                                                             log_pr_w = low_pr_w[split1_indices],
                                                             assignmentProbList = assignmentProbList,
                                                             hypotheticalProbList = vec2list(theta_),
+                                                            computeLB = optimizeLB,
                                                             hajek = T)$Qest; if(findMax == T){Qhat <- -1*Qhat} #remember, solnp minimizes
                                           #if(runif(1)<0.1){print( Qhat )}
+                                          print( Qhat )
                                           return( Qhat )
                                         }
                                         ,control=list(rho=myRho,tol=tol, delta = myDelta,trace = !quiet),
@@ -175,6 +179,9 @@ computeQ_conjoint <- function(FactorsMat,
     }
     }
     hypotheticalProbList <- vec2list(optim_max_hajek)
+    hypotheticalProbList <- sapply(1:length(hypotheticalProbList),function(ze){
+      names(hypotheticalProbList[[ze]]) <- names( assignmentProbList[[ze]] )
+      return( hypotheticalProbList[[ze]]  )   })
     names(hypotheticalProbList) <- names( assignmentProbList )
 
     Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
@@ -182,6 +189,7 @@ computeQ_conjoint <- function(FactorsMat,
                         log_pr_w = low_pr_w[split1_indices],
                         assignmentProbList = assignmentProbList,
                         hypotheticalProbList = hypotheticalProbList, hajek = T)
+    #Qhat$Qest
     SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat1_numeric,
                           Yobs=Yobs[split1_indices],
                           log_pr_w = low_pr_w[split1_indices],log_treatment_combs = log_treatment_combs,
@@ -223,6 +231,7 @@ computeQ_conjoint <- function(FactorsMat,
                                              Yobs=Yobs[INDICES_mEst],
                                              log_pr_w = low_pr_w[INDICES_mEst],
                                              assignmentProbList = assignmentProbList,
+                                             computeLB = optimizeLB,
                                              hypotheticalProbList = hypotheticalProbList, hajek = T)$Qest
             if(findMax == T){mainContrib <- -1*mainContrib} #remember, we're minimizing the final objective function
             TOTAL_OBJ = mainContrib  +  sum(LagrangianTerm)
