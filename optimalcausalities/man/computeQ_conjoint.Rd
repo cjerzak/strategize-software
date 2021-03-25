@@ -16,7 +16,8 @@ computeQ_conjoint(
   openBrowser = F,
   hajek = T,
   findMax = T,
-  quiet = T
+  quiet = T,
+  optimizeLB = T
 )
 }
 \arguments{

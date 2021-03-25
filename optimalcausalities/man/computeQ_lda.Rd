@@ -5,7 +5,6 @@
 \title{computeQ_lda}
 \usage{
 computeQ_lda(
-  DTM_MAT,
   hypotheticalTopicProportion = NULL,
   n_fold = 3,
   Yobs,
@@ -13,8 +12,8 @@ computeQ_lda(
   documents_list,
   wordTopicDistributions,
   se_ub = sd(Yobs)/10,
-  split2_indices = NULL,
   split1_indices = NULL,
+  split2_indices = NULL,
   computeThetaSEs = T,
   findMax = T,
   nboot = 10,

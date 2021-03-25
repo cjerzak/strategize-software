@@ -10,3 +10,5 @@ system(paste(shQuote(file.path(R.home("bin"), "R")),
 #install.packages(package_path)
 
 #install.packages( "~/Documents/optimalcausalities-software/optimalcausalities",repos = NULL, type = "source")
+
+#install.packages("~/Library/gurobi911/mac64/R/gurobi_9.1-1_R_4.0.2.tgz",repos=NULL)

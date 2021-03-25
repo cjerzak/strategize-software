@@ -40,22 +40,20 @@ computeQ_lda_internal <- function(theta=NULL,
     #calculate conditionals
     {
       if(is.null(term_mat_TRUE)){term_mat_USE <- term_mat}
-      log_pr_w_given_theta   = PrWGivenPi_fxn(doc_indices     = doc_words,
+      log_pr_w_given_theta   = logPrWGivenPi_fxn(doc_indices     = doc_words,
                                               pi_mat          = theta_mat,
                                               terms_posterior = term_mat_USE,
                                               doc_indices_u   = doc_indices_u,
-                                              d_indices_u     = d_indices_u,
-                                              log_            = T)
+                                              d_indices_u     = d_indices_u)
 
 
       if(intOutPi){pi_mat = apply(alpha_mat, 2, function(ae){gtools::rdirichlet(1,ae)})}
       if(is.null(log_pr_w)){
-        log_pr_w                = PrWGivenPi_fxn(doc_indices          = doc_words,
+        log_pr_w                = logPrWGivenPi_fxn(doc_indices          = doc_words,
                                                  pi_mat          = pi_mat,
                                                  terms_posterior = term_mat,
                                                  doc_indices_u = doc_indices_u,
-                                                 d_indices_u = d_indices_u,
-                                                 log_=T)
+                                                 d_indices_u = d_indices_u)
       }
     }
 
