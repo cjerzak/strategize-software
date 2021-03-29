@@ -8,7 +8,7 @@ computeQ_conjoint_internal <- function(FactorsMat, Yobs,
       log_pr_w = rowSums(log(
         sapply(1:ncol(FactorsMat),function(ze){
         (assignmentProbList[[ze]][ FactorsMat[,ze] ]) })
-        ))#fast match here
+        ))
     }
     log_pr_new <- rowSums(log(
       sapply(1:ncol(FactorsMat),function(ze){
@@ -37,5 +37,6 @@ computeQ_conjoint_internal <- function(FactorsMat, Yobs,
     return(list("Qest"=Qest,
                 "Qest_se"=NULL,
                 "Q_wts"=my_wts,
+                "log_pr_w_new"=log_pr_w_new,
                 "log_pr_w"=log_pr_w))
 }

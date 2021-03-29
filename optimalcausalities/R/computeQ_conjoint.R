@@ -49,7 +49,9 @@ computeQ_conjoint <- function(FactorsMat,
     RETURN_LIST <-   list("Q_point" = Qhat$Qest,
                           "Q_se" = SE_Q,
                           "Q_interval" = Q_interval,
-                          "Q_wts" = Qhat$Q_wts)
+                          "Q_wts" = Qhat$Q_wts,
+                          "log_pr_w_new"=Qhat$log_pr_w_new,
+                          "log_pr_w"=Qhat$log_pr_w)
   }
 
   if(is.null(hypotheticalProbList)){
