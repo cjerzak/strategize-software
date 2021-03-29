@@ -30,10 +30,13 @@ computeQ_conjoint <- function(FactorsMat,
                               split1_indices=NULL, split2_indices=NULL,
                               computeThetaSEs = F, openBrowser = F,
                               hajek = T,findMax=T,quiet=T,
+                              control = list(delta = NULL,
+                                             rho = NULL,
+                                             tol = 0.00002),
                               optimizeLB = T,box_epsilon=0.01){
+
   FactorsMat_numeric <- sapply(1:ncol(FactorsMat),function(ze){
-    match(FactorsMat[,ze], names(assignmentProbList[[ze]]))
-  })
+    match(FactorsMat[,ze], names(assignmentProbList[[ze]]))  })
   if(!is.null(hypotheticalProbList)){
     Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
                                        Yobs_internal=Yobs,
@@ -147,7 +150,6 @@ computeQ_conjoint <- function(FactorsMat,
 
     # augmented lagrangian
     {
-    myDelta <- 0.001;  myRho <- 1;  tol <- 0.00002;
     optim_max_hajek <- (rsolnp_results <- Rsolnp::solnp(pars = theta_init,
                                         fun =  function(theta_){
                                           Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat1_numeric,
@@ -161,7 +163,7 @@ computeQ_conjoint <- function(FactorsMat,
                                           #print( Qhat )
                                           return( Qhat )
                                         }
-                                        ,control=list(rho=myRho,tol=tol, delta = myDelta,trace = !quiet),
+                                        ,control=list(rho=control$rho,tol=control$tol, delta = control$delta,trace = !quiet),
                                         ineqfun = function(theta_){
                                               hypoProbsList__ <- vec2list(theta_)
                                               log_Qse <- computeQse_conjoint(FactorsMat=FactorsMat1_numeric,
