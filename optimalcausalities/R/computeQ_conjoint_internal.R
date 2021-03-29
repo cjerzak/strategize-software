@@ -10,11 +10,11 @@ computeQ_conjoint_internal <- function(FactorsMat, Yobs,
         (assignmentProbList[[ze]][ FactorsMat[,ze] ]) })
         ))
     }
-    log_pr_new <- rowSums(log(
+    log_pr_w_new <- rowSums(log(
       sapply(1:ncol(FactorsMat),function(ze){
         hypotheticalProbList[[ze]][ FactorsMat[,ze] ]  })
     ))
-    my_wts = exp(  log_pr_new   - log_pr_w  )
+    my_wts = exp(  log_pr_w_new   - log_pr_w  )
     if(hajek == T){
       my_wts <- my_wts / sum(my_wts);
       if(computeLB == F){ Qest = sum(Yobs * my_wts )  }
