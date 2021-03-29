@@ -48,7 +48,8 @@ computeQ_conjoint <- function(FactorsMat,
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
     RETURN_LIST <-   list("Q_point" = Qhat$Qest,
                           "Q_se" = SE_Q,
-                          "Q_interval" = Q_interval)
+                          "Q_interval" = Q_interval,
+                          "Q_wts" = Qhat$Q_wts)
   }
 
   if(is.null(hypotheticalProbList)){
@@ -280,7 +281,7 @@ computeQ_conjoint <- function(FactorsMat,
                               "Q_point"=Qhat$Qest,
                               "Q_se" = SE_Q,
                               "Q_interval" = Q_interval,
-                              "Q_wts_raw" = Qhat$Q_wts,
+                              "Q_wts" = Qhat$Q_wts,
                               "Q_point_split"=Qhat_split$Qest,
                               "Q_se_split" = SE_Q_split,
                               "Q_interval_split" = Q_interval_split,
