@@ -4,8 +4,8 @@ computeQ_conjoint_internal <- function(FactorsMat_internal, Yobs_internal,
                               log_pr_w_internal = NULL,
                               hajek = T,
                               computeLB  = F){
-    if(is.null(log_pr_w)){
-      log_pr_w = rowSums(log(
+    if(is.null(log_pr_w_internal)){
+      log_pr_w_internal = rowSums(log(
         sapply(1:ncol(FactorsMat),function(ze){
         (assignmentProbList[[ze]][ FactorsMat[,ze] ]) })
         ))
@@ -37,5 +37,5 @@ computeQ_conjoint_internal <- function(FactorsMat_internal, Yobs_internal,
     return(list("Qest"=Qest,
                 "Q_wts"=my_wts,
                 "log_pr_w_new"=log_pr_w_new,
-                "log_pr_w"=log_pr_w))
+                "log_pr_w"=log_pr_w_internal))
 }
