@@ -31,19 +31,22 @@ computeQ_conjoint <- function(FactorsMat,
                               computeThetaSEs = F, openBrowser = F,
                               hajek = T,findMax=T,quiet=T,
                               optimizeLB = T,box_epsilon=0.01){
+  FactorsMat_numeric <- sapply(1:ncol(FactorsMat),function(ze){
+    match(FactorsMat[,ze], names(assignmentProbList[[ze]]))
+  })
   if(!is.null(hypotheticalProbList)){
-    Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat,
+    Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat_numeric,
                                        Yobs=Yobs,
                                        log_pr_w = NULL,
                                        assignmentProbList = assignmentProbList,
                                        hypotheticalProbList = hypotheticalProbList, hajek = T)
-    SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat,
+    SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat_numeric,
                                 Yobs=Yobs,
                                 log_pr_w = NULL,log_treatment_combs = NULL,
                                 assignmentProbList=assignmentProbList, returnLog = F,
                                 hypotheticalProbList=hypotheticalProbList)
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
-    RETURN_LIST <-   list("Q_point"=Qhat$Qest,
+    RETURN_LIST <-   list("Q_point" = Qhat$Qest,
                           "Q_se" = SE_Q,
                           "Q_interval" = Q_interval)
   }
@@ -55,9 +58,6 @@ computeQ_conjoint <- function(FactorsMat,
     split1_indices <- which(DENOTE_SPLIT==1)
     split2_indices <- which(DENOTE_SPLIT==2)
   }
-   FactorsMat_numeric <- sapply(1:ncol(FactorsMat),function(ze){
-      match(FactorsMat[,ze], names(assignmentProbList[[ze]]))
-    })
     FactorsMat1 <- FactorsMat[split1_indices,];FactorsMat1_numeric <- FactorsMat_numeric[split1_indices,]
     FactorsMat2 <- FactorsMat[split2_indices,];FactorsMat2_numeric <- FactorsMat_numeric[split2_indices,]
 
