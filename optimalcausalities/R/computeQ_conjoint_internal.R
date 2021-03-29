@@ -35,7 +35,6 @@ computeQ_conjoint_internal <- function(FactorsMat, Yobs,
     }
 
     return(list("Qest"=Qest,
-                "Qest_se"=NULL,
                 "Q_wts"=my_wts,
                 "log_pr_w_new"=log_pr_w_new,
                 "log_pr_w"=log_pr_w))
