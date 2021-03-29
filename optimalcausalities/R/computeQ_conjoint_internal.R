@@ -1,7 +1,7 @@
-computeQ_conjoint_internal <- function(FactorsMat, Yobs,
-                              hypotheticalProbList,
-                              assignmentProbList,
-                              log_pr_w = NULL,
+computeQ_conjoint_internal <- function(FactorsMat_internal, Yobs_internal,
+                              hypotheticalProbList_internal,
+                              assignmentProbList_internal,
+                              log_pr_w_internal = NULL,
                               hajek = T,
                               computeLB  = F){
     if(is.null(log_pr_w)){

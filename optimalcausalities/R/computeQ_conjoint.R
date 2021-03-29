@@ -35,11 +35,12 @@ computeQ_conjoint <- function(FactorsMat,
     match(FactorsMat[,ze], names(assignmentProbList[[ze]]))
   })
   if(!is.null(hypotheticalProbList)){
-    Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat_numeric,
-                                       Yobs=Yobs,
-                                       log_pr_w = NULL,
-                                       assignmentProbList = assignmentProbList,
-                                       hypotheticalProbList = hypotheticalProbList, hajek = T)
+    Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
+                                       Yobs_internal=Yobs,
+                                       log_pr_w_internal = NULL,
+                                       assignmentProbList_internal = assignmentProbList,
+                                       hypotheticalProbList_internal = hypotheticalProbList,
+                                       hajek = T)
     SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat_numeric,
                                 Yobs=Yobs,
                                 log_pr_w = NULL,log_treatment_combs = NULL,
@@ -70,9 +71,10 @@ computeQ_conjoint <- function(FactorsMat,
     ))
 
     # get denominator so we don't need to recompute it
-    low_pr_w    <-   as.vector(computeQ_conjoint_internal(FactorsMat = FactorsMat_numeric, Yobs=Yobs,
-                                  hypotheticalProbList = assignmentProbList,
-                                  assignmentProbList = assignmentProbList,
+    low_pr_w    <-   as.vector(computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
+                                  Yobs_internal=Yobs,
+                                  hypotheticalProbList_internal = assignmentProbList,
+                                  assignmentProbList_internal = assignmentProbList,
                                   hajek = T)$log_pr_w)
 
 
@@ -111,12 +113,12 @@ computeQ_conjoint <- function(FactorsMat,
     if(T == F){
         nloptr_sol <- ((cobyla_results <- nloptr::nloptr(x0 = theta_init ,
                                                                           eval_f =  function(theta_){
-                                                                              Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
-                                                                                                        Yobs=Yobs[split1_indices],
-                                                                                                        log_pr_w = low_pr_w[split1_indices],
-                                                                                                        assignmentProbList = assignmentProbList,
+                                                                              Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat1_numeric,
+                                                                                                        Yobs_internal = Yobs[split1_indices],
+                                                                                                        log_pr_w_internal = low_pr_w[split1_indices],
+                                                                                                        assignmentProbList_internal = assignmentProbList,
+                                                                                                        hypotheticalProbList_internal = vec2list(theta_),
                                                                                                         computeLB = optimizeLB,
-                                                                                                        hypotheticalProbList = vec2list(theta_),
                                                                                                         hajek = T)$Qest; if(findMax == T){Qhat <- -1*Qhat} #remember, solnp minimizes
                                                                               #print( Qhat )
                                                                               return( Qhat )},
@@ -148,11 +150,11 @@ computeQ_conjoint <- function(FactorsMat,
     myDelta <- 0.001;  myRho <- 1;  tol <- 0.00002;
     optim_max_hajek <- (rsolnp_results <- Rsolnp::solnp(pars = theta_init,
                                         fun =  function(theta_){
-                                          Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
-                                                            Yobs=Yobs[split1_indices],
-                                                            log_pr_w = low_pr_w[split1_indices],
-                                                            assignmentProbList = assignmentProbList,
-                                                            hypotheticalProbList = vec2list(theta_),
+                                          Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat1_numeric,
+                                                            Yobs_internal=Yobs[split1_indices],
+                                                            log_pr_w_internal = low_pr_w[split1_indices],
+                                                            assignmentProbList_internal = assignmentProbList,
+                                                            hypotheticalProbList_internal = vec2list(theta_),
                                                             computeLB = optimizeLB,
                                                             hajek = T)$Qest; if(findMax == T){Qhat <- -1*Qhat} #remember, solnp minimizes
                                           #if(runif(1)<0.1){print( Qhat )}
@@ -186,22 +188,22 @@ computeQ_conjoint <- function(FactorsMat,
       return( hypotheticalProbList[[ze]]  )   })
     names(hypotheticalProbList) <- names( assignmentProbList )
 
-    Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
-                        Yobs=Yobs[split1_indices],
-                        log_pr_w = low_pr_w[split1_indices],
-                        assignmentProbList = assignmentProbList,
-                        hypotheticalProbList = hypotheticalProbList, hajek = T)
+    Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat1_numeric,
+                        Yobs_internal = Yobs[split1_indices],
+                        log_pr_w_internal = low_pr_w[split1_indices],
+                        assignmentProbList_internal = assignmentProbList,
+                        hypotheticalProbList_internal = hypotheticalProbList, hajek = T)
     #Qhat$Qest
     SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat1_numeric,
                           Yobs=Yobs[split1_indices],
                           log_pr_w = low_pr_w[split1_indices],log_treatment_combs = log_treatment_combs,
                           assignmentProbList=assignmentProbList, returnLog = F,
                           hypotheticalProbList=hypotheticalProbList)
-    Qhat_split <- computeQ_conjoint_internal(FactorsMat = FactorsMat2_numeric,
-                              Yobs=Yobs[split2_indices],
-                              log_pr_w = low_pr_w[split2_indices],
-                              assignmentProbList = assignmentProbList,
-                              hypotheticalProbList = hypotheticalProbList, hajek = T)
+    Qhat_split <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat2_numeric,
+                              Yobs_internal = Yobs[split2_indices],
+                              log_pr_w_internal = low_pr_w[split2_indices],
+                              assignmentProbList_internal = assignmentProbList,
+                              hypotheticalProbList_internal = hypotheticalProbList, hajek = T)
     SE_Q_split <- computeQse_conjoint(FactorsMat=FactorsMat2_numeric,
                                Yobs=Yobs[split2_indices],
                                log_pr_w = low_pr_w[split2_indices],log_treatment_combs = log_treatment_combs,
@@ -229,12 +231,13 @@ computeQ_conjoint <- function(FactorsMat,
             LowerUpperCloserToViolated = apply(tmp_mat,1,which.max)
             LagrangianTerm <- c(rsolnp_results$lagrange)*
               sapply(1:length(LowerUpperCloserToViolated),function(ze){ tmp_mat[ze,LowerUpperCloserToViolated[ze]] })
-            mainContrib <- computeQ_conjoint_internal(FactorsMat = FactorsMat_,
-                                             Yobs=Yobs[INDICES_mEst],
-                                             log_pr_w = low_pr_w[INDICES_mEst],
-                                             assignmentProbList = assignmentProbList,
+            mainContrib <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_,
+                                             Yobs_internal = Yobs[INDICES_mEst],
+                                             log_pr_w_internal = low_pr_w[INDICES_mEst],
+                                             assignmentProbList_internal = assignmentProbList,
+                                             hypotheticalProbList_internal = hypotheticalProbList,
                                              computeLB = optimizeLB,
-                                             hypotheticalProbList = hypotheticalProbList, hajek = T)$Qest
+                                             hajek = T)$Qest
             if(findMax == T){mainContrib <- -1*mainContrib} #remember, we're minimizing the final objective function
             TOTAL_OBJ = mainContrib  +  sum(LagrangianTerm)
             return( TOTAL_OBJ )   }, x = theta)))) ;
