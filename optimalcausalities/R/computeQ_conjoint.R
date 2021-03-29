@@ -30,7 +30,7 @@ computeQ_conjoint <- function(FactorsMat,
                               split1_indices=NULL, split2_indices=NULL,
                               computeThetaSEs = F, openBrowser = F,
                               hajek = T,findMax=T,quiet=T,
-                              optimizeLB = T){
+                              optimizeLB = T,box_epsilon=0.01){
   if(!is.null(hypotheticalProbList)){
     Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat,
                                        Yobs=Yobs,
@@ -78,10 +78,9 @@ computeQ_conjoint <- function(FactorsMat,
     theta_init = unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rev(ze))))))}))
 
     log_se_ub <- log(se_ub)
-    my_ep = 0.005#
     UB_VEC <- LB_VEC <- unlist(assignmentProbList)
-    UB_VEC[] <- 1 - my_ep
-    LB_VEC[] <- my_ep
+    UB_VEC[] <- 1 - box_epsilon
+    LB_VEC[] <- box_epsilon
     LB_VEC <- c(-Inf, LB_VEC)
     UB_VEC <- c(log_se_ub, UB_VEC)
 
@@ -143,7 +142,7 @@ computeQ_conjoint <- function(FactorsMat,
 
     # augmented lagrangian
     {
-    myDelta <- 0.001;  myRho <- 1;  tol <- 0.0002;
+    myDelta <- 0.001;  myRho <- 1;  tol <- 0.00002;
     optim_max_hajek <- (rsolnp_results <- Rsolnp::solnp(pars = theta_init,
                                         fun =  function(theta_){
                                           Qhat <- computeQ_conjoint_internal(FactorsMat = FactorsMat1_numeric,
@@ -154,7 +153,7 @@ computeQ_conjoint <- function(FactorsMat,
                                                             computeLB = optimizeLB,
                                                             hajek = T)$Qest; if(findMax == T){Qhat <- -1*Qhat} #remember, solnp minimizes
                                           #if(runif(1)<0.1){print( Qhat )}
-                                          print( Qhat )
+                                          #print( Qhat )
                                           return( Qhat )
                                         }
                                         ,control=list(rho=myRho,tol=tol, delta = myDelta,trace = !quiet),
