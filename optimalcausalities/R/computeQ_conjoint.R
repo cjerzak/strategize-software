@@ -67,7 +67,7 @@ computeQ_conjoint <- function(FactorsMat,
     ))
 
     # get denominator so we don't need to recompute it
-    low_pr_w    <-   as.vector(computeQ_conjoint_internal(FactorsMat = FactorsMat, Yobs=Yobs,
+    low_pr_w    <-   as.vector(computeQ_conjoint_internal(FactorsMat = FactorsMat_numeric, Yobs=Yobs,
                                   hypotheticalProbList = assignmentProbList,
                                   assignmentProbList = assignmentProbList,
                                   hajek = T)$log_pr_w)
