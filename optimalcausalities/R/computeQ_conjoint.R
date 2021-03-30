@@ -30,6 +30,7 @@ computeQ_conjoint <- function(FactorsMat,
                               split1_indices=NULL, split2_indices=NULL,
                               computeThetaSEs = F, openBrowser = F,
                               hajek = T,findMax=T,quiet=T,
+                              uniformInitialization = F,
                               control = list(delta = NULL,
                                              rho = NULL,
                                              tol = 0.00002),
@@ -84,6 +85,10 @@ computeQ_conjoint <- function(FactorsMat,
     # tricky initializations + simplex forcings
     all_names = unlist(lapply(assignmentProbList,function(ze){names(ze)}))
     theta_init = unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rev(ze))))))}))
+    if(uniformInitialization == T){
+      uniformInitialization <- unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rep(1/length(ze),times=length(ze)) )))))}))
+    }
+    print( uniformInitialization[[1]] )
 
     log_se_ub <- log(se_ub)
     UB_VEC <- LB_VEC <- unlist(assignmentProbList)
