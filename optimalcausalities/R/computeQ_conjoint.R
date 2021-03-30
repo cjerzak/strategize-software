@@ -34,7 +34,7 @@ computeQ_conjoint <- function(FactorsMat,
                               control = list(delta = NULL,
                                              rho = NULL,
                                              tol = NULL),
-                              optimizeLB = T,box_epsilon=0.01){
+                              optimizeLB = T,box_epsilon=0.01,hypotheticalN=NULL){
 
   FactorsMat_numeric <- sapply(1:ncol(FactorsMat),function(ze){
     match(FactorsMat[,ze], names(assignmentProbList[[ze]]))  })
@@ -46,10 +46,11 @@ computeQ_conjoint <- function(FactorsMat,
                                        hypotheticalProbList_internal = hypotheticalProbList,
                                        hajek = T)
     SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat_numeric,
-                                Yobs=Yobs,
+                                Yobs=Yobs,hypotheticalN = hypotheticalN,
                                 log_pr_w = NULL,log_treatment_combs = NULL,
                                 assignmentProbList=assignmentProbList, returnLog = F,
-                                hypotheticalProbList=hypotheticalProbList)
+                                hypotheticalProbList=hypotheticalProbList,
+                                hypotheticalN = hypotheticalN)
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
     RETURN_LIST <-   list("Q_point" = Qhat$Qest,
                           "Q_se" = SE_Q,
@@ -139,6 +140,7 @@ computeQ_conjoint <- function(FactorsMat,
                                                                                                            Yobs=Yobs[split1_indices],
                                                                                                            log_pr_w = low_pr_w[split1_indices],
                                                                                                            returnLog = T,
+                                                                                                           hypotheticalN = hypotheticalN,
                                                                                                            assignmentProbList=assignmentProbList,
                                                                                                            log_treatment_combs = log_treatment_combs,
                                                                                                            hypotheticalProbList=hypoProbsList__)
@@ -172,6 +174,7 @@ computeQ_conjoint <- function(FactorsMat,
                                                                           Yobs=Yobs[split1_indices],
                                                                           log_pr_w = low_pr_w[split1_indices],
                                                                           returnLog = T,
+                                                                          hypotheticalN = hypotheticalN,
                                                                           assignmentProbList=assignmentProbList,
                                                                           log_treatment_combs = log_treatment_combs,
                                                                           hypotheticalProbList = hypoProbsList__)
@@ -199,7 +202,7 @@ computeQ_conjoint <- function(FactorsMat,
                         hypotheticalProbList_internal = hypotheticalProbList, hajek = T)
     #Qhat$Qest
     SE_Q <- computeQse_conjoint(FactorsMat=FactorsMat1_numeric,
-                          Yobs=Yobs[split1_indices],
+                          Yobs=Yobs[split1_indices],hypotheticalN = hypotheticalN,
                           log_pr_w = low_pr_w[split1_indices],log_treatment_combs = log_treatment_combs,
                           assignmentProbList=assignmentProbList, returnLog = F,
                           hypotheticalProbList=hypotheticalProbList)
@@ -209,7 +212,7 @@ computeQ_conjoint <- function(FactorsMat,
                               assignmentProbList_internal = assignmentProbList,
                               hypotheticalProbList_internal = hypotheticalProbList, hajek = T)
     SE_Q_split <- computeQse_conjoint(FactorsMat=FactorsMat2_numeric,
-                               Yobs=Yobs[split2_indices],
+                               Yobs=Yobs[split2_indices],hypotheticalN = hypotheticalN,
                                log_pr_w = low_pr_w[split2_indices],log_treatment_combs = log_treatment_combs,
                                assignmentProbList=assignmentProbList, returnLog = F,
                                hypotheticalProbList=hypotheticalProbList)
@@ -226,7 +229,7 @@ computeQ_conjoint <- function(FactorsMat,
         function(theta){ with(data, {
           my_grad = ((c(rootSolve::gradient(f = function(x){
             hypotheticalProbList_ <- vec2list(x)
-            logSE__ <-  computeQse_conjoint(FactorsMat=FactorsMat_,
+            logSE__ <-  computeQse_conjoint(FactorsMat=FactorsMat_, hypotheticalN = hypotheticalN,
                                             Yobs=Yobs[INDICES_mEst],
                                             log_pr_w = low_pr_w[INDICES_mEst],
                                             log_treatment_combs = log_treatment_combs,

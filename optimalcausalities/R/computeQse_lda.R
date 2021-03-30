@@ -1,6 +1,6 @@
 computeQse_lda = function(THETA__,INDICES_, DOC_INDICES_U, D_INDICES_U,
                             PI_MAT_INPUT,MARGINAL_BOUNDS,DOC_LIST,
-                            MODAL_DOC_LEN,
+                            MODAL_DOC_LEN,hypotheticalN = NULL,
                             TERMS_MAT_INPUT,LOG_TREATCOMBS,YOBS,
                             returnLog = T,LOG_PR_W=NULL){
 
@@ -33,8 +33,10 @@ computeQse_lda = function(THETA__,INDICES_, DOC_INDICES_U, D_INDICES_U,
     scaleFactor = sum(YOBS[INDICES_]^2 * prop.table(exp(NUM__ - LOG_PR_W  ))  )
 
     # Combine terms to get overall variance - log scale for improved numerical stability
-    upperBound_se_VE_log = (log(scaleFactor) + LOG_TREATCOMBS + log_maxProb - log(length(INDICES_)))
-    upperBound_se_EV_log = (log(var(YOBS[INDICES_])) + LOG_TREATCOMBS + log_maxProb - log(length(INDICES_)))
+    logN <- log(length(INDICES_))
+    if(!is.null(hypotheticalN)){logN <- log(hypotheticalN)}
+    upperBound_se_VE_log = (log(scaleFactor) + LOG_TREATCOMBS + log_maxProb - logN)
+    upperBound_se_EV_log = (log(var(YOBS[INDICES_])) + LOG_TREATCOMBS + log_maxProb - logN)
     upperBound_se_ <- 0.5*matrixStats::logSumExp(c(upperBound_se_EV_log,upperBound_se_VE_log))#0.5 for sqrt
     if(returnLog == F){upperBound_se_ <- exp(upperBound_se_) }
     return( upperBound_se_ )

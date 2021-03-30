@@ -39,8 +39,10 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   ))
 
   # Combine terms to get VE and EV
-  upperBound_se_VE_log = (log(scaleFactor) + log_treatment_combs + log_maxProb - log(length(Yobs)))
-  upperBound_se_EV_log = (log(var(Yobs)) + log_treatment_combs + log_maxProb - log(length(Yobs)))
+  logN <- log(length(Yobs))
+  if(!is.null(hypotheticalN)){logN <- log(hypotheticalN)}
+  upperBound_se_VE_log = (log(scaleFactor) + log_treatment_combs + log_maxProb - logN)
+  upperBound_se_EV_log = (log(var(Yobs)) + log_treatment_combs + log_maxProb - logN)
   upperBound_se_ <- 0.5*matrixStats::logSumExp(c(upperBound_se_EV_log,upperBound_se_VE_log))#0.5 for sqrt
 
   # log scale is used in optimization to improve numerical stability
