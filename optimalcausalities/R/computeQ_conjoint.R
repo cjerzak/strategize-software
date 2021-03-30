@@ -190,7 +190,7 @@ computeQ_conjoint <- function(FactorsMat,
     hypotheticalProbList <- vec2list(optim_max_hajek)
     hypotheticalProbList <- sapply(1:length(hypotheticalProbList),function(ze){
       names(hypotheticalProbList[[ze]]) <- names( assignmentProbList[[ze]] )
-      return( hypotheticalProbList[[ze]]  )   })
+      return( list(hypotheticalProbList[[ze]]  ) )  })
     names(hypotheticalProbList) <- names( assignmentProbList )
 
     Qhat <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat1_numeric,
@@ -230,8 +230,7 @@ computeQ_conjoint <- function(FactorsMat,
                                             log_treatment_combs = log_treatment_combs,
                                             assignmentProbList=assignmentProbList, returnLog = F,
                                             hypotheticalProbList=hypotheticalProbList_)
-            constrain_vec <- unlist(hypotheticalProbList_)
-            constrainThese_ <- c(logSE__,constrain_vec)
+            constrainThese_ <- c(logSE__, unlist(hypotheticalProbList_))
 
             tmp_mat = cbind(LB_VEC - constrainThese_, constrainThese_ - UB_VEC )
             LowerUpperCloserToViolated = apply(tmp_mat,1,which.max)
@@ -297,6 +296,7 @@ computeQ_conjoint <- function(FactorsMat,
                               "Q_se_split" = SE_Q_split,
                               "Q_interval_split" = Q_interval_split,
                               "Q_wts_split" = Qhat_split$Q_wts,
+                       "convergence"= rsolnp_results$convergence,
                         "Output.Description"=c(""))
   }
   return(RETURN_LIST)
