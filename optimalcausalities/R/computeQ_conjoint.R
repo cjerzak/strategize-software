@@ -216,7 +216,10 @@ computeQ_conjoint <- function(FactorsMat,
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
     Q_interval_split <- c(Qhat_split$Qest - 1.64*SE_Q_split, Qhat_split$Qest + 1.64*SE_Q_split)
 
-    if(computeThetaSEs == T){
+    if(computeThetaSEs == T & rsolnp_results$convergence == 0){
+        print("warning: no convergence, asymptotic SEs not valid and not reported!")
+    }
+    if(computeThetaSEs == T & rsolnp_results$convergence == 0){
       #INDICES_mEst <- split2_indices; FactorsMat_ <- FactorsMat2_numeric
       INDICES_mEst <- split1_indices; FactorsMat_ <- FactorsMat1_numeric
       library(geex); ex_eeFUN_max <- function(data){
