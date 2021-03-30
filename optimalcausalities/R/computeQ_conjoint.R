@@ -218,7 +218,7 @@ computeQ_conjoint <- function(FactorsMat,
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
     Q_interval_split <- c(Qhat_split$Qest - 1.64*SE_Q_split, Qhat_split$Qest + 1.64*SE_Q_split)
 
-    if(computeThetaSEs == T & rsolnp_results$convergence == 0){
+    if(computeThetaSEs == T & rsolnp_results$convergence != 0){
         print("warning: no convergence, asymptotic SEs not valid and not reported!")
     }
     if(computeThetaSEs == T & rsolnp_results$convergence == 0){
