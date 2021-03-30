@@ -49,8 +49,7 @@ computeQ_conjoint <- function(FactorsMat,
                                 Yobs=Yobs,hypotheticalN = hypotheticalN,
                                 log_pr_w = NULL,log_treatment_combs = NULL,
                                 assignmentProbList=assignmentProbList, returnLog = F,
-                                hypotheticalProbList=hypotheticalProbList,
-                                hypotheticalN = hypotheticalN)
+                                hypotheticalProbList=hypotheticalProbList)
     Q_interval <- c(Qhat$Qest - 1.64*SE_Q,  Qhat$Qest + 1.64*SE_Q)
     RETURN_LIST <-   list("Q_point" = Qhat$Qest,
                           "Q_se" = SE_Q,

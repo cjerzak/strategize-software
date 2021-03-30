@@ -3,6 +3,7 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
                                 assignmentProbList,
                                 log_pr_w = NULL,
                                 hajek = T,
+                                hypotheticalN = NULL,
                                 returnLog = T,
                                 log_treatment_combs=NULL){
 
