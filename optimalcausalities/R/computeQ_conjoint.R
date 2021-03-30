@@ -88,7 +88,6 @@ computeQ_conjoint <- function(FactorsMat,
     if(uniformInitialization == T){
       theta_init <- unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rep(1/length(ze),times=length(ze)) )))))}))
     }
-    print( uniformInitialization[[1]] )
 
     log_se_ub <- log(se_ub)
     UB_VEC <- LB_VEC <- unlist(assignmentProbList)
@@ -240,7 +239,7 @@ computeQ_conjoint <- function(FactorsMat,
                                              Yobs_internal = Yobs[INDICES_mEst],
                                              log_pr_w_internal = low_pr_w[INDICES_mEst],
                                              assignmentProbList_internal = assignmentProbList,
-                                             hypotheticalProbList_internal = hypotheticalProbList,
+                                             hypotheticalProbList_internal = hypotheticalProbList_,
                                              computeLB = optimizeLB,
                                              hajek = T)$Qest
             if(findMax == T){mainContrib <- -1*mainContrib} #remember, we're minimizing the final objective function
