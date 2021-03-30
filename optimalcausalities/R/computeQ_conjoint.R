@@ -24,7 +24,7 @@
 
 computeQ_conjoint <- function(FactorsMat,
                               Yobs,
-                              assignmentProbList,
+                              assignmentProbList = NULL,
                               hypotheticalProbList = NULL,
                               se_ub = NULL,
                               split1_indices=NULL, split2_indices=NULL,
@@ -33,7 +33,7 @@ computeQ_conjoint <- function(FactorsMat,
                               uniformInitialization = F,
                               control = list(delta = NULL,
                                              rho = NULL,
-                                             tol = 0.00002),
+                                             tol = NULL),
                               optimizeLB = T,box_epsilon=0.01){
 
   FactorsMat_numeric <- sapply(1:ncol(FactorsMat),function(ze){
@@ -86,7 +86,7 @@ computeQ_conjoint <- function(FactorsMat,
     all_names = unlist(lapply(assignmentProbList,function(ze){names(ze)}))
     theta_init = unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rev(ze))))))}))
     if(uniformInitialization == T){
-      uniformInitialization <- unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rep(1/length(ze),times=length(ze)) )))))}))
+      theta_init <- unlist(lapply(assignmentProbList,function(ze){c(rev(c(compositions::alr(t(rep(1/length(ze),times=length(ze)) )))))}))
     }
     print( uniformInitialization[[1]] )
 
@@ -164,8 +164,6 @@ computeQ_conjoint <- function(FactorsMat,
                                                             hypotheticalProbList_internal = vec2list(theta_),
                                                             computeLB = optimizeLB,
                                                             hajek = T)$Qest; if(findMax == T){Qhat <- -1*Qhat} #remember, solnp minimizes
-                                          #if(runif(1)<0.1){print( Qhat )}
-                                          #print( Qhat )
                                           return( Qhat )
                                         }
                                         ,control=list(rho=control$rho,tol=control$tol, delta = control$delta,trace = !quiet),
@@ -179,7 +177,7 @@ computeQ_conjoint <- function(FactorsMat,
                                                                           log_treatment_combs = log_treatment_combs,
                                                                           hypotheticalProbList = hypoProbsList__)
                                               #if(runif(1)<0.1){print( log_Qse )}
-                                              return( c(log_Qse,unlist(hypoProbsList__)) )
+                                              return( c(log_Qse, unlist(hypoProbsList__)) )
                                         },
                                         ineqLB = LB_VEC,ineqUB = UB_VEC))$pars
       if(rsolnp_results$convergence == 0){
@@ -232,7 +230,8 @@ computeQ_conjoint <- function(FactorsMat,
                                             log_treatment_combs = log_treatment_combs,
                                             assignmentProbList=assignmentProbList, returnLog = F,
                                             hypotheticalProbList=hypotheticalProbList_)
-            constrainThese_ <- c(logSE__,unlist(hypotheticalProbList_))
+            constrain_vec <- unlist(hypotheticalProbList_)
+            constrainThese_ <- c(logSE__,constrain_vec)
 
             tmp_mat = cbind(LB_VEC - constrainThese_, constrainThese_ - UB_VEC )
             LowerUpperCloserToViolated = apply(tmp_mat,1,which.max)
