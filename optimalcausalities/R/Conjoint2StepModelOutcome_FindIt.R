@@ -39,10 +39,10 @@
 
 generate_ModelOutcome_FindIt <- function(){
   {
-    library(FindIt)
-    for(col_ in colnames(w_orig)){ full_dat[,col_] <- as.factor(full_dat[,col_]) }
-    CausalANOVA_factors <- colnames(w_orig)
     if(T == F){
+      library(FindIt)
+      for(col_ in colnames(w_orig)){ full_dat[,col_] <- as.factor(full_dat[,col_]) }
+      CausalANOVA_factors <- colnames(w_orig)
       DiffType <- "ANOVA"
       full_dat$pair_id <- paste(full_dat$respondentIndex, full_dat$task, sep = "_")
       MaxMinIters <- 1:c(1+MaxMin)
