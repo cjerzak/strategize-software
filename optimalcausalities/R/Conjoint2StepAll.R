@@ -4,14 +4,14 @@
 #'
 #' @usage
 #'
-#' computeQ_TwoStep(x, y, by ...)
+#' computeQ_TwoStep(x, Y, by ...)
 #'
-#' @param x,y data frames to be merged
+#' @param x,Y data frames to be merged
 #'
 #' @return `z` The merged data frame.
 #' @export
 #'
-#' @details `LinkOrgs` automatically processes the name text for each dataset (specified by `by`, `by.x`, and/or `by.y`. Users may specify the following options:
+#' @details `LinkOrgs` automatically processes the name text for each dataset (specified by `by`, `by.x`, and/or `by.Y`. Users may specify the following options:
 #'
 #' - Set `DistanceMeasure` to control algorithm for computing pairwise string distances. Options include "`osa`", "`jaccard`", "`jw`". See `?stringdist::stringdist` for all options. (Default is "`jaccard`")
 #'
@@ -21,13 +21,13 @@
 #' x_orgnames <- c("apple","oracle","enron inc.","mcdonalds corporation")
 #' y_orgnames <- c("apple corp","oracle inc","enron","mcdonalds co")
 #' x <- data.frame("orgnames_x"=x_orgnames)
-#' y <- data.frame("orgnames_y"=y_orgnames)
+#' Y <- data.frame("orgnames_y"=y_orgnames)
 #'
 #' # Perform merge
 #' linkedOrgs <- LinkOrgs(x = x,
-#'                        y = y,
+#'                        Y = Y,
 #'                        by.x = "orgnames_x",
-#'                        by.y = "orgnames_y",
+#'                        by.Y = "orgnames_y",
 #'                        MaxDist = 0.6)
 #'
 #' print( linkedOrgs )
@@ -36,25 +36,25 @@
 #'
 #' @md
 
-computeQ_TwoStep       <-          function(y,
-                                            w,
+computeQ_TwoStep       <-          function(Y,
+                                            W,
                                             lambda,
                                             varcov_cluster_variable = NULL,
                                             competing_respondent_group_variable = NULL,
                                             competing_candidate_group_variable = NULL,
                                             pair_id = NULL,
+                                            p_list = NULL,
                                             full_dat = full_dat,
                                             kEst = 1,
                                             nSGD = 100,
-                                            p_list = NULL,
                                             diff = F, MaxMin = F,
-                                            useRegularization = F,
-                                            openBrowser = F,
-                                            forceGaussianFamily = F,
+                                            UseRegularization = F,
+                                            OpenBrowser = F,
+                                            ForceGaussianFamily = F,
                                             A_INIT_SD = 0,
                                             TypePen = "KL",
                                             ComputeSEs = T,
-                                            optimType = "default"){
+                                            OptimType = "default"){
 
   # load in packages - may help memory bugs to load them in thru package
   if(T == T){
@@ -100,18 +100,18 @@ computeQ_TwoStep       <-          function(y,
   }
 
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
-  if(openBrowser == T){ browser() }
+  if(OpenBrowser == T){ browser() }
   nSGD_orig <- nSGD
   ai <- as.integer
-  w_orig <- w
+  w_orig <- W
   #usedRegularization <- F
   #MaxMinType <- "OneRoundDouble"
   #MaxMinType <- "OneRoundSingle"
   MaxMinType <- "TwoRoundSingle"
 
   glm_family = "gaussian"; glm_outcome_transform <- tf$identity
-  if(!forceGaussianFamily){
-    if(mean(unique(y) %in% c(0,1)) == 1){
+  if(!ForceGaussianFamily){
+    if(mean(unique(Y) %in% c(0,1)) == 1){
       glm_family = "binomial";
       glm_outcome_transform <- tf$nn$sigmoid;
       #glm_outcome_transform <- function(x){return(   0.5*(1+tf$math$erf(x / sqrt(2)) ))  } #probit; glm_outcome_transform(1.2); pnorm(1.2)
@@ -125,13 +125,13 @@ computeQ_TwoStep       <-          function(y,
   if(!is.null(p_list) & !is.null(names(p_list[[1]]))){
     names_list <- lapply(p_list,function(zer){list(names(zer))})
   }
-  w <- sapply(1:ncol(w),function(zer){
-    match(w[,zer],names_list[[zer]][[1]]) })
+  W <- sapply(1:ncol(W),function(zer){
+    match(W[,zer],names_list[[zer]][[1]]) })
 
   # get info about # of levels per factor
-  factor_levels_full <- factor_levels <- apply(w,2,function(zer){length(unique(zer))})
+  factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
-  if(diff == T){
+  if(diff == F){
     initialize_ModelOutcome_FindIt <- paste(deparse(generate_ModelOutcome_FindIt),collapse="\n")
     initialize_ModelOutcome_FindIt <- gsub(initialize_ModelOutcome_FindIt,pattern="function \\(\\)",replace="")
     eval( parse( text = initialize_ModelOutcome_FindIt ),envir = evaluation_environment )
@@ -139,42 +139,47 @@ computeQ_TwoStep       <-          function(y,
 
   # obtain outcome models
   if(T == T){
-    useRegularization_ORIG <- useRegularization
-    Groups <- sort(unique(competing_candidate_group_variable))
+    UseRegularization_ORIG <- UseRegularization
     Rounds <- c(0,1)
 
-    #Rounds <- 1;GroupCounter <- 2
-    for(Round_ in Rounds){
-    for(GroupCounter in c(1,2)){
+    nRounds <- GroupsPool <- 1; RoundsPool <- 1
+    if(MaxMin){
+      nRounds <- 2
+      RoundsPool <- c(0,1)
+      GroupsPool <- sort(unique(competing_candidate_group_variable))
+    }
+
+    for(Round_ in RoundsPool){
+    for(GroupCounter in 1:length(GroupsPool)){
       print(c(Round_, GroupCounter))
       # select data to use for each iteration
-      #w_ <- w; y_ <- y; varcov_cluster_variable_ <- varcov_cluster_variable
-      if(MaxMin == F){ indi_ <- 1:nrow( full_dat )  }
+      #W_ <- W; Y_ <- Y; varcov_cluster_variable_ <- varcov_cluster_variable
+      UseRegularization <- UseRegularization_ORIG
+      if(MaxMin == F){ indi_ <- 1:length( Y )  }
       if(MaxMin == T){
-        useRegularization <- useRegularization_ORIG
         if(Round_ == 0){
-          indi_ <- which( competing_respondent_group_variable == Groups[ GroupCounter ] &
+          indi_ <- which( competing_respondent_group_variable == GroupsPool[ GroupCounter ] &
                       ( full_dat$Party.competition == "Same" &
-                          competing_candidate_group_variable == Groups[GroupCounter]) )
+                          competing_candidate_group_variable == GroupsPool[GroupCounter]) )
         }
         if(Round_ == 1){
-          indi_ <- which( competing_respondent_group_variable == Groups[ GroupCounter ] &
+          indi_ <- which( competing_respondent_group_variable == GroupsPool[ GroupCounter ] &
                             ( full_dat$Party.competition == "Different" &
-                                competing_candidate_group_variable %in% Groups) )
+                                competing_candidate_group_variable %in% GroupsPool) )
         }
-
-        # subset data
-        w_ <- w[indi_,]; y_ <- y[indi_];
-        varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
-        full_dat_ <- full_dat[ indi_ ,]
-        pair_id_ <- pair_id[ indi_ ]
-        DagProp <- prop.table(table(competing_respondent_group_variable[competing_respondent_group_variable %in% Groups]))[2]
-        #table(full_dat_$Party.affiliation_clean)
-        #table(full_dat_$R_Partisanship)
-        #table(table(pair_id_))
+        DagProp <- prop.table(table(competing_respondent_group_variable[competing_respondent_group_variable %in% GroupsPool]))[2]
       }
 
-      # run models with inputs: w_; y_; varcov_cluster_variable_; full_dat_
+      # subset data
+      W_ <- W[indi_,]; Y_ <- Y[indi_];
+      varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
+      full_dat_ <- full_dat[ indi_ ,]
+      pair_id_ <- pair_id[ indi_ ]
+      #table(full_dat_$Party.affiliation_clean)
+      #table(full_dat_$R_Partisanship)
+      #table(table(pair_id_))
+
+      # run models with inputs: W_; Y_; varcov_cluster_variable_; full_dat_
       initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")
       initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
@@ -197,16 +202,29 @@ computeQ_TwoStep       <-          function(y,
     }
     }
   }
+
   if(!"vcov_OutcomeModel_dag0" %in% ls()){
-    vcov_OutcomeModel_dag0 <- vcov_OutcomeModel_dag }
+    vcov_OutcomeModel_dag0 <- vcov_OutcomeModel_dag
+    EST_INTERCEPT_tf_dag0 <- EST_INTERCEPT_tf_dag
+    EST_COEFFICIENTS_tf_dag0 <- EST_COEFFICIENTS_tf_dag
+    REGRESSION_PARAMS_jax_dag0 <- REGRESSION_PARAMS_jax_dag
+  }
   if(!"vcov_OutcomeModel_ast0" %in% ls()){
-    vcov_OutcomeModel_dag0 <- vcov_OutcomeModel_dag }
+    vcov_OutcomeModel_ast0 <- vcov_OutcomeModel_dag
+    EST_INTERCEPT_tf_ast0 <- EST_INTERCEPT_tf_dag
+    EST_COEFFICIENTS_tf_ast0 <- EST_COEFFICIENTS_tf_dag
+    REGRESSION_PARAMS_jax_ast0 <- REGRESSION_PARAMS_jax_dag
+  }
   if(!"vcov_OutcomeModel_ast" %in% ls()){
-    vcov_OutcomeModel_ast <- vcov_OutcomeModel_dag }
+    vcov_OutcomeModel_ast <- vcov_OutcomeModel_dag
+    EST_INTERCEPT_tf_ast <- EST_INTERCEPT_tf_dag
+    EST_COEFFICIENTS_tf_ast <- EST_COEFFICIENTS_tf_dag
+    REGRESSION_PARAMS_jax_ast <- REGRESSION_PARAMS_jax_dag
+  }
   print("Done fitting outcome models!...")
 
   n_main_params <- nrow( main_info )
-  if(is.null(p_list) & any(apply(w,2,function(zer){
+  if(is.null(p_list) & any(apply(W,2,function(zer){
     max(abs(prop.table(table(zer))-1/length(unique(zer))))})>0.1)){
     stop("Must adjust for non-uniform assignment probability!")
   }
@@ -215,7 +233,7 @@ computeQ_TwoStep       <-          function(y,
     p_vec <- unlist(p_list_red <- sapply(factor_levels,function(l_d){rep(1/l_d,times=l_d-1)}))
   }
   if(!is.null(p_list)){
-    if(any(names(p_list) != colnames(w))){stop("p_list and w not aligned")}
+    if(any(names(p_list) != colnames(W))){stop("p_list and W not aligned")}
     p_list_full <- p_list
     p_vec_full_PreRegularization <- p_list_full
     p_list_PreRegularization <- p_list
@@ -328,7 +346,7 @@ computeQ_TwoStep       <-          function(y,
                                         pi_star = jnp$array(pi_star_value_init_ast),
                                         EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf),
                                         EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf))
-  for(UseSinglePop in c(F,T)){
+  for(UseSinglePop in ifelse(MaxMin, yes = list(c(F,T)), no = list(T))[[1]]){
     # general specifications
     getQStar_diff_R <- function(pi_star_ast, pi_star_dag,
                                 EST_COEFFICIENTS_tf_ast, EST_INTERCEPT_tf_ast,
@@ -478,11 +496,11 @@ computeQ_TwoStep       <-          function(y,
                                                          a_vec_init_ast,a_vec_init_ast, jnp$array(1.))
 
   ## get exact result
-  if(optimType %in% c("exact","both")){
+  if(OptimType %in% c("exact","both")){
     pi_star_exact <- as.numeric(getPrettyPi(getPiStar_exact()))
   }
 
-  if(optimType != "exact"){
+  if(OptimType != "exact"){
   if(!diff){
     getFixedEntries <- tf_function(function(EST_COEFFICIENTS_tf){
         main_coef <- tf$gather(EST_COEFFICIENTS_tf, indices = main_indices_i0, axis=0L)
@@ -600,14 +618,17 @@ computeQ_TwoStep       <-          function(y,
                               P_VEC_FULL_dag,
                               LAMBDA){
         REGRESSION_PARAMETERS_ast <- gather_conv(REGRESSION_PARAMETERS_ast)
-        INTERCEPT_dag_ <- INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
-        COEFFICIENTS_dag_ <- COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
+        INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
+        COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
+
+        INTERCEPT_dag0_ <- INTERCEPT_ast0_ <- INTERCEPT_dag_ <- INTERCEPT_ast_
+        COEFFICIENTS_dag0_ <- COEFFICIENTS_ast0_ <- COEFFICIENTS_dag_ <- COEFFICIENTS_ast_
         if( MaxMin ){
           REGRESSION_PARAMETERS_dag <- gather_conv(REGRESSION_PARAMETERS_dag)
           INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag[[1]]
           COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag[[2]]
         }
-        if(length(Rounds) > 1){
+        if(nRounds > 1){
           REGRESSION_PARAMETERS_ast0 <- gather_conv(REGRESSION_PARAMETERS_ast0)
           INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0[[1]]
           COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0[[2]]
@@ -638,14 +659,19 @@ computeQ_TwoStep       <-          function(y,
                                                       LAMBDA_,Q_SIGN){
                 pi_star_full_i_ast <- getPrettyPi_conv_diff( pi_star_i_ast <- a2Simplex_conv_diff_use( a_i_ast ))
                 pi_star_full_i_dag <- getPrettyPi_conv_diff( pi_star_i_dag <- a2Simplex_conv_diff_use( a_i_dag ))
-                q__ <- getQStar_diff_MultiGroup_conv(
+
+                q__ <- ifelse(MaxMin,
+                       yes = list(getQStar_diff_MultiGroup_conv),
+                       no = list(getQStar_diff_SingleGroup_conv))[[1]](
                   pi_star_ast =  pi_star_i_ast,
                   pi_star_dag = pi_star_i_dag,
                   EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
                   EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
                   EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
                   EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
-                q__ <- jnp$take(q__,0L)
+                q_max <- q__ <- jnp$take(q__,0L)
+
+                if(MaxMin){
                 q_ast <- q__
                 q_dag <- jnp$subtract(jnp$array(1),q__)
                 cond_UseDag <- jnp$multiply(jnp$array(0.5),jnp$subtract(jnp$array(1.), Q_SIGN))
@@ -655,7 +681,7 @@ computeQ_TwoStep       <-          function(y,
                   jnp$multiply(cond_UseDag, q_dag),
                   jnp$multiply(cond_UseAst, q_ast)
                 )
-                if(length(Rounds)>1){
+                if(nRounds > 1){
                   q0_ast <- getQStar_diff_SingleGroup_conv(
                                 pi_star_ast =  pi_star_i_ast,
                                 pi_star_dag = p_vec_jnp,
@@ -689,6 +715,7 @@ computeQ_TwoStep       <-          function(y,
 
                   # find best profile for general that reaches 0.5 primary threshold
                   #q_max <- jnp$multiply( jax$nn$softplus(jnp$subtract(q_max,jnp$array(0.5))), q0)
+                }
                 }
                 if(TypePen == "L1"){
                   var_pen_ast__ <- jnp$multiply(LAMBDA_, jnp$negative(jnp$sum(jnp$abs(  jnp$subtract(  pi_star_full_i_ast, P_VEC_FULL_ast_ )  ))))
@@ -815,7 +842,9 @@ computeQ_TwoStep       <-          function(y,
         {
           pi_star_ast_full_simplex_ <- getPrettyPi_conv( pi_star_ast_ <- a2Simplex_conv_diff_use( a_i_ast ) )
           pi_star_dag_full_simplex_ <- getPrettyPi_conv( pi_star_dag_ <- a2Simplex_conv_diff_use( a_i_dag ))
-          q_star_ <- getQStar_diff_MultiGroup_conv(
+          q_star_ <- ifelse(MaxMin,
+                            yes = list(getQStar_diff_MultiGroup_conv),
+                            no = list(getQStar_diff_SingleGroup_conv))[[1]](
                                    pi_star_ast = pi_star_ast_,
                                    pi_star_dag = pi_star_dag_,
                                    EST_INTERCEPT_tf_ast = INTERCEPT_ast_, EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
@@ -835,10 +864,12 @@ computeQ_TwoStep       <-          function(y,
   }
 
   # Obtain solution via exact calculation
-  use_exact <- F; use_gd <- T; if(optimType != "gd"){
-  use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1) | optimType == "gd" |
+  print("Starting optimization...")
+  use_exact <- F; use_gd <- T;
+  if(OptimType != "gd"){
+  use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1) | OptimType == "gd" |
     (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5)
-  use_exact <- (  optimType == "both" |  (!use_gd) ); use_gd <- (  optimType == "both" |  (use_gd) )
+  use_exact <- (  OptimType == "both" |  (!use_gd) ); use_gd <- (  OptimType == "both" |  (use_gd) )
   }
   if(use_exact){
     results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
@@ -905,7 +936,8 @@ computeQ_TwoStep       <-          function(y,
     # optimize q for pi* then for pi_dag and so forth, change iterative
     #plot( REGRESSION_PARAMS_jax$to_py(),REGRESSION_PARAMS_jax_dag$to_py() );abline(a=0,b=1)
     #plot(p_vec_full_dot_jnp$to_py(), p_vec_full_dag_jnp$to_py());abline(a=0,b=1)
-    MaxMin <- T; gd_full_simplex <- T
+    #MaxMin <- T;
+    gd_full_simplex <- T
     gd_time <- system.time( q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
                              REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag,
@@ -946,7 +978,7 @@ computeQ_TwoStep       <-          function(y,
     # see https://github.com/google/jax/issues/1696 for debugging help
     jacobian_time <- ""
     jacobian_mat_gd <- jacobian_mat <- matrix(0,
-                              ncol = REGRESSION_PARAMS_jax_ast$shape[[1]],
+                              ncol = 4*REGRESSION_PARAMS_jax_ast$shape[[1]],
                               nrow = q_with_pi_star_full$shape$as_list()[1])
     diag(jacobian_mat_gd) <- diag(jacobian_mat) <- 1
     vcov_OutcomeModel_concat <- matrix(0,
@@ -980,17 +1012,26 @@ computeQ_TwoStep       <-          function(y,
     # summary(lm(as.numeric(sol_gd)~as.numeric(sol_exact)))
   }
 
-  if(optimType == "both"){
+  if(OptimType == "both"){
     plot(c(jacobian_mat_exact), c(jacobian_mat_gd)); abline(a=0,b=1)
   }
 
   # print time of jacobian calculation
+  # remember, the first three entries of output are:
+  # Qhat_population, Qhat, Qhat_dag
   print( jacobian_time )
   vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
   pi_star_numeric <- as.numeric( pi_star_full )
-  pi_star_se <- sqrt(  diag( vcov_PiStar )[-1] )
+
+  # drop the q part
+  if(diff){
+    pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] )
+  }
+  if(!diff){
+    pi_star_se <- sqrt(  diag( vcov_PiStar )[-1] )
+  }
 
   # setup pretty pi's
   if( diff == F ){
@@ -1053,7 +1094,9 @@ computeQ_TwoStep       <-          function(y,
                   "regularization_adjust_hash" = regularization_adjust_hash,
 
                   # reconstruct q info
-                  "Qfxn" = getQStar_diff_MultiGroup_conv,
+                  "Qfxn" = ifelse(MaxMin,
+                                  yes = list(getQStar_diff_MultiGroup_conv),
+                                  no = list(getQStar_diff_SingleGroup_conv))[[1]],
 
                   'p_vec_full_ast_jnp' = p_vec_full_ast_jnp,
                   'p_vec_full_dag_jnp' = p_vec_full_dag_jnp,
@@ -1065,7 +1108,8 @@ computeQ_TwoStep       <-          function(y,
                   "Q_point_mEst" = c(q_star),
                   "Q_se_mEst"= q_star_se,
                   "vcov_OutcomeModel" = vcov_OutcomeModel,
-                  "optimType" = optimType,
-                  "forceGaussianFamily" = forceGaussianFamily,
+                  "OptimType" = OptimType,
+                  "ForceGaussianFamily" = ForceGaussianFamily,
+                  "UsedRegularization" = UsedRegularization,
                   "model" = my_model) )
 }

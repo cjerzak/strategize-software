@@ -4,14 +4,14 @@
 #'
 #' @usage
 #'
-#' generate_ModelOutcome(x, y, by ...)
+#' generate_ModelOutcome(x, Y, by ...)
 #'
-#' @param x,y data frames to be merged
+#' @param x,Y data frames to be merged
 #'
 #' @return `z` The merged data frame.
 #' @export
 #'
-#' @details `LinkOrgs` automatically processes the name text for each dataset (specified by `by`, `by.x`, and/or `by.y`. Users may specify the following options:
+#' @details `LinkOrgs` automatically processes the name text for each dataset (specified by `by`, `by.x`, and/or `by.Y`. Users may specify the following options:
 #'
 #' - Set `DistanceMeasure` to control algorithm for computing pairwise string distances. Options include "`osa`", "`jaccard`", "`jw`". See `?stringdist::stringdist` for all options. (Default is "`jaccard`")
 #'
@@ -21,13 +21,13 @@
 #' x_orgnames <- c("apple","oracle","enron inc.","mcdonalds corporation")
 #' y_orgnames <- c("apple corp","oracle inc","enron","mcdonalds co")
 #' x <- data.frame("orgnames_x"=x_orgnames)
-#' y <- data.frame("orgnames_y"=y_orgnames)
+#' Y <- data.frame("orgnames_y"=y_orgnames)
 #'
 #' # Perform merge
 #' linkedOrgs <- LinkOrgs(x = x,
-#'                        y = y,
+#'                        Y = Y,
 #'                        by.x = "orgnames_x",
-#'                        by.y = "orgnames_y",
+#'                        by.Y = "orgnames_y",
 #'                        MaxDist = 0.6)
 #'
 #' print( linkedOrgs )
@@ -77,27 +77,28 @@ generate_ModelOutcome <- function(){
     interaction_info$dp_adj <- interaction_info$dp
 
     # regularization entry
+    UsedRegularization <- F
     ok_ <- F;ok_counter <- 0; while(ok_ == F){
       print(sprintf("ok_counter = %s", ok_counter))
       ok_counter <- ok_counter + 1
-      forceSparsity <- nrow(w) <= (nrow(interaction_info)+nrow(main_info) + 2)
+      forceSparsity <- nrow(W) <= (nrow(interaction_info)+nrow(main_info) + 2)
       if(forceSparsity){
         print("WARNING! More regression parameters than observations, enforcing sparsity...")
-        useRegularization <- T
+        UseRegularization <- T
       }
       if(diff){
         DiffType <- "glm"
         #table(table(pair_id_)); length(unique(pair_id_))
         pair_mat <- do.call(rbind, tapply(1:nrow(full_dat_), pair_id_, c) )
-        if(diff){
-          pair_mat <- do.call(rbind, tapply(1:nrow(full_dat_), pair_id_, function(zer){
-            zer[ order( competing_candidate_group_variable[zer]) ] }) )
+        if(!is.null(competing_candidate_group_variable)){
+           pair_mat <- do.call(rbind, tapply(1:nrow(full_dat_), pair_id_, function(zer){
+              zer[ order( competing_candidate_group_variable[zer]) ] }) )
         }
         main_dat_use <- main_dat <- apply(main_info,1,function(row_){
-          1*(w_[,row_[['d']]] == row_[['l']]) })
+          1*(W_[,row_[['d']]] == row_[['l']]) })
         if(ok_counter > 1){
           main_dat_use <- apply(main_info_PreRegularization,1,function(row_){
-            1*(w_[,row_[['d']]] == row_[['l']]) })
+            1*(W_[,row_[['d']]] == row_[['l']]) })
         }
         interacted_dat <- NULL;if(nrow(interaction_info)>0){
           interacted_dat <- apply(interaction_info,1,function(row_){
@@ -105,7 +106,7 @@ generate_ModelOutcome <- function(){
               1*(main_dat_use[,row_[["dplp_index"]]]) })
           rm( main_dat_use )
         }
-        y_glm <- y_[pair_mat[,1]]
+        Y_glm <- Y_[pair_mat[,1]]
         main_dat <- main_dat[pair_mat[,1],] - main_dat[pair_mat[,2],]
         interacted_dat <- interacted_dat[pair_mat[,1],] - interacted_dat[pair_mat[,2],]
         varcov_cluster_variable_glm <- varcov_cluster_variable_[pair_mat[,1]]
@@ -118,11 +119,11 @@ generate_ModelOutcome <- function(){
 
       if(diff == F){
         main_dat <- apply(main_info,1,function(row_){
-          1*(w_[,row_[['d']]] == row_[['l']]) })
+          1*(W_[,row_[['d']]] == row_[['l']]) })
         interacted_dat <- apply(interaction_info,1,function(row_){
-          1*(w_[,row_[['d']]] == row_[['l']]) *
-            1*(w_[,row_[['dp']]] == row_[['lp']]) })
-        y_glm <- y_
+          1*(W_[,row_[['d']]] == row_[['l']]) *
+            1*(W_[,row_[['dp']]] == row_[['lp']]) })
+        Y_glm <- Y_
         varcov_cluster_variable_glm <- varcov_cluster_variable_
       }
       interacted_dat <- interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat,2,sd)>0]
@@ -138,40 +139,19 @@ generate_ModelOutcome <- function(){
         regularization_adjust_hash_PreRegularization <- regularization_adjust_hash
       }
 
-      if( useRegularization == F | ok_counter > 1 ){ ok_ <- T }
-      if( useRegularization == T & ok_counter == 1 ){
+      if( UseRegularization == F | ok_counter > 1 ){ ok_ <- T }
+      if( UseRegularization == T & ok_counter == 1 ){
         # original keys
+        UsedRegularization <- T
         main_info_PreRegularization <- main_info
         interaction_info_PreRegularization <- interaction_info
-        library(glinternet)
-        if(T == F){
-          w_glinternet <- w-1L
-          glinternet_results <- glinternet.cv(X=w_glinternet, Y=y, family = glm_family,
-                                              nFolds=5, numLevels = apply(w_glinternet,2,function(zer){length(unique(zer))}))
-          rm(w_glinternet)
-          keep_inter <- glinternet_results$activeSet[[1]]$catcat
-          keep_main <- sort(unique(c(keep_inter,glinternet_results$activeSet[[1]]$cat)))
-
-          # adjust main
-          main_info <- main_info[main_info$d %in% keep_main,]
-          main_info$d_adj <- cumsum(!duplicated(main_info$d))
-          regularization_adjust_hash <- c(main_info$d_adj)
-          names(regularization_adjust_hash) <- main_info$d
-
-          # adjust inter
-          keep_inter_col <- apply(keep_inter,1,function(zer){ paste(sort(zer),collapse="_") })
-          interaction_info_col <- apply(cbind(interaction_info$d,interaction_info$dp),1,function(zer){ paste(sort(zer),collapse="_") })
-          interaction_info <- interaction_info[interaction_info_col %in% keep_inter_col,]
-          interaction_info$d_adj <- regularization_adjust_hash[as.character(interaction_info$d)]
-          interaction_info$dp_adj <- regularization_adjust_hash[as.character(interaction_info$dp)]
-        }
-
-        if(T == T){
+        {
+          library(glinternet)
           InteractionPairs <- t(combn(1:nrow(main_info),m = 2))
           InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ],]
           #sum(duplicated(apply(InteractionPairs,1,function(zer){ paste(zer,collapse = "_") })))
           glinternet_results <- glinternet.cv(X = main_dat,
-                                              Y = y_glm, family = glm_family,
+                                              Y = Y_glm, family = glm_family,
                                               numLevels = rep(1,times = ncol(main_dat)),
                                               interactionPairs = InteractionPairs,
                                               nFolds = 5 )
@@ -179,7 +159,7 @@ generate_ModelOutcome <- function(){
           keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
           if(is.null(keep_MainWithInter)){
             glinternet_results <- glinternet(X = main_dat,
-                                             Y = y_glm, family = glm_family,
+                                             Y = Y_glm, family = glm_family,
                                              numLevels = rep(1,times = ncol(main_dat)),
                                              interactionPairs = InteractionPairs,
                                              numToFind = 1L)
@@ -216,7 +196,7 @@ generate_ModelOutcome <- function(){
             interaction_info$dplp_index_adj <- (1:length(base_dl_vec))[match(dplp_vec,base_dl_vec)]
           }
         }
-        useRegularization <- F
+        UseRegularization <- F
       }
     }
   }
@@ -224,18 +204,24 @@ generate_ModelOutcome <- function(){
   # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
   # solve(t(main_dat) %*% main_dat)
   # solve(t(interacted_dat) %*% interacted_dat)
-  my_model <- glm(y_glm ~ cbind( main_dat, interacted_dat ), family = glm_family)
+  my_model <- glm(Y_glm ~ cbind( main_dat, interacted_dat ), family = glm_family)
   # summary(  my_model  )
-  # vcov(my_model)
   # sum(is.na(coef(my_model)))
   if(any(is.na(coef(my_model)))){
-    print("WARNING: Some coefficients NA... This case hasn't been rigoriously tested!")
+    browser()
+    stop("WARNING: Some coefficients NA... This case hasn't been sufficiently tested!")
     which_na <- which( is.na(coef(my_model)[-1]) ) # minus 1 for intercept
-    my_model <- try(glm(y ~ cbind( main_dat, interacted_dat)[,-which_na], family = glm_family),T)
+    my_model <- try(glm(Y_glm ~ cbind( main_dat, interacted_dat)[,-which_na], family = glm_family),T)
     if(class(my_model) == "try-error"){browser()}
-    which_na_drop_interacted <- which_na - ncol(main_dat)
-    interaction_info <- interaction_info[-which_na_drop_interacted,]
-    interaction_info$inter_index <- 1:nrow(interaction_info)
+    Main_na <- which_na[which_na <= ncol(main_dat)]
+    Inter_na <- which_na[which_na > ncol(main_dat)] - ncol(main_dat)
+
+    # drop
+    interaction_info <- interaction_info[-Inter_na,]
+    interaction_info$inter_index <- 1:nrow(interaction_info) # check
+
+    main_info <- main_info[-Main_na,]
+    main_info$d_index <- 1:nrow(main_info) # check
   }
   if(!is.null(varcov_cluster_variable)){
     vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
