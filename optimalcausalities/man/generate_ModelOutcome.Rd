@@ -4,10 +4,10 @@
 \alias{generate_ModelOutcome}
 \title{generate_ModelOutcome}
 \usage{
-generate_ModelOutcome(x, y, by ...)
+generate_ModelOutcome(x, Y, by ...)
 }
 \arguments{
-\item{x, y}{data frames to be merged}
+\item{x, Y}{data frames to be merged}
 }
 \value{
 \code{z} The merged data frame.
@@ -16,7 +16,7 @@ generate_ModelOutcome(x, y, by ...)
 Implements the organizational record linkage algorithms of Jerzak and Libgober (2021).
 }
 \details{
-\code{LinkOrgs} automatically processes the name text for each dataset (specified by \code{by}, \code{by.x}, and/or \code{by.y}. Users may specify the following options:
+\code{LinkOrgs} automatically processes the name text for each dataset (specified by \code{by}, \code{by.x}, and/or \code{by.Y}. Users may specify the following options:
 \itemize{
 \item Set \code{DistanceMeasure} to control algorithm for computing pairwise string distances. Options include "\code{osa}", "\code{jaccard}", "\code{jw}". See \code{?stringdist::stringdist} for all options. (Default is "\code{jaccard}")
 }
@@ -27,13 +27,13 @@ Implements the organizational record linkage algorithms of Jerzak and Libgober (
 x_orgnames <- c("apple","oracle","enron inc.","mcdonalds corporation")
 y_orgnames <- c("apple corp","oracle inc","enron","mcdonalds co")
 x <- data.frame("orgnames_x"=x_orgnames)
-y <- data.frame("orgnames_y"=y_orgnames)
+Y <- data.frame("orgnames_y"=y_orgnames)
 
 # Perform merge
 linkedOrgs <- LinkOrgs(x = x,
-                       y = y,
+                       Y = Y,
                        by.x = "orgnames_x",
-                       by.y = "orgnames_y",
+                       by.Y = "orgnames_y",
                        MaxDist = 0.6)
 
 print( linkedOrgs )
