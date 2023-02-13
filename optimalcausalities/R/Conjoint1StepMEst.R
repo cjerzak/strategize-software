@@ -329,10 +329,13 @@ get_se <- function(){
             psi_list[[counter_ji]] <- psi_ji
             neg_jacobian_list[[counter_ji]] <-   -1 * jacobian_ji
           }
-          return(list(psi_list,
-                      neg_jacobian_list))
+          return(list("psi_list" = psi_list,
+                      "neg_jacobian_list" = neg_jacobian_list))
         }
         JacobianComponents <- getJacobianComponents()
+        psi_list <- JacobianComponents$psi_list
+        neg_jacobian_list <- JacobianComponents$neg_jacobian_list
+        rm( JacobianComponents )
         
         # resources
         #https://www.tensorflow.org/guide/advanced_autodiff
