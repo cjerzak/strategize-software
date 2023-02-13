@@ -266,6 +266,7 @@ get_se <- function(){
                   return( my_psi_i_jax )
                 }
                 jacobian_psi_fxn_jax <- jax$jacobian(psi_fxn_jax, argnums = 0L:1L)
+                #jacobian_psi_fxn_jax <- jax$jacrev(psi_fxn_jax, argnums = 0L:1L)
                 
                 # compile
                 psi_fxn_jax <- jax$jit(psi_fxn_jax)
@@ -323,9 +324,10 @@ get_se <- function(){
               plot(c(jacobian_ji[,2])-c(psi_i_jacobian[,2]));abline(h=0)
             }
             
+            # sum(is.na(jacobian_ji))
             # save m est results to list holders
-            if(is.na(sum(psi_ji))){browser()}
-            if(is.na(sum(jacobian_ji))){browser()}
+            #if(is.na(sum(psi_ji))){browser()}
+            #if(is.na(sum(jacobian_ji))){browser()}
             psi_list[[counter_ji]] <- psi_ji
             neg_jacobian_list[[counter_ji]] <-   -1 * jacobian_ji
           }
@@ -335,6 +337,12 @@ get_se <- function(){
         JacobianComponents <- getJacobianComponents()
         psi_list <- JacobianComponents$psi_list
         neg_jacobian_list <- JacobianComponents$neg_jacobian_list
+        jacob_NAs <- unlist( lapply(neg_jacobian_list,function(l_){is.na(sum(l_))}) )  
+        # X[which( jacob_NAs ),]
+        # FactorsMat_numeric_0Indexed[which( jacob_NAs ),]
+        if(sum(jacob_NAs) > 0){ print("Warning: Jacobian contains NAs! Dropping...") }
+        psi_list <- psi_list[!jacob_NAs]
+        neg_jacobian_list <- neg_jacobian_list[!jacob_NAs]
         rm( JacobianComponents )
         
         # resources
