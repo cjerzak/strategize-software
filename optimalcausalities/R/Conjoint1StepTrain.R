@@ -211,12 +211,11 @@ for(trainIndicator in trainIndicator_pool){
                     optax$scale(-1)
                   )
               }
-              browser() 
               if(OptimType == "Other"){
                 LR_schedule <- optax$warmup_cosine_decay_schedule(
                   init_value = (LEARNING_RATE_BASE<- .1)/2,
                   peak_value = LEARNING_RATE_BASE,
-                  warmup_steps = nWarm <- 50L, decay_steps = max(nSGD - nWarm, 1L))
+                  warmup_steps = nWarm <- 50L, decay_steps = max(nSGD - nWarm, 5L))
                 optax_optimizer <-  optax$chain(
                   #optax$sgd(momentum = 0.90, nesterov = T,
                   #optax$scale_by_schedule(LR_schedule),
