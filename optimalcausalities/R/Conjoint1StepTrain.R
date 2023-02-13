@@ -117,7 +117,9 @@ for(trainIndicator in trainIndicator_pool){
       {
         marginalProb_m <- c()
         i_eff <- 1; SquaredL2Grad_accumulations <- L2_squared_init
+        gc(); py_gc$collect()
         for(i in 1:nSGD){
+          if(i %% 50){ gc(); py_gc$collect() }
           # generate batch indices
           my_batch <- availableTrainIndices_train_seq[[i]]
 
@@ -413,6 +415,7 @@ for(trainIndicator in trainIndicator_pool){
 
         # figs to figure out dynamics
         {
+          gc(); py_gc$collect()
           #try(plot(MomenetumNextIter_seq), T)
           try(plot(LR_effective), T)
           try(plot(L2_norm_squared_vec),T)
