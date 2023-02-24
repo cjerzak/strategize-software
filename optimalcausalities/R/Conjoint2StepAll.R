@@ -1092,6 +1092,7 @@ computeQ_TwoStep       <-          function(Y,
                   "lambda" = lambda,
                   "p_vec_full" = p_vec_full,
                   "regularization_adjust_hash" = regularization_adjust_hash,
+                  "p_list" = p_list,
 
                   # reconstruct q info
                   "Qfxn" = ifelse(MaxMin,
@@ -1111,5 +1112,6 @@ computeQ_TwoStep       <-          function(Y,
                   "OptimType" = OptimType,
                   "ForceGaussianFamily" = ForceGaussianFamily,
                   "UsedRegularization" = UsedRegularization,
+
                   "model" = my_model) )
 }
