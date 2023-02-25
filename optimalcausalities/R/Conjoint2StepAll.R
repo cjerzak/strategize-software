@@ -260,12 +260,14 @@ computeQ_TwoStep       <-          function(Y,
     initialize_ExactSol <- paste(deparse(generate_ExactSol),collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)",replace="")
     eval( parse( text = initialize_ExactSol ),envir = evaluation_environment )
+    getPiStar_exact <- generate_ExactSolImplicit
   }
   if(ParameterizationType == "Full"){
     print("Initializing manual exact solution code...")
     initialize_ExactSol <- paste(deparse(generate_ExactSol),collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)",replace="")
     eval( parse( text = initialize_ExactSol ),envir = evaluation_environment )
+    getPiStar_exact <- generate_ExactSolExplicit
   }
 
   # pi in constrained space using gradient ascent
@@ -326,7 +328,7 @@ computeQ_TwoStep       <-          function(Y,
   pi_star_value_init_ast <- a2Simplex( a_vec_init_ast )
   pi_star_value_init_dag <- a2Simplex( a_vec_init_dag )
   pi_star_value_init_ast <- a2Simplex( a_vec_init <- a_vec_init_ast )
-  getQStar_marginal <- tf_function(function(pi_star,
+  getQStar_single <- tf_function(function(pi_star,
                                    EST_COEFFICIENTS_tf,
                                    EST_INTERCEPT_tf){
     # coef info
@@ -341,8 +343,8 @@ computeQ_TwoStep       <-          function(Y,
         EST_INTERCEPT_tf + tf$matmul(tf$transpose(main_coef),pi_star) +
           tf$reduce_sum(tf$multiply(tf$multiply(inter_coef,pi_dp),pi_dpp),keepdims=T) )
     return( Qhat ) })
-  getQStar_marginal_conv <- tf2jax$convert_functional(
-                                        getQStar_marginal,
+  getQStar_single_conv <- tf2jax$convert_functional(
+                                        getQStar_single,
                                         pi_star = jnp$array(pi_star_value_init_ast),
                                         EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf),
                                         EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf))
@@ -404,8 +406,8 @@ computeQ_TwoStep       <-          function(Y,
   }
 
   # check work:
-  try(getQStar_marginal( pi_star = pi_star_value_init_ast, EST_INTERCEPT_tf = EST_INTERCEPT_tf, EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf),T)
-  try(getQStar_marginal_conv( pi_star =  jnp$array(pi_star_value_init_ast) , EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf), EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf)),T)
+  try(getQStar_single( pi_star = pi_star_value_init_ast, EST_INTERCEPT_tf = EST_INTERCEPT_tf, EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf),T)
+  try(getQStar_single_conv( pi_star =  jnp$array(pi_star_value_init_ast) , EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf), EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf)),T)
 
   # Pretty Pi function
   {
@@ -467,14 +469,14 @@ computeQ_TwoStep       <-          function(Y,
       pi_star_full <- pi_star_value
     }
     if(ParameterizationType == "Implicit"){
-    pi_star_impliedTerms <- tapply(1:length(d_locator),d_locator,function(zer){
-      pi_implied <- OneTf - tf$reduce_sum(tf$gather(pi_star_value,
-                                                    n2int(ai(zer-1L)),0L),keepdims=T) })
-    names(pi_star_impliedTerms) <- NULL
-    pi_star_impliedTerms <- tf$concat(pi_star_impliedTerms,0L)
+      pi_star_impliedTerms <- tapply(1:length(d_locator),d_locator,function(zer){
+        pi_implied <- OneTf - tf$reduce_sum(tf$gather(pi_star_value,
+                                                      n2int(ai(zer-1L)),0L),keepdims=T) })
+      names(pi_star_impliedTerms) <- NULL
+      pi_star_impliedTerms <- tf$concat(pi_star_impliedTerms,0L)
 
-    pi_star_full <- tf$add(tf$matmul(main_comp_mat,pi_star_value),
-                           tf$matmul(shadow_comp_mat,pi_star_impliedTerms))
+      pi_star_full <- tf$add(tf$matmul(main_comp_mat,pi_star_value),
+                             tf$matmul(shadow_comp_mat,pi_star_impliedTerms))
     }
 
     return( pi_star_full )
@@ -496,11 +498,15 @@ computeQ_TwoStep       <-          function(Y,
                                                          a_vec_init_ast,a_vec_init_ast, jnp$array(1.))
 
   ## get exact result
-  if(OptimType %in% c("exact","both")){
+  pi_star_exact <- -10
+  if(OptimType %in% c("tryboth") & diff == F){
     pi_star_exact <- as.numeric(getPrettyPi(getPiStar_exact()))
   }
 
-  if(OptimType != "exact"){
+  use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
+    (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5)
+  use_exact <- !use_gd
+  if( use_gd ){
   if(!diff){
     getFixedEntries <- tf_function(function(EST_COEFFICIENTS_tf){
         main_coef <- tf$gather(EST_COEFFICIENTS_tf, indices = main_indices_i0, axis=0L)
@@ -585,11 +591,11 @@ computeQ_TwoStep       <-          function(Y,
     initialize_GD_WithExactGradients <- gsub(initialize_GD_WithExactGradients,pattern="function \\(\\)",replace="")
     eval( parse( text = initialize_GD_WithExactGradients ),envir = evaluation_environment )
   }
-  if(diff == T){
-    p_vec_jnp <- jnp$array(   as.matrix(p_vec)   )
-    p_vec_full_jnp <- jnp$array( as.matrix( p_vec_full ) )
-    lambda_jnp <-  jnp$array(  lambda  )
-    {
+
+  p_vec_jnp <- jnp$array(   as.matrix(p_vec)   )
+  p_vec_full_jnp <- jnp$array( as.matrix( p_vec_full ) )
+  lambda_jnp <-  jnp$array(  lambda  )
+  {
       UseOptax <- F
       # model partition + setup state
       optax_optimizer_ast <-  optax$chain(
@@ -606,11 +612,11 @@ computeQ_TwoStep       <-          function(Y,
       opt_state_dag <- optax_optimizer_jax$init(jnp$array( a_vec_init_dag ))
       jit_apply_updates_dag <- jax$jit(optax$apply_updates)
       jit_update_dag <- jax$jit(optax_optimizer_jax$update)
-    }
+  }
 
-    print("Defining adversarial gd function...")
-    getPiStar_gd <-  function(
-                              REGRESSION_PARAMETERS_ast,
+    print("Defining gd function...")
+  {
+    getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                               REGRESSION_PARAMETERS_dag,
                               REGRESSION_PARAMETERS_ast0,
                               REGRESSION_PARAMETERS_dag0,
@@ -643,12 +649,12 @@ computeQ_TwoStep       <-          function(Y,
 
         # gradient descent iterations
         grad_mag_dag_vec <<- grad_mag_ast_vec <<- rep(NA, times = nSGD)
-        goOn <- F; i<-0;maxIter<-nSGD;
+        goOn <- F; i<-0; maxIter<-nSGD;
         while(goOn == F){
           i<-i+1;
           if(i == 1){
             {
-              FullGetQStar_diff <- jax$jit(  function(a_i_ast,
+              FullGetQStar_ <- jax$jit(  function(a_i_ast,
                                                       a_i_dag,
                                                       INTERCEPT_ast_, COEFFICIENTS_ast_,
                                                       INTERCEPT_dag_, COEFFICIENTS_dag_,
@@ -660,16 +666,24 @@ computeQ_TwoStep       <-          function(Y,
                 pi_star_full_i_ast <- getPrettyPi_conv_diff( pi_star_i_ast <- a2Simplex_conv_diff_use( a_i_ast ))
                 pi_star_full_i_dag <- getPrettyPi_conv_diff( pi_star_i_dag <- a2Simplex_conv_diff_use( a_i_dag ))
 
-                q__ <- ifelse(MaxMin,
-                       yes = list(getQStar_diff_MultiGroup_conv),
-                       no = list(getQStar_diff_SingleGroup_conv))[[1]](
-                  pi_star_ast =  pi_star_i_ast,
-                  pi_star_dag = pi_star_i_dag,
-                  EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
-                  EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
-                  EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
-                  EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
-                q_max <- q__ <- jnp$take(q__,0L)
+                if(diff){
+                  q__ <- ifelse(MaxMin,
+                         yes = list(getQStar_diff_MultiGroup_conv),
+                         no = list(getQStar_diff_SingleGroup_conv))[[1]](
+                    pi_star_ast =  pi_star_i_ast,
+                    pi_star_dag = pi_star_i_dag,
+                    EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
+                    EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
+                    EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
+                    EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
+                  q_max <- q__ <- jnp$take(q__,0L)
+                }
+                if(!diff){
+                  q__ <- getQStar_single_conv(pi_star = pi_star_i_ast,
+                                    EST_INTERCEPT_tf = INTERCEPT_ast_,
+                                    EST_COEFFICIENTS_tf = COEFFICIENTS_ast_)
+                  q_max <- q__ <- jnp$take(q__,0L)
+                }
 
                 if(MaxMin){
                 q_ast <- q__
@@ -745,18 +759,18 @@ computeQ_TwoStep       <-          function(Y,
                 ret_ <- jnp$add( jnp$add( q_max, var_pen_ast__), var_pen_dag__)
                 return( ret_ )
               } )
-              dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_diff, argnums = jnp$array(0L)))
-              dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_diff, argnums = jnp$array(1L)))
+              dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(0L)))
+              dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
             }
 
-            FullGetQStar_diff(a_i_ast = a_i_ast, a_i_dag = a_i_dag,
+            FullGetQStar_(a_i_ast = a_i_ast, a_i_dag = a_i_dag,
                            INTERCEPT_ast_ = INTERCEPT_ast_, COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
                            INTERCEPT_dag_ = INTERCEPT_dag_, COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
                            INTERCEPT_ast0_ = INTERCEPT_ast0_, COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
                            INTERCEPT_dag0_ = INTERCEPT_dag0_, COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
                            P_VEC_FULL_ast_ = P_VEC_FULL_ast, P_VEC_FULL_dag_ = P_VEC_FULL_dag,
                            LAMBDA_ = LAMBDA, Q_SIGN = jnp$array(1.))
-            FullGetQStar_diff(a_i_ast = a_i_ast, a_i_dag = a_i_dag,
+            FullGetQStar_(a_i_ast = a_i_ast, a_i_dag = a_i_dag,
                               INTERCEPT_ast_ = INTERCEPT_ast_, COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
                               INTERCEPT_dag_ = INTERCEPT_dag_, COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
                               INTERCEPT_ast0_ = INTERCEPT_ast0_, COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
@@ -842,13 +856,20 @@ computeQ_TwoStep       <-          function(Y,
         {
           pi_star_ast_full_simplex_ <- getPrettyPi_conv( pi_star_ast_ <- a2Simplex_conv_diff_use( a_i_ast ) )
           pi_star_dag_full_simplex_ <- getPrettyPi_conv( pi_star_dag_ <- a2Simplex_conv_diff_use( a_i_dag ))
-          q_star_ <- ifelse(MaxMin,
+          if(diff){
+            q_star_ <- ifelse(MaxMin,
                             yes = list(getQStar_diff_MultiGroup_conv),
                             no = list(getQStar_diff_SingleGroup_conv))[[1]](
                                    pi_star_ast = pi_star_ast_,
                                    pi_star_dag = pi_star_dag_,
                                    EST_INTERCEPT_tf_ast = INTERCEPT_ast_, EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
                                    EST_INTERCEPT_tf_dag = INTERCEPT_dag_, EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
+          }
+          if(!diff){
+            q_star_ <- getQStar_single_conv(pi_star = pi_star_ast_,
+                            EST_INTERCEPT_tf = INTERCEPT_ast_,
+                            EST_COEFFICIENTS_tf = COEFFICIENTS_ast_)
+          }
           if( gd_full_simplex == T){ ret_array <- jnp$concatenate(list( q_star_, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ ) ) }
           if( gd_full_simplex == F){ ret_array <- jnp$concatenate(list( q_star_, pi_star_ast_, pi_star_dag_ ) ) }
           # plot(a_i_dag$to_py(),a_i$to_py());abline(a=0,b=1)
@@ -865,19 +886,13 @@ computeQ_TwoStep       <-          function(Y,
 
   # Obtain solution via exact calculation
   print("Starting optimization...")
-  use_exact <- F; use_gd <- T;
-  if(OptimType != "gd"){
-  use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1) | OptimType == "gd" |
-    (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5)
-  use_exact <- (  OptimType == "both" |  (!use_gd) ); use_gd <- (  OptimType == "both" |  (use_gd) )
-  }
   if(use_exact){
     results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
     dx_vars <- list( EST_INTERCEPT_tf, EST_COEFFICIENTS_tf )
     with(tf$GradientTape(persistent = T) %as% tape, {
       tape$watch(  dx_vars   )
       pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- getPiStar_exact())
-      q_star_exact <- q_star <- getQStar_marginal(pi_star = pi_star_reduced,
+      q_star_exact <- q_star <- getQStar_single(pi_star = pi_star_reduced,
                                          EST_INTERCEPT_tf = EST_INTERCEPT_tf,
                                          EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf)
       results_vec <- tf$concat(list(q_star, pi_star_full),0L)
@@ -891,6 +906,7 @@ computeQ_TwoStep       <-          function(Y,
     jacobian_time <- system.time(jacobian_mat <- tape$jacobian(results_vec, dx_vars ))
     jacobian_mat_exact <- jacobian_mat <- cbind(as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[1]],1L),1L))),
                           as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[2]],1L),2L))))
+    vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast
     }
   }
 
@@ -945,7 +961,7 @@ computeQ_TwoStep       <-          function(Y,
                              REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0,
                              P_VEC_FULL_ast = p_vec_full_ast_jnp,
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
-                             LAMBDA = LAMBDA_ITERATIVE))
+                             LAMBDA = LAMBDA_ITERATIVE) )
     q_with_pi_star_full <- tf$constant(q_with_pi_star_full, tf$float32)
     # as.matrix(q_with_pi_star_full)[1:3]
     print("Time GD: ");print(gd_time)
@@ -1012,10 +1028,6 @@ computeQ_TwoStep       <-          function(Y,
     # summary(lm(as.numeric(sol_gd)~as.numeric(sol_exact)))
   }
 
-  if(OptimType == "both"){
-    plot(c(jacobian_mat_exact), c(jacobian_mat_gd)); abline(a=0,b=1)
-  }
-
   # print time of jacobian calculation
   # remember, the first three entries of output are:
   # Qhat_population, Qhat, Qhat_dag
@@ -1026,17 +1038,21 @@ computeQ_TwoStep       <-          function(Y,
   pi_star_numeric <- as.numeric( pi_star_full )
 
   # drop the q part
-  if(diff){
+  if(diff == T){
     pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] )
   }
-  if(!diff){
-    pi_star_se <- sqrt(  diag( vcov_PiStar )[-1] )
+  if(diff == F){
+    take_indices <- 1:length( pi_star_numeric )
+    if(use_gd){ take_indices <- 1:(length(pi_star_numeric)/2+1)  }
+    pi_star_numeric <- pi_star_numeric[take_indices]
+    pi_star_se <- sqrt(  diag( vcov_PiStar )[-1][take_indices] )
   }
 
   # setup pretty pi's
   if( diff == F ){
-    pi_star_list <- split(pi_star_numeric,split_vec)
-    pi_star_se_list <- split(pi_star_se,split_vec)
+    pi_star_se_list <- pi_star_list <- list()
+    pi_star_list$k1 <- (  split(pi_star_numeric, split_vec) )
+    pi_star_se_list$k1 <- (  split(pi_star_se, split_vec) )
   }
 
   if( diff == T ){
@@ -1055,14 +1071,17 @@ computeQ_TwoStep       <-          function(Y,
     #  plot (pi_star_numeric[1:length(p_vec_full)] - pi_star_numeric[-c(1:length(p_vec_full))] )
   }
 
+  # re-jig to account for regularization
   pi_star_list <- RejiggerPi(pi_ = pi_star_list, isSE = F  )
   pi_star_se_list <- RejiggerPi(pi_ = pi_star_se_list, isSE = T  )
 
   # checks
   #plot(abs(pi_star_true-as.numeric(1-getPiStar_exact())));abline(a=0,b=1);points(pi_star_se,col="red")
   #plot(abs(pi_star_true-unlist(lapply(pi_star_list,function(zer){zer[-1]}))));abline(a=0,b=1);points(pi_star_se,col="red"); points(pi_star_se,col="red")
-  pi_star_list <- RenamePiList(pi_star_list)
-  pi_star_se_list <- RenamePiList(pi_star_se_list)
+
+  # add names
+  pi_star_list <- RenamePiList(  pi_star_list  )
+  pi_star_se_list <- RenamePiList(  pi_star_se_list  )
 
   for(sign_ in c(-1,1)){
     bound_ <- lapply(1:kEst,function(k_){
@@ -1077,15 +1096,23 @@ computeQ_TwoStep       <-          function(Y,
 
   names(upperList) <- names(lowerList) <- paste("k",1:length(lowerList),sep="")
 
-  return( list(   "PiStar_vec" = pi_star_numeric,
+  if(!diff){
+    pi_star_red_dag <- pi_star_red_ast <- pi_star_numeric
+    pi_star_dag_vec_jnp <- pi_star_vec_jnp <- pi_star_red_ast
+    p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full
+  }
+  return( list(
+                  "PiStar_point" = pi_star_list,
+                  "PiStar_se" = pi_star_se_list,
+                  "Q_point_mEst" = c(q_star),
+                  "Q_se_mEst"= q_star_se,
+                  "PiStar_vec" = pi_star_numeric,
                   "pi_star_red_ast" = pi_star_red_ast,
                   "pi_star_red_dag" = pi_star_red_dag,
                   "factor_levels" = factor_levels,
                   "PiSEStar_vec" = pi_star_se,
-                  "PiStar_point" = pi_star_list,
                   "pi_star_ave" = pi_star_ave,
                   "q_ave" = q_ave, "q_dag_ave" = q_dag_ave,
-                  "PiStar_se" = pi_star_se_list,
                   "PiStar_lb" = lowerList,
                   "PiStar_ub" = upperList,
                   "Q_point" = c(q_star),
@@ -1106,12 +1133,10 @@ computeQ_TwoStep       <-          function(Y,
                   "EST_INTERCEPT_jnp" = jnp$array(EST_INTERCEPT_tf),
                   "EST_COEFFICIENTS_jnp" = jnp$array(EST_COEFFICIENTS_tf),
 
-                  "Q_point_mEst" = c(q_star),
-                  "Q_se_mEst"= q_star_se,
                   "vcov_OutcomeModel" = vcov_OutcomeModel,
                   "OptimType" = OptimType,
                   "ForceGaussianFamily" = ForceGaussianFamily,
                   "UsedRegularization" = UsedRegularization,
 
-                  "model" = my_model) )
+                  "model" = my_model  ) )
 }
