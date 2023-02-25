@@ -86,7 +86,7 @@ generate_ModelOutcome <- function(){
         print("WARNING! More regression parameters than observations, enforcing sparsity...")
         UseRegularization <- T
       }
-      if(diff){
+      if(diff == T){
         DiffType <- "glm"
         #table(table(pair_id_)); length(unique(pair_id_))
         pair_mat <- do.call(rbind, tapply(1:nrow(full_dat_), pair_id_, c) )
@@ -118,8 +118,13 @@ generate_ModelOutcome <- function(){
       }
 
       if(diff == F){
-        main_dat <- apply(main_info,1,function(row_){
+        DiffType <- ""
+        main_dat_use <- main_dat <- apply(main_info,1,function(row_){
           1*(W_[,row_[['d']]] == row_[['l']]) })
+        if(ok_counter > 1){
+          main_dat_use <- apply(main_info_PreRegularization,1,function(row_){
+            1*(W_[,row_[['d']]] == row_[['l']]) })
+        }
         interacted_dat <- apply(interaction_info,1,function(row_){
           1*(W_[,row_[['d']]] == row_[['l']]) *
             1*(W_[,row_[['dp']]] == row_[['lp']]) })
@@ -137,14 +142,15 @@ generate_ModelOutcome <- function(){
         regularization_adjust_hash <- main_info$d
         names(regularization_adjust_hash) <- main_info$d
         regularization_adjust_hash_PreRegularization <- regularization_adjust_hash
+
+        main_info_PreRegularization <- main_info
+        interaction_info_PreRegularization <- interaction_info
       }
 
       if( UseRegularization == F | ok_counter > 1 ){ ok_ <- T }
       if( UseRegularization == T & ok_counter == 1 ){
         # original keys
         UsedRegularization <- T
-        main_info_PreRegularization <- main_info
-        interaction_info_PreRegularization <- interaction_info
         {
           library(glinternet)
           InteractionPairs <- t(combn(1:nrow(main_info),m = 2))
@@ -227,7 +233,7 @@ generate_ModelOutcome <- function(){
     vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
   }
   if(is.null(varcov_cluster_variable)){
-    vcov_OutcomeModel <- vcov(my_model)
+    vcov_OutcomeModel <- vcov(  my_model  )
   }
   model_coef_vec <- coef(my_model)[-1]
   EST_INTERCEPT_tf <- tf$Variable(as.matrix(coef(my_model)[1]),
