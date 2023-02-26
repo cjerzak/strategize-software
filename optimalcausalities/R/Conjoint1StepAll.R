@@ -74,6 +74,7 @@ computeQ_OneStep <- function(FactorsMat,
                               LAMBDA_SEQ = NULL,
                               COEF_LAMBDA = 0.0001,
                               nFolds = 3, batch_size = 50,
+                              confLevel = 0.90,
                               hypotheticalNInVarObj=NULL){
   # load in packages
   {
@@ -140,7 +141,8 @@ computeQ_OneStep <- function(FactorsMat,
                                 knownNormalizationFactor = knownNormalizationFactor,
                                 assignmentProbList=assignmentProbList, returnLog = F,
                                 hypotheticalProbList=hypotheticalProbList)
-    Q_interval_all <- c(Qhat_all$Qest - 1.64*SE_Q_all,  Qhat_all$Qest_all + 1.64*SE_Q_all)
+    Q_interval_all <- c(Qhat_all$Qest - abs(qnorm((1-confLevel)/2))*SE_Q_all,
+                        Qhat_all$Qest_all + abs(qnorm((1-confLevel)/2))*SE_Q_all)
     return(    list("Q_point_all" = RescaleFxn(Qhat_all$Qest, estMean = mean_Y, estSD = sd_Y),
                     "Q_se_all" = RescaleFxn(SE_Q_all, estMean = mean_Y, estSD = sd_Y,center=F),
                     "Q_interval_all" = RescaleFxn(Q_interval_all, estMean = mean_Y, estSD = sd_Y),
@@ -156,7 +158,7 @@ computeQ_OneStep <- function(FactorsMat,
     # setup for m estimation
     {
       forceHajek <- T
-      zStar <- abs(qnorm( 0.10 / 2 ))
+      zStar <- abs(qnorm((1-confLevel)/2))
       varHat <- mean( (Yobs - (muHat <- mean(Yobs)) )^2   )
       n_target <- ifelse(is.null(hypotheticalNInVarObj), yes = length(  split1_indices  ), no = hypotheticalNInVarObj)
     }

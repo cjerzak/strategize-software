@@ -210,7 +210,8 @@ generate_ModelOutcome <- function(){
   # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
   # solve(t(main_dat) %*% main_dat)
   # solve(t(interacted_dat) %*% interacted_dat)
-  my_model <- glm(Y_glm ~ cbind( main_dat, interacted_dat ), family = glm_family)
+  #  + 0 + 1 to get the glm to return the var-covar for the intercept
+  my_model <- glm(Y_glm ~ cbind(main_dat, interacted_dat ), family = glm_family)
   # summary(  my_model  )
   # sum(is.na(coef(my_model)))
   if(any(is.na(coef(my_model)))){
@@ -233,7 +234,7 @@ generate_ModelOutcome <- function(){
     vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
   }
   if(is.null(varcov_cluster_variable)){
-    vcov_OutcomeModel <- vcov(  my_model  )
+    vcov_OutcomeModel <- vcov(  my_model, complete = T)
   }
   model_coef_vec <- coef(my_model)[-1]
   EST_INTERCEPT_tf <- tf$Variable(as.matrix(coef(my_model)[1]),
@@ -258,7 +259,7 @@ generate_ModelOutcome <- function(){
     EST_COEFFICIENTS_tf <- tf$Variable(as.matrix(my_mean), dtype = tf$float32, trainable = T)
   }
 
-  # vcov adjust
+  # vcov adjust - check this in regularization case!
   {
     vcov_OutcomeModel_full <- matrix(0, nrow = length(my_mean)+1, ncol = length(my_mean)+1)
     interaction_info$IntoPreRegIndex_vcov <- 1+interaction_info$IntoPreRegIndex+nrow(main_info_PreRegularization)

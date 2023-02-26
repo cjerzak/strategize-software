@@ -54,6 +54,7 @@ computeQ_TwoStep       <-          function(Y,
                                             A_INIT_SD = 0,
                                             TypePen = "KL",
                                             ComputeSEs = T,
+                                            confLevel = 0.90,
                                             OptimType = "default"){
 
   # load in packages - may help memory bugs to load them in thru package
@@ -190,7 +191,7 @@ computeQ_TwoStep       <-          function(Y,
       ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
             "REGRESSION_PARAMS_jax","regularization_adjust_hash","main_dat", "my_mean","EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
       dag_condition <- (GroupCounter == 1) | (MaxMin == F)
-      round_text <- ifelse( Round_ ==0,yes="0",no="")
+      round_text <- ifelse( Round_==0,yes="0",no="")
       if( dag_condition ){
           tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_dag%s = %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
           rm(tmp)
@@ -333,7 +334,7 @@ computeQ_TwoStep       <-          function(Y,
                                    EST_INTERCEPT_tf){
     # coef info
     main_coef <- tf$gather(EST_COEFFICIENTS_tf, indices = main_indices_i0, axis = 0L)
-    inter_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = inter_indices_i0,axis=0L)
+    inter_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = inter_indices_i0, axis = 0L)
 
     # get interaction info
     pi_dp <- tf$gather(pi_star, n2int(as.integer(interaction_info$dl_index_adj)-1L), axis=0L)
@@ -889,7 +890,7 @@ computeQ_TwoStep       <-          function(Y,
   if(use_exact){
     results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
     dx_vars <- list( EST_INTERCEPT_tf, EST_COEFFICIENTS_tf )
-    with(tf$GradientTape(persistent = T) %as% tape, {
+    with(tf$GradientTape(persistent = F) %as% tape, {
       tape$watch(  dx_vars   )
       pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- getPiStar_exact())
       q_star_exact <- q_star <- getQStar_single(pi_star = pi_star_reduced,
@@ -904,8 +905,10 @@ computeQ_TwoStep       <-          function(Y,
     # automatic jacobian from tf
     {
     jacobian_time <- system.time(jacobian_mat <- tape$jacobian(results_vec, dx_vars ))
-    jacobian_mat_exact <- jacobian_mat <- cbind(as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[1]],1L),1L))),
-                          as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[2]],1L),2L))))
+    jacobian_mat_exact <- jacobian_mat <- cbind(
+                          as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[1]],1L),1L))),
+                          as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[2]],1L),2L)))
+                        )
     vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast
     }
   }
@@ -1086,7 +1089,7 @@ computeQ_TwoStep       <-          function(Y,
   for(sign_ in c(-1,1)){
     bound_ <- lapply(1:kEst,function(k_){
        l_ <- sapply(1:length(pi_star_list[[k_]]),function(zer){
-          ret_ <- list( pi_star_list[[k_]][[zer]] + sign_*1.96*pi_star_se_list[[k_]][[zer]] )
+          ret_ <- list( pi_star_list[[k_]][[zer]] + sign_*abs(qnorm((1-confLevel)/2))*pi_star_se_list[[k_]][[zer]] )
           names(ret_) <- names(pi_star_list[[k_]])[zer]
           return(    ret_   )   })
        return(l_) })
