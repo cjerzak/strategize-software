@@ -42,10 +42,10 @@ generate_ExactSol <- function(){
   # ParameterizationType == "Implicit" solution
   if(ParameterizationType == "Implicit"){
   Neg4lambda_diag <-tf$constant( rep(-4 * lambda,times=n_main_params))
-  Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),tf$float32)
-  Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),tf$float32)
-  Const_4_lambda_pl <- tf$constant(as.matrix( 4*lambda*p_vec_use),tf$float32)
-  Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),tf$float32)
+  Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),dttf)
+  Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),dttf)
+  Const_4_lambda_pl <- tf$constant(as.matrix( 4*lambda*p_vec_use),dttf)
+  Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),dttf)
 
   generate_ExactSolImplicit <- function(){
     main_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = main_indices_i0,axis=0L)
@@ -54,7 +54,7 @@ generate_ExactSol <- function(){
 
     C_mat <- sapply(1:n_main_params,function(main_comp){
       # initialize to 0
-      row_ <- tf$zeros(list(n_main_params,1L))
+      row_ <- tf$zeros(list(n_main_params,1L),dtype = dttf)
 
       # update diagonal component
       row_ <- tf$tensor_scatter_nd_update(row_,
@@ -64,7 +64,7 @@ generate_ExactSol <- function(){
       # update off-diagonal component (same d)
       same_d_diff_l <- n2int(as.matrix(ai(setdiff(which(main_info$d_adj == main_info[main_comp,]$d_adj),main_comp)-1L)))
       row_ <- tf$tensor_scatter_nd_update(row_,
-                                          updates = -2*lambda*tf$ones(list(nrow(same_d_diff_l),1L)),
+                                          updates = tf$constant(-2,dttf)*lambda*tf$ones(list(nrow(same_d_diff_l),1L),dttf),
                                           indices = same_d_diff_l)
 
       # update off-diagonal component (different d)
@@ -102,10 +102,10 @@ generate_ExactSol <- function(){
 
   # ParameterizationType == "Full" solution
   if(ParameterizationType == "Full"){
-    Const_2_lambda_pl <- tf$constant(as.matrix( 2*lambda*p_vec_use),tf$float32)
-    Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),tf$float32)
-    Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),tf$float32)
-    Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),tf$float32)
+    Const_2_lambda_pl <- tf$constant(as.matrix( 2*lambda*p_vec_use),dttf)
+    Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),dttf)
+    Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),dttf)
+    Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),dttf)
     getPiStar_exact <- function(){
       main_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = main_indices_i0,axis=0L)
       inter_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = inter_indices_i0,axis=0L)
@@ -113,7 +113,7 @@ generate_ExactSol <- function(){
 
       C_mat <- sapply(1:n_main_params,function(main_comp){
         # initialize to 0
-        row_ <- tf$zeros(list(n_main_params,1L))
+        row_ <- tf$zeros(list(n_main_params,1L),dtype = dttf)
 
         # update diagonal component
         row_ <- tf$tensor_scatter_nd_update(row_,
@@ -123,8 +123,8 @@ generate_ExactSol <- function(){
         # update off-diagonal component (same d)
         same_d_diff_l <- n2int(as.matrix(ai(setdiff(which(main_info$d_adj == main_info[main_comp,]$d_adj),main_comp)-1L)))
         row_ <- tf$tensor_scatter_nd_update(row_,
-                                            #updates = -2*lambda*tf$ones(list(nrow(same_d_diff_l),1L)),
-                                            updates = tf$zeros(list(nrow(same_d_diff_l),1L)),
+                                            #updates = -2*lambda*tf$ones(list(nrow(same_d_diff_l),1L),dttf),
+                                            updates = tf$zeros(list(nrow(same_d_diff_l),1L),dttf),
                                             indices = same_d_diff_l)
 
         # update off-diagonal component (different d)
