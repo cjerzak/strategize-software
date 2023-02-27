@@ -55,6 +55,7 @@ computeQ_TwoStep       <-          function(Y,
                                             TypePen = "KL",
                                             ComputeSEs = T,
                                             confLevel = 0.90,
+                                            nFolds_glm = 3L,
                                             OptimType = "default"){
 
   # load in packages - may help memory bugs to load them in thru package
@@ -62,6 +63,10 @@ computeQ_TwoStep       <-          function(Y,
     library(tensorflow); library(keras)
     try(tensorflow::use_python(python = "/Users/cjerzak/miniforge3/bin/python", required = T),T)
     try(tensorflow::use_condaenv("tensorflow_m1",required = T, conda = "~/miniforge3/bin/conda"), T)
+    CPUDevice <- tf$config$list_physical_devices()[[1]]
+    tf$config$set_visible_devices( CPUDevice )
+    tf$config$set_soft_device_placement(T)
+    dttf <- tf$float64
     try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
     try(tfp <- tf_probability(),T)
     try(tfd <- tfp$distributions,T)
@@ -73,6 +78,9 @@ computeQ_TwoStep       <-          function(Y,
     jnp <- tensorflow::import("jax.numpy")
     tf2jax <- tensorflow::import("tf2jax",as="tf2jax")
     evaluation_environment <- environment()
+
+    dtj <- jnp$float64
+    jax$config$update("jax_enable_x64", T)
   }
 
   # setup pretty pi functions
@@ -272,8 +280,8 @@ computeQ_TwoStep       <-          function(Y,
   }
 
   # pi in constrained space using gradient ascent
-  p_vec_tf <- tf$constant(as.matrix(p_vec_use),tf$float32)
-  inv_learning_rate <- tf$constant(1., dtype=tf$float32)
+  p_vec_tf <- tf$constant(as.matrix(p_vec_use),dtype = dttf)
+  inv_learning_rate <- tf$constant(1., dtype=dttf)
   #tf_function_ex <- function(x){x}
   tf_function_ex <- function(x){tf_function(x)}
 
@@ -297,8 +305,8 @@ computeQ_TwoStep       <-          function(Y,
   })
 
   a_vec_init_mat <- as.matrix(unlist( lapply(p_list, function(zer){ c(compositions::alr( t((zer)))) }) ) )
-  a_vec_init_ast <- tf$constant(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd=A_INIT_SD) ,tf$float32)
-  a_vec_init_dag <- tf$constant(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin),tf$float32)
+  a_vec_init_ast <- tf$constant(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd=A_INIT_SD) ,dttf)
+  a_vec_init_dag <- tf$constant(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin),dttf)
   a2Simplex <- tf_function_ex(function(a_){
     exp_a_ <- tf$exp(a_)
     aOnSimplex <- tapply(1:nrow(main_info),main_info$d,function(zer){
@@ -320,9 +328,9 @@ computeQ_TwoStep       <-          function(Y,
     names(aOnSimplex) <- NULL
     return(  tf$concat(aOnSimplex,0L) )
   })
-  OneTf <- tf$constant(matrix(1L),tf$float32)
-  OneTf_flat <- tf$constant(1L,tf$float32)
-  Neg2_tf <- tf$constant(-2.,tf$float32)
+  OneTf <- tf$constant(matrix(1L),dttf)
+  OneTf_flat <- tf$constant(1L,dttf)
+  Neg2_tf <- tf$constant(-2.,dttf)
 
   # Q functions
   print("Defining Q functions..")
@@ -349,6 +357,13 @@ computeQ_TwoStep       <-          function(Y,
                                         pi_star = jnp$array(pi_star_value_init_ast),
                                         EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf),
                                         EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf))
+
+  # check work:
+  try(getQStar_single( pi_star = pi_star_value_init_ast, EST_INTERCEPT_tf = EST_INTERCEPT_tf, EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf),T)
+  try(getQStar_single_conv( pi_star =  jnp$array(pi_star_value_init_ast) , EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf), EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf)),T)
+
+  # multiround material
+  {
   for(UseSinglePop in ifelse(MaxMin, yes = list(c(F,T)), no = list(T))[[1]]){
     # general specifications
     getQStar_diff_R <- function(pi_star_ast, pi_star_dag,
@@ -405,10 +420,7 @@ computeQ_TwoStep       <-          function(Y,
                                           EST_COEFFICIENTS_tf_dag = jnp$array(EST_COEFFICIENTS_tf_dag)))",
                               name_,name_)))
   }
-
-  # check work:
-  try(getQStar_single( pi_star = pi_star_value_init_ast, EST_INTERCEPT_tf = EST_INTERCEPT_tf, EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf),T)
-  try(getQStar_single_conv( pi_star =  jnp$array(pi_star_value_init_ast) , EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf), EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf)),T)
+  }
 
   # Pretty Pi function
   {
@@ -448,13 +460,13 @@ computeQ_TwoStep       <-          function(Y,
     main_comp_mat <- sapply(1:length(pi_star_value_loc),function(zer){
       main_comp_mat[pi_star_value_loc[zer],zer] <- 1
       return( main_comp_mat[,zer] ) })
-    main_comp_mat <- tf$constant(main_comp_mat,tf$float32)
+    main_comp_mat <- tf$constant(main_comp_mat,dttf)
 
     shadow_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
     shadow_comp_mat <- sapply(1:length(pi_star_value_loc_shadow),function(zer){
       shadow_comp_mat[pi_star_value_loc_shadow[zer],zer] <- 1
       return( shadow_comp_mat[,zer] ) })
-    shadow_comp_mat <- tf$constant(shadow_comp_mat,tf$float32)
+    shadow_comp_mat <- tf$constant(shadow_comp_mat,dttf)
     }
 
     split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
@@ -504,9 +516,8 @@ computeQ_TwoStep       <-          function(Y,
     pi_star_exact <- as.numeric(getPrettyPi(getPiStar_exact()))
   }
 
-  use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
-    (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5)
-  use_exact <- !use_gd
+  use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
+    (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5) )
   if( use_gd ){
   if(!diff){
     getFixedEntries <- tf_function(function(EST_COEFFICIENTS_tf){
@@ -881,7 +892,7 @@ computeQ_TwoStep       <-          function(Y,
   }
 
   # get initial learning rate for gd result
-  #if(!diff){nSGD <- 1; inv_learning_rate <- tf$constant(getPiStar_gd(REGRESSION_PARAMETERS = REGRESSION_PARAMS_jax),tf$float32)}
+  #if(!diff){nSGD <- 1; inv_learning_rate <- tf$constant(getPiStar_gd(REGRESSION_PARAMETERS = REGRESSION_PARAMS_jax),dttf)}
   nSGD <- nSGD_orig
   }
 
@@ -965,15 +976,15 @@ computeQ_TwoStep       <-          function(Y,
                              P_VEC_FULL_ast = p_vec_full_ast_jnp,
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
                              LAMBDA = LAMBDA_ITERATIVE) )
-    q_with_pi_star_full <- tf$constant(q_with_pi_star_full, tf$float32)
+    q_with_pi_star_full <- tf$constant(q_with_pi_star_full, dttf)
     # as.matrix(q_with_pi_star_full)[1:3]
     print("Time GD: ");print(gd_time)
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
-      ifelse(is.na(zer),no = as.numeric(tf$sqrt( tf$reduce_sum(tf$square(tf$constant(zer,tf$float32))) )), yes = NA) }) )
+      ifelse(is.na(zer),no = as.numeric(tf$sqrt( tf$reduce_sum(tf$square(tf$constant(zer,dttf))) )), yes = NA) }) )
     try(plot( grad_mag_ast_vec , main = "Gradient Magnitude Evolution (ast)"),T)
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
-      ifelse(is.na(zer),no=as.numeric(tf$sqrt( tf$reduce_sum(tf$square(tf$constant(zer,tf$float32))) )),yes=NA) }) ),T)
+      ifelse(is.na(zer),no=as.numeric(tf$sqrt( tf$reduce_sum(tf$square(tf$constant(zer,dttf))) )),yes=NA) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)"),T)
 
     gd_full_simplex <- F
@@ -1015,7 +1026,7 @@ computeQ_TwoStep       <-          function(Y,
                                           p_vec_full_dag_jnp,
                                           LAMBDA_ITERATIVE))
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
-        as.matrix( tf$squeeze(tf$squeeze(tf$constant(l_,tf$float32),1L),2L) ) })
+        as.matrix( tf$squeeze(tf$squeeze(tf$constant(l_,dttf),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
       vcov_OutcomeModel_concat <- list(
                      vcov_OutcomeModel_ast  ,
@@ -1024,7 +1035,7 @@ computeQ_TwoStep       <-          function(Y,
                      vcov_OutcomeModel_dag0  )
       vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
       vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
-      #jacobian_mat_gd <- jacobian_mat <- as.matrix( tf$squeeze(tf$squeeze(tf$constant(jacobian_mat,tf$float32),1L),2L) )
+      #jacobian_mat_gd <- jacobian_mat <- as.matrix( tf$squeeze(tf$squeeze(tf$constant(jacobian_mat,dttf),1L),2L) )
       print("Time Jacobian of GD Solution: ");print(jacobian_time)
     }
     # hist(c(jacobian_mat));image(jacobian_mat)
@@ -1039,6 +1050,8 @@ computeQ_TwoStep       <-          function(Y,
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
   pi_star_numeric <- as.numeric( pi_star_full )
+  #trueQ;print(civ<-c(q_star - abs(qnorm((1-ConfLevel)/2))*q_star_se,q_star + abs(qnorm((1-ConfLevel)/2))*q_star_se))
+  # 1*(  civ[1] <= trueQ & civ[2] >= trueQ)
 
   # drop the q part
   if(diff == T){

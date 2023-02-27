@@ -156,11 +156,13 @@ generate_ModelOutcome <- function(){
           InteractionPairs <- t(combn(1:nrow(main_info),m = 2))
           InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ],]
           #sum(duplicated(apply(InteractionPairs,1,function(zer){ paste(zer,collapse = "_") })))
+          print("Starting a glinternet fit...")
           glinternet_results <- glinternet.cv(X = main_dat,
                                               Y = Y_glm, family = glm_family,
                                               numLevels = rep(1,times = ncol(main_dat)),
                                               interactionPairs = InteractionPairs,
-                                              nFolds = 5 )
+                                              nFolds = nFolds_glm )
+          print("Done with glinternet fit...")
           keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
           keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
           if(is.null(keep_MainWithInter)){
@@ -238,7 +240,7 @@ generate_ModelOutcome <- function(){
   }
   model_coef_vec <- coef(my_model)[-1]
   EST_INTERCEPT_tf <- tf$Variable(as.matrix(coef(my_model)[1]),
-                                  dtype = tf$float32,trainable = T)
+                                  dtype = dttf,trainable = T)
 
   # get EST COEFFICIENTS_tf
   {
@@ -256,7 +258,7 @@ generate_ModelOutcome <- function(){
                                               interaction_info_PreRegularization$dl_dplp_comb)
     my_mean_inter_part[interaction_info$IntoPreRegIndex] <- model_coef_vec[-c(1:nrow(main_info))]
     my_mean <- c(my_mean_main_part, my_mean_inter_part)
-    EST_COEFFICIENTS_tf <- tf$Variable(as.matrix(my_mean), dtype = tf$float32, trainable = T)
+    EST_COEFFICIENTS_tf <- tf$Variable(as.matrix(my_mean), dtype = dttf, trainable = T)
   }
 
   # vcov adjust - check this in regularization case!

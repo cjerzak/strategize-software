@@ -42,10 +42,10 @@ generate_ExactSol <- function(){
   # ParameterizationType == "Implicit" solution
   if(ParameterizationType == "Implicit"){
   Neg4lambda_diag <-tf$constant( rep(-4 * lambda,times=n_main_params))
-  Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),tf$float32)
-  Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),tf$float32)
-  Const_4_lambda_pl <- tf$constant(as.matrix( 4*lambda*p_vec_use),tf$float32)
-  Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),tf$float32)
+  Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),dttf)
+  Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),dttf)
+  Const_4_lambda_pl <- tf$constant(as.matrix( 4*lambda*p_vec_use),dttf)
+  Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),dttf)
 
   generate_ExactSolImplicit <- function(){
     main_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = main_indices_i0,axis=0L)
@@ -102,10 +102,10 @@ generate_ExactSol <- function(){
 
   # ParameterizationType == "Full" solution
   if(ParameterizationType == "Full"){
-    Const_2_lambda_pl <- tf$constant(as.matrix( 2*lambda*p_vec_use),tf$float32)
-    Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),tf$float32)
-    Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),tf$float32)
-    Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),tf$float32)
+    Const_2_lambda_pl <- tf$constant(as.matrix( 2*lambda*p_vec_use),dttf)
+    Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),dttf)
+    Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),dttf)
+    Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),dttf)
     getPiStar_exact <- function(){
       main_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = main_indices_i0,axis=0L)
       inter_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = inter_indices_i0,axis=0L)
