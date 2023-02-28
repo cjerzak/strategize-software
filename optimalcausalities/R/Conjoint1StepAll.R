@@ -391,6 +391,7 @@ computeQ_OneStep <- function(FactorsMat,
                "PrXd_vec" = PrXd_vec,
                "X_factorized_complete"=ifelse(("X_factorized_complete" %in% ls()),yes=list(X_factorized_complete),no=list(NULL)),
                "PrXdGivenClust" = PrXdGivenClust_mat,
+               "estimationType" = "OneStep",
                "PrXdGivenClust_se" = PrXdGivenClust_se,
                "Output.Description"=c("")) )
   }
