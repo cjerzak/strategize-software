@@ -1153,6 +1153,6 @@ computeQ_TwoStep       <-          function(Y,
                   "OptimType" = OptimType,
                   "ForceGaussianFamily" = ForceGaussianFamily,
                   "UsedRegularization" = UsedRegularization,
-
+                  "estimationType" = "TwoStep",
                   "model" = my_model  ) )
 }
