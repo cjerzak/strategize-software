@@ -40,11 +40,11 @@ computeQ_TwoStep       <-          function(Y,
                                             W,
                                             lambda,
                                             varcov_cluster_variable = NULL,
-                                            competing_respondent_group_variable = NULL,
-                                            competing_candidate_group_variable = NULL,
+                                            competing_group_variable_respondent = NULL,
+                                            competing_group_variable_candidate = NULL,
+                                            competing_group_competition_variable_candidate = NULL,
                                             pair_id = NULL,
                                             p_list = NULL,
-                                            full_dat = full_dat,
                                             kEst = 1,
                                             nSGD = 100,
                                             diff = F, MaxMin = F,
@@ -56,6 +56,7 @@ computeQ_TwoStep       <-          function(Y,
                                             ComputeSEs = T,
                                             confLevel = 0.90,
                                             nFolds_glm = 3L,
+                                            nMonte_MaxMin = 5L,
                                             OptimType = "default"){
 
   # load in packages - may help memory bugs to load them in thru package
@@ -71,10 +72,12 @@ computeQ_TwoStep       <-          function(Y,
     try(tfp <- tf_probability(),T)
     try(tfd <- tfp$distributions,T)
     print(tf$version$VERSION)
+    JaxKey <- function(int_){ jax$random$PRNGKey(int_)}
 
     # jax
     jax <- tensorflow::import("jax",as="jax")
     optax <- tensorflow::import("optax")
+    oryx <- tensorflow::import("oryx")
     jnp <- tensorflow::import("jax.numpy")
     tf2jax <- tensorflow::import("tf2jax",as="tf2jax")
     evaluation_environment <- environment()
@@ -108,6 +111,7 @@ computeQ_TwoStep       <-          function(Y,
     return( pi_ ) }
   }
 
+  nMonte_MaxMin <- as.integer( nMonte_MaxMin )
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
   if(OpenBrowser == T){ browser() }
   nSGD_orig <- nSGD
@@ -155,7 +159,7 @@ computeQ_TwoStep       <-          function(Y,
     if(MaxMin){
       nRounds <- 2
       RoundsPool <- c(0,1)
-      GroupsPool <- sort(unique(competing_candidate_group_variable))
+      GroupsPool <- sort(unique(competing_group_variable_candidate))
     }
 
     for(Round_ in RoundsPool){
@@ -167,28 +171,27 @@ computeQ_TwoStep       <-          function(Y,
       if(MaxMin == F){ indi_ <- 1:length( Y )  }
       if(MaxMin == T){
         if(Round_ == 0){
-          indi_ <- which( competing_respondent_group_variable == GroupsPool[ GroupCounter ] &
-                      ( full_dat$Party.competition == "Same" &
-                          competing_candidate_group_variable == GroupsPool[GroupCounter]) )
+          indi_ <- which( competing_group_variable_respondent == GroupsPool[ GroupCounter ] &
+                      ( competing_group_competition_variable_candidate == "Same" &
+                          competing_group_variable_candidate == GroupsPool[GroupCounter]) )
         }
         if(Round_ == 1){
-          indi_ <- which( competing_respondent_group_variable == GroupsPool[ GroupCounter ] &
-                            ( full_dat$Party.competition == "Different" &
-                                competing_candidate_group_variable %in% GroupsPool) )
+          indi_ <- which( competing_group_variable_respondent == GroupsPool[ GroupCounter ] &
+                            ( competing_group_competition_variable_candidate == "Different" &
+                                competing_group_variable_candidate %in% GroupsPool) )
         }
-        DagProp <- prop.table(table(competing_respondent_group_variable[competing_respondent_group_variable %in% GroupsPool]))[2]
+        DagProp <- prop.table(table(competing_group_variable_respondent[competing_group_variable_respondent %in% GroupsPool]))[2]
       }
 
       # subset data
       W_ <- W[indi_,]; Y_ <- Y[indi_];
       varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
-      full_dat_ <- full_dat[ indi_ ,]
       pair_id_ <- pair_id[ indi_ ]
       #table(full_dat_$Party.affiliation_clean)
       #table(full_dat_$R_Partisanship)
       #table(table(pair_id_))
 
-      # run models with inputs: W_; Y_; varcov_cluster_variable_; full_dat_
+      # run models with inputs: W_; Y_; varcov_cluster_variable_;
       initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")
       initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
@@ -628,13 +631,39 @@ computeQ_TwoStep       <-          function(Y,
 
     print("Defining gd function...")
   {
+    getMultinomialSamp <- (function(pi_star_value, baseSeed){
+      # parameterization is implicit
+      {
+        T_star_samp_reduced <- tapply(1:length(d_locator),d_locator,function(zer){
+          zer <- ai(  zer  )
+          pi_selection <- jnp$take(pi_star_value, jnp$array(n2int(ai(zer-1L))),0L)
+          if(length(zer) == 1){ pi_selection <- jnp$expand_dims(pi_selection,0L) }
+          pi_implied <- jnp$expand_dims(jnp$expand_dims(jnp$subtract(jnp$array(1.), jnp$sum(pi_selection)),0L),0L)
+          pi_selection <- jnp$concatenate(list(pi_implied,pi_selection))
+
+          TDist <- oryx$distributions$RelaxedOneHotCategorical(
+                  probs = jnp$transpose(pi_selection),# row = simplex entry
+                  temperature = jnp$array(0.5))
+          TSamp <- TDist$sample(size = 1L, seed = JaxKey( jnp$add(jnp$take(jnp$array(zer),0L),baseSeed)))
+          TSamp <- jnp$transpose( TSamp )
+          TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L)
+          if(length(zer) == 1){TSamp <- jnp$expand_dims(TSamp, 1L)}
+          return (  TSamp   )
+        })
+        names(T_star_samp_reduced) <- NULL
+        T_star_samp_reduced <-  jnp$concatenate(unlist(T_star_samp_reduced),0L)
+      }
+
+      return( T_star_samp_reduced )
+    })
     getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                               REGRESSION_PARAMETERS_dag,
                               REGRESSION_PARAMETERS_ast0,
                               REGRESSION_PARAMETERS_dag0,
                               P_VEC_FULL_ast,
                               P_VEC_FULL_dag,
-                              LAMBDA){
+                              LAMBDA,
+                              BASE_SEED){
         REGRESSION_PARAMETERS_ast <- gather_conv(REGRESSION_PARAMETERS_ast)
         INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
         COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
@@ -646,7 +675,7 @@ computeQ_TwoStep       <-          function(Y,
           INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag[[1]]
           COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag[[2]]
         }
-        if(nRounds > 1){
+        if(nRounds > 1 & MaxMin){
           REGRESSION_PARAMETERS_ast0 <- gather_conv(REGRESSION_PARAMETERS_ast0)
           INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0[[1]]
           COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0[[2]]
@@ -667,14 +696,16 @@ computeQ_TwoStep       <-          function(Y,
           if(i == 1){
             {
               FullGetQStar_ <- jax$jit(  function(a_i_ast,
-                                                      a_i_dag,
-                                                      INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                                      INTERCEPT_dag_, COEFFICIENTS_dag_,
-                                                      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                                                      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                                                      P_VEC_FULL_ast_,
-                                                      P_VEC_FULL_dag_,
-                                                      LAMBDA_,Q_SIGN){
+                                                  a_i_dag,
+                                                  INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                                  INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                                  P_VEC_FULL_ast_,
+                                                  P_VEC_FULL_dag_,
+                                                  LAMBDA_,
+                                                  Q_SIGN,
+                                                  SEED_IN_LOOP){
                 pi_star_full_i_ast <- getPrettyPi_conv_diff( pi_star_i_ast <- a2Simplex_conv_diff_use( a_i_ast ))
                 pi_star_full_i_dag <- getPrettyPi_conv_diff( pi_star_i_dag <- a2Simplex_conv_diff_use( a_i_dag ))
 
@@ -697,52 +728,119 @@ computeQ_TwoStep       <-          function(Y,
                   q_max <- q__ <- jnp$take(q__,0L)
                 }
 
+                q_max_global <- jnp$array(0.)
+                lax_cond_indicator <- jnp$array(1.)# default value
+                lax_cond_indicator_counter <- jnp$array(0.)
                 if(MaxMin){
-                q_ast <- q__
-                q_dag <- jnp$subtract(jnp$array(1),q__)
-                cond_UseDag <- jnp$multiply(jnp$array(0.5),jnp$subtract(jnp$array(1.), Q_SIGN))
-                cond_UseAst <- jnp$multiply(jnp$array(0.5),jnp$add(jnp$array(1.), Q_SIGN))
+                for( i in 1:nMonte_MaxMin){
+                  TSAMP_ast <- getMultinomialSamp(pi_star_i_ast, baseSeed = SEED_IN_LOOP)
+                  TSAMP_dag <- getMultinomialSamp(pi_star_i_dag, baseSeed = jnp$add(jnp$array(2L),SEED_IN_LOOP))
+                  TSAMP_ast0 <- getMultinomialSamp(p_vec_jnp, baseSeed = jnp$add(jnp$array(3L),SEED_IN_LOOP))
+                  TSAMP_dag0 <- getMultinomialSamp(p_vec_jnp, baseSeed = jnp$add(jnp$array(4L),SEED_IN_LOOP))
+                  q__ <- ifelse(MaxMin,
+                                yes = list(getQStar_diff_MultiGroup_conv),
+                                no = list(getQStar_diff_SingleGroup_conv))[[1]](
+                                  pi_star_ast =  TSAMP_ast,
+                                  pi_star_dag = TSAMP_dag,
+                                  #pi_star_ast =  pi_star_i_ast,
+                                  #pi_star_dag = pi_star_i_dag,
+                                  EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
+                                  EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
+                                  EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
+                                  EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
+                  q_max <- q__ <- jnp$take(q__,0L)
 
-                q_max <- jnp$add(
-                  jnp$multiply(cond_UseDag, q_dag),
-                  jnp$multiply(cond_UseAst, q_ast)
-                )
-                if(nRounds > 1){
+                  q_ast <- q__
+                  q_dag <- jnp$subtract(jnp$array(1),q__)
+                  cond_UseDag <- jnp$multiply(jnp$array(0.5),jnp$subtract(jnp$array(1.), Q_SIGN))
+                  cond_UseAst <- jnp$multiply(jnp$array(0.5),jnp$add(jnp$array(1.), Q_SIGN))
+
+                  q_max <- jnp$add(
+                    jnp$multiply(cond_UseDag, q_dag),
+                    jnp$multiply(cond_UseAst, q_ast)
+                  )
+
+                # primary stage analysis
+                {
                   q0_ast <- getQStar_diff_SingleGroup_conv(
-                                pi_star_ast =  pi_star_i_ast,
-                                pi_star_dag = p_vec_jnp,
+                                #pi_star_ast =  pi_star_i_ast,
+                                #pi_star_dag = p_vec_jnp,
+                                pi_star_ast =  TSAMP_ast,
+                                pi_star_dag = TSAMP_ast0,
                                 EST_INTERCEPT_tf_ast = INTERCEPT_ast0_,
                                 EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast0_,
                                 EST_INTERCEPT_tf_dag = INTERCEPT_ast0_,
                                 EST_COEFFICIENTS_tf_dag = COEFFICIENTS_ast0_)
                   q0_dag <- getQStar_diff_SingleGroup_conv(
-                                      pi_star_ast = pi_star_i_dag,
-                                      pi_star_dag = p_vec_jnp,
+                                      #pi_star_ast = pi_star_i_dag,
+                                      #pi_star_dag = p_vec_jnp,
+                                      pi_star_ast = TSAMP_dag,
+                                      pi_star_dag = TSAMP_dag0,
                                       EST_INTERCEPT_tf_ast = INTERCEPT_dag0_,
                                       EST_COEFFICIENTS_tf_ast = COEFFICIENTS_dag0_,
                                       EST_INTERCEPT_tf_dag = INTERCEPT_dag0_,
                                       EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag0_)
-                  q0_dag <- jnp$take(q0_dag,0L)
-                  q0_ast <- jnp$take(q0_ast,0L)
-                  q0 <- jnp$add(
+                q0_dag <- jnp$take(q0_dag,0L)
+                q0_ast <- jnp$take(q0_ast,0L)
+                q0 <- jnp$add(
                     jnp$multiply(cond_UseDag, q0_dag),
                     jnp$multiply(cond_UseAst, q0_ast)
                   )
+                q0_ast_withT <- getQStar_diff_SingleGroup_conv(
+                    pi_star_ast =  TSAMP_ast,
+                    pi_star_dag = TSAMP_ast0,
+                    EST_INTERCEPT_tf_ast = INTERCEPT_ast0_,
+                    EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast0_,
+                    EST_INTERCEPT_tf_dag = INTERCEPT_ast0_,
+                    EST_COEFFICIENTS_tf_dag = COEFFICIENTS_ast0_)
+                q0_dag_withT <- getQStar_diff_SingleGroup_conv(
+                    pi_star_ast = TSAMP_dag,
+                    pi_star_dag = TSAMP_dag0,
+                    EST_INTERCEPT_tf_ast = INTERCEPT_dag0_,
+                    EST_COEFFICIENTS_tf_ast = COEFFICIENTS_dag0_,
+                    EST_INTERCEPT_tf_dag = INTERCEPT_dag0_,
+                    EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag0_)
+                q0_dag_withT <- jnp$take(q0_dag_withT,0L)
+                q0_ast_withT <- jnp$take(q0_ast_withT,0L)
+                q0_withT <- jnp$add(
+                  jnp$multiply(cond_UseDag, q0_dag_withT),
+                  jnp$multiply(cond_UseAst, q0_ast_withT)
+                )
                   # one utility function - leads to same strategy
                   #q_max <- q0
 
                   #q_max <- q_max
 
+                  # true conditional analysis
+                  # for the adversarial,
+                  # you can set pi_star_i_ast to T_star
+                  # via random sampling!
+                  # do update only if win in first round stage,
+                  # otherwise, do nothing (CHECK)
+                  lax_cond_indicator <- jax$lax$cond(
+                    pred = jnp$greater(q0_withT,jnp$array(0.5)),
+                    true_fun = function(){ jnp$array(1.) },
+                    false_fun = function(){ jnp$array(0.)} )
+                  lax_cond_indicator_counter <- jnp$add(lax_cond_indicator_counter, lax_cond_indicator)
+                  q_max <- jnp$multiply(lax_cond_indicator, jnp$multiply(q_max,q0))
+
                   # maximize product
                   #q_max <- jnp$multiply(q_max,q0)
 
                   # find best profile for base that reaches 0.5 general threshold
-                  q_max <- jnp$multiply( jax$nn$softplus(jnp$subtract(q_max,jnp$array(0.5))), q0)
+                  #q_max <- jnp$multiply( jax$nn$softplus(jnp$subtract(q_max,jnp$array(0.5))), q0)
 
                   # find best profile for general that reaches 0.5 primary threshold
                   #q_max <- jnp$multiply( jax$nn$softplus(jnp$subtract(q_max,jnp$array(0.5))), q0)
                 }
+                  q_max_global <- jnp$add(q_max_global, q_max)
                 }
+                  #q_max <- jnp$divide(q_max_global,jnp$array(as.numeric(nMonte_MaxMin)))
+                  q_max <- jnp$divide(q_max_global,jnp$add(jnp$array(0.001),
+                                                           lax_cond_indicator_counter))
+                }
+
+                # regularization here
                 if(TypePen == "L1"){
                   var_pen_ast__ <- jnp$multiply(LAMBDA_, jnp$negative(jnp$sum(jnp$abs(  jnp$subtract(  pi_star_full_i_ast, P_VEC_FULL_ast_ )  ))))
                   var_pen_dag__ <- jnp$multiply(LAMBDA_, jnp$negative(jnp$sum(jnp$abs(  jnp$subtract(  pi_star_full_i_dag, P_VEC_FULL_dag_ )  ))))
@@ -769,8 +867,10 @@ computeQ_TwoStep       <-          function(Y,
                 }
 
                 ret_ <- jnp$add( jnp$add( q_max, var_pen_ast__), var_pen_dag__)
+                ret_ <- jnp$multiply(lax_cond_indicator, ret_)
                 return( ret_ )
-              } )
+              }
+                )
               dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(0L)))
               dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
             }
@@ -781,15 +881,14 @@ computeQ_TwoStep       <-          function(Y,
                            INTERCEPT_ast0_ = INTERCEPT_ast0_, COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
                            INTERCEPT_dag0_ = INTERCEPT_dag0_, COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
                            P_VEC_FULL_ast_ = P_VEC_FULL_ast, P_VEC_FULL_dag_ = P_VEC_FULL_dag,
-                           LAMBDA_ = LAMBDA, Q_SIGN = jnp$array(1.))
+                           LAMBDA_ = LAMBDA, Q_SIGN = jnp$array(1.), SEED_IN_LOOP = jnp$array(3L))
             FullGetQStar_(a_i_ast = a_i_ast, a_i_dag = a_i_dag,
                               INTERCEPT_ast_ = INTERCEPT_ast_, COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
                               INTERCEPT_dag_ = INTERCEPT_dag_, COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
                               INTERCEPT_ast0_ = INTERCEPT_ast0_, COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
                               INTERCEPT_dag0_ = INTERCEPT_dag0_, COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
                               P_VEC_FULL_ast_ = P_VEC_FULL_ast, P_VEC_FULL_dag_ = P_VEC_FULL_dag,
-                              LAMBDA_ = LAMBDA, Q_SIGN = jnp$array(-1.))
-
+                              LAMBDA_ = LAMBDA, Q_SIGN = jnp$array(-1.), SEED_IN_LOOP = jnp$array(39L))
             init_dQ_da_ast <- dQ_da_ast(
                                 a_i_ast, a_i_dag,
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,
@@ -797,7 +896,8 @@ computeQ_TwoStep       <-          function(Y,
                                 INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                                 INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                 P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                LAMBDA, jnp$array(1.) )
+                                LAMBDA, jnp$array(1.),
+                                jnp$array(3L))
             inv_learning_rate_da_ast <- jnp$maximum(jnp$array(0.001), jnp$multiply(10, jnp$square(jnp$linalg$norm(init_dQ_da_ast))))
 
             init_dQ_da_dag <- dQ_da_dag( a_i_ast, a_i_dag,
@@ -806,7 +906,8 @@ computeQ_TwoStep       <-          function(Y,
                                          INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                                          INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                          P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                         LAMBDA, jnp$array(-1.) )
+                                         LAMBDA, jnp$array(-1.),
+                                         jnp$array(3L))
             inv_learning_rate_da_dag <- jnp$maximum(jnp$array(0.001), jnp$multiply(10,  jnp$square(jnp$linalg$norm( init_dQ_da_dag ))))
             #plot(init_dQ_da_ast$to_py(),init_dQ_da_dag$to_py());abline(a=0,b=1)
             #plot(init_dQ_da_ast$to_py()-init_dQ_da_dag$to_py());abline(h = 0)
@@ -820,7 +921,8 @@ computeQ_TwoStep       <-          function(Y,
                                       INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                                       INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                       P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                      LAMBDA, jnp$array(-1.) )
+                                      LAMBDA, jnp$array(-1.),
+                                      jnp$add(BASE_SEED,jnp$array(as.integer( i) ) ) )
             if(!UseOptax){
               inv_learning_rate_da_dag <-  jax$lax$stop_gradient(GetInvLR_conv(inv_learning_rate_da_dag, grad_i_dag))
               a_i_dag <- GetUpdatedParameters_conv(a_vec = a_i_dag, grad_i = grad_i_dag,
@@ -844,7 +946,8 @@ computeQ_TwoStep       <-          function(Y,
                                      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                                      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                      P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                     LAMBDA, jnp$array(1.) )
+                                     LAMBDA, jnp$array(1.),
+                                     jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer( i) ) ) )  )
             if(!UseOptax){
               inv_learning_rate_da_ast <-  jax$lax$stop_gradient( GetInvLR_conv(inv_learning_rate_da_ast, grad_i_ast) )
               a_i_ast <- GetUpdatedParameters_conv(a_vec = a_i_ast, grad_i = grad_i_ast,
@@ -931,6 +1034,7 @@ computeQ_TwoStep       <-          function(Y,
     # first do ave case analysis
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full_jnp
     if(T == F){
+      # second stage approximation code
       p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full_jnp
       MaxMin <- F; gd_full_simplex <- T
       q_with_pi_star_full_ast_ <- getPiStar_gd(
@@ -940,7 +1044,8 @@ computeQ_TwoStep       <-          function(Y,
                                            REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_ast,
                                            P_VEC_FULL_ast = p_vec_full_ast_jnp,
                                            P_VEC_FULL_dag = p_vec_full_ast_jnp,
-                                           LAMBDA = lambda_jnp)$to_py()
+                                           LAMBDA = lambda_jnp,
+                                           BASE_SEED = jnp$array(3432L))$to_py()
       q_with_pi_star_full_dag_ <- getPiStar_gd(
                                            REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_dag,
                                            REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag,
@@ -948,7 +1053,8 @@ computeQ_TwoStep       <-          function(Y,
                                            REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag,
                                            P_VEC_FULL_ast = p_vec_full_dag_jnp,
                                            P_VEC_FULL_dag = p_vec_full_dag_jnp,
-                                           LAMBDA = lambda_jnp)$to_py()
+                                           LAMBDA = lambda_jnp,
+                                           BASE_SEED = jnp$array(3432L))$to_py()
       q_ave <- q_with_pi_star_full_ast_[1]; q_dag_ave <- q_with_pi_star_full_dag_[1]
       MaxMin <- T; pi_star_ave <- list()
       pi_star_ave$k1 <- split(p_vec_full_ast <- q_with_pi_star_full_ast_[-c(1:3)][c(1:length(p_vec_full))], split_vec_use)
@@ -967,6 +1073,8 @@ computeQ_TwoStep       <-          function(Y,
     #plot( REGRESSION_PARAMS_jax$to_py(),REGRESSION_PARAMS_jax_dag$to_py() );abline(a=0,b=1)
     #plot(p_vec_full_dot_jnp$to_py(), p_vec_full_dag_jnp$to_py());abline(a=0,b=1)
     #MaxMin <- T;
+    # check the multinomial sampling
+    # plot(getMultinomialSamp(p_vec_jnp, baseSeed = jnp$array(55L))$to_py())
     gd_full_simplex <- T
     gd_time <- system.time( q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
@@ -975,17 +1083,20 @@ computeQ_TwoStep       <-          function(Y,
                              REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0,
                              P_VEC_FULL_ast = p_vec_full_ast_jnp,
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
-                             LAMBDA = LAMBDA_ITERATIVE) )
+                             LAMBDA = LAMBDA_ITERATIVE,
+                             BASE_SEED = jnp$array(3432L)) )
     q_with_pi_star_full <- tf$constant(q_with_pi_star_full, dttf)
     # as.matrix(q_with_pi_star_full)[1:3]
     print("Time GD: ");print(gd_time)
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
       ifelse(is.na(zer),no = as.numeric(tf$sqrt( tf$reduce_sum(tf$square(tf$constant(zer,dttf))) )), yes = NA) }) )
-    try(plot( grad_mag_ast_vec , main = "Gradient Magnitude Evolution (ast)"),T)
+    try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log =""),T)
+    try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
       ifelse(is.na(zer),no=as.numeric(tf$sqrt( tf$reduce_sum(tf$square(tf$constant(zer,dttf))) )),yes=NA) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)"),T)
+    try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
 
     gd_full_simplex <- F
     pi_star_red <- getPiStar_gd(
@@ -995,7 +1106,8 @@ computeQ_TwoStep       <-          function(Y,
                         REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0,
                         P_VEC_FULL_ast = p_vec_full_ast_jnp,
                         P_VEC_FULL_dag = p_vec_full_dag_jnp,
-                        LAMBDA = LAMBDA_ITERATIVE)
+                        LAMBDA = LAMBDA_ITERATIVE,
+                        BASE_SEED = jnp$array(3432L))
     pi_star_red <- (pi_star_red$to_py()[-c(1:3),])
     pi_star_red_dag <- jnp$array(as.matrix(pi_star_red[-c(1:(length(pi_star_red)/2))]))
     pi_star_red_ast <- jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -1024,7 +1136,8 @@ computeQ_TwoStep       <-          function(Y,
                                           REGRESSION_PARAMS_jax_dag0,
                                           p_vec_full_ast_jnp,
                                           p_vec_full_dag_jnp,
-                                          LAMBDA_ITERATIVE))
+                                          LAMBDA_ITERATIVE,
+                                          jnp$array(3432L)))
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
         as.matrix( tf$squeeze(tf$squeeze(tf$constant(l_,dttf),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)

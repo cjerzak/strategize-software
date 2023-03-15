@@ -89,10 +89,10 @@ generate_ModelOutcome <- function(){
       if(diff == T){
         DiffType <- "glm"
         #table(table(pair_id_)); length(unique(pair_id_))
-        pair_mat <- do.call(rbind, tapply(1:nrow(full_dat_), pair_id_, c) )
-        if(!is.null(competing_candidate_group_variable)){
-           pair_mat <- do.call(rbind, tapply(1:nrow(full_dat_), pair_id_, function(zer){
-              zer[ order( competing_candidate_group_variable[zer]) ] }) )
+        pair_mat <- do.call(rbind, tapply(1:length(pair_id_), pair_id_, c) )
+        if(!is.null(competing_group_variable_candidate)){
+           pair_mat <- do.call(rbind, tapply(1:length(pair_id_), pair_id_, function(zer){
+              zer[ order( competing_group_variable_candidate[zer]) ] }) )
         }
         main_dat_use <- main_dat <- apply(main_info,1,function(row_){
           1*(W_[,row_[['d']]] == row_[['l']]) })

@@ -114,6 +114,7 @@ generate_ModelOutcome_FindIt <- function(){
                                                           "dp", "lp", "dplp_index",
                                                           "inter_index", "d_adj", "dp_adj")]
         vcov_OutcomeModel <- my_model$vcov
+        browser()
         vcov_OutcomeModel <- rbind(0,cbind(0,vcov_OutcomeModel))
         print(" CHECK THIS ")
         vcov_OutcomeModel[1,1] <- se(tapply(full_dat$selected,
