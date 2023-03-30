@@ -1,9 +1,9 @@
-setwd("~/Documents/optimalcausalities-software")
+setwd("~/Documents/strategize-software")
 
-package_path <- "~/Documents/optimalcausalities-software/optimalcausalities"
+package_path <- "~/Documents/strategize-software/strategize"
 
 devtools::document(package_path)
-try(file.remove(sprintf("./optimalcausalities.pdf")),T)
+try(file.remove(sprintf("./strategize.pdf")),T)
 system(paste(shQuote(file.path(R.home("bin"), "R")),
              "CMD", "Rd2pdf", shQuote(package_path)))
 

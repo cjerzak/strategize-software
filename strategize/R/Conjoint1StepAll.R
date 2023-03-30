@@ -1,6 +1,6 @@
 #' computeQ_OneStep
 #'
-#' Implements the organizational record linkage algorithms of Jerzak and Libgober (2021).
+#' Implements...
 #'
 #' @usage
 #'
@@ -36,7 +36,7 @@
 #'
 #' @md
 
-computeQ_OneStep <- function(FactorsMat,
+strategize_OneStep <- function(FactorsMat,
                               Yobs,
                               X = NULL,
                               kClust = 1,

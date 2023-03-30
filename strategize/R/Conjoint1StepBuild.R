@@ -1,6 +1,6 @@
 #' ml_build
 #'
-#' Implements the organizational record linkage algorithms of Jerzak and Libgober (2021).
+#' Implements...
 #'
 #' @usage
 #'

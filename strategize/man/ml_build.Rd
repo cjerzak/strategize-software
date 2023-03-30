@@ -13,7 +13,7 @@ ml_build(x, y, by ...)
 \code{z} The merged data frame.
 }
 \description{
-Implements the organizational record linkage algorithms of Jerzak and Libgober (2021).
+Implements...
 }
 \details{
 \code{LinkOrgs} automatically processes the name text for each dataset (specified by \code{by}, \code{by.x}, and/or \code{by.y}. Users may specify the following options:

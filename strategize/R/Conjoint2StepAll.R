@@ -36,7 +36,7 @@
 #'
 #' @md
 
-computeQ_TwoStep       <-          function(Y,
+strategize_TwoStep       <-          function(Y,
                                             W,
                                             lambda,
                                             varcov_cluster_variable = NULL,
