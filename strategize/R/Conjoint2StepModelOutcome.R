@@ -1,42 +1,3 @@
-#' generate_ModelOutcome
-#'
-#' Implements the organizational record linkage algorithms of Jerzak and Libgober (2021).
-#'
-#' @usage
-#'
-#' generate_ModelOutcome(x, Y, by ...)
-#'
-#' @param x,Y data frames to be merged
-#'
-#' @return `z` The merged data frame.
-#' @export
-#'
-#' @details `LinkOrgs` automatically processes the name text for each dataset (specified by `by`, `by.x`, and/or `by.Y`. Users may specify the following options:
-#'
-#' - Set `DistanceMeasure` to control algorithm for computing pairwise string distances. Options include "`osa`", "`jaccard`", "`jw`". See `?stringdist::stringdist` for all options. (Default is "`jaccard`")
-#'
-#' @examples
-#'
-#' #Create synthetic data
-#' x_orgnames <- c("apple","oracle","enron inc.","mcdonalds corporation")
-#' y_orgnames <- c("apple corp","oracle inc","enron","mcdonalds co")
-#' x <- data.frame("orgnames_x"=x_orgnames)
-#' Y <- data.frame("orgnames_y"=y_orgnames)
-#'
-#' # Perform merge
-#' linkedOrgs <- LinkOrgs(x = x,
-#'                        Y = Y,
-#'                        by.x = "orgnames_x",
-#'                        by.Y = "orgnames_y",
-#'                        MaxDist = 0.6)
-#'
-#' print( linkedOrgs )
-#'
-#' @export
-#'
-#' @md
-#'
-
 generate_ModelOutcome <- function(){
   # obtain main + interaction info
   {
@@ -148,54 +109,135 @@ generate_ModelOutcome <- function(){
       }
 
       if( UseRegularization == F | ok_counter > 1 ){ ok_ <- T }
-      if( UseRegularization == T & ok_counter == 1 ){
+
+      if( UseRegularization == T & ok_counter == 1 | K > 1){
         # original keys
         UsedRegularization <- T
         {
-          library(glinternet)
-          InteractionPairs <- t(combn(1:nrow(main_info),m = 2))
-          InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ],]
-          #sum(duplicated(apply(InteractionPairs,1,function(zer){ paste(zer,collapse = "_") })))
-          print("Starting a glinternet fit...")
-          glinternet_results <- glinternet.cv(X = main_dat,
-                                              Y = Y_glm, family = glm_family,
-                                              numLevels = rep(1,times = ncol(main_dat)),
-                                              interactionPairs = InteractionPairs,
-                                              nFolds = nFolds_glm )
-          print("Done with glinternet fit...")
-          keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
-          keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
-          if(is.null(keep_MainWithInter)){
-            glinternet_results <- glinternet(X = main_dat,
-                                             Y = Y_glm, family = glm_family,
-                                             numLevels = rep(1,times = ncol(main_dat)),
-                                             interactionPairs = InteractionPairs,
-                                             numToFind = 1L)
-            keep_OnlyMain <- glinternet_results$activeSet[[length(glinternet_results$activeSet)]]$cont
-            keep_MainWithInter <- glinternet_results$activeSet[[length(glinternet_results$activeSet)]]$contcont
-          }
-          AllMain <- sort(unique(c(keep_OnlyMain, c(keep_MainWithInter))))
+        if(K == 1){
+            library(glinternet)
+            InteractionPairs <- t(combn(1:nrow(main_info), m = 2))
+            InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ],]
+            #sum(duplicated(apply(InteractionPairs,1,function(zer){ paste(zer,collapse = "_") })))
+            print("Starting a glinternet fit...")
+            glinternet_results <- glinternet.cv(X = main_dat,
+                                                Y = Y_glm, family = glm_family,
+                                                numLevels = rep(1,times = ncol(main_dat)),
+                                                interactionPairs = InteractionPairs,
+                                                nFolds = nFolds_glm )
+            print("Done with glinternet fit...")
+            keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
+            keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
+            if(is.null(keep_MainWithInter)){
+              glinternet_results <- glinternet(X = main_dat,
+                                               Y = Y_glm, family = glm_family,
+                                               numLevels = rep(1,times = ncol(main_dat)),
+                                               interactionPairs = InteractionPairs,
+                                               numToFind = 1L)
+              keep_OnlyMain <- glinternet_results$activeSet[[length(glinternet_results$activeSet)]]$cont
+              keep_MainWithInter <- glinternet_results$activeSet[[length(glinternet_results$activeSet)]]$contcont
+            }
+            AllMain <- sort(unique(c(keep_OnlyMain, c(keep_MainWithInter))))
 
-          # main_info <- main_info_PreRegularization
-          # interaction_info <- interaction_info_PreRegularization
+            # some debugging checks
+            # main_info <- main_info_PreRegularization
+            # interaction_info <- interaction_info_PreRegularization
 
-          # adjust main
-          main_info <- main_info[main_info$d %in% main_info$d[AllMain],]
-          main_info$d_adj <- cumsum(!duplicated(main_info$d))
-          regularization_adjust_hash <- c(main_info$d_adj)
-          names(regularization_adjust_hash) <- main_info$d
+            # adjust main
+            main_info <- main_info[main_info$d %in% main_info$d[AllMain],]
+            main_info$d_adj <- cumsum(!duplicated(main_info$d))
+            regularization_adjust_hash <- c(main_info$d_adj)
+            names(regularization_adjust_hash) <- main_info$d
 
-          # adjust inter
-          keep_inter_d <- cbind(main_info_PreRegularization$d[keep_MainWithInter[,1]],
-                                main_info_PreRegularization$d[keep_MainWithInter[,2]])
-          keep_inter_col <- apply(keep_inter_d,1,function(zer){ paste(sort(zer),collapse="_") })
-          interaction_info_col <- apply(cbind(interaction_info$d,interaction_info$dp),1,function(zer){ paste(sort(zer),collapse="_") })
-          interaction_info_keep_indices <- which( interaction_info_col %in% keep_inter_col )
-          interaction_info <- interaction_info[interaction_info_keep_indices,]
-          interaction_info$d_adj <- regularization_adjust_hash[as.character(interaction_info$d)]
-          interaction_info$dp_adj <- regularization_adjust_hash[as.character(interaction_info$dp)]
+            # adjust inter
+            keep_inter_d <- cbind(main_info_PreRegularization$d[keep_MainWithInter[,1]],
+                                  main_info_PreRegularization$d[keep_MainWithInter[,2]])
+            keep_inter_col <- apply(keep_inter_d,1,function(zer){ paste(sort(zer),collapse="_") })
+            interaction_info_col <- apply(cbind(interaction_info$d,interaction_info$dp),1,function(zer){ paste(sort(zer),collapse="_") })
+            interaction_info_keep_indices <- which( interaction_info_col %in% keep_inter_col )
+            interaction_info <- interaction_info[interaction_info_keep_indices,]
+            interaction_info$d_adj <- regularization_adjust_hash[as.character(interaction_info$d)]
+            interaction_info$dp_adj <- regularization_adjust_hash[as.character(interaction_info$dp)]
+        }
+        if(K > 1){
+            W_fh <- W
+            colnames(W_fh) <- colnames(w_orig)
+            inter_fh <- t(combn(1:ncol(W_fh),m=2))
+            # length( Y ) # 14k
+            # length( individual_id ) # 7k
+            # length( individual_task_id ) # 7k
+            # dim( W_fh ); dim( X ) # 7k, 14k
+            design_fh <- as.data.frame(
+              cbind("Yobs"=Y, "individual_id" = individual_id,
+                    "individual_task_id" = individual_task_id,
+                    "profile_order" = profile_order, W_fh, X))
+            library( FactorHet )
 
-          # get adjustments
+            OutcomeFormula_withInter <- as.formula( paste(
+              # outcome
+              "Yobs", "~",
+              # main terms
+              paste(colnames(W_fh),collapse = "+"), "+",
+              # interactions
+              paste(paste(colnames(W_fh)[inter_fh[,1]],
+                          colnames(W_fh)[inter_fh[,2]],sep = ":"),collapse="+")
+            ))
+            OutcomeFormula_mainOnly <- as.formula( paste(
+              # outcome
+              "Yobs", "~",
+              # main terms
+              paste(colnames(W_fh),collapse = "+") ))
+            #OutcomeFormula_minimal <- as.formula("Yobs~Sex+Age+Family+Race")
+            ModeratorFormula <- as.formula(paste("~", paste(paste("`",colnames(X),"`",sep = ""),
+                                                       collapse = "+")))
+            gc(); py_gc$collect()
+            log(sort( sapply(ls(),function(zr){object.size(eval(parse(text=zr)))})))
+            rm(W_fh); rm(inter_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
+            my_model <- FactorHet_mbo(
+              formula = OutcomeFormula_mainOnly,
+              group = as.formula("~ individual_id"),
+              task =  as.formula("~ individual_task_id"),
+              choice_order = as.formula("~ profile_order"),
+              moderator = ModeratorFormula,
+              design = design_fh[1:2000,],
+              mbo_control = FactorHet_mbo_control(iters = 3),
+              control = FactorHet_control(beta_method = "cpp"),
+              K = K)
+            my_mean <- my_model$parameters$beta
+            my_mean <- rbind(my_mean, matrix(0,nrow = nrow( interaction_info),ncol=K))
+
+            # define for forward compatability
+            EST_INTERCEPT_tf <- jnp$array(t( my_mean[1,1] ) )
+            EST_COEFFICIENTS_tf <- jnp$array(as.matrix( my_mean[-1,1] ) )
+
+
+            point_est_predict_clust <- my_model$parameters$phi
+            vcov_OutcomeModel <- as.matrix(  my_model$vcov$vcov )
+
+            phi_drop <- which(
+              gsub(row.names(vcov_OutcomeModel),pattern="phi[1-9]_",replace="") %in%
+                colnames( point_est_predict_clust ) )
+            vcov_full <- matrix(0,nrow = nrow(my_mean), ncol = nrow(my_mean))
+            vcov_OutcomeModel <- vcov_OutcomeModel[-phi_drop,-phi_drop]
+            vcov_OutcomeModel_by_k <- sapply(1:K,function(k){
+              k_indi <- grep(row.names(vcov_OutcomeModel),
+                             pattern  = sprintf("beta%s_",k))
+
+              vcov_red <- vcov_OutcomeModel[k_indi,k_indi]
+              vcov_full[1:nrow(vcov_red),1:ncol(vcov_red)] <- vcov_red
+              return(  list( vcov_full ))
+            })
+            #causalimages::image2( vcov_OutcomeModel )
+            #plot (  diag(vcov_OutcomeModel) )
+
+            # adjustements for competibility with k=1 case
+            # do you need this?
+            #AllMain <- 1:nrow( main_info  )
+            #main_info$d_adj
+            ok_ <- T
+        }
+
+          # perform get adjustments
           {
             dl_vec <- paste(interaction_info$d,interaction_info$l,sep ="_")
             dplp_vec <- paste(interaction_info$dp,interaction_info$lp,sep ="_")
@@ -209,6 +251,11 @@ generate_ModelOutcome <- function(){
     }
   }
 
+  # final outcomes modeled for base case
+  if(K == 1){
+
+  # fit outcome model, post regularization
+  {
   # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
   # solve(t(main_dat) %*% main_dat)
   # solve(t(interacted_dat) %*% interacted_dat)
@@ -242,8 +289,6 @@ generate_ModelOutcome <- function(){
   EST_INTERCEPT_tf <- tf$Variable(as.matrix(coef(my_model)[1]),
                                   dtype = dttf,trainable = T)
 
-  # get EST COEFFICIENTS_tf
-  {
     # main part
     my_mean_main_part <- matrix(0,nrow = nrow(main_info_PreRegularization), ncol = 1)
     my_mean_main_part[main_info$d_index] <- model_coef_vec[1:nrow(main_info)]
@@ -258,6 +303,7 @@ generate_ModelOutcome <- function(){
                                               interaction_info_PreRegularization$dl_dplp_comb)
     my_mean_inter_part[interaction_info$IntoPreRegIndex] <- model_coef_vec[-c(1:nrow(main_info))]
     my_mean <- c(my_mean_main_part, my_mean_inter_part)
+
     EST_COEFFICIENTS_tf <- tf$Variable(as.matrix(my_mean), dtype = dttf, trainable = T)
   }
 
@@ -275,5 +321,6 @@ generate_ModelOutcome <- function(){
     interaction_info <- interaction_info_PreRegularization
     vcov_OutcomeModel <- vcov_OutcomeModel_full
     regularization_adjust_hash <- regularization_adjust_hash_PreRegularization
+  }
   }
 }
