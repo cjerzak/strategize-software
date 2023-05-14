@@ -2,3 +2,4 @@
 
 export(OptiConjoint)
 export(OptiConjoint_OneStep)
+export(cv.OptiConjoint)
