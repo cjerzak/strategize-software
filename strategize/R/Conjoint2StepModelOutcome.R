@@ -164,15 +164,13 @@ generate_ModelOutcome <- function(){
             colnames(W_fh) <- colnames(w_orig)
             inter_fh <- t(combn(1:ncol(W_fh),m=2))
             # length( Y ) # 14k
-            # length( individual_id ) # 7k
-            # length( individual_task_id ) # 7k
+            # length( respondent_id ) # 7k
+            # length( respondent_task_id ) # 7k
             # dim( W_fh ); dim( X ) # 7k, 14k
             design_fh <- as.data.frame(
-              cbind("Yobs"=Y, "individual_id" = individual_id,
-                    "individual_task_id" = individual_task_id,
+              cbind("Yobs"=Y, "respondent_id" = respondent_id,
+                    "respondent_task_id" = respondent_task_id,
                     "profile_order" = profile_order, W_fh, X))
-            library( FactorHet )
-
             OutcomeFormula_withInter <- as.formula( paste(
               # outcome
               "Yobs", "~",
@@ -193,13 +191,18 @@ generate_ModelOutcome <- function(){
             gc(); py_gc$collect()
             log(sort( sapply(ls(),function(zr){object.size(eval(parse(text=zr)))})))
             rm(W_fh); rm(inter_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
+            browser()
+            #save(list=ls(all.names = TRUE),file = "~/Downloads/FactorHet_mbo_INPUTS.RData", envir = environment())
+            save(list=c("OutcomeFormula_mainOnly","ModeratorFormula","design_fh"),file = "~/Downloads/FactorHet_mbo_INPUTS.RData")
+            library( FactorHet )
             my_model <- FactorHet_mbo(
               formula = OutcomeFormula_mainOnly,
-              group = as.formula("~ individual_id"),
-              task =  as.formula("~ individual_task_id"),
+              group = as.formula("~ respondent_id"),
+              task =  as.formula("~ respondent_task_id"),
               choice_order = as.formula("~ profile_order"),
               moderator = ModeratorFormula,
               design = design_fh[1:2000,],
+              #design = design_fh,
               mbo_control = FactorHet_mbo_control(iters = 3),
               control = FactorHet_control(beta_method = "cpp"),
               K = K)
