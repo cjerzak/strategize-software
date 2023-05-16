@@ -1,15 +1,29 @@
 generate_ModelOutcome <- function(){
   # obtain main + interaction info
   {
-    # main info
-    main_info <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
-      list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_] - 1 )))}))
-    heldout_levels_list <- lapply(factor_levels,function(xer){xer})
-    main_info <- cbind(main_info,"d_index"=1:nrow(main_info))
+    holdout_indicator  <-  1*(K == 1)
+
+    # main_info + a_structure
+    for(nrp in 1:2){
+      main_info <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
+        list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_] - ifelse(nrp == 1,
+                                                                           yes = 1,
+                                                                           no = holdout_indicator) )))}))
+      heldout_levels_list <- lapply(factor_levels,function(xer){xer})
+      main_info <- cbind(main_info,"d_index"=1:nrow(main_info))
+      if(nrp == 1){
+        a_structure <- main_info
+      }
+    }
+
+    if(holdout_indicator == 0){
+      a_structure_leftoutLdminus1 <- main_info[which(c(diff(main_info$d),1)==0),]
+      a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
+    }
 
     # interaction info
     main_info_inter <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
-      list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_]-1 )))}))
+      list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_] - holdout_indicator )))}))
     main_info_all <- main_info_inter <- cbind(main_info_inter,"d_full_index"=1:nrow(main_info_inter))
 
     interaction_helper <- expand.grid(1:nrow(main_info_inter),1:nrow(main_info_inter))
@@ -162,15 +176,11 @@ generate_ModelOutcome <- function(){
         if(K > 1){
             W_fh <- W
             colnames(W_fh) <- colnames(w_orig)
-            inter_fh <- t(combn(1:ncol(W_fh),m=2))
-            # length( Y ) # 14k
-            # length( respondent_id ) # 7k
-            # length( respondent_task_id ) # 7k
-            # dim( W_fh ); dim( X ) # 7k, 14k
             design_fh <- as.data.frame(
               cbind("Yobs"=Y, "respondent_id" = respondent_id,
                     "respondent_task_id" = respondent_task_id,
                     "profile_order" = profile_order, W_fh, X))
+            inter_fh <- t(combn(1:ncol(W_fh),m=2))
             OutcomeFormula_withInter <- as.formula( paste(
               # outcome
               "Yobs", "~",
@@ -178,22 +188,19 @@ generate_ModelOutcome <- function(){
               paste(colnames(W_fh),collapse = "+"), "+",
               # interactions
               paste(paste(colnames(W_fh)[inter_fh[,1]],
-                          colnames(W_fh)[inter_fh[,2]],sep = ":"),collapse="+")
-            ))
+                          colnames(W_fh)[inter_fh[,2]],sep = ":"),collapse="+")) )
             OutcomeFormula_mainOnly <- as.formula( paste(
               # outcome
               "Yobs", "~",
               # main terms
               paste(colnames(W_fh),collapse = "+") ))
-            #OutcomeFormula_minimal <- as.formula("Yobs~Sex+Age+Family+Race")
-            ModeratorFormula <- as.formula(paste("~", paste(paste("`",colnames(X),"`",sep = ""),
-                                                       collapse = "+")))
+
+            ModeratorFormula <- as.formula(paste("~", paste(paste("`",colnames(X),"`",sep = ""), collapse = "+")))
             gc(); py_gc$collect()
             log(sort( sapply(ls(),function(zr){object.size(eval(parse(text=zr)))})))
             rm(W_fh); rm(inter_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
-            browser()
-            #save(list=ls(all.names = TRUE),file = "~/Downloads/FactorHet_mbo_INPUTS.RData", envir = environment())
-            save(list=c("OutcomeFormula_mainOnly","ModeratorFormula","design_fh"),file = "~/Downloads/FactorHet_mbo_INPUTS.RData")
+            #save(list=c("OutcomeFormula_mainOnly","ModeratorFormula","design_fh"),file = "~/Downloads/FactorHet_mbo_INPUTS.RData")
+            #table(table( paste(design_fh$respondent_task_id, design_fh$respondent_id,sep='_') ))
             library( FactorHet )
             my_model <- FactorHet_mbo(
               formula = OutcomeFormula_mainOnly,
@@ -201,35 +208,36 @@ generate_ModelOutcome <- function(){
               task =  as.formula("~ respondent_task_id"),
               choice_order = as.formula("~ profile_order"),
               moderator = ModeratorFormula,
-              design = design_fh[1:2000,],
-              #design = design_fh,
+              design = design_fh,
               mbo_control = FactorHet_mbo_control(iters = 3),
               control = FactorHet_control(beta_method = "cpp"),
               K = K)
-            my_mean <- my_model$parameters$beta
-            my_mean <- rbind(my_mean, matrix(0,nrow = nrow( interaction_info),ncol=K))
+            my_mean_full <- my_model$parameters$beta
+            my_mean_full <- rbind(my_mean_full, matrix(0,nrow = nrow( interaction_info),ncol=K))
 
             # define for forward compatability
-            EST_INTERCEPT_tf <- jnp$array(t( my_mean[1,1] ) )
-            EST_COEFFICIENTS_tf <- jnp$array(as.matrix( my_mean[-1,1] ) )
+            # k = 1 for now..
+            EST_INTERCEPT_tf <- tf$constant(t( my_mean_full[1,1] ) )
+            EST_COEFFICIENTS_tf <- tf$constant(as.matrix( my_mean_full[-1,1] ) )
+            my_mean <- as.vector( my_mean_full[-1,1] )
 
-
+            # more definitions
             point_est_predict_clust <- my_model$parameters$phi
-            vcov_OutcomeModel <- as.matrix(  my_model$vcov$vcov )
 
-            phi_drop <- which(
-              gsub(row.names(vcov_OutcomeModel),pattern="phi[1-9]_",replace="") %in%
+            vcov_OutcomeModel <- as.matrix(  my_model$vcov$vcov )
+            phi_drop <- which(  gsub(row.names(vcov_OutcomeModel),pattern="phi[1-9]_",replace="") %in%
                 colnames( point_est_predict_clust ) )
-            vcov_full <- matrix(0,nrow = nrow(my_mean), ncol = nrow(my_mean))
+            vcov_full <- matrix(0,nrow = length(my_mean)+1, ncol = length(my_mean)+1)# plus 1 for intercept
             vcov_OutcomeModel <- vcov_OutcomeModel[-phi_drop,-phi_drop]
             vcov_OutcomeModel_by_k <- sapply(1:K,function(k){
               k_indi <- grep(row.names(vcov_OutcomeModel),
-                             pattern  = sprintf("beta%s_",k))
+                                pattern  = sprintf("beta%s_",k) )
 
               vcov_red <- vcov_OutcomeModel[k_indi,k_indi]
               vcov_full[1:nrow(vcov_red),1:ncol(vcov_red)] <- vcov_red
               return(  list( vcov_full ))
             })
+            vcov_OutcomeModel <- vcov_OutcomeModel_by_k[[1]]
             #causalimages::image2( vcov_OutcomeModel )
             #plot (  diag(vcov_OutcomeModel) )
 
@@ -254,7 +262,9 @@ generate_ModelOutcome <- function(){
     }
   }
 
-  # final outcomes modeled for base case
+  ###################################
+  # re-run final outcomes modeled for base case
+  ###################################
   if(K == 1){
 
   # fit outcome model, post regularization

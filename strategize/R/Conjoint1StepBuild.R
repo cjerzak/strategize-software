@@ -3,11 +3,11 @@ ml_build <- function(){
   zero_ep <- tf$constant(1e-5,tf$float32)
   print("Begin building block...")
 
-  for(d_ in 1:length(assignmentProbList)){
-    eval(parse(text = sprintf("ilrBasis%s <- tf$constant(compositions::ilrBase(D = length(assignmentProbList[[d_]])),tf$float32)",d_)))
+  for(d_ in 1:length(p_list)){
+    eval(parse(text = sprintf("ilrBasis%s <- tf$constant(compositions::ilrBase(D = length(p_list[[d_]])),tf$float32)",d_)))
     eval(parse(text = sprintf("ilrBasis%s_t <- tf$transpose(ilrBasis%s)",d_,d_)))
   }
-  ilrBasisClust <- tf$constant(compositions::ilrBase(D = kClust),tf$float32)
+  ilrBasisClust <- tf$constant(compositions::ilrBase(D = K),tf$float32)
   ilrBasisClust_t <- tf$expand_dims(tf$transpose(ilrBasisClust),0L)
   Zero1by1 <- tf$constant(as.matrix(0.),tf$float32)
 
@@ -22,15 +22,15 @@ ml_build <- function(){
   }
   if(penaltyType == "L2"){
     ## if equal weighting of the penalty by cluster
-    if(kClust == 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$square( tf$subtract( pd%s, tf$exp(log_pidk) ) ))' }
+    if(K == 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$square( tf$subtract( pd%s, tf$exp(log_pidk) ) ))' }
 
     ## if weighting the penalty by the marginal probability for that factor
     # approach 1: (pi_z - p)^2 * pr(z)
-    #if(kClust > 1){ RegularizationPiAction <- 'tf$multiply(tf$reduce_sum(tf$square( tf$subtract( pd%s, tf$exp(log_pidk) ) )),
+    #if(K > 1){ RegularizationPiAction <- 'tf$multiply(tf$reduce_sum(tf$square( tf$subtract( pd%s, tf$exp(log_pidk) ) )),
                #tf$squeeze(tf$gather(ClassProbsMarginal, k_ - 1L, axis = 1L)))' }
 
     # approach 2: mean( ( (p_z-pi) * pr(z|x) )^2 )
-    if(kClust > 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$reduce_mean(tf$square(tf$multiply( tf$subtract( pd%s, tf$exp(log_pidk) ) ,
+    if(K > 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$reduce_mean(tf$square(tf$multiply( tf$subtract( pd%s, tf$exp(log_pidk) ) ,
                                           tf$expand_dims(tf$gather(ClassProbs, k_ - 1L, axis = 1L),0L) )),1L))' }
 
   }
@@ -46,11 +46,11 @@ ml_build <- function(){
     if(useVariational == T){
       regularizationContrib <- 'tf$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
     }
-    if(useVariational == F & kClust > 1){
+    if(useVariational == F & K > 1){
       regularizationContrib <- 'tf$add(tf$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi),
-                                                tf$multiply(COEF_LAMBDA, tf$reduce_mean(tf$square(ClassProbProj$kernel))) )'
+                                                tf$multiply(lambda_coef, tf$reduce_mean(tf$square(ClassProbProj$kernel))) )'
     }
-    if(useVariational == F & kClust == 1){
+    if(useVariational == F & K == 1){
       regularizationContrib <- 'tf$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
     }
     if(useHajekInOptimization == F){
@@ -62,20 +62,20 @@ ml_build <- function(){
     # define main function
     {
       base_tf_function <- eval(parse(text = paste('myLoss_or_returnWeights <- (function(Y_, X_,factorMat_,logProb_,REGULARIZATION_LAMBDA){
-          if(kClust == 1){ logClassProbs <- tf$zeros(tf$shape(Y_),tf$float32)  }
-          if(kClust >  1){
+          if(K == 1){ logClassProbs <- tf$zeros(tf$shape(Y_),tf$float32)  }
+          if(K >  1){
               logClassProbs <- tf$math$log( ClassProbs <- getClassProb(  X_ )  )
               ClassProbsMarginal <- tf$reduce_mean(ClassProbs, 0L, keepdims=T)
           }
 
           RegularizationContribPi <- tf$zeros( list() )
-          logPrWGivenAllClasses <- replicate(  kClust, list()   )
+          logPrWGivenAllClasses <- replicate(  K, list()   )
 
           # Approach:
           # Pr(W) = sum_k Pr(W, k) = sum_k Pr(W | K = k) Pr(K = k) = sum_k prod_d [Pr(W_d | K=k)] Pr(K=k)
 
           # iterate over clusters
-          for(k_ in 1L:kClust){
+          for(k_ in 1L:K){
 
             # log( prod_d [Pr(W_d|K=k)] Pr(K=k) ) =  [sum_d { log(Pr(W_d|K=k)) }] + log( Pr(K=k) )
             logPrW_given_k <- tf$expand_dims(tf$gather(logClassProbs, indices = k_ - 1L, axis=1L),1L)
@@ -133,7 +133,7 @@ ml_build <- function(){
 ## start  building model
 {
   # define the class prob projection, the trainable vars, the baseline probs
-  KFreeProbProj <- as.integer(kClust - 1L)
+  KFreeProbProj <- as.integer(K - 1L)
   b_proj <- 0.1
   if(KFreeProbProj > 0){
     value_seq <- sapply(b_seq <- 10^seq(-10,1,length.out=100),function(b_){
@@ -153,7 +153,7 @@ ml_build <- function(){
         penalty_val
       }))
   })
-    #value_seq <- value_seq - 1 / kClust
+    #value_seq <- value_seq - 1 / K
     b_proj <- b_seq[which.min(abs(value_seq - CLUSTER_EPSILON))]
     print(sprintf("Uniform init bounds for kernel: %.5f",b_proj))
   }
@@ -195,7 +195,7 @@ ml_build <- function(){
   }
   #ClassProbProj(tf$constant(X,tf$float32))
   print(paste("Initial Class Probs: ", paste(round(colMeans(as.array(getClassProb(tf$constant(X,tf$float32) ))),7L),collapse=','),sep=""))
-  DFactors <- length( nLevels_vec <- apply(FactorsMat,2,function(l){length(unique(l))}) )
+  DFactors <- length( nLevels_vec <- apply(W,2,function(l){length(unique(l))}) )
 
   if(useVariational == T){
     KERNEL_LOC_INIT  <- as.matrix(ClassProbProj$kernel_posterior$trainable_variables[[1]])
@@ -204,13 +204,13 @@ ml_build <- function(){
 
   # initialize pd -  assignment probabilities for penalty and pr(w)
     for(d_ in 1:(DFactors <- length(nLevels_vec))){
-        eval(parse(text=sprintf( "pd%s = tf$constant(as.matrix(assignmentProbList[[d_]]),
+        eval(parse(text=sprintf( "pd%s = tf$constant(as.matrix(p_list[[d_]]),
                                        dtype = tf$float32,name='pd%s')",d_,d_)) )
     }
 
   # initialize av- the new probability generators
   initialize_avs <- function(b_SCALE=1){
-    for(k_ in 1:kClust){ for(d_ in 1:DFactors){
+    for(k_ in 1:K){ for(d_ in 1:DFactors){
       if(useVariational == T){
         sd_d <- f2n(attr(pi_init_list[d_,k_,1L][[1]],"random_"))[1]
         sd_d <- tf$constant(as.matrix(sd_d),dtype=tf$float32)
@@ -264,8 +264,8 @@ ml_build <- function(){
   initialize_avs()
 
   getPiList <- function(simplex=T,rename=T,return_SE = F,VarCov = NULL){
-    FinalSEList <- FinalProbList <- eval(parse(text=paste("list(",paste(rep("list(),",times=kClust-1),collapse=""), "list())",collapse="")))
-    for(k_ in 1:kClust){
+    FinalSEList <- FinalProbList <- eval(parse(text=paste("list(",paste(rep("list(),",times=K-1),collapse=""), "list())",collapse="")))
+    for(k_ in 1:K){
      for(d_ in 1:length(nLevels_vec)){
          if(simplex == F & normType == "ilr"){
            pidk <- as.numeric(eval(parse(text=sprintf("av%sk%s_()",d_,k_))) )
@@ -318,8 +318,8 @@ ml_build <- function(){
           }
         }
         if(rename == T){
-          tmp_<-try(names(FinalProbList[[k_]][[d_]]) <- names(assignmentProbList[[d_]]),T)
-          names(FinalProbList[[k_]])[d_] <- names(assignmentProbList)[d_]
+          tmp_<-try(names(FinalProbList[[k_]][[d_]]) <- names(p_list[[d_]]),T)
+          names(FinalProbList[[k_]])[d_] <- names(p_list)[d_]
 
           if(return_SE == T){
             names(FinalSEList[[k_]][[d_]]) <- names(FinalProbList[[k_]][[d_]])
@@ -338,20 +338,20 @@ ml_build <- function(){
   tfConst <- function(x,ty=tf$float32){  tf$constant(x,dtype=ty)  }
 
   # initial forward pass
-  my_batch <- sample(1:length(Yobs), batch_size,replace=F)
-  tmp_loss <- getProbRatio_tf(Y_ = tfConst(as.matrix(Yobs[my_batch])),
+  my_batch <- sample(1:length(Y), batch_size,replace=F)
+  tmp_loss <- getProbRatio_tf(Y_ = tfConst(as.matrix(Y[my_batch])),
                          X_ = tfConst(X[my_batch,]),
                          factorMat_ = tfConst(FactorsMat_numeric_0Indexed[my_batch,],tf$int32),
-                         logProb_ = tfConst(as.matrix(log_pr_w[my_batch])),
-                         REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(LAMBDA_SEQ[1])))
+                         logProb_ = tfConst(as.matrix(log_PrW[my_batch])),
+                         REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(lambda_seq[1])))
 
   with(tf$GradientTape() %as% tape, {
-      my_batch <- sample(1:length(Yobs), batch_size,replace=F)
-      tmp_loss <- getLoss_tf(Y_ = tfConst(as.matrix(Yobs[my_batch])),
+      my_batch <- sample(1:length(Y), batch_size,replace=F)
+      tmp_loss <- getLoss_tf(Y_ = tfConst(as.matrix(Y[my_batch])),
                                  X_ = tfConst(X[my_batch,]),
                                  factorMat_ = tfConst(FactorsMat_numeric_0Indexed[my_batch,],tf$int32),
-                                 logProb_ = tfConst(as.matrix(log_pr_w[my_batch])),
-                                 REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(LAMBDA_SEQ[1])))
+                                 logProb_ = tfConst(as.matrix(log_PrW[my_batch])),
+                                 REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(lambda_seq[1])))
   })
 
 # trainable variables: the class prob projection variables + the a's
@@ -371,7 +371,7 @@ rm(tmp_loss_grad)
         ClassProbProj$trainable_variables[[2]]$assign(KERNEL_SCALE_INIT);
         ClassProbProj$trainable_variables[[3]]$assign(tf$expand_dims(tf$constant(0.,tf$float32),0L))'))
     }
-    if(useVariational == F & kClust > 1){
+    if(useVariational == F & K > 1){
      values_ <- unlist( lapply(strsplit(grep(names(ClassProbProj),pattern="initializer",value=T),
                          split="_"),function(zer){zer[1]}) )
      for(value_ in values_){

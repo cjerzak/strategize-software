@@ -2,21 +2,21 @@
 #'
 #' @usage
 #'
-#' OptiConjoint_OneStep(...)
+#' OneStep.OptiConjoint(...)
 #'
 #' @param x Description
 #'
 #' @return `z` Description
 #' @export
 #'
-#' @details `OptiConjoint_OneStep` Description
+#' @details `OneStep.OptiConjoint` Description
 #'
 #' - Description
 #'
 #' @examples
 #'
 #' # Analysis
-#' OptiConjoint_analysis <- OptiConjoint_OneStep()
+#' OptiConjoint_analysis <- OneStep.OptiConjoint()
 #'
 #' print( OptiConjoint_analysis )
 #'
@@ -24,14 +24,14 @@
 #'
 #' @md
 
-OptiConjoint_OneStep <- function(
-                              FactorsMat,
-                              Yobs,
+OneStep.OptiConjoint <- function(
+                              W,
+                              Y,
                               X = NULL,
-                              kClust = 1,
+                              K = 1,
                               warmStart = F,
                               automatic_scaling = T,
-                              assignmentProbList = NULL,
+                              p_list = NULL,
                               hypotheticalProbList = NULL,
                               pi_init_vec = NULL,
                               constrain_ub = NULL,
@@ -39,7 +39,7 @@ OptiConjoint_OneStep <- function(
                               useVariational = F,
                               penaltyType = "LogMaxProb",
                               testFraction = 0.5,
-                              log_pr_w = NULL,
+                              log_PrW = NULL,
                               LEARNING_RATE_BASE = 0.01,
                               cycle_width  = 50,
                               cycle_number = 4,
@@ -60,8 +60,8 @@ OptiConjoint_OneStep <- function(
                               piSEtype  = "automatic",
                               openBrowser = F,
                               useHajekInOptimization = T, findMax = T,quiet = T,
-                              LAMBDA_SEQ = NULL,
-                              COEF_LAMBDA = 0.0001,
+                              lambda_seq = NULL,
+                              lambda_coef = 0.0001,
                               nFolds = 3, batch_size = 50,
                               confLevel = 0.90,
                               hypotheticalNInVarObj=NULL){
@@ -89,46 +89,46 @@ OptiConjoint_OneStep <- function(
 
   # initial processing
   {
-  if(is.null(X)){ X <- cbind(rnorm(length(Yobs)),rnorm(length(Yobs))) }
+  if(is.null(X)){ X <- cbind(rnorm(length(Y)),rnorm(length(Y))) }
   if(automatic_scaling == T){  X <- scale ( X  )  }
 
   useHajek <- T
   if(openBrowser){browser()}
-  if(any(unlist(lapply(assignmentProbList,class)) == "table")){
-    for(ij in 1:length(assignmentProbList)){
-      n_ <- names(assignmentProbList[[ij]] )
-      assignmentProbList[[ij]] <- as.vector(assignmentProbList[[ij]])
-      names(assignmentProbList[[ij]]) <- n_
+  if(any(unlist(lapply(p_list,class)) == "table")){
+    for(ij in 1:length(p_list)){
+      n_ <- names(p_list[[ij]] )
+      p_list[[ij]] <- as.vector(p_list[[ij]])
+      names(p_list[[ij]]) <- n_
     } }
-  penaltyProbList_unlisted <- unlist(assignmentProbList)
-  if(findMax == F){ Yobs <- -1 * Yobs }
+  penaltyProbList_unlisted <- unlist(p_list)
+  if(findMax == F){ Y <- -1 * Y }
 
-  # SCALE Yobs
+  # SCALE Y
   mean_Y <- 0; sd_Y <- 1
   if(automatic_scaling == T){
-  mean_Y <- mean(Yobs); sd_Y <- sd(Yobs)
-  Yobs <-   (Yobs -  mean_Y) / sd_Y
+  mean_Y <- mean(Y); sd_Y <- sd(Y)
+  Y <-   (Y -  mean_Y) / sd_Y
   }
 
-  FactorsMat_numeric <- sapply(1:ncol(FactorsMat),function(ze){ match(FactorsMat[,ze], names(assignmentProbList[[ze]]))  })
+  FactorsMat_numeric <- sapply(1:ncol(W),function(ze){ match(W[,ze], names(p_list[[ze]]))  })
   }
 
   ### case 1 - the new multinomial probabilities ARE specified
   if(!is.null(hypotheticalProbList)){
     Qhat_all <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
-                                       Yobs_internal = Yobs,
+                                       Yobs_internal = Y,
                                        log_pr_w_internal = NULL,
                                        knownNormalizationFactor = knownNormalizationFactor,
-                                       assignmentProbList_internal = assignmentProbList,
+                                       assignmentProbList_internal = p_list,
                                        hypotheticalProbList_internal = hypotheticalProbList,
                                        hajek = useHajek)
-    SE_Q_all <- computeQse_conjoint(FactorsMat=FactorsMat_numeric,
-                                Yobs=Yobs,
+    SE_Q_all <- computeQse_conjoint(W=FactorsMat_numeric,
+                                Y=Y,
                                 hypotheticalN = NULL,
-                                log_pr_w = NULL,log_treatment_combs = NULL,
+                                log_PrW = NULL,log_treatment_combs = NULL,
                                 hajek = useHajek,
                                 knownNormalizationFactor = knownNormalizationFactor,
-                                assignmentProbList=assignmentProbList, returnLog = F,
+                                p_list=p_list, returnLog = F,
                                 hypotheticalProbList=hypotheticalProbList)
     Q_interval_all <- c(Qhat_all$Qest - abs(qnorm((1-confLevel)/2))*SE_Q_all,
                         Qhat_all$Qest_all + abs(qnorm((1-confLevel)/2))*SE_Q_all)
@@ -138,7 +138,7 @@ OptiConjoint_OneStep <- function(
                     "Q_wts_all" = Qhat_all$Q_wts,
                     "Q_wts_raw_sum_all" = Qhat_all$Q_wts_raw_sum,
                     "log_pr_w_new_all"=Qhat_all$log_pr_w_new,
-                    "log_pr_w_all"=Qhat_all$log_pr_w) )
+                    "log_pr_w_all"=Qhat_all$log_PrW) )
   }#end !is.null(hypotheticalProbList)
 
   #### case 2 - the new multinomial probabilities ARE NOT specified
@@ -148,47 +148,47 @@ OptiConjoint_OneStep <- function(
     {
       forceHajek <- T
       zStar <- abs(qnorm((1-confLevel)/2))
-      varHat <- mean( (Yobs - (muHat <- mean(Yobs)) )^2   )
+      varHat <- mean( (Y - (muHat <- mean(Y)) )^2   )
       n_target <- ifelse(is.null(hypotheticalNInVarObj), yes = length(  split1_indices  ), no = hypotheticalNInVarObj)
     }
 
     # define number of treatment combinations
-    treatment_combs <- exp(log_treatment_combs  <- sum(log(sapply(1:ncol(FactorsMat),function(ze){ length(assignmentProbList[[ze]]) }) )))
+    treatment_combs <- exp(log_treatment_combs  <- sum(log(sapply(1:ncol(W),function(ze){ length(p_list[[ze]]) }) )))
 
     # initialize quantities
     marginalProb_m <- seList <- seList_automatic <- m_se_Q <- seList_manual <- lowerList <- upperList <- NULL
     PrXd_vec <- PrXdGivenClust_se <- PrXdGivenClust_mat <- NULL
     if(is.null(split1_indices)){
-      split_ <- rep(1,times=length(Yobs))
+      split_ <- rep(1,times=length(Y))
       if(is.null(testFraction)){ testFraction <- 0.5 }
-      split_[sample(1:length(split_), round(length(Yobs)*testFraction))] <- 2
+      split_[sample(1:length(split_), round(length(Y)*testFraction))] <- 2
       split1_indices = which(split_ == 1); split2_indices = which(split_ == 2)
-      if(length(LAMBDA_SEQ) == 1){
+      if(length(lambda_seq) == 1){
         warning("NO SAMPLE SPLITTING, AS LAMBDA IS FIXED")
-        split1_indices <- split2_indices <- 1:length(Yobs)
+        split1_indices <- split2_indices <- 1:length(Y)
       }
     }
     print(c(length(split1_indices),length(split2_indices)))
 
     # execute splits
-    FactorsMat1 <- FactorsMat[split1_indices,];FactorsMat1_numeric <- FactorsMat_numeric[split1_indices,]
-    FactorsMat2 <- FactorsMat[split2_indices,];FactorsMat2_numeric <- FactorsMat_numeric[split2_indices,]
+    FactorsMat1 <- W[split1_indices,];FactorsMat1_numeric <- FactorsMat_numeric[split1_indices,]
+    FactorsMat2 <- W[split2_indices,];FactorsMat2_numeric <- FactorsMat_numeric[split2_indices,]
 
-    Yobs_split1 <- Yobs[split1_indices]
-    log_pr_w_split1 <- log_pr_w[split1_indices]
+    Yobs_split1 <- Y[split1_indices]
+    log_pr_w_split1 <- log_PrW[split1_indices]
     sigma2_hat_split1 <- var( Yobs_split1)
 
-    Yobs_split2 <- Yobs[split2_indices]
-    log_pr_w_split2 <- log_pr_w[split2_indices]
+    Yobs_split2 <- Y[split2_indices]
+    log_pr_w_split2 <- log_PrW[split2_indices]
     sigma2_hat_split2 <- var( Yobs_split2)
 
     # obtain pr(w) so we don't need to recompute it at every step
-    if(is.null(log_pr_w)){
-      log_pr_w    <-   as.vector(computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
-                                                            Yobs_internal=Yobs,
-                                                            hypotheticalProbList_internal = assignmentProbList,
-                                                            assignmentProbList_internal = assignmentProbList,
-                                                            hajek = useHajek)$log_pr_w)
+    if(is.null(log_PrW)){
+      log_PrW    <-   as.vector(computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
+                                                            Yobs_internal=Y,
+                                                            hypotheticalProbList_internal = p_list,
+                                                            assignmentProbList_internal = p_list,
+                                                            hajek = useHajek)$log_PrW)
     }
 
     # INITIALIZE M ESTIMATION
@@ -204,12 +204,12 @@ OptiConjoint_OneStep <- function(
         normType <- "alr"
         #normType <- "ilr"
         print(sprintf("Using %s prob. norm.",toupper(normType)))
-        TARGET_EPSILON_PI <- 0.01  #/ exp( length( assignmentProbList ) )
+        TARGET_EPSILON_PI <- 0.01  #/ exp( length( p_list ) )
         CLUSTER_EPSILON <- 0.1
 
         if(useVariational == T){ pi_init_type <- "rnorm" }
         if(useVariational == F){ pi_init_type <- "runif" }
-        pi_init_list = replicate(nFolds+1,replicate(kClust,lapply(assignmentProbList,function(ze){
+        pi_init_list = replicate(nFolds+1,replicate(K,lapply(p_list,function(ze){
           if(normType == "alr"){systemit_init <- tmp <- ((c(rev(c(compositions::alr(t(rev(ze))))))))}
           if(normType == "ilr"){systemit_init <- tmp <- ((c((c(compositions::ilr(t((ze))))))))}
           p_val <- prop.table(exp(ze))
@@ -244,7 +244,7 @@ OptiConjoint_OneStep <- function(
 
     # get mapped transformations
     {
-      probsIndex_mapped <- unlist(assignmentProbList)
+      probsIndex_mapped <- unlist(p_list)
       probsIndex_mapped[] <- 1:length( probsIndex_mapped )
       probsIndex_mapped <- vec2list_noTransform(probsIndex_mapped)
       FactorsMat1_mapped <- sapply(1:ncol(FactorsMat1_numeric),function(ze){
@@ -253,31 +253,31 @@ OptiConjoint_OneStep <- function(
     }
 
     # main cross-validation routine
-    optim_max_hajek_list <- sapply(1:(length(LAMBDA_SEQ)+1),function(er){
+    optim_max_hajek_list <- sapply(1:(length(lambda_seq)+1),function(er){
       list(matrix(NA,nrow = length( pi_init_vec), ncol = nFolds)) })
-    if ( length(LAMBDA_SEQ) == 1){
-      LAMBDA_selected <- LAMBDA_ <- LAMBDA_SEQ;
+    if ( length(lambda_seq) == 1){
+      LAMBDA_selected <- LAMBDA_ <- lambda_seq;
 
       FactorsMat_numeric_IN <- FactorsMat1_numeric <- FactorsMat2_numeric <- FactorsMat_numeric
-      Yobs_IN <- Yobs_split1 <- Yobs_split2 <- Yobs
-      log_pr_w_IN <- log_pr_w_split1 <- log_pr_w_split2 <- log_pr_w
+      Yobs_IN <- Yobs_split1 <- Yobs_split2 <- Y
+      log_pr_w_IN <- log_pr_w_split1 <- log_pr_w_split2 <- log_PrW
     }
-    LAMBDA_SEQ <- sort(LAMBDA_SEQ, decreasing = T)
+    lambda_seq <- sort(lambda_seq, decreasing = T)
 
     # optimization
     {
         # helper functions
-        if(is.null(X)){X<-matrix(rnorm(length(Yobs)*max(2,kClust)),nrow=length(Yobs),ncol=max(2,kClust))}
-        FactorsMat_numeric <- sapply(1:ncol(FactorsMat_numeric <- FactorsMat),function(zer){
-          match(FactorsMat_numeric[,zer], names(assignmentProbList[[zer]])) })
+        if(is.null(X)){X<-matrix(rnorm(length(Y)*max(2,K)),nrow=length(Y),ncol=max(2,K))}
+        FactorsMat_numeric <- sapply(1:ncol(FactorsMat_numeric <- W),function(zer){
+          match(FactorsMat_numeric[,zer], names(p_list[[zer]])) })
         FactorsMat_numeric_0Indexed <- FactorsMat_numeric - 1L
 
-        performance_matrix_out <- performance_matrix_in <- matrix(NA, ncol = length(LAMBDA_SEQ), nrow = nFolds)
+        performance_matrix_out <- performance_matrix_in <- matrix(NA, ncol = length(lambda_seq), nrow = nFolds)
         holdBasis_traintv <- sample(1:length(split1_indices) %% nFolds+1)
-        REGULARIZATION_LAMBDA_SEQ_ORIG <- LAMBDA_SEQ
+        REGULARIZATION_LAMBDA_SEQ_ORIG <- lambda_seq
 
-        if(length(LAMBDA_SEQ) > 1){trainIndicator_pool <- c(1,0); if(nFolds == 1){stop("ERROR: SET nFolds > 1!")}}
-        if(length(LAMBDA_SEQ) == 1){warning(sprintf("NO CV SELCTION OF LAMBDA, FORCING LAMBDA = %.5f|",LAMBDA_SEQ)); trainIndicator_pool <- 0}
+        if(length(lambda_seq) > 1){trainIndicator_pool <- c(1,0); if(nFolds == 1){stop("ERROR: SET nFolds > 1!")}}
+        if(length(lambda_seq) == 1){warning(sprintf("NO CV SELCTION OF LAMBDA, FORCING LAMBDA = %.5f|",lambda_seq)); trainIndicator_pool <- 0}
 
         # Build Model
         print("Building...")
@@ -292,7 +292,7 @@ OptiConjoint_OneStep <- function(
         eval(parse( text = trainText ),envir = evaluation_environment)
 
         # obtain the pi's
-        hypotheticalProbList <- getPiList();names(hypotheticalProbList) <- paste("k",1:kClust,sep="")
+        hypotheticalProbList <- getPiList();names(hypotheticalProbList) <- paste("k",1:K,sep="")
         FinalProbList <- hypotheticalProbList
         optim_max_hajek_full <- na.omit(  unlist(getPiList(simplex=F)) )
         ClassProbs <- as.array(  getClassProb(X) )
@@ -315,7 +315,7 @@ OptiConjoint_OneStep <- function(
                            performance_mat$Q_out - qStar*performance_mat$Qse_out,
                            performance_mat$Q_out + qStar*performance_mat$Qse_out
                              ))[c(1,6)])
-    abline(h=mean(Yobs),lty = 2, col= "gray",lwd=2)
+    abline(h=mean(Y),lty = 2, col= "gray",lwd=2)
     for(iaj in 1:nrow(performance_mat)){
       points( c(log(performance_mat$lambda[iaj]),log(performance_mat$lambda[iaj])),
             c(performance_mat$Q_in[iaj] -qStar*performance_mat$Qse_in[iaj],

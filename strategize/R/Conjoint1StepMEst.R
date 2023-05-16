@@ -11,16 +11,16 @@ get_se <- function(){
     ClassProbProjCoefs <- apply(ClassProbsPosterior_draws,1:2,mean)
     sort(ClassProbProjCoefs/ClassProbProjCoefs_se)
     row.names(ClassProbProjCoefs_se) <- row.names(ClassProbProjCoefs) <- colnames(X)
-    colnames(ClassProbProjCoefs_se) <- colnames(ClassProbProjCoefs) <- paste("k",2:kClust,sep="")
+    colnames(ClassProbProjCoefs_se) <- colnames(ClassProbProjCoefs) <- paste("k",2:K,sep="")
 
     PiPosterior_draws <- replicate(100,list(getPiList()))
-    hypotheticalProbList_full <- sapply(1:kClust,function(k_){
+    hypotheticalProbList_full <- sapply(1:K,function(k_){
       tmp_ <- sapply(1:length(PiPosterior_draws),function(boo_){
         PiPosterior_draws[[boo_]][[k_]] })
       posterior_means_k <- apply(tmp_,1,function(zer){
         colMeans(do.call(rbind,zer)) })
       list(posterior_means_k) })
-    seList_automatic <- sapply(1:kClust,function(k_){
+    seList_automatic <- sapply(1:K,function(k_){
       tmp_ <- sapply(1:length(PiPosterior_draws),function(boo_){
         PiPosterior_draws[[boo_]][[k_]] })
       posterior_means_k <- apply(tmp_,1,function(zer){
@@ -102,10 +102,10 @@ get_se <- function(){
             # tf calc
             if(optimization_language == "tf"){
               PsiWithJacobian_ji <- as.matrix( tf$constant(
-                getPsiAndJacobian_unvectorized(Y__ = tfConst(as.matrix(Yobs[ji])),
+                getPsiAndJacobian_unvectorized(Y__ = tfConst(as.matrix(Y[ji])),
                                                X__ = tfConst(t(X[ji,])),
                                                factorMat__ = tfConst(t(FactorsMat_numeric_0Indexed[ji,]),tf$int32),
-                                               logProb__ = tfConst(as.matrix(log_pr_w[ji]) ) ),tf$float32))
+                                               logProb__ = tfConst(as.matrix(log_PrW[ji]) ) ),tf$float32))
               psi_ji <- PsiWithJacobian_ji[,1]; names(psi_ji) <- var_names
               jacobian_ji <- PsiWithJacobian_ji[,-1]; colnames(jacobian_ji) <- row.names(jacobian_ji) <- var_names
             }
@@ -117,10 +117,10 @@ get_se <- function(){
               if(counter_ji == 1){
                 for(fn_ in rev(c("getLoss_tf_unnormalized","getProbRatio_tf"))){
                   jax_fxn_raw <- tf2jax$convert(eval(parse(text = fn_)),
-                                                Y_  = tf$constant(as.matrix(Yobs[i_]),tf$float32),
+                                                Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
                                                 X_  = tf$constant(t(X[i_,]),tf$float32),
                                                 factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                logProb_ = tf$constant(as.matrix(log_pr_w[i_]),tf$float32),
+                                                logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
                                                 REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
 
                   eval(parse(text = sprintf("%s <- jax_fxn_raw",
@@ -130,36 +130,36 @@ get_se <- function(){
                   # testing
                   if(T == F){
                     # check loss
-                    tf_v <- getLoss_tf_unnormalized( Y_  = tf$constant(as.matrix(Yobs[i_]),tf$float32),
+                    tf_v <- getLoss_tf_unnormalized( Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
                                                      X_  = tf$constant(t(X[i_,]),tf$float32),
                                                      factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                     logProb_ = tf$constant(as.matrix(log_pr_w[i_]),tf$float32),
+                                                     logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
                                                      REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
                     jax_v1 <- getLoss_jax_unnormalized( param_set,
-                                                        Y_  = tf$constant(as.matrix(Yobs[i_]),tf$float32),
+                                                        Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
                                                         X_  = tf$constant(t(X[i_,]),tf$float32),
                                                         factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                        logProb_ = tf$constant(as.matrix(log_pr_w[i_]),tf$float32),
+                                                        logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
                                                         REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
                     jax_v2 <- getLoss_jax_unnormalized( param_set,
-                                                        Y_  = jnp$array(as.matrix(Yobs[i_])),
+                                                        Y_  = jnp$array(as.matrix(Y[i_])),
                                                         X_  = jnp$array(t(X[i_,])),
                                                         factorMat_  = jnp$array(t(FactorsMat_numeric_0Indexed[i_,])),
-                                                        logProb_ = jnp$array(as.matrix(log_pr_w[i_])),
+                                                        logProb_ = jnp$array(as.matrix(log_PrW[i_])),
                                                         REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(LAMBDA_selected)))
                     tf_v; jax_v1; jax_v2
 
                     # check prob ratio - CHECKS OUT
-                    tf_v <- getProbRatio_tf( Y_  = tf$constant(as.matrix(Yobs[i_]),tf$float32),
+                    tf_v <- getProbRatio_tf( Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
                                              X_  = tf$constant(t(X[i_,]),tf$float32),
                                              factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                             logProb_ = tf$constant(as.matrix(log_pr_w[i_]),tf$float32),
+                                             logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
                                              REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
                     jax_v1 <- getProbRatio_jax( param_set,
-                                                Y_  = tf$constant(as.matrix(Yobs[i_]),tf$float32),
+                                                Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
                                                 X_  = tf$constant(t(X[i_,]),tf$float32),
                                                 factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                logProb_ = tf$constant(as.matrix(log_pr_w[i_]),tf$float32),
+                                                logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
                                                 REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
                     tf_v;jax_v1
                   }
@@ -181,10 +181,10 @@ get_se <- function(){
                   # test the function
                   jax_eval <- jax_fxn(
                     param_set,
-                    Y_  = jnp$array(as.matrix(Yobs[i_])),
+                    Y_  = jnp$array(as.matrix(Y[i_])),
                     X_  = jnp$array(t(X[i_,])),
                     factorMat_  = jnp$array(t(FactorsMat_numeric_0Indexed[i_,])),
-                    logProb_ = jnp$array(as.matrix(log_pr_w[i_])),
+                    logProb_ = jnp$array(as.matrix(log_PrW[i_])),
                     REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(LAMBDA_selected))
                   )
 
@@ -234,10 +234,10 @@ get_se <- function(){
                 jacobian_psi_fxn_jax <- jax$jit(jacobian_psi_fxn_jax)
               }
 
-              Y__i <- jnp$array(as.matrix(Yobs[i_]))
+              Y__i <- jnp$array(as.matrix(Y[i_]))
               X__i <- jnp$array(t(X[i_,]))
               factorMat__i <- jnp$array(t(FactorsMat_numeric_0Indexed[i_,]))
-              logProb__i <- jnp$array(as.matrix(log_pr_w[i_]))
+              logProb__i <- jnp$array(as.matrix(log_PrW[i_]))
               REGULARIZATION_LAMBDA__ <- jnp$array(returnWeightsFxn(LAMBDA_selected))
               Qhat__ <- jnp$array(as.matrix(  Qhat_tf) )
               psi_i <- psi_fxn_jax(
@@ -317,7 +317,7 @@ get_se <- function(){
         l1_psi <- unlist(lapply(psi_list,function(zer){mean(abs(zer))}))
         l1_neg_jacobian <- unlist(lapply(neg_jacobian_list,function(zer){mean(abs(zer))}))
         l1_check_ref <- split2_indices[which.max(l1_neg_jacobian)]
-        print( as.vector(FactorsMat[l1_check_ref,]) )
+        print( as.vector(W[l1_check_ref,]) )
         print( sapply(1:length(hypotheticalProbList[[1]]),function(zer){
           tmp_ <- hypotheticalProbList[[1]][[zer]]; tmp_[which.max(tmp_)] }) )
         sapply(1:length(hypotheticalProbList[[1]]),function(zer){
@@ -351,7 +351,7 @@ get_se <- function(){
                                       VarCov = VarCov_n_automatic)$FinalSEList
 
         # projection coefficients + SEs
-        if(kClust > 1){
+        if(K > 1){
           BinaryCovariateIndicator <- apply(X_factorized, 2, function(zer){names(table(zer))})
           BinaryCovariateIndicator <- unlist( lapply(BinaryCovariateIndicator,function(zer){mean(zer[1:2] == c("0","1") & length(zer)==2)}))
           X_completion <- sapply(which(BinaryCovariateIndicator==0),function(zer){
@@ -437,7 +437,7 @@ get_se <- function(){
             tf$reshape(zer,c(dim(zer)[1:2],-1L))})
           dPrXdGivenClust_dParam <- tf$concat(dPrXdGivenClust_dParam,2L)
           PrXdGivenClust_mat <- as.matrix(PrXdGivenClust)
-          row.names(PrXdGivenClust_mat) <- paste("k",1:kClust,sep="")
+          row.names(PrXdGivenClust_mat) <- paste("k",1:K,sep="")
           colnames(PrXdGivenClust_mat) <- colnames(X_factorized_complete)
           PrXd_vec <- colMeans(X_factorized_complete)
 
@@ -458,7 +458,7 @@ get_se <- function(){
       }
       if(any(is.na(unlist(seList_automatic)))){browser()}
 
-      for(k__ in 1:kClust){
+      for(k__ in 1:K){
         try(seList_automatic[[k__]] <- sapply(1:length(hypotheticalProbList[[k__]]),function(d_){
           names(seList_automatic[[k__]][[d_]]) <- names(  hypotheticalProbList[[k__]][[d_]] )
           list(seList_automatic[[k__]][[d_]]) }), T)
@@ -518,11 +518,11 @@ get_se <- function(){
                                                     Yobs_internal = Yobs_DATA,
                                                     knownNormalizationFactor = NULL, hajek = F,
                                                     log_pr_w_internal = log_pr_w_DATA,
-                                                    assignmentProbList_internal = assignmentProbList,
+                                                    assignmentProbList_internal = p_list,
                                                     hypotheticalProbList_internal = pi_forGrad_simplexListed)
 
         # Q comp
-        prob_ratio <- exp(Qhat__sumComp$log_pr_w_new - Qhat__sumComp$log_pr_w)
+        prob_ratio <- exp(Qhat__sumComp$log_pr_w_new - Qhat__sumComp$log_PrW)
         if(forceHajek == F){ Q_comp <- sum(Yobs_DATA * prob_ratio  -   pi_forQ )} # without hajek
         if(forceHajek == T){ Q_comp <- sum(Yobs_DATA * prob_ratio  -   pi_forQ * prob_ratio) }# with hajek
       }
@@ -538,7 +538,7 @@ get_se <- function(){
                                                    log_pr_w_DATA = log_pr_w_DATA,
                                                    pi_forGrad_simplexListed = pi_forGrad_simplexListed,
                                                    SIGMA2_ = pi_forYVar,
-                                                   n_in_sum_DATA = (n_in_sum_Mest <- length(Yobs)) )
+                                                   n_in_sum_DATA = (n_in_sum_Mest <- length(Y)) )
         Grad_comp <- unlist(  GradContribInfo["full_grad",] )
       }
 
@@ -610,20 +610,20 @@ get_se <- function(){
       return( list("psi_vec"=psi_vec,
                    "Jacobian_mat"=Jacobian_mat) )
     }
-    Qhat_hajek_split2 <- sum( Qhat_split2$Yobs * exp(Qhat_split2$log_pr_w_new-Qhat_split2$log_pr_w) / sum( exp(Qhat_split2$log_pr_w_new-Qhat_split2$log_pr_w) ))
+    Qhat_hajek_split2 <- sum( Qhat_split2$Y * exp(Qhat_split2$log_pr_w_new-Qhat_split2$log_PrW) / sum( exp(Qhat_split2$log_pr_w_new-Qhat_split2$log_PrW) ))
     pi_unnormalized <- c( Qhat_hajek_split2, optim_max_hajek_full )
 
     # all gradient info - all observations -  later we process this down to split2
     JACOBIAN_MAT <- matrix(0,nrow = length(pi_unnormalized),ncol=length(pi_unnormalized))
     GradContribInfo_allObs <- GRADIENT_FXN_vectorized(FactorsMat_DATA = FactorsMat_numeric,
-                                                      Yobs_DATA = Yobs,
-                                                      log_pr_w_DATA = log_pr_w,
+                                                      Yobs_DATA = Y,
+                                                      log_pr_w_DATA = log_PrW,
                                                       pi_forGrad_simplexListed = vec2list(optim_max_hajek_full),
                                                       SIGMA2_ = varHat,
-                                                      n_in_sum_DATA = length( Yobs ) )
+                                                      n_in_sum_DATA = length( Y ) )
     GradComp_allObs <- do.call(cbind, GradContribInfo_allObs["full_grad",])
     GradContribInfo_allObs <- apply(GradContribInfo_allObs,1,function(ze){
-      unitwiseCompIndicator <-  length(unlist(ze)) %% length(Yobs) == 0
+      unitwiseCompIndicator <-  length(unlist(ze)) %% length(Y) == 0
       if(!unitwiseCompIndicator){ return(  matrix(do.call(c,ze)) )  }
       if( unitwiseCompIndicator){ return( do.call(cbind,ze) )  }
     })
@@ -641,7 +641,7 @@ get_se <- function(){
     {
       DD_L2Pen <- Reduce("+",sapply(1:length(pi_forGrad_simplexListed_outer),function(K___){
         pi_k <- pi_forGrad_simplexListed_outer[[K___]]
-        p_k <- assignmentProbList[[K___]]
+        p_k <- p_list[[K___]]
 
         DD_ <- matrix(0,nrow = length(pi_k)-1,ncol=length(pi_k)-1)
         DD_[] <- apply(GRID_LIST[[K___]],1,function(ze){
@@ -670,7 +670,7 @@ get_se <- function(){
 
     An_Bn <- sapply(split2_indices,function(iiii){
       GradContribInfo_iii <- lapply(GradContribInfo_allObs,function(comp_){
-        tmp1_ <- nrow(comp_) == length(Yobs)
+        tmp1_ <- nrow(comp_) == length(Y)
         tmp2_ <- ncol(comp_) == 1
         if(tmp1_){comp_ <- comp_[iiii,]}
         if(tmp2_){comp_ <- c(comp_)}
@@ -678,8 +678,8 @@ get_se <- function(){
       GradContribInfo_iii <- do.call(rbind,GradContribInfo_iii)
       row.names(GradContribInfo_iii) <- names(GradContribInfo_allObs)
       psiInfo_iii <- getPsiInfo_unnormalized(pi = pi_unnormalized,
-                                             Yobs_DATA     = Yobs[iiii],
-                                             log_pr_w_DATA = log_pr_w[iiii],
+                                             Yobs_DATA     = Y[iiii],
+                                             log_pr_w_DATA = log_PrW[iiii],
                                              GradComp_DATA = GradComp_allObs[iiii,],
                                              GradContribInfo_DATA = GradContribInfo_iii,
                                              FactorsMat_DATA = as.data.frame( t(FactorsMat_numeric[iiii,])),
@@ -722,7 +722,7 @@ get_se <- function(){
                                                                      cov  = m_cov_max,
                                                                      ses = T) # returns SE, NOT Var
     seList_manual <- vec2list_noTransform(optim_max_SEs_mEst)
-    names(upperList) <- names(lowerList) <- names(seList_manual) <- names( assignmentProbList )
+    names(upperList) <- names(lowerList) <- names(seList_manual) <- names( p_list )
     seList <- seList_manual
   }
 

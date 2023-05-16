@@ -26,7 +26,8 @@ cv.OptiConjoint       <-          function(
                                             Y,
                                             W,
                                             X = NULL,
-                                            lambda_seq = 10^seq(-4, 0, length.out = 5),
+                                            lambda_seq = NULL,
+                                            lambda = NULL,
                                             folds = 2L,
                                             varcov_cluster_variable = NULL,
                                             competing_group_variable_respondent = NULL,
@@ -58,40 +59,70 @@ cv.OptiConjoint       <-          function(
   # define evaluation environment
   evaluation_environment <- environment()
 
+  # initialize environment
+  {
+    print("Initializing environment...")
+    library(tensorflow); library(keras)
+    try(tensorflow::use_condaenv(conda_env,
+                                 required = conda_env_required,
+                                 conda = conda_loc), T)
+    CPUDevice <- tf$config$list_physical_devices()[[1]]
+    tf$config$set_visible_devices( CPUDevice )
+    tf$config$set_soft_device_placement(T)
+    dttf <- tf$float64
+    try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
+    try(tfp <- tf_probability(),T)
+    try(tfd <- tfp$distributions,T)
+    print(tf$version$VERSION)
+
+    # import computational modules
+    jax <- tensorflow::import("jax",as="jax")
+    jnp <- tensorflow::import("jax.numpy")
+    py_gc <- reticulate::import("gc")
+
+    # setup numerical precision for delta method
+    dtj <- jnp$float64
+    jax$config$update("jax_enable_x64", T)
+  }
+
+  if(is.null(lambda_seq) & is.null(lambda)){
+    lambda_seq <- 10^seq(-4, 0, length.out = 5) * sd(Y, na.rm = T)
+  }
+  if(is.null(lambda_seq) & !is.null(lambda)){ lambda_seq <- lambda }
+
   # CV sequence
   {
+    print("Starting CV sequence...")
     cv_info_orig <- outsamp_results <- replicate(length(lambda_seq),list())
     insamp_results <- c() ; lambda_counter <- 0;
-    FACTOR_MAT_ <- FACTOR_MAT;
     for(lambda__ in lambda_seq){
       gc(); py_gc$collect()
       print(lambda__)
       lambda_counter <- lambda_counter + 1
       Qoptimized__ <- replicate(n = folds, list())
       if(is.null(respondent_id)){ respondent_id <- 1:length(Y) }
-      indi_list <- tapply( 1:nrow(my_data_red),respondent_id,c )
+      indi_list <- tapply( 1:length(Y), respondent_id,  c  )
       split_i1 <- sample(1:length(indi_list),length(indi_list)/folds)
       split_i2 <- (1:length(indi_list))[! 1:length(indi_list) %in% split_i1 ]
       indi_list <- list(unlist(indi_list[split_i1]),unlist(indi_list[split_i2]))
-
 
       # CV sequence
       for(split_ in c(1:folds)){
         Qoptimized__[[split_]] <- OptiConjoint(
 
-          # dynamic parameters
+          # input data
           Y = Y[indi_list[[split_]]],
           W = W[indi_list[[split_]],],
           X = ifelse(analysisType=="cluster", yes = list(X[indi_list[[split_]],]), no = list(NULL))[[1]],
           varcov_cluster_variable = varcov_cluster_variable[indi_list[[split_]]],
           pair_id = pair_id[indi_list[[split_]]],
+          respondent_id = respondent_id[ indi_list[[split_]] ],
+          respondent_task_id = respondent_task_id[ indi_list[[split_]] ],
+          profile_order = profile_order[ indi_list[[split_]] ],
           p_list = p_list,
-          respondent_id = my_data_red[indi_list[[split_]],]$respondentIndex,
-          respondent_task_id = my_data_red[indi_list[[split_]],]$task,
-          profile_order = my_data_red[indi_list[[split_]],]$profile,
           lambda = lambda__,
 
-          # fixed parameters
+          # hyperparameters
           ComputeSEs = F, # -> must be set to F for CV sequence
           nSGD = nSGD,
           TypePen = TypePen,
@@ -106,12 +137,9 @@ cv.OptiConjoint       <-          function(
           conda_env = conda_env,
           conda_loc = conda_loc,
           conda_env_required = conda_env_required)
-        if(class(Qoptimized__[[split_]]) == "try-error"){
-          stop("Failed in Qoptimized__[[split_]]!");browser()
-        }
+        if(class(Qoptimized__[[split_]]) == "try-error"){ stop("Failed in Qoptimized__[[split_]]!");browser() }
       }
       q_vec_in <- c(Qoptimized__[[1]]$Q_point, Qoptimized__[[2]]$Q_point)
-
       q_vec_cv <- c(Qoptimized__[[2]]$Qfxn(
         "pi_star_ast" = Qoptimized__[[1]]$pi_star_red_ast,
         "pi_star_dag" = Qoptimized__[[1]]$pi_star_red_dag,
@@ -139,30 +167,40 @@ cv.OptiConjoint       <-          function(
     colnames(insamp_results) <- colnames(outsamp_results) <- c("lambda","Q","Qse")
     # insight: in and out Q are dif when should be same - indexing off?
     #https://www.youtube.com/watch?v=AzwXNW6BYf0
-    qStar <- 1
     insamp_results <- as.data.frame( insamp_results )
-    outsamp_results$l_bound <- outsamp_results$Q - qStar * outsamp_results$Qse
-    outsamp_results$u_bound <- outsamp_results$Q + qStar * outsamp_results$Qse
+    outsamp_results$l_bound <- outsamp_results$Q - (qStar_lambda <- 1) * outsamp_results$Qse
+    outsamp_results$u_bound <- outsamp_results$Q + qStar_lambda * outsamp_results$Qse
     #plot(insamp_results$Q,outsamp_results$Q);abline(a=0,b=1)
     #plot(insamp_results$Q-outsamp_results$Q);abline(a=0,b=1)
     #plot(log(outsamp_results$lambda), outsamp_results$Q,pch = as.character(  rank(-outsamp_results$l_bound)) )
     lambda__ <- lambda_seq[which(max(outsamp_results$Q) <= outsamp_results$u_bound)[1]] # 1 se rule
+    print("Done with CV sequence!")
   }
 
   # final output
   {
+    print("Starting final OptiConjoint run...")
     gc(); py_gc$collect()
-    Qoptimized_ <- OptiConjoint(Y = Y,
+    Qoptimized_ <- OptiConjoint(
+
+                                # input data
+                                Y = Y,
                                 W = W,
-                                lambda = lambda__, # this lambda is chosen via CV
+                                X = ifelse(K > 1, yes = list(X), no = list(NULL))[[1]],
                                 nSGD = nSGD,
                                 TypePen = TypePen,
-                                p_list = p_list,
                                 varcov_cluster_variable = varcov_cluster_variable,
-                                pair_id = pair_id,
                                 competing_group_variable_respondent = competing_group_variable_respondent,
                                 competing_group_variable_candidate = competing_group_variable_candidate,
                                 competing_group_competition_variable_candidate = competing_group_competition_variable_candidate,
+                                pair_id = pair_id,
+                                respondent_id = respondent_id,
+                                respondent_task_id = respondent_task_id,
+                                profile_order = profile_order,
+                                p_list = p_list,
+                                lambda = lambda__, # this lambda is chosen via CV
+
+                                # hyperparameters
                                 OptimType = OptimType,
                                 ForceGaussianFamily = ForceGaussianFamily,
                                 UseRegularization = UseRegularization,
@@ -176,9 +214,12 @@ cv.OptiConjoint       <-          function(
                                 conda_env = conda_env,
                                 conda_loc = conda_loc,
                                 conda_env_required = conda_env_required)
+    print("Done with final OptiConjoint run!")
   }
 
   # RETURN
-  return(  list("OptiConjointResults" = Qoptimized_,
-                "cv.info" = outsamp_results ) )
+  return(  c( Qoptimized_,
+            "lambda" = lambda__,
+            "qStar_lambda" = qStar_lambda,
+            "OptiConjointCVInfo" = list(outsamp_results )) )
 }
