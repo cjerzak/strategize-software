@@ -7,7 +7,7 @@ for(trainIndicator in trainIndicator_pool){
 
   # iterate over lambda FIRST (for warm starts...)
 
-  lambda_counter <- 0; for(REGULARIZATION_LAMBDA in LAMBDA_SEQ){
+  lambda_counter <- 0; for(REGULARIZATION_LAMBDA in lambda_seq){
         lambda_counter <- lambda_counter + 1
 
       # training indices pool
@@ -57,10 +57,10 @@ for(trainIndicator in trainIndicator_pool){
           my_batch <- availableTrainIndices_train_seq[[sample(1:length(availableTrainIndices_train_seq),1) ]]
 
           # train
-          trainStep( y_  = as.matrix(Yobs[my_batch]),
+          trainStep( y_  = as.matrix(Y[my_batch]),
                      x_  = X[my_batch,],
                      f_  = FactorsMat_numeric_0Indexed[my_batch,],
-                     lp_ = as.matrix(log_pr_w[my_batch]),
+                     lp_ = as.matrix(log_PrW[my_batch]),
                      lambda_ = returnWeightsFxn(REGULARIZATION_LAMBDA),
                      applyGradients = F)
           L2_norm_squared
@@ -88,10 +88,10 @@ for(trainIndicator in trainIndicator_pool){
 
           # train
           if(optimization_language == "tf"){
-            trainStep( y_  = as.matrix(Yobs[my_batch]),
+            trainStep( y_  = as.matrix(Y[my_batch]),
                        x_  = X[my_batch,],
                        f_  = FactorsMat_numeric_0Indexed[my_batch,],
-                       lp_ = as.matrix( log_pr_w[my_batch] ),
+                       lp_ = as.matrix( log_PrW[my_batch] ),
                        lambda_ = returnWeightsFxn(REGULARIZATION_LAMBDA),
                        applyGradients = T)
           }
@@ -111,10 +111,10 @@ for(trainIndicator in trainIndicator_pool){
               batch_size_jax <- length(my_batch_jax)
 
               # convert
-              jax_fxn_raw <- tf2jax$convert(getLoss_tf, Y_  = tf$constant(as.matrix(Yobs[my_batch_jax]),tf$float32),
+              jax_fxn_raw <- tf2jax$convert(getLoss_tf, Y_  = tf$constant(as.matrix(Y[my_batch_jax]),tf$float32),
                                             X_  = tf$constant(X[my_batch_jax,],tf$float32),
                                             factorMat_  = tf$constant(FactorsMat_numeric_0Indexed[my_batch_jax,],tf$int32),
-                                            logProb_ = tf$constant(as.matrix(log_pr_w[my_batch_jax]),tf$float32),
+                                            logProb_ = tf$constant(as.matrix(log_PrW[my_batch_jax]),tf$float32),
                                             REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(REGULARIZATION_LAMBDA),tf$float32))
               param_set <- jax_fxn_raw[[2]]
 
@@ -137,10 +137,10 @@ for(trainIndicator in trainIndicator_pool){
               # test the function
               jax_eval <- jax_fxn(
                 param_set,
-                Y_  = jnp$array(as.matrix(Yobs[my_batch_jax])),
+                Y_  = jnp$array(as.matrix(Y[my_batch_jax])),
                 X_  = jnp$array(X[my_batch_jax,]),
                 factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                logProb_ = jnp$array(as.matrix(log_pr_w[my_batch_jax])),
+                logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
                 REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA))
               )
               param_set_names <- names( param_set )
@@ -201,10 +201,10 @@ for(trainIndicator in trainIndicator_pool){
             {
             # updates + derivatives using jax
             v_and_grad_eval <- v_and_grad_jax_fxn( param_set[param_set_names],
-                              Y_ = jnp$array(as.matrix(Yobs[my_batch_jax])),
+                              Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
                               X_ = jnp$array(X[my_batch_jax,]),
                               factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                              logProb_ = jnp$array(as.matrix(log_pr_w[my_batch_jax])),
+                              logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
                               REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
 
             # subset
@@ -238,10 +238,10 @@ for(trainIndicator in trainIndicator_pool){
             }
             if(OptimType == "SecondOrder"){
               hessian_value <- hessian_fxn(param_set[param_set_names],
-                                           Y_ = jnp$array(as.matrix(Yobs[my_batch_jax])),
+                                           Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
                                            X_ = jnp$array(X[my_batch_jax,]),
                                            factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                                           logProb_ = jnp$array(as.matrix(log_pr_w[my_batch_jax])),
+                                           logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
                                            REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
               HessianMat <- matrix(list(),nrow = length(param_set),ncol=length(param_set))
               row.names(HessianMat) <- colnames(HessianMat) <- names(hessian_value)
@@ -284,10 +284,10 @@ for(trainIndicator in trainIndicator_pool){
                 param_set_test <- jit_apply_updates(params = param_set,
                                     updates = SecondOrderUpdates)
                 f_x_updated <- jax_fxn( param_set_test[param_set_names],
-                                            Y_ = jnp$array(as.matrix(Yobs[my_batch_jax])),
+                                            Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
                                             X_ = jnp$array(X[my_batch_jax,]),
                                             factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                                            logProb_ = jnp$array(as.matrix(log_pr_w[my_batch_jax])),
+                                            logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
                                             REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
                 armijo_cond <- f_x_updated$tolist() <= (currentLossGlobal + mu_t*0.25*InnerProd_GradNewtonDir )
                 #if(is.na(armijo_cond)){browser()}
@@ -318,7 +318,7 @@ for(trainIndicator in trainIndicator_pool){
           # report on performance 1 + 4 times during training
           if(i %% max(round( nSGD/4 ),1) == 0 | i == 1){
             try_ <- try(print(sprintf("Iter %i - Fold %i - Lambda %i of %i - Current obj: %.3f",
-                                      i, fold_, lambda_counter, length(LAMBDA_SEQ), currentLossGlobal)),T)
+                                      i, fold_, lambda_counter, length(lambda_seq), currentLossGlobal)),T)
             if(class(try_) == "try-error"){browser()}
           }
 
@@ -381,7 +381,7 @@ for(trainIndicator in trainIndicator_pool){
           try(plot(L2_norm_squared_vec),T)
           try(plot(  loss_vec   ),T)
           try(points(lowess(loss_vec),type = "l",lwd = 5, col = "red"),T)
-          if(kClust > 1){
+          if(K > 1){
             print(sprintf("Mean Abs Coef: %.5f:", mean(abs(as.array(ClassProbProj$kernel)))))
             try(plot( as.matrix(getClassProb(tfConst(X[availableTrainIndices,])))[,2] ),T)
           }
@@ -389,7 +389,7 @@ for(trainIndicator in trainIndicator_pool){
       }
       # in sample objective
 
-      try(plot(unlist( lapply(getPiList(),function(zer){ unlist(zer) - unlist(assignmentProbList) }) ) ),T)
+      try(plot(unlist( lapply(getPiList(),function(zer){ unlist(zer) - unlist(p_list) }) ) ),T)
       getQ_fxn <- function(indices_){
           # broken up indices
           # batch_indices_Q <- tapply(sample(indices_),1:length(indices_) %% round(length(indices_)/batch_size),c)
@@ -397,12 +397,12 @@ for(trainIndicator in trainIndicator_pool){
           # all together indices
           batch_indices_Q <- list( indices_ )
           Qhat_value <- mean( unlist( lapply(batch_indices_Q, function(use_i){
-            finalWts_ <- prop.table( as.matrix(  getProbRatio_tf(Y_ = tfConst(as.matrix(Yobs[use_i])),
+            finalWts_ <- prop.table( as.matrix(  getProbRatio_tf(Y_ = tfConst(as.matrix(Y[use_i])),
                                                                  X_ = tfConst(X[use_i,]),
                                                                  factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],tf$int32),
-                                                                 logProb_ = tfConst(as.matrix(log_pr_w[use_i])),
+                                                                 logProb_ = tfConst(as.matrix(log_PrW[use_i])),
                                                                  REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(REGULARIZATION_LAMBDA))) ) )
-            Qhat_ <- sum(as.matrix(Yobs[use_i])*finalWts_)
+            Qhat_ <- sum(as.matrix(Y[use_i])*finalWts_)
           } )))
           return( Qhat_value )
       }
@@ -419,7 +419,7 @@ for(trainIndicator in trainIndicator_pool){
   }
   if(trainIndicator == 1){
     lowerBound_vec <- colMeans(performance_matrix_out) - 1 * apply(performance_matrix_out,2,function(zer){ sqrt(1/length(zer)*var(zer)) })
-    LAMBDA_selected <- LAMBDA_SEQ <- LAMBDA_SEQ[which.max(lowerBound_vec)]
+    LAMBDA_selected <- lambda_seq <- lambda_seq[which.max(lowerBound_vec)]
   }
 }
 }

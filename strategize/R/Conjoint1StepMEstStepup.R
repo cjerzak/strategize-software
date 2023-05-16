@@ -67,7 +67,7 @@ initialize_m <- function(){
           L2_grad <- L2_value <- NULL
           if(PenaltyType == "L2"){
             pi_k <- pi_forGrad_k
-            p_k  <- assignmentProbList[[k__]]
+            p_k  <- p_list[[k__]]
             L2_value <- ( (pi_k - p_k)^2 )[-1]
             L2_grad  <- (2 * ( (pi_k - p_k)*pi_k*(1-pi_k) -
                                  sapply(1:length(pi_k),function(ze){
@@ -93,10 +93,10 @@ initialize_m <- function(){
         }) )
         return( GradContribInfo )
       }
-      DD_full <- matrix(0, ncol = length( unlist(assignmentProbList)) - length(assignmentProbList),
-                        nrow = length( unlist(assignmentProbList)) - length(assignmentProbList) )
-      DD_full_indices <- c(0,cumsum(unlist(  lapply(assignmentProbList,function(zer){(length(zer)-1)}) )))
-      INIT_d_d_mat <- DD_full; INIT_d_d_mat[] <- NA#matrix(, nrow = length(assignmentProbList), ncol = length(assignmentProbList))
+      DD_full <- matrix(0, ncol = length( unlist(p_list)) - length(p_list),
+                        nrow = length( unlist(p_list)) - length(p_list) )
+      DD_full_indices <- c(0,cumsum(unlist(  lapply(p_list,function(zer){(length(zer)-1)}) )))
+      INIT_d_d_mat <- DD_full; INIT_d_d_mat[] <- NA#matrix(, nrow = length(p_list), ncol = length(p_list))
       comb1 <- expand.grid(1:nrow(DD_full),1:nrow(DD_full));
       comb2 <- comb1[,2];  comb1 <- comb1[,1]
 
@@ -209,26 +209,26 @@ initialize_m <- function(){
 
     # pre-processed k information
     {
-      lref_vec <- unlist(  sapply(1:length(assignmentProbList),
+      lref_vec <- unlist(  sapply(1:length(p_list),
                                   function(ze){
-                                    l_ <- 2:length(assignmentProbList[[ ze ]])  }))
-      kref_vec <- unlist(sapply(1:length(assignmentProbList),
-                                function(ze){ k_ <- assignmentProbList[[ ze ]][-1] ;
+                                    l_ <- 2:length(p_list[[ ze ]])  }))
+      kref_vec <- unlist(sapply(1:length(p_list),
+                                function(ze){ k_ <- p_list[[ ze ]][-1] ;
                                 k_[] <- ze; return( k_ )  }))
       names(lref_vec) <- names(kref_vec) <- NULL
       expanded_kl <- expand.grid(1:length(kref_vec), 1:length(kref_vec))
       expanded_kl <- cbind(cbind(kref_vec,lref_vec)[expanded_kl[,1],],
                            cbind(kref_vec,lref_vec)[expanded_kl[,2],])
-      GRID_LIST <- lapply(assignmentProbList,function(ze){ expand.grid(2:length(ze),2:length(ze)) })
+      GRID_LIST <- lapply(p_list,function(ze){ expand.grid(2:length(ze),2:length(ze)) })
 
       # bound information (if supplied)
-      all_names = unlist(lapply(assignmentProbList,function(ze){names(ze)}))
+      all_names = unlist(lapply(p_list,function(ze){names(ze)}))
 
       # simplex generating functions
-      splitIndices = as.factor(unlist(sapply(1:length(assignmentProbList),function(ze){
-        rep(ze,times=length(assignmentProbList[[ze]]))  })))
-      zeros_vec <- rep(0,times=length(unlist(assignmentProbList)));
-      nonZero_indices <- lapply(1:length(assignmentProbList),function(ze){!duplicated(rep(ze,times=length(assignmentProbList[[ze]])))})
+      splitIndices = as.factor(unlist(sapply(1:length(p_list),function(ze){
+        rep(ze,times=length(p_list[[ze]]))  })))
+      zeros_vec <- rep(0,times=length(unlist(p_list)));
+      nonZero_indices <- lapply(1:length(p_list),function(ze){!duplicated(rep(ze,times=length(p_list[[ze]])))})
       nonZero_indices <- unlist(nonZero_indices)
       nonZero_indices <- which(!nonZero_indices)
       vec2list <- function(vec_){
@@ -241,9 +241,9 @@ initialize_m <- function(){
       vec2list_noTransform <- function(vec_){
         return( split(vec_,f = splitIndices)) }
       #system.time(replicate(1000,vec2list(pi_init_vec)))
-      #lapply(assignmentProbList,length)[[1]]
+      #lapply(p_list,length)[[1]]
       #vec2list(pi_init_vec)[[1]] - toSimplex(c(0,pi_init_vec[1:6]))
-      #sum(abs(unlist(vec2list(pi_init_vec))-unlist(assignmentProbList))) # test: should be close to 0
+      #sum(abs(unlist(vec2list(pi_init_vec))-unlist(p_list))) # test: should be close to 0
     }
   }
 }
