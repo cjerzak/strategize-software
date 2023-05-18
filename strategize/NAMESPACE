@@ -3,3 +3,4 @@
 export(OneStep.OptiConjoint)
 export(OptiConjoint)
 export(cv.OptiConjoint)
+export(strategize.plot)
