@@ -7,6 +7,9 @@ try(file.remove(sprintf("./strategize.pdf")),T)
 system(paste(shQuote(file.path(R.home("bin"), "R")),
              "CMD", "Rd2pdf", shQuote(package_path)))
 
+# Check package to ensure it meets CRAN standards.
+devtools::check( package_path )
+
 #install.packages(package_path)
 
 #install.packages( "~/Documents/optimalcausalities-software/optimalcausalities",repos = NULL, type = "source")
