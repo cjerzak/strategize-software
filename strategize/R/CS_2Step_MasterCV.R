@@ -48,7 +48,6 @@ cv.OptiConjoint       <-          function(
                                             TypePen = "KL",
                                             ComputeSEs = T,
                                             conda_env = NULL,
-                                            conda_loc = NULL,
                                             conda_env_required = F,
                                             confLevel = 0.90,
                                             nFolds_glm = 3L,
@@ -63,9 +62,10 @@ cv.OptiConjoint       <-          function(
   {
     print("Initializing environment...")
     library(tensorflow); library(keras)
-    try(tensorflow::use_condaenv(conda_env,
-                                 required = conda_env_required,
-                                 conda = conda_loc), T)
+    if(!is.null(conda_env)){
+      try(tensorflow::use_condaenv(conda_env,
+                                   required = conda_env_required), T)
+    }
     CPUDevice <- tf$config$list_physical_devices()[[1]]
     tf$config$set_visible_devices( CPUDevice )
     tf$config$set_soft_device_placement(T)
