@@ -329,7 +329,7 @@ get_se <- function(){
         {
           A_n <- 1/(n_m <- length(psi_list)) * Reduce("+", neg_jacobian_list)
           A_n_inv <- try(solve(A_n), T)
-          if(all(class(A_n_inv) == "try-error")){warning("Singular A_n -- Forcing Correction"); A_n_inv <- solve(A_n+0.01*diag(nrow(A_n)))}
+          if(all( "try-error" %in% class(A_n_inv))){warning("Singular A_n -- Forcing Correction"); A_n_inv <- solve(A_n+0.01*diag(nrow(A_n)))}
           B_n <- 1/n_m * Reduce("+", lapply(psi_list,function(psi_){ psi_ %*% t(psi_) }))
           VarCov_n_automatic <- 1 / n_m * ( A_n_inv %*% B_n %*% t(A_n_inv) )
         }
@@ -696,7 +696,7 @@ get_se <- function(){
     #plot(c(Reduce("+", An_Bn[2,])[-c(1:3),-c(1:3)]),c(Jacobian_numerical));abline(a=0,b=1)
     #sum_psi <- Reduce("+", An_Bn[3,]); plot( abs(sum_psi)+0.01,log = "y" );abline(h=0.01)
     A_n_inv <- try(solve( A_n ), T)
-    if(any(class(A_n_inv) == "try-error")){stop("A_n cannot be inverted!")}
+    if(any("try-error" %in% class(A_n_inv))){stop("A_n cannot be inverted!")}
     VarCov_n_manual <- 1 / ncol(  An_Bn  ) * (  A_n_inv %*% B_n %*% t( A_n_inv )  )
 
     # obtain variance or var/cov info

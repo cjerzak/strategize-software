@@ -15,7 +15,7 @@ initialize_m <- function(){
           pi_forGrad_k      <- pi_forGrad_simplexListed[[k__]]
           FactorsMat_k         <- FactorsMat_DATA[,k__]
           FactorsMat_minusk <- FactorsMat_DATA[,-k__]
-          if(all(class(FactorsMat_minusk) %in% c("integer","numeric"))){ FactorsMat_minusk <- as.matrix(FactorsMat_minusk) }
+          if(c("integer","numeric") %in% all(class(FactorsMat_minusk))){ FactorsMat_minusk <- as.matrix(FactorsMat_minusk) }
 
           # calculate pr_pi constants
           log_prodConstMinusk_ <- rowSums(  sapply(1:length(pi_forGrad_minusk),function(raa){log(  pi_forGrad_minusk[[raa]][FactorsMat_minusk[,raa]]  )}))

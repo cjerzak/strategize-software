@@ -281,7 +281,7 @@ generate_ModelOutcome <- function(){
     stop("WARNING: Some coefficients NA... This case hasn't been sufficiently tested!")
     which_na <- which( is.na(coef(my_model)[-1]) ) # minus 1 for intercept
     my_model <- try(glm(Y_glm ~ cbind( main_dat, interacted_dat)[,-which_na], family = glm_family),T)
-    if(class(my_model) == "try-error"){browser()}
+    if("try-error" %in% class(my_model)){browser()}
     Main_na <- which_na[which_na <= ncol(main_dat)]
     Inter_na <- which_na[which_na > ncol(main_dat)] - ncol(main_dat)
 
