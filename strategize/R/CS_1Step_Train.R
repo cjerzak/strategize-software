@@ -319,7 +319,7 @@ for(trainIndicator in trainIndicator_pool){
           if(i %% max(round( nSGD/4 ),1) == 0 | i == 1){
             try_ <- try(print(sprintf("Iter %i - Fold %i - Lambda %i of %i - Current obj: %.3f",
                                       i, fold_, lambda_counter, length(lambda_seq), currentLossGlobal)),T)
-            if(class(try_) == "try-error"){browser()}
+            if("try-error" %in% class(try_)){browser()}
           }
 
           # cycle info

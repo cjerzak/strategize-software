@@ -137,7 +137,7 @@ cv.OptiConjoint       <-          function(
           conda_env = conda_env,
           conda_loc = conda_loc,
           conda_env_required = conda_env_required)
-        if(class(Qoptimized__[[split_]]) == "try-error"){ stop("Failed in Qoptimized__[[split_]]!");browser() }
+        if("try-error" %in% class(Qoptimized__[[split_]])){ stop("Failed in Qoptimized__[[split_]]!");browser() }
       }
       q_vec_in <- c(Qoptimized__[[1]]$Q_point, Qoptimized__[[2]]$Q_point)
       q_vec_cv <- c(Qoptimized__[[2]]$Qfxn(
