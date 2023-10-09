@@ -64,14 +64,13 @@ OptiConjoint       <-          function(
       try(tensorflow::use_condaenv(conda_env,
                                    required = conda_env_required), T)
     }
-    CPUDevice <- tf$config$list_physical_devices()[[1]]
-    tf$config$set_visible_devices( CPUDevice )
-    tf$config$set_soft_device_placement(T)
+    #CPUDevice <- tf$config$list_physical_devices()[[1]]
+    #tf$config$set_visible_devices( CPUDevice )
+    #tf$config$set_soft_device_placement(T)
+    #try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
+    #try(tfp <- tf_probability(),T)
+    #try(tfd <- tfp$distributions,T)
     dttf <- tf$float64
-    try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
-    try(tfp <- tf_probability(),T)
-    try(tfd <- tfp$distributions,T)
-    print(tf$version$VERSION)
     JaxKey <- function(int_){ jax$random$PRNGKey(int_)}
 
     # import computational modules
@@ -79,7 +78,7 @@ OptiConjoint       <-          function(
     optax <- tensorflow::import("optax")
     oryx <- tensorflow::import("oryx")
     jnp <- tensorflow::import("jax.numpy")
-    tf2jax <- tensorflow::import("tf2jax",as="tf2jax")
+    #tf2jax <- tensorflow::import("tf2jax",as="tf2jax")
     py_gc <- reticulate::import("gc")
 
     # setup numerical precision for delta method
@@ -199,7 +198,9 @@ OptiConjoint       <-          function(
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
 
       #REGRESSION_PARAMS_jax <- jnp$array(tf$concat(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
+      browser()
       REGRESSION_PARAMS_jax <- jnp$array(tf$concat(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
+      REGRESSION_PARAMS_jax$shape
 
       # rename as appropriate
       ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
