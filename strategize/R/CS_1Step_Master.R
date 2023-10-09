@@ -72,8 +72,8 @@ OneStep.OptiConjoint <- function(
     try(tensorflow::use_python(python = "/Users/cjerzak/miniforge3/bin/python", required = T),T)
     try(tensorflow::use_condaenv("tensorflow_m1",required = T, conda = "~/miniforge3/bin/conda"), T)
     try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
-    try(tfp <- tf_probability(),T)
-    try(tfd <- tfp$distributions,T)
+    #try(tfp <- tf_probability(),T)
+    #try(tfd <- tfp$distributions,T)
     tf$random$set_seed(as.integer(runif(1,0,100000)))# critical - MUST SET SEED FOR ALL RANDOM GENERATION TO WORK
     print(tf$version$VERSION)
 
