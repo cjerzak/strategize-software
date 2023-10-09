@@ -2,20 +2,23 @@ generate_ExactSol <- function(){
 
   # ParameterizationType == "Implicit" solution
   if(ParameterizationType == "Implicit"){
-  Neg4lambda_diag <-tf$constant( rep(-4 * lambda,times=n_main_params))
-  Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),dttf)
-  Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),dttf)
-  Const_4_lambda_pl <- tf$constant(as.matrix( 4*lambda*p_vec_use),dttf)
-  Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),dttf)
+  Neg4lambda_diag <- jnp$array( rep(-4 * lambda,times=n_main_params))
+  Neg4lambda_update <- jnp$array(as.matrix(-4*lambda),dtj)
+  Neg2lambda_update <- jnp$array(as.matrix(-2*lambda),dtj)
+  Const_4_lambda_pl <- jnp$array(as.matrix( 4*lambda*p_vec_use),dtj)
+  Const_2_lambda_plprime <- jnp$array(as.matrix( 2*lambda*p_vec_sum_prime_use), dtype = dtj)
 
   generate_ExactSolImplicit <- function(){
-    main_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = main_indices_i0,axis=0L)
-    inter_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = inter_indices_i0,axis=0L)
-    b_vec <- tf$negative( main_coef ) - Const_4_lambda_pl - Const_2_lambda_plprime
+    main_coef <- jnp$take(EST_COEFFICIENTS_tf, indices = main_indices_i0, axis=0L)
+    inter_coef <- jnp$take(EST_COEFFICIENTS_tf, indices = inter_indices_i0, axis=0L)
+    b_vec <- jnp$subtract(
+                          jnp$subtract(jnp$negative( main_coef ), Const_4_lambda_pl),
+                          Const_2_lambda_plprime
+                          )
 
     C_mat <- sapply(1:n_main_params,function(main_comp){
       # initialize to 0
-      row_ <- tf$zeros(list(n_main_params,1L))
+      row_ <- jnp$zeros(list(n_main_params, 1L))
 
       # update diagonal component
       row_ <- tf$tensor_scatter_nd_update(row_,
@@ -24,8 +27,11 @@ generate_ExactSol <- function(){
 
       # update off-diagonal component (same d)
       same_d_diff_l <- n2int(as.matrix(ai(setdiff(which(main_info$d_adj == main_info[main_comp,]$d_adj),main_comp)-1L)))
+      SameDDiffL_update <- jnp$multiply(
+                                jnp$multiply(jnp$negative(2),lambda),
+                                jnp$ones(list(nrow(same_d_diff_l),1L)))
       row_ <- tf$tensor_scatter_nd_update(row_,
-                                          updates = -2*lambda*tf$ones(list(nrow(same_d_diff_l),1L)),
+                                          updates = SameDDiffL_update,
                                           indices = same_d_diff_l)
 
       # update off-diagonal component (different d)
@@ -45,36 +51,36 @@ generate_ExactSol <- function(){
 
       #interaction_info_ordering <- interaction_info_red$dl_index * (ind1) + interaction_info_red$dplp_index * (ind2)
       if(nrow(interaction_info_red)>0){
-        inter_coef_ <- tf$gather(inter_coef,
+        inter_coef_ <- jnp$take(inter_coef,
                                  indices = n2int(ai(which_inter-1L)),
                                  axis = 0L)
-        if(length(which_inter) == 1){ inter_coef_ <- tf$expand_dims(inter_coef_,0L) }
+        if(length(which_inter) == 1){ inter_coef_ <- jnp$expand_dims(inter_coef_,0L) }
         row_ <- tf$tensor_scatter_nd_update(row_,
                                             updates = inter_coef_,
                                             indices = n2int(as.matrix(ai(inter_into_main-1L))))
       }
       return( row_ )
     })
-    C_mat <- tf$concat(C_mat,1L)
+    C_mat <- jnp$concatenate(C_mat,1L)
 
-    return(  pi_star <- tf$matmul(tf$linalg$inv(C_mat),b_vec)  )
+    return(  pi_star <- jnp$matmul(jnp$linalg$inv(C_mat), b_vec)  )
   }
   }
 
   # ParameterizationType == "Full" solution
   if(ParameterizationType == "Full"){
-    Const_2_lambda_pl <- tf$constant(as.matrix( 2*lambda*p_vec_use),dttf)
-    Const_2_lambda_plprime <- tf$constant(as.matrix( 2*lambda*p_vec_sum_prime_use),dttf)
-    Neg4lambda_update <- tf$constant(as.matrix(-4*lambda),dttf)
-    Neg2lambda_update <- tf$constant(as.matrix(-2*lambda),dttf)
+    Const_2_lambda_pl <- jnp$array(as.matrix( 2*lambda*p_vec_use),dtj)
+    Const_2_lambda_plprime <- jnp$array(as.matrix( 2*lambda*p_vec_sum_prime_use),dtj)
+    Neg4lambda_update <- jnp$array(as.matrix(-4*lambda),dtj)
+    Neg2lambda_update <- jnp$array(as.matrix(-2*lambda),dtj)
     getPiStar_exact <- function(){
-      main_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = main_indices_i0,axis=0L)
-      inter_coef <- tf$gather(EST_COEFFICIENTS_tf,indices = inter_indices_i0,axis=0L)
-      b_vec <- tf$negative( main_coef ) - Const_2_lambda_pl
+      main_coef <- jnp$take(EST_COEFFICIENTS_tf,indices = main_indices_i0, axis=0L)
+      inter_coef <- jnp$take(EST_COEFFICIENTS_tf,indices = inter_indices_i0, axis=0L)
+      b_vec <- jnp$subtract(  jnp$negative( main_coef ), Const_2_lambda_pl  )
 
       C_mat <- sapply(1:n_main_params,function(main_comp){
         # initialize to 0
-        row_ <- tf$zeros(list(n_main_params,1L))
+        row_ <- jnp$zeros(  list(n_main_params,1L)  )
 
         # update diagonal component
         row_ <- tf$tensor_scatter_nd_update(row_,
@@ -83,6 +89,7 @@ generate_ExactSol <- function(){
 
         # update off-diagonal component (same d)
         same_d_diff_l <- n2int(as.matrix(ai(setdiff(which(main_info$d_adj == main_info[main_comp,]$d_adj),main_comp)-1L)))
+        # see this on scatter update in jax https://github.com/google/jax/issues/9269
         row_ <- tf$tensor_scatter_nd_update(row_,
                                             #updates = -2*lambda*tf$ones(list(nrow(same_d_diff_l),1L)),
                                             updates = tf$zeros(list(nrow(same_d_diff_l),1L)),
@@ -104,10 +111,10 @@ generate_ExactSol <- function(){
         inter_into_main <- sapply(id_,function(zer){which(id_main %in% zer)})
 
         if(nrow(interaction_info_red)>0){
-          inter_coef_ <- tf$gather(inter_coef,
+          inter_coef_ <- jnp$take(inter_coef,
                                    indices = n2int(ai(which_inter-1L)),
                                    axis = 0L)
-          if(length(which_inter) == 1){ inter_coef_ <- tf$expand_dims(inter_coef_,0L) }
+          if(length(which_inter) == 1){ inter_coef_ <- jnp$expand_dims(inter_coef_,0L) }
           row_ <- tf$tensor_scatter_nd_update(row_,
                                               updates = inter_coef_,
                                               indices = n2int(as.matrix(ai(inter_into_main-1L))))
