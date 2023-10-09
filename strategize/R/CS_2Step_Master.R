@@ -58,6 +58,7 @@ OptiConjoint       <-          function(
 
   # load in packages - may help memory bugs to load them in thru package
   print("Initializing computational environment...")
+  # conda_env <- "tensorflow_m1"; conda_env_required <- T
   {
     if(!is.null(conda_env)){
       try(reticulate::use_condaenv(conda_env,
@@ -133,11 +134,11 @@ OptiConjoint       <-          function(
   # get info about # of levels per factor
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
-  if(diff == F){
-    initialize_ModelOutcome_FindIt <- paste(deparse(generate_ModelOutcome_FindIt),collapse="\n")
-    initialize_ModelOutcome_FindIt <- gsub(initialize_ModelOutcome_FindIt,pattern="function \\(\\)",replace="")
-    eval( parse( text = initialize_ModelOutcome_FindIt ),envir = evaluation_environment )
-  }
+  #if(diff == F){
+    #initialize_ModelOutcome_FindIt <- paste(deparse(generate_ModelOutcome_FindIt),collapse="\n")
+    #initialize_ModelOutcome_FindIt <- gsub(initialize_ModelOutcome_FindIt,pattern="function \\(\\)",replace="")
+    #eval( parse( text = initialize_ModelOutcome_FindIt ),envir = evaluation_environment )
+  #}
 
   # obtain outcome models
   print("Initializing outcome models...")
@@ -274,7 +275,6 @@ OptiConjoint       <-          function(
   if(ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
   if(ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
 
-  browser()
   if(OptimType != "gd"){
   if(ParameterizationType == "Implicit"){
     print("Initializing manual exact solution code... (Implicit mode)")
@@ -296,7 +296,6 @@ OptiConjoint       <-          function(
   p_vec_tf <- jnp$array(as.matrix(p_vec_use),dtype = dtj)
   inv_learning_rate <- jnp$array(1., dtype = dtj)
   #compile_fxn <- function(x){x}
-  #compile_fxn <- function(x){tf_function(x)}
   compile_fxn <- function(x){jax$jit(x)}
 
   # initialize manual gradient updates
@@ -326,10 +325,10 @@ OptiConjoint       <-          function(
     aOnSimplex <- tapply(1:nrow(a_structure),a_structure$d,function(zer){
       tmp <- jnp$divide(  jnp$take(exp_a_, n2int(zer-1L) ),
                         jnp$add(OneTf_flat,jnp$sum(jnp$take(exp_a_, n2int(zer-1L) ) )))
-      if(length(dim(tmp)) == 1){ tmp <- jnp$expand_dims( tmp, 0L ) }
+      #if(length(dim(tmp)) == 1){ tmp <- jnp$expand_dims( tmp, 0L ) }
       return( list( tmp ) ) })
     names(aOnSimplex) <- NULL
-    return(  jnp$concatenate(aOnSimplex,0L) )
+    return(  jnp$expand_dims(jnp$stack(aOnSimplex,0L),1L) )
   })
   a2FullSimplex <- compile_fxn(function(a_){
     exp_a_ <- jnp$exp( a_ )
@@ -338,10 +337,10 @@ OptiConjoint       <-          function(
                                   as.matrix(1.)), # last category is exp(0) = 1
                                   axis = 0L)
       tmp <- jnp$divide(  exp_a_zer, jnp$sum(exp_a_zer))
-      if(length(dim(tmp)) == 1){ tmp <- jnp$expand_dims( tmp, 0L ) }
+      #if(length(dim(tmp)) == 1){ tmp <- jnp$expand_dims( tmp, 0L ) }
       return( list( tmp ) ) })
     names( aOnSimplex ) <- NULL
-    return(  jnp$concatenate(aOnSimplex,0L) )
+    return(  jnp$expand_dims(jnp$stack(aOnSimplex,0L),1L) )
   })
   OneTf <- jnp$array(matrix(1L),dtj)
   OneTf_flat <- jnp$array(1L,dtj)
@@ -506,7 +505,7 @@ OptiConjoint       <-          function(
     split_vec_use <- ifelse(ParameterizationType == "Implicit",
                             yes = list(split_vec), no = list(split_vec_full))[[1]]
   }
-  getPrettyPi <- tf_function(function(pi_star_value){
+  getPrettyPi <- compile_fxn(function(pi_star_value){
     # NB: NO RENORMALIZATION IS DONE
     if(ParameterizationType == "Full"){
       #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){jnp$take(pi_star_value,n2int(ai(zer-1L))) })
@@ -624,10 +623,11 @@ OptiConjoint       <-          function(
 
   # define GD function
   #REGRESSION_PARAMS_jax_dag <- REGRESSION_PARAMS_jax <- jnp$array(jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
-  gather_conv <- tf2jax$convert_functional(tf_function(function(x){
+  gather_fxn <- compile_fxn(function(x){
       INTERCEPT_ <- jnp$expand_dims(jnp$take(x,0L),1L)
       COEFFICIENTS_ <- jnp$take(x,ai(1L:(length(x)-1L)))
-      list(INTERCEPT_, COEFFICIENTS_)}), x = REGRESSION_PARAMS_jax)
+      list(INTERCEPT_, COEFFICIENTS_)})
+  #gather_conv <- tf2jax$convert_functional(gather_fxn, x = REGRESSION_PARAMS_jax)
   if(diff == F){
     initialize_GD_WithExactGradients <- paste(deparse(generate_GD_WithExactGradients),collapse="\n")
     initialize_GD_WithExactGradients <- gsub(initialize_GD_WithExactGradients,pattern="function \\(\\)",replace="")
