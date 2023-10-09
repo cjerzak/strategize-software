@@ -127,43 +127,6 @@ get_se <- function(){
                                             internal_jax_fxn_name <- sprintf("internal_%s",
                                                                              gsub(fn_,pattern="_tf",replace="_jax")))))
 
-                  # testing
-                  if(T == F){
-                    # check loss
-                    tf_v <- getLoss_tf_unnormalized( Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
-                                                     X_  = tf$constant(t(X[i_,]),tf$float32),
-                                                     factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                     logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
-                                                     REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
-                    jax_v1 <- getLoss_jax_unnormalized( param_set,
-                                                        Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
-                                                        X_  = tf$constant(t(X[i_,]),tf$float32),
-                                                        factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                        logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
-                                                        REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
-                    jax_v2 <- getLoss_jax_unnormalized( param_set,
-                                                        Y_  = jnp$array(as.matrix(Y[i_])),
-                                                        X_  = jnp$array(t(X[i_,])),
-                                                        factorMat_  = jnp$array(t(FactorsMat_numeric_0Indexed[i_,])),
-                                                        logProb_ = jnp$array(as.matrix(log_PrW[i_])),
-                                                        REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(LAMBDA_selected)))
-                    tf_v; jax_v1; jax_v2
-
-                    # check prob ratio - CHECKS OUT
-                    tf_v <- getProbRatio_tf( Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
-                                             X_  = tf$constant(t(X[i_,]),tf$float32),
-                                             factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                             logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
-                                             REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
-                    jax_v1 <- getProbRatio_jax( param_set,
-                                                Y_  = tf$constant(as.matrix(Y[i_]),tf$float32),
-                                                X_  = tf$constant(t(X[i_,]),tf$float32),
-                                                factorMat_  = tf$constant(t(FactorsMat_numeric_0Indexed[i_,]),tf$int32),
-                                                logProb_ = tf$constant(as.matrix(log_PrW[i_]),tf$float32),
-                                                REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(LAMBDA_selected),tf$float32))
-                    tf_v;jax_v1
-                  }
-
                   # select parameters + names
                   param_set <- jax_fxn_raw[[2]]
                   param_set_names <- names( param_set )

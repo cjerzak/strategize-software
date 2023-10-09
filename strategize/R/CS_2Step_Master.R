@@ -70,9 +70,9 @@ OptiConjoint       <-          function(
     jax <- reticulate::import("jax",as="jax")
     oryx <- reticulate::import("oryx")
     jnp <- reticulate::import("jax.numpy")
+    np <- reticulate::import("numpy")
     py_gc <- reticulate::import("gc")
-    #optax <- reticulate::import("optax")
-    #tf2jax <- reticulate::import("tf2jax",as="tf2jax")
+    optax <- reticulate::import("optax")
 
     # setup numerical precision for delta method
     dtj <- jnp$float64
@@ -134,11 +134,9 @@ OptiConjoint       <-          function(
   # get info about # of levels per factor
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
-  #if(diff == F){
-    #initialize_ModelOutcome_FindIt <- paste(deparse(generate_ModelOutcome_FindIt),collapse="\n")
-    #initialize_ModelOutcome_FindIt <- gsub(initialize_ModelOutcome_FindIt,pattern="function \\(\\)",replace="")
-    #eval( parse( text = initialize_ModelOutcome_FindIt ),envir = evaluation_environment )
-  #}
+  #initialize_ModelOutcome_FindIt <- paste(deparse(generate_ModelOutcome_FindIt),collapse="\n")
+  #initialize_ModelOutcome_FindIt <- gsub(initialize_ModelOutcome_FindIt,pattern="function \\(\\)",replace="")
+  #eval( parse( text = initialize_ModelOutcome_FindIt ),envir = evaluation_environment )
 
   # obtain outcome models
   print("Initializing outcome models...")
@@ -231,14 +229,14 @@ OptiConjoint       <-          function(
 
   # setup glm transform in tf / jax
   print("Starting optimization sequence...")
-  glm_outcome_transform <- jnp$identity
+  glm_outcome_transform <- function(x){x} # identity function
   if(!ForceGaussianFamily){
     if(mean(unique(Y) %in% c(0,1)) == 1){
       # sigmoid transform
       glm_outcome_transform <- jax$nn$sigmoid
 
       # identity transform
-      #if(diff == T){ glm_outcome_transform <- jnp$identity }
+      #if(diff == T){ glm_outcome_transform <- function(x){x} }
     }
   }
 
@@ -271,7 +269,7 @@ OptiConjoint       <-          function(
   p_vec_sum_prime_full <- unlist(tapply(1:length(p_vec_full),d_locator_full,function(er){
     sapply(er,function(re){sum(p_vec_full[er[!er %in% re]])}) }))
   main_indices_i0 <- jnp$array((ai(1:n_main_params-1L)),jnp$int32)
-  inter_indices_i0 <- jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$shape[[1]])-1L)),jnp$int32)
+  inter_indices_i0 <- jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$size)-1L)),jnp$int32)
   if(ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
   if(ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
 
@@ -323,21 +321,19 @@ OptiConjoint       <-          function(
   a2Simplex <- compile_fxn(function(a_){
     exp_a_ <- jnp$exp(a_)
     aOnSimplex <- tapply(1:nrow(a_structure),a_structure$d,function(zer){
-      tmp <- jnp$divide(  jnp$take(exp_a_, n2int(zer-1L) ),
+      tmp <- jnp$divide(  jnp$take(exp_a_, n2int(as.matrix(zer-1L) )),
                         jnp$add(OneTf_flat,jnp$sum(jnp$take(exp_a_, n2int(zer-1L) ) )))
-      #if(length(dim(tmp)) == 1){ tmp <- jnp$expand_dims( tmp, 0L ) }
       return( list( tmp ) ) })
     names(aOnSimplex) <- NULL
-    return(  jnp$expand_dims(jnp$stack(aOnSimplex,0L),1L) )
+    return(  jnp$concatenate(aOnSimplex,0L) )
   })
   a2FullSimplex <- compile_fxn(function(a_){
     exp_a_ <- jnp$exp( a_ )
     aOnSimplex <- tapply(1:nrow(a_structure_leftoutLdminus1),a_structure_leftoutLdminus1$d,function(zer){
-      exp_a_zer <- jnp$concatenate(list(jnp$take(exp_a_, n2int(as.array(zer - 1L) )),
-                                  as.matrix(1.)), # last category is exp(0) = 1
+      exp_a_zer <- jnp$concatenate(list(jnp$take(exp_a_, n2int(as.matrix(as.array(zer - 1L) ))),
+                                  jnp$array(as.matrix(1.))), # last category is exp(0) = 1
                                   axis = 0L)
       tmp <- jnp$divide(  exp_a_zer, jnp$sum(exp_a_zer))
-      #if(length(dim(tmp)) == 1){ tmp <- jnp$expand_dims( tmp, 0L ) }
       return( list( tmp ) ) })
     names( aOnSimplex ) <- NULL
     return(  jnp$expand_dims(jnp$stack(aOnSimplex,0L),1L) )
@@ -351,10 +347,10 @@ OptiConjoint       <-          function(
   a2Simplex_optim <- ifelse( holdout_indicator == 1 ,
                              yes = list(a2Simplex),
                              no = list(a2FullSimplex) )[[1]]
-  pi_star_value_init_dag <- a2Simplex_optim( a_vec_init_dag )
+  pi_star_value_init_dag <- a2Simplex_optim( a_ = a_vec_init_dag )
   pi_star_value_init_ast <- a2Simplex_optim( a_vec_init <- a_vec_init_ast )
-  # sum( a2FullSimplex( a_ = a_vec_init_dag )$numpy()); dim(W)
-  # a2Simplex_optim(a_vec_init_dag)
+
+  # define Q functions
   getQStar_single <- compile_fxn(function(pi_star,
                                    EST_COEFFICIENTS_tf,
                                    EST_INTERCEPT_tf){
@@ -372,15 +368,9 @@ OptiConjoint       <-          function(
         jnp$add( jnp$add(EST_INTERCEPT_tf, MainTermContrib), InterTermContrib)
     )
     return( Qhat ) })
-  #getQStar_single_conv <- tf2jax$convert_functional(
-                                        #getQStar_single,
-                                        #pi_star = jnp$array(  pi_star_value_init_ast ),
-                                        #EST_INTERCEPT_tf = jnp$array( EST_INTERCEPT_tf ),
-                                        #EST_COEFFICIENTS_tf = jnp$array( EST_COEFFICIENTS_tf ))
 
   # check work:
   try(getQStar_single( pi_star = pi_star_value_init_ast, EST_INTERCEPT_tf = EST_INTERCEPT_tf, EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf),T)
-  #try(getQStar_single_conv( pi_star =  jnp$array(pi_star_value_init_ast) , EST_INTERCEPT_tf = jnp$array(EST_INTERCEPT_tf), EST_COEFFICIENTS_tf = jnp$array(EST_COEFFICIENTS_tf)),T)
 
   # multiround material
   {
@@ -403,10 +393,13 @@ OptiConjoint       <-          function(
       pi_dag_prod <- jnp$multiply(pi_dag_dp, pi_dag_dpp)
 
       # combine
-      Qhat_ast <- glm_outcome_transform( EST_INTERCEPT_tf_ast +
-                                                                      jnp$matmul(jnp$transpose(main_coef_ast), pi_star_ast - pi_star_dag) +
-                                                                      jnp$sum(jnp$multiply(inter_coef_ast, pi_ast_prod - pi_dag_prod), keepdims = T))
+      DELTA_pi_star <- jnp$subtract(pi_star_ast, pi_star_dag)
+      DELTA_pi_star_prod <- jnp$subtract(pi_ast_prod, pi_dag_prod)
 
+      Qhat_ast <- glm_outcome_transform( jnp$add(
+                                            jnp$add(EST_INTERCEPT_tf_ast,
+                                                    jnp$matmul(jnp$transpose(main_coef_ast), DELTA_pi_star)),
+                                            jnp$sum(jnp$multiply(inter_coef_ast, DELTA_pi_star_prod), keepdims = T)))
       if( !SINGLE_PROP_KEY ){ Qhat_population <- Qhat_dag <- Qhat_ast }
       # get dag value
       if( SINGLE_PROP_KEY ){
@@ -437,18 +430,6 @@ OptiConjoint       <-          function(
     if(!UseSinglePop){ getQStar_diff_R <- getQStar_diff_R; name_ <-"Multi" }
     eval(parse(text = sprintf("getQStar_diff_R_%sGroup <- getQStar_diff_R",name_)))
     eval(parse(text = sprintf("getQStar_diff_%sGroup <- compile_fxn( getQStar_diff_R_%sGroup )",name_,name_)))
-
-    if(T == F){
-      eval(parse(text = sprintf("getQStar_diff_%sGroup_conv <-  ( tf2jax$convert_functional(
-                                          getQStar_diff_%sGroup,
-                                          pi_star_ast = jnp$array(pi_star_value_init_ast),
-                                          pi_star_dag = jnp$array(pi_star_value_init_dag),
-                                          EST_INTERCEPT_tf_ast = jnp$array(EST_INTERCEPT_tf_ast),
-                                          EST_COEFFICIENTS_tf_ast = jnp$array(EST_COEFFICIENTS_tf_ast),
-                                          EST_INTERCEPT_tf_dag = jnp$array(EST_INTERCEPT_tf_dag),
-                                          EST_COEFFICIENTS_tf_dag = jnp$array(EST_COEFFICIENTS_tf_dag)))",
-                              name_,name_)))
-    }
   }
   }
 
@@ -527,27 +508,18 @@ OptiConjoint       <-          function(
 
     return( pi_star_full )
   })
-  # initialize + convert fxn
-  getPrettyPi( pi_star_value_init_ast )
-  getPrettyPi_conv <- tf2jax$convert_functional(getPrettyPi,jnp$array(pi_star_value_init_ast))
-  getPrettyPi_conv_diff <- ifelse(ParameterizationType=="Implicit",
-                                  yes = list(getPrettyPi_conv),
-                                  no = list(jax$jit(function(x){x})))[[1]]
-  getPrettyPi_conv_diff( jnp$array( pi_star_value_init_ast) )
 
-  a2Simplex_conv <- try(tf2jax$convert_functional(a2Simplex,jnp$array(a_vec_init_ast)),T)
-  a2FullSimplex_conv <- try(tf2jax$convert_functional(a2FullSimplex,jnp$array(a_vec_init_ast)),T)
-  a2Simplex_conv_diff_use <- ifelse(ParameterizationType == "Implicit",
-                               yes = list(a2Simplex_conv),
-                               no = list(a2FullSimplex_conv))[[1]]
-  GetInvLR_conv <- tf2jax$convert_functional(GetInvLR,jnp$array(1.), a_vec_init_ast)
-  GetUpdatedParameters_conv <- tf2jax$convert_functional(GetUpdatedParameters,
-                                                         a_vec_init_ast,a_vec_init_ast, jnp$array(1.))
+  getPrettyPi_diff <- ifelse(ParameterizationType=="Implicit",
+                                  yes = list(getPrettyPi),
+                                  no = list(jax$jit(function(x){x})))[[1]]
+  a2Simplex_diff_use <- ifelse(ParameterizationType == "Implicit",
+                               yes = list(a2Simplex),
+                               no = list(a2FullSimplex))[[1]]
 
   ## get exact result
   pi_star_exact <- -10
   if(OptimType %in% c("tryboth") & diff == F){
-    pi_star_exact <- as.numeric(getPrettyPi(getPiStar_exact()))
+    pi_star_exact <- np$array(getPrettyPi(getPiStar_exact(EST_COEFFICIENTS_tf)))
   }
 
   use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
@@ -616,18 +588,15 @@ OptiConjoint       <-          function(
         }
         return( l_res )
       })
-    #getFixedEntries_conv <- tf2jax$convert_functional(getFixedEntries,jnp$array(EST_COEFFICIENTS_tf))
     fe <- getFixedEntries( EST_COEFFICIENTS_tf ) # needed for function initialization
-    #getFixedEntries_conv( jnp$array(EST_COEFFICIENTS_tf) ) # needed for function initialization
   }
 
   # define GD function
   #REGRESSION_PARAMS_jax_dag <- REGRESSION_PARAMS_jax <- jnp$array(jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
   gather_fxn <- compile_fxn(function(x){
-      INTERCEPT_ <- jnp$expand_dims(jnp$take(x,0L),1L)
-      COEFFICIENTS_ <- jnp$take(x,ai(1L:(length(x)-1L)))
+      INTERCEPT_ <- jnp$expand_dims(jnp$take(x,0L),0L)
+      COEFFICIENTS_ <- jnp$take(x, jnp$array( jnp$arange( jnp$shape(x)[[1]] ) ) )
       list(INTERCEPT_, COEFFICIENTS_)})
-  #gather_conv <- tf2jax$convert_functional(gather_fxn, x = REGRESSION_PARAMS_jax)
   if(diff == F){
     initialize_GD_WithExactGradients <- paste(deparse(generate_GD_WithExactGradients),collapse="\n")
     initialize_GD_WithExactGradients <- gsub(initialize_GD_WithExactGradients,pattern="function \\(\\)",replace="")
@@ -658,7 +627,7 @@ OptiConjoint       <-          function(
 
   print("Defining gd function...")
   {
-    getMultinomialSamp <- (function(pi_star_value, baseSeed){
+    getMultinomialSamp <- jax$jit(function(pi_star_value, baseSeed){
       {
         # define d locator
         d_locator_use <- ifelse(ParameterizationType == "Implicit",
@@ -708,7 +677,7 @@ OptiConjoint       <-          function(
   jax_seed <- jnp$array(as.integer(c(jax_seed)))
 
   # Obtain solution via exact calculation
-  print("Starting core optimization...")
+  print("Starting optimization...")
   pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
   q_star_OUTER <- q_star_se_OUTER <- replicate(n = K, list())
   for(k_clust in 1:K){
@@ -729,33 +698,33 @@ OptiConjoint       <-          function(
     vcov_OutcomeModel_ast <- vcov_OutcomeModel_dag <- vcov_OutcomeModel_ast0 <- vcov_OutcomeModel_dag0 <- vcov_OutcomeModel <- vcov_OutcomeModel_by_k[[ k_clust ]]
   }
 
-  browser()
   if(use_exact){
     print("Optimization type: Exact solution")
-    results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
-    dx_vars <- list( EST_INTERCEPT_tf, EST_COEFFICIENTS_tf )
-    browser()
-    with(tf$GradientTape(persistent = F) %as% tape, {
-      tape$watch(  dx_vars   )
-      pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- getPiStar_exact())
+    #results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
+    FxnForJacobian <- function(INPUT_){
+      EST_INTERCEPT_tf_ <- INPUT_[[1]]
+      EST_COEFFICIENTS_tf_  <- INPUT_[[2]]
+      pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- getPiStar_exact(EST_COEFFICIENTS_tf_))
       q_star_exact <- q_star <- getQStar_single(pi_star = pi_star_reduced,
-                                         EST_INTERCEPT_tf = EST_INTERCEPT_tf,
-                                         EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf)
+                                                EST_INTERCEPT_tf = EST_INTERCEPT_tf_,
+                                                EST_COEFFICIENTS_tf = EST_COEFFICIENTS_tf_)
       results_vec <- jnp$concatenate(list(q_star, pi_star_full),0L)
-      for(ia in 1:length(results_vec_list)){
-        results_vec_list[[ia]] <- tf$reshape(jnp$take(results_vec,n2int(ai(ia-1L)),axis=0L),shape=list())
-      }
-    })
-
-    # automatic jacobian from tf
-    {
-    jacobian_time <- system.time(jacobian_mat <- tape$jacobian(results_vec, dx_vars ))
-    jacobian_mat_exact <- jacobian_mat <- cbind(
-                          as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[1]],1L),1L))),
-                          as.matrix(tf$squeeze(tf$squeeze(tf$squeeze(jacobian_mat[[2]],1L),2L)))
-                        )
-    vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast
+      return( results_vec )
     }
+    results_vec <- FxnForJacobian(list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf))
+    jacobian_mat <- jax$jacobian(FxnForJacobian,0L)( (INPUT_  <- list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf)))
+
+    # old code
+    # for(ia in 1:length(results_vec_list)){results_vec_list[[ia]] <- jnp$reshape(jnp$take(results_vec,n2int(ai(ia-1L)),axis=0L),shape=list()) }
+
+    # reshape jacobian and process results
+    jacobian_mat_exact <- jacobian_mat <- cbind(
+                          np$array(jnp$squeeze(jnp$squeeze(jnp$squeeze(jacobian_mat[[1]],1L),1L))),
+                          np$array(jnp$squeeze(jnp$squeeze(jnp$squeeze(jacobian_mat[[2]],1L),2L)))
+                         )
+    vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast
+    q_star_exact <- q_star <- np$array( jnp$take(results_vec, 0L) )
+    pi_star_full <- np$array( jnp$take(results_vec, jnp$array(1L:(length(results_vec)-1L))) )
   }
 
   if(use_gd){
@@ -815,22 +784,20 @@ OptiConjoint       <-          function(
                              P_VEC_FULL_ast = p_vec_full_ast_jnp,
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
                              LAMBDA = lambda_jnp,
-                             BASE_SEED = jax_seed) )
+                             BASE_SEED = jax_seed ) )
     q_with_pi_star_full <- jnp$array(q_with_pi_star_full, dtj)
     # as.matrix(q_with_pi_star_full)[1:3]
     print("Time GD: ");print(gd_time)
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
-      ifelse(is.na(zer),no = as.numeric(tf$sqrt( jnp$sum(tf$square(jnp$array(zer,dtj))) )), yes = NA) }) )
+      ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )), yes = NA) }) )
     try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log =""),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
-      ifelse(is.na(zer),no=as.numeric(tf$sqrt( jnp$sum(tf$square(jnp$array(zer,dtj))) )),yes=NA) }) ),T)
+      ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )),yes=NA) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
 
-    browser()
-    #RETURN THE FUNCTION?
     gd_full_simplex <- F
     pi_star_red <- getPiStar_gd(
                         REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
@@ -845,8 +812,8 @@ OptiConjoint       <-          function(
     pi_star_red_dag <- jnp$array(as.matrix(pi_star_red[-c(1:(length(pi_star_red)/2))]))
     pi_star_red_ast <- jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
 
-    q_star_gd <- q_star <- as.numeric(  q_with_pi_star_full )[1]
-    pi_star_full_gd <- pi_star_full <- as.numeric( q_with_pi_star_full )[-c(1:3)]
+    q_star_gd <- q_star <- np$array(  q_with_pi_star_full )[1]
+    pi_star_full_gd <- pi_star_full <- np$array( q_with_pi_star_full )[-c(1:3)]
     #plot(pi_star_full_gd[1:(length(pi_star_full_gd)/2)],pi_star_full_gd[-c(1:(length(pi_star_full_gd)/2))]); abline(a=0,b=1)
     #plot(pi_star_full_gd[1:(length(pi_star_full_gd)/2)]-pi_star_full_gd[-c(1:(length(pi_star_full_gd)/2))]); abline(h=0)
 
@@ -872,7 +839,7 @@ OptiConjoint       <-          function(
                                           lambda_jnp,
                                           jax_seed))
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
-        as.matrix( tf$squeeze(tf$squeeze(jnp$array(l_,dtj),1L),2L) ) })
+        as.matrix( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
       vcov_OutcomeModel_concat <- list(
                      vcov_OutcomeModel_ast  ,
@@ -881,21 +848,20 @@ OptiConjoint       <-          function(
                      vcov_OutcomeModel_dag0  )
       vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
       vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
-      #jacobian_mat_gd <- jacobian_mat <- as.matrix( tf$squeeze(tf$squeeze(jnp$array(jacobian_mat,dtj),1L),2L) )
+      #jacobian_mat_gd <- jacobian_mat <- as.matrix( jnp$squeeze(jnp$squeeze(jnp$array(jacobian_mat,dtj),1L),2L) )
       print("Time Jacobian of GD Solution: ");print(jacobian_time)
     }
     # hist(c(jacobian_mat));image(jacobian_mat)
-    # summary(lm(as.numeric(sol_gd)~as.numeric(sol_exact)))
+    # summary(lm(np$array(sol_gd)~np$array(sol_exact)))
   }
 
   # print time of jacobian calculation
   # remember, the first three entries of output are:
   # Qhat_population, Qhat, Qhat_dag
-  print( jacobian_time )
   vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
-  pi_star_numeric <- as.numeric( pi_star_full )
+  pi_star_numeric <- np$array( pi_star_full )
   #trueQ;print(civ<-c(q_star - abs(qnorm((1-ConfLevel)/2))*q_star_se,q_star + abs(qnorm((1-ConfLevel)/2))*q_star_se))
   # 1*(  civ[1] <= trueQ & civ[2] >= trueQ)
 
@@ -938,7 +904,7 @@ OptiConjoint       <-          function(
   pi_star_se_list <- RejiggerPi(pi_ = pi_star_se_list, isSE = T  )
 
   # checks
-  #plot(abs(pi_star_true-as.numeric(1-getPiStar_exact())));abline(a=0,b=1);points(pi_star_se,col="red")
+  #plot(abs(pi_star_true-np$array(1-getPiStar_exact())));abline(a=0,b=1);points(pi_star_se,col="red")
   #plot(abs(pi_star_true-unlist(lapply(pi_star_list,function(zer){zer[-1]}))));abline(a=0,b=1);points(pi_star_se,col="red"); points(pi_star_se,col="red")
 
   # add names
@@ -1005,8 +971,8 @@ OptiConjoint       <-          function(
 
                   # reconstruct q info
                   "Qfxn" = ifelse(MaxMin,
-                                  yes = list(getQStar_diff_MultiGroup_conv),
-                                  no = list(getQStar_diff_SingleGroup_conv))[[1]],
+                                  yes = list(getQStar_diff_MultiGroup),
+                                  no = list(getQStar_diff_SingleGroup))[[1]],
 
                   'p_vec_full_ast_jnp' = p_vec_full_ast_jnp,
                   'p_vec_full_dag_jnp' = p_vec_full_dag_jnp,
