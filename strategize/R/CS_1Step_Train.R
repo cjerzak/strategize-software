@@ -103,19 +103,16 @@ for(trainIndicator in trainIndicator_pool){
             # define training function via jax
             if(i == 1 & lambda_counter == 1){
               jax <- tensorflow::import("jax")
-              tf2jax <- import("tf2jax")
               jnp <- tensorflow::import("jax.numpy")
-              eq <- reticulate::import("equinox")
               optax <- reticulate::import("optax")
-              kfac <- reticulate::import("kfac_jax")
               batch_size_jax <- length(my_batch_jax)
 
               # convert
-              jax_fxn_raw <- tf2jax$convert(getLoss_tf, Y_  = tf$constant(as.matrix(Y[my_batch_jax]),tf$float32),
-                                            X_  = tf$constant(X[my_batch_jax,],tf$float32),
-                                            factorMat_  = tf$constant(FactorsMat_numeric_0Indexed[my_batch_jax,],tf$int32),
-                                            logProb_ = tf$constant(as.matrix(log_PrW[my_batch_jax]),tf$float32),
-                                            REGULARIZATION_LAMBDA = tf$constant(returnWeightsFxn(REGULARIZATION_LAMBDA),tf$float32))
+              jax_fxn_raw <- tf2jax$convert(getLoss_tf, Y_  = jnp$array(as.matrix(Y[my_batch_jax]),jnp$float32),
+                                            X_  = jnp$array(X[my_batch_jax,],jnp$float32),
+                                            factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,],jnp$int32),
+                                            logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax]),jnp$float32),
+                                            REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA),jnp$float32))
               param_set <- jax_fxn_raw[[2]]
 
               # convert fxn with eval+params output into eval only
@@ -342,8 +339,8 @@ for(trainIndicator in trainIndicator_pool){
 
           if(adaptiveMomentum == T){ #https://arxiv.org/pdf/2110.09057.pdf
             if(optimization_language == "tf"){
-              x_k <- as.numeric( tf$concat((lapply(tv_trainWith, function(zer){tf$reshape(zer,-1L)})),0L))
-              grad_k <- as.numeric( tf$concat((lapply(my_grads, function(zer){tf$reshape(zer,-1L)})),0L))
+              x_k <- as.numeric( jnp$concatenate((lapply(tv_trainWith, function(zer){jnp$reshape(zer,-1L)})),0L))
+              grad_k <- as.numeric( jnp$concatenate((lapply(my_grads, function(zer){jnp$reshape(zer,-1L)})),0L))
             }
             if(optimization_language == "jax"){
               x_k <- unlist( param_set)
@@ -399,7 +396,7 @@ for(trainIndicator in trainIndicator_pool){
           Qhat_value <- mean( unlist( lapply(batch_indices_Q, function(use_i){
             finalWts_ <- prop.table( as.matrix(  getProbRatio_tf(Y_ = tfConst(as.matrix(Y[use_i])),
                                                                  X_ = tfConst(X[use_i,]),
-                                                                 factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],tf$int32),
+                                                                 factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],jnp$int32),
                                                                  logProb_ = tfConst(as.matrix(log_PrW[use_i])),
                                                                  REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(REGULARIZATION_LAMBDA))) ) )
             Qhat_ <- sum(as.matrix(Y[use_i])*finalWts_)

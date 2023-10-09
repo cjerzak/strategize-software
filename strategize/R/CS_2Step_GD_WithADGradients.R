@@ -13,8 +13,7 @@ generate_ExactSol <- function(){
   Const_4_lambda_pl <- jnp$array(as.matrix( 4*lambda*p_vec_use),dtj)
   Const_2_lambda_plprime <- jnp$array(as.matrix( 2*lambda*p_vec_sum_prime_use), dtype = dtj)
 
-
-  generate_ExactSolImplicit <- function(){
+  generate_ExactSolImplicit <- function(EST_COEFFICIENTS_tf){
     main_coef <- jnp$take(EST_COEFFICIENTS_tf, indices = main_indices_i0, axis=0L)
     inter_coef <- jnp$take(EST_COEFFICIENTS_tf, indices = inter_indices_i0, axis=0L)
     b_vec <- jnp$subtract(
@@ -79,7 +78,7 @@ generate_ExactSol <- function(){
     Const_2_lambda_plprime <- jnp$array(as.matrix( 2*lambda*p_vec_sum_prime_use),dtj)
     Neg4lambda_update <- jnp$array(as.matrix(-4*lambda),dtj)
     Neg2lambda_update <- jnp$array(as.matrix(-2*lambda),dtj)
-    getPiStar_exact <- function(){
+    getPiStar_exact <- function(EST_COEFFICIENTS_tf){
       main_coef <- jnp$take(EST_COEFFICIENTS_tf,indices = main_indices_i0, axis=0L)
       inter_coef <- jnp$take(EST_COEFFICIENTS_tf,indices = inter_indices_i0, axis=0L)
       b_vec <- jnp$subtract(  jnp$negative( main_coef ), Const_2_lambda_pl  )

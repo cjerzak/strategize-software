@@ -6,23 +6,23 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           P_VEC_FULL_dag,
                           LAMBDA,
                           BASE_SEED){
-  REGRESSION_PARAMETERS_ast <- gather_conv(REGRESSION_PARAMETERS_ast)
+  REGRESSION_PARAMETERS_ast <- gather_fxn(REGRESSION_PARAMETERS_ast)
   INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
   COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
 
   INTERCEPT_dag0_ <- INTERCEPT_ast0_ <- INTERCEPT_dag_ <- INTERCEPT_ast_
   COEFFICIENTS_dag0_ <- COEFFICIENTS_ast0_ <- COEFFICIENTS_dag_ <- COEFFICIENTS_ast_
   if( MaxMin ){
-    REGRESSION_PARAMETERS_dag <- gather_conv(REGRESSION_PARAMETERS_dag)
+    REGRESSION_PARAMETERS_dag <- gather_fxn(REGRESSION_PARAMETERS_dag)
     INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag[[1]]
     COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag[[2]]
   }
   if(nRounds > 1 & MaxMin){
-    REGRESSION_PARAMETERS_ast0 <- gather_conv(REGRESSION_PARAMETERS_ast0)
+    REGRESSION_PARAMETERS_ast0 <- gather_fxn(REGRESSION_PARAMETERS_ast0)
     INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0[[1]]
     COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0[[2]]
 
-    REGRESSION_PARAMETERS_dag0 <- gather_conv(REGRESSION_PARAMETERS_dag0)
+    REGRESSION_PARAMETERS_dag0 <- gather_fxn(REGRESSION_PARAMETERS_dag0)
     INTERCEPT_dag0_ <- REGRESSION_PARAMETERS_dag0[[1]]
     COEFFICIENTS_dag0_ <- REGRESSION_PARAMETERS_dag0[[2]]
   }
@@ -48,20 +48,20 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                             LAMBDA_,
                                             Q_SIGN,
                                             SEED_IN_LOOP){
-          pi_star_full_i_ast <- getPrettyPi_conv_diff( pi_star_i_ast <- a2Simplex_conv_diff_use( a_i_ast ))
-          pi_star_full_i_dag <- getPrettyPi_conv_diff( pi_star_i_dag <- a2Simplex_conv_diff_use( a_i_dag ))
+          pi_star_full_i_ast <- getPrettyPi_diff( pi_star_i_ast <- a2Simplex_diff_use( a_i_ast ))
+          pi_star_full_i_dag <- getPrettyPi_diff( pi_star_i_dag <- a2Simplex_diff_use( a_i_dag ))
 
           if(!MaxMin){
             if(!diff){
-              q__ <- getQStar_single_conv(pi_star = pi_star_i_ast,
+              q__ <- getQStar_single(pi_star = pi_star_i_ast,
                                           EST_INTERCEPT_tf = INTERCEPT_ast_,
                                           EST_COEFFICIENTS_tf = COEFFICIENTS_ast_)
               q_max <- q__ <- jnp$take(q__,0L)
             }
             if(diff){
               q__ <- ifelse(MaxMin,
-                            yes = list(getQStar_diff_MultiGroup_conv),
-                            no = list(getQStar_diff_SingleGroup_conv))[[1]](
+                            yes = list(getQStar_diff_MultiGroup),
+                            no = list(getQStar_diff_SingleGroup))[[1]](
                               pi_star_ast =  pi_star_i_ast,
                               pi_star_dag = pi_star_i_dag,
                               EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
@@ -83,6 +83,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           lax_cond_indicator_counter_AstWinsPrimary <- jnp$array(0.)
 
           for( monti_i in 1:nMonte_MaxMin){
+
               SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
               TSAMP_ast <- getMultinomialSamp(pi_star_i_ast, baseSeed = jnp$add(jnp$array(1L),SEED_IN_LOOP_i))
               TSAMP_dag <- getMultinomialSamp(pi_star_i_dag, baseSeed = jnp$add(jnp$array(2L),SEED_IN_LOOP_i))
@@ -96,8 +97,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
               TSAMP_dag_PrimaryComp <- jax$lax$stop_gradient(getMultinomialSamp(pi_star_i_dag, baseSeed = jnp$add(jnp$array(4L),SEED_IN_LOOP_i)))
 
               GeneralVoteShareResults_AstReferenced <- ifelse(MaxMin,
-                            yes = list(getQStar_diff_MultiGroup_conv),
-                            no = list(getQStar_diff_SingleGroup_conv))[[1]](
+                            yes = list(getQStar_diff_MultiGroup),
+                            no = list(getQStar_diff_SingleGroup))[[1]](
                               pi_star_ast =  TSAMP_ast,
                               pi_star_dag = TSAMP_dag,
                               #pi_star_ast =  pi_star_i_ast, pi_star_dag = pi_star_i_dag,
@@ -113,14 +114,14 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
               # primary stage analysis
               {
-                PrimaryVoteShareAstAmongAst <- getQStar_diff_SingleGroup_conv(
+                PrimaryVoteShareAstAmongAst <- getQStar_diff_SingleGroup(
                   pi_star_ast =  TSAMP_ast,
                   pi_star_dag = TSAMP_ast_PrimaryComp,
                   EST_INTERCEPT_tf_ast = INTERCEPT_ast0_,
                   EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast0_,
                   EST_INTERCEPT_tf_dag = INTERCEPT_ast0_,
                   EST_COEFFICIENTS_tf_dag = COEFFICIENTS_ast0_)
-                PrimaryVoteShareDagAmongDag <- getQStar_diff_SingleGroup_conv(
+                PrimaryVoteShareDagAmongDag <- getQStar_diff_SingleGroup(
                   pi_star_ast = TSAMP_dag,
                   pi_star_dag = TSAMP_dag_PrimaryComp,
                   EST_INTERCEPT_tf_ast = INTERCEPT_dag0_,
@@ -167,21 +168,21 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
               ProductAstGroup_sum_DagOpti <- jnp$add(ProductAstGroup_sum_DagOpti,ProductAstGroup_DagOpti)
               ProductDagGroup_sum_DagOpti <- jnp$add(ProductDagGroup_sum_DagOpti,ProductDagGroup_DagOpti)
             }
-            AveProdAst_AstOpti <- jnp$divide(ProductAstGroup_sum_AstOpti,
+          AveProdAst_AstOpti <- jnp$divide(ProductAstGroup_sum_AstOpti,
                                      jnp$add(jnp$array(0.001),
                                         lax_cond_indicator_counter_AstWinsPrimary))
-            AveProdDag_AstOpti <- jnp$divide(ProductDagGroup_sum_AstOpti,
+          AveProdDag_AstOpti <- jnp$divide(ProductDagGroup_sum_AstOpti,
                                      jnp$add(jnp$array(0.001),
                                         lax_cond_indicator_counter_DagWinsPrimary))
-            AveProdAst_DagOpti <- jnp$divide(ProductAstGroup_sum_DagOpti,
+          AveProdAst_DagOpti <- jnp$divide(ProductAstGroup_sum_DagOpti,
                                      jnp$add(jnp$array(0.001),
                                         lax_cond_indicator_counter_AstWinsPrimary))
-            AveProdDag_DagOpti <- jnp$divide(ProductDagGroup_sum_DagOpti,
+          AveProdDag_DagOpti <- jnp$divide(ProductDagGroup_sum_DagOpti,
                                       jnp$add(jnp$array(0.001),
                                           lax_cond_indicator_counter_DagWinsPrimary))
 
-            # quantity to maximize
-            q_max <- jnp$add(
+          # quantity to maximize
+          q_max <- jnp$add(
                 jnp$multiply(cond_UseDag,jnp$add( AveProdAst_DagOpti, AveProdDag_DagOpti )),
                 jnp$multiply(cond_UseAst,jnp$add( AveProdAst_AstOpti, AveProdDag_AstOpti ))
               )
@@ -223,6 +224,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
       }
 
+      browser()
       FullGetQStar_(a_i_ast = a_i_ast, a_i_dag = a_i_dag,
                     INTERCEPT_ast_ = INTERCEPT_ast_, COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
                     INTERCEPT_dag_ = INTERCEPT_dag_, COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
@@ -272,8 +274,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 LAMBDA, jnp$array(-1.),
                                 jnp$add(BASE_SEED,jnp$array(as.integer( i) ) ) )
       if(!UseOptax){
-        inv_learning_rate_da_dag <-  jax$lax$stop_gradient(GetInvLR_conv(inv_learning_rate_da_dag, grad_i_dag))
-        a_i_dag <- GetUpdatedParameters_conv(a_vec = a_i_dag, grad_i = grad_i_dag,
+        inv_learning_rate_da_dag <-  jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
+        a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, grad_i = grad_i_dag,
                                              inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_dag))
       }
 
@@ -297,8 +299,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                LAMBDA, jnp$array(1.),
                                jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer( i) ) ) )  )
       if(!UseOptax){
-        inv_learning_rate_da_ast <-  jax$lax$stop_gradient( GetInvLR_conv(inv_learning_rate_da_ast, grad_i_ast) )
-        a_i_ast <- GetUpdatedParameters_conv(a_vec = a_i_ast, grad_i = grad_i_ast,
+        inv_learning_rate_da_ast <-  jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
+        a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, grad_i = grad_i_ast,
                                              inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_ast))
       }
 
@@ -317,8 +319,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
   # save output
   {
-    pi_star_ast_full_simplex_ <- getPrettyPi_conv( pi_star_ast_ <- a2Simplex_conv_diff_use( a_i_ast ) )
-    pi_star_dag_full_simplex_ <- getPrettyPi_conv( pi_star_dag_ <- a2Simplex_conv_diff_use( a_i_dag ))
+    pi_star_ast_full_simplex_ <- getPrettyPi( pi_star_ast_ <- a2Simplex_diff_use( a_i_ast ) )
+    pi_star_dag_full_simplex_ <- getPrettyPi( pi_star_dag_ <- a2Simplex_diff_use( a_i_dag ))
     doMonte_Q <- ifelse(glm_family == "gaussian", yes = F, no = T)
     nMonte_Q <- ifelse(glm_family == "gaussian", yes = 1, no = nMonte_Qglm)
     q_star_f <- jnp$array(0.)
@@ -337,15 +339,15 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
       if(diff){
         q_star_ <- ifelse(MaxMin,
-                          yes = list(getQStar_diff_MultiGroup_conv),
-                          no = list(getQStar_diff_SingleGroup_conv))[[1]](
+                          yes = list(getQStar_diff_MultiGroup),
+                          no = list(getQStar_diff_SingleGroup))[[1]](
                             pi_star_ast = pi_star_ast_f,
                             pi_star_dag = pi_star_dag_f,
                             EST_INTERCEPT_tf_ast = INTERCEPT_ast_, EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
                             EST_INTERCEPT_tf_dag = INTERCEPT_dag_, EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
       }
       if(!diff){
-        q_star_ <- getQStar_single_conv(pi_star = pi_star_ast_f,
+        q_star_ <- getQStar_single(pi_star = pi_star_ast_f,
                                         EST_INTERCEPT_tf = INTERCEPT_ast_,
                                         EST_COEFFICIENTS_tf = COEFFICIENTS_ast_)
       }

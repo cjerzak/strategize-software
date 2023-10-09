@@ -1,15 +1,15 @@
 ml_build <- function(){
 
-  zero_ep <- tf$constant(1e-5,tf$float32)
+  zero_ep <- jnp$array(1e-5,jnp$float32)
   print("Begin building block...")
 
   for(d_ in 1:length(p_list)){
-    eval(parse(text = sprintf("ilrBasis%s <- tf$constant(compositions::ilrBase(D = length(p_list[[d_]])),tf$float32)",d_)))
-    eval(parse(text = sprintf("ilrBasis%s_t <- tf$transpose(ilrBasis%s)",d_,d_)))
+    eval(parse(text = sprintf("ilrBasis%s <- jnp$array(compositions::ilrBase(D = length(p_list[[d_]])),jnp$float32)",d_)))
+    eval(parse(text = sprintf("ilrBasis%s_t <- jnp$transpose(ilrBasis%s)",d_,d_)))
   }
-  ilrBasisClust <- tf$constant(compositions::ilrBase(D = K),tf$float32)
-  ilrBasisClust_t <- tf$expand_dims(tf$transpose(ilrBasisClust),0L)
-  Zero1by1 <- tf$constant(as.matrix(0.),tf$float32)
+  ilrBasisClust <- jnp$array(compositions::ilrBase(D = K),jnp$float32)
+  ilrBasisClust_t <- jnp$expand_dims(jnp$transpose(ilrBasisClust),0L)
+  Zero1by1 <- jnp$array(as.matrix(0.),jnp$float32)
 
   # test
   #compositions::ilr(t(c(0.49,0.51))) - t(log(c(0.49,0.51))) %*% compositions::ilrBase(D=2)
@@ -17,21 +17,21 @@ ml_build <- function(){
  # setup main functions
   useHajekInOptimization_orig <- useHajekInOptimization
   if(penaltyType == "LogMaxProb"){
-    RegularizationPiAction <- 'tf$add(tf$reduce_max(( (  (log_pidk) ) )),
-    tf$math$log(tf$squeeze(tf$divide(tf$gather(ClassProbsMarginal, k_ - 1L, axis = 1L),DFactors)))'
+    RegularizationPiAction <- 'jnp$add(tf$reduce_max(( (  (log_pidk) ) )),
+    tf$math$log(tf$squeeze(jnp$divide(jnp$take(ClassProbsMarginal, k_ - 1L, axis = 1L),DFactors)))'
   }
   if(penaltyType == "L2"){
     ## if equal weighting of the penalty by cluster
-    if(K == 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$square( tf$subtract( pd%s, tf$exp(log_pidk) ) ))' }
+    if(K == 1){ RegularizationPiAction <- 'tf$reduce_sum(jnp$square( jnp$subtract( pd%s, jnp$exp(log_pidk) ) ))' }
 
     ## if weighting the penalty by the marginal probability for that factor
     # approach 1: (pi_z - p)^2 * pr(z)
-    #if(K > 1){ RegularizationPiAction <- 'tf$multiply(tf$reduce_sum(tf$square( tf$subtract( pd%s, tf$exp(log_pidk) ) )),
-               #tf$squeeze(tf$gather(ClassProbsMarginal, k_ - 1L, axis = 1L)))' }
+    #if(K > 1){ RegularizationPiAction <- 'jnp$multiply(tf$reduce_sum(jnp$square( jnp$subtract( pd%s, jnp$exp(log_pidk) ) )),
+               #tf$squeeze(jnp$take(ClassProbsMarginal, k_ - 1L, axis = 1L)))' }
 
     # approach 2: mean( ( (p_z-pi) * pr(z|x) )^2 )
-    if(K > 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$reduce_mean(tf$square(tf$multiply( tf$subtract( pd%s, tf$exp(log_pidk) ) ,
-                                          tf$expand_dims(tf$gather(ClassProbs, k_ - 1L, axis = 1L),0L) )),1L))' }
+    if(K > 1){ RegularizationPiAction <- 'tf$reduce_sum(tf$reduce_mean(jnp$square(jnp$multiply( jnp$subtract( pd%s, jnp$exp(log_pidk) ) ,
+                                          jnp$expand_dims(jnp$take(ClassProbs, k_ - 1L, axis = 1L),0L) )),1L))' }
 
   }
   for(forMEst in c(T,F)){
@@ -44,31 +44,31 @@ ml_build <- function(){
       if(subtype == "objToMin"){ return_text <- 'returnThis_ <- minThis_;'}
     }
     if(useVariational == T){
-      regularizationContrib <- 'tf$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
+      regularizationContrib <- 'jnp$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
     }
     if(useVariational == F & K > 1){
-      regularizationContrib <- 'tf$add(tf$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi),
-                                                tf$multiply(lambda_coef, tf$reduce_mean(tf$square(ClassProbProj$kernel))) )'
+      regularizationContrib <- 'jnp$add(jnp$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi),
+                                                jnp$multiply(lambda_coef, tf$reduce_mean(jnp$square(ClassProbProj$kernel))) )'
     }
     if(useVariational == F & K == 1){
-      regularizationContrib <- 'tf$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
+      regularizationContrib <- 'jnp$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
     }
     if(useHajekInOptimization == F){
-      minThis_text <- sprintf('minThis_ <- tf$add(tf$negative(tf$reduce_mean( tf$multiply(Y_,probRatio) )), %s);',regularizationContrib)
+      minThis_text <- sprintf('minThis_ <- jnp$add(jnp$negative(tf$reduce_mean( jnp$multiply(Y_,probRatio) )), %s);',regularizationContrib)
     }
     if(useHajekInOptimization == T){
-      minThis_text <- sprintf('minThis_ <- tf$add(tf$negative(tf$reduce_sum( tf$truediv(tf$multiply(Y_,probRatio),tf$reduce_sum(probRatio)))), %s );',regularizationContrib)
+      minThis_text <- sprintf('minThis_ <- jnp$add(jnp$negative(tf$reduce_sum( tf$truediv(jnp$multiply(Y_,probRatio),tf$reduce_sum(probRatio)))), %s );',regularizationContrib)
     }
     # define main function
     {
       base_tf_function <- eval(parse(text = paste('myLoss_or_returnWeights <- (function(Y_, X_,factorMat_,logProb_,REGULARIZATION_LAMBDA){
-          if(K == 1){ logClassProbs <- tf$zeros(tf$shape(Y_),tf$float32)  }
+          if(K == 1){ logClassProbs <- jnp$zeros(tf$shape(Y_),jnp$float32)  }
           if(K >  1){
               logClassProbs <- tf$math$log( ClassProbs <- getClassProb(  X_ )  )
               ClassProbsMarginal <- tf$reduce_mean(ClassProbs, 0L, keepdims=T)
           }
 
-          RegularizationContribPi <- tf$zeros( list() )
+          RegularizationContribPi <- jnp$zeros( list() )
           logPrWGivenAllClasses <- replicate(  K, list()   )
 
           # Approach:
@@ -78,7 +78,7 @@ ml_build <- function(){
           for(k_ in 1L:K){
 
             # log( prod_d [Pr(W_d|K=k)] Pr(K=k) ) =  [sum_d { log(Pr(W_d|K=k)) }] + log( Pr(K=k) )
-            logPrW_given_k <- tf$expand_dims(tf$gather(logClassProbs, indices = k_ - 1L, axis=1L),1L)
+            logPrW_given_k <- jnp$expand_dims(jnp$take(logClassProbs, indices = k_ - 1L, axis=1L),1L)
 
             # iterate over factors
             for(d__ in 1L:DFactors){
@@ -92,8 +92,9 @@ ml_build <- function(){
               if(normType == "ilr"){
                   log_pidk <- eval(parse(text=sprintf("av%sk%s",d__, k_)))
                   basis__t <- eval(parse(text=sprintf("ilrBasis%s_t",d__)))
-                  log_pidk <- tf$transpose(tf$exp(tf$matmul(tf$transpose(log_pidk), basis__t)))
-                  log_pidk <- log_pidk / (zero_ep+tf$reduce_sum(log_pidk,axis = 0L,keepdims=T))
+                  log_pidk <- jnp$transpose(jnp$exp(tf$matmul(jnp$transpose(log_pidk), basis__t)))
+                  pidk_denom <- jnp$add(zero_ep, jnp$sum(log_pidk,axis = 0L, keepdims=T))
+                  log_pidk <- jnp$divide(log_pidk, pidk_denom)
                   log_pidk <- tf$math$log( log_pidk )
               }
               if(normType == "alr"){
@@ -101,16 +102,16 @@ ml_build <- function(){
                                          eval(parse(text=sprintf("av%sk%s",d__, k_))) ),0L),axis = 0L)
               }
              }
-              received_wd <- tf$gather(factorMat_, indices = d__ - 1L, axis = 1L)
-              log_PrWd_given_k <- tf$gather(log_pidk, indices = received_wd, axis = 0L)
+              received_wd <- jnp$take(factorMat_, indices = d__ - 1L, axis = 1L)
+              log_PrWd_given_k <- jnp$take(log_pidk, indices = received_wd, axis = 0L)
 
-              logPrW_given_k <- tf$add(logPrW_given_k, log_PrWd_given_k)
+              logPrW_given_k <- jnp$add(logPrW_given_k, log_PrWd_given_k)
               RegularizationContribPi <- RegularizationContribPi + eval(parse(text=sprintf(" ', RegularizationPiAction,' ",d__)))
             }
             logPrWGivenAllClasses[[k_]] <- logPrW_given_k
           }
           logPrW_new <- tf$reduce_logsumexp(tf$concat(logPrWGivenAllClasses, 1L),keepdims = T, axis =  1L)
-          probRatio <- tf$exp( tf$subtract(logPrW_new,  logProb_ ));',
+          probRatio <- jnp$exp( jnp$subtract(logPrW_new,  logProb_ ));',
           minThis_text, return_text,'return(   returnThis_    )})', sep = "")))
       }
     #tf_function_use <- function(x){x};print("Using non-compiled fxns") # for debugging
@@ -166,7 +167,7 @@ ml_build <- function(){
                               activation = "linear",name="ClassProbProj" )
   }
   if(useVariational == F){
-    ClassProbProj <- tf$keras$layers$Dense(units = KFreeProbProj, activation = "linear",name="ClassProbProj", bias_initializer  = tf$zeros,
+    ClassProbProj <- tf$keras$layers$Dense(units = KFreeProbProj, activation = "linear",name="ClassProbProj", bias_initializer  = jnp$zeros,
                                       kernel_initializer = tf$keras$initializers$random_uniform(minval = -b_proj, maxval = b_proj),
                                       trainable = T)
   }
@@ -177,24 +178,24 @@ ml_build <- function(){
 
       # k > 1 case
       if(KFreeProbProj > 0){
-        tf$transpose(ilrBasisClust_t, list(0L,2L,1L))
+        jnp$transpose(ilrBasisClust_t, list(0L,2L,1L))
         x <- ClassProbProj(x)
-        #x <- tf$exp(tf$squeeze(tf$multiply(tf$expand_dims(x,2L),ilrBasisClust_t),1L))
+        #x <- jnp$exp(tf$squeeze(jnp$multiply(jnp$expand_dims(x,2L),ilrBasisClust_t),1L))
 
-        # CHECK THE  FOLLOWING LINE
-        x <- tf$exp(tf$squeeze(tf$matmul(tf$transpose(ilrBasisClust_t, list(0L,2L,1L)),
-                                        tf$expand_dims(x,2L)),2L))
-        x <- x / tf$reduce_sum(x,axis = 1L,keepdims=T)
+        # CHECK THE FOLLOWING LINE
+        x <- jnp$exp(tf$squeeze(tf$matmul(jnp$transpose(ilrBasisClust_t, list(0L,2L,1L)),
+                                        jnp$expand_dims(x,2L)),2L))
+        x <- jnp$divide(x, tf$reduce_sum(x,axis = 1L,keepdims=T))
       }
       return(  x ) } )
   }
   if( normType == "alr"){
     getClassProb <- tf_function(function(x){
-      return(  tf$keras$activations$softmax( tf$concat( list(tf$zeros(c(nrow = nrow(x),1L),
-                                                                      dtype=tf$float32),ClassProbProj(x)),1L ) ,1L ) ) })
+      return(  tf$keras$activations$softmax( tf$concat( list(jnp$zeros(c(nrow = nrow(x),1L),
+                                                                      dtype=jnp$float32),ClassProbProj(x)),1L ) ,1L ) ) })
   }
-  #ClassProbProj(tf$constant(X,tf$float32))
-  print(paste("Initial Class Probs: ", paste(round(colMeans(as.array(getClassProb(tf$constant(X,tf$float32) ))),7L),collapse=','),sep=""))
+  #ClassProbProj(jnp$array(X,jnp$float32))
+  print(paste("Initial Class Probs: ", paste(round(colMeans(as.array(getClassProb(jnp$array(X,jnp$float32) ))),7L),collapse=','),sep=""))
   DFactors <- length( nLevels_vec <- apply(W,2,function(l){length(unique(l))}) )
 
   if(useVariational == T){
@@ -204,8 +205,7 @@ ml_build <- function(){
 
   # initialize pd -  assignment probabilities for penalty and pr(w)
     for(d_ in 1:(DFactors <- length(nLevels_vec))){
-        eval(parse(text=sprintf( "pd%s = tf$constant(as.matrix(p_list[[d_]]),
-                                       dtype = tf$float32,name='pd%s')",d_,d_)) )
+        eval(parse(text=sprintf( "pd%s = jnp$array(as.matrix(p_list[[d_]]), dtype = jnp$float32,name='pd%s')",d_,d_)) )
     }
 
   # initialize av- the new probability generators
@@ -213,9 +213,9 @@ ml_build <- function(){
     for(k_ in 1:K){ for(d_ in 1:DFactors){
       if(useVariational == T){
         sd_d <- f2n(attr(pi_init_list[d_,k_,1L][[1]],"random_"))[1]
-        sd_d <- tf$constant(as.matrix(sd_d),dtype=tf$float32)
-        Zeros_init <- tf$constant(as.matrix(rep(0,times=((nrow(pi_init_list[d_,k_,1L][[1]]))))),dtype=tf$float32)
-        Raw_SD_init <- tf$constant(as.matrix(rep(as.numeric(tfp$math$softplus_inverse(sd_d)),times=((nrow(pi_init_list[d_,k_,1L][[1]]))))),dtype=tf$float32)
+        sd_d <- jnp$array(as.matrix(sd_d),dtype=jnp$float32)
+        Zeros_init <- jnp$array(as.matrix(rep(0,times=((nrow(pi_init_list[d_,k_,1L][[1]]))))),dtype=jnp$float32)
+        Raw_SD_init <- jnp$array(as.matrix(rep(as.numeric(tfp$math$softplus_inverse(sd_d)),times=((nrow(pi_init_list[d_,k_,1L][[1]]))))),dtype=jnp$float32)
         if(!sprintf("av%sk%s",d_,k_) %in% ls(envir = evaluation_environment)){
           eval(parse(text = sprintf( "av%sk%s_mean = tf$Variable(Zeros_init,trainable = T)",d_,k_)))
           eval(parse(text = sprintf( "av%sk%s_sd_raw = tf$Variable(Raw_SD_init,trainable = T)",d_,k_)))
@@ -226,10 +226,10 @@ ml_build <- function(){
                                   }",d_,k_,d_,k_,d_,k_)))
 
           # assign to correct environment
-          eval(parse(text=sprintf("assign('av%sk%s_mean',av%sk%s_mean, envir = evaluation_environment)",d_,k_,d_,k_)))
-          eval(parse(text=sprintf("assign('av%sk%s_sd_raw',av%sk%s_sd_raw, envir = evaluation_environment)",d_,k_,d_,k_)))
-          eval(parse(text=sprintf("assign('av%sk%s',av%sk%s, envir = evaluation_environment)",d_,k_,d_,k_)))
-          eval(parse(text=sprintf("assign('av%sk%s_',av%sk%s_, envir = evaluation_environment)",d_,k_,d_,k_)))
+          eval(parse(text=sprintf("assign('av%sk%s_mean', av%sk%s_mean, envir = evaluation_environment)",d_,k_,d_,k_)))
+          eval(parse(text=sprintf("assign('av%sk%s_sd_raw', av%sk%s_sd_raw, envir = evaluation_environment)",d_,k_,d_,k_)))
+          eval(parse(text=sprintf("assign('av%sk%s', av%sk%s, envir = evaluation_environment)",d_,k_,d_,k_)))
+          eval(parse(text=sprintf("assign('av%sk%s_', av%sk%s_, envir = evaluation_environment)",d_,k_,d_,k_)))
         }
         if(sprintf("av%sk%s",d_,k_) %in% ls(envir = evaluation_environment)){
           eval(parse(text = sprintf( "av%sk%s_mean$assign(Zeros_init)",d_,k_)))
@@ -243,7 +243,7 @@ ml_build <- function(){
           INIT_VALUE <- INIT_systemic + INIT_random
           if(!sprintf("av%sk%s",d_,k_) %in% ls(envir = evaluation_environment)){
             eval(parse(text=sprintf( "av%sk%s = tf$Variable( INIT_VALUE,
-                       trainable = T, dtype = tf$float32,name = 'av%sk%s')",d_,k_,d_,k_)) )
+                       trainable = T, dtype = jnp$float32,name = 'av%sk%s')",d_,k_,d_,k_)) )
             eval(parse(text = sprintf( "av%sk%s_ = function(){ av%sk%s }",d_,k_,d_,k_)))
 
             # assign to correct environment
@@ -279,7 +279,7 @@ ml_build <- function(){
              if(normType == "ilr"){
                tmp_ <- eval(parse(text=sprintf("av%sk%s",d_, k_)))
                ilr_basis__t <- eval(parse(text=sprintf("ilrBasis%s_t",d_)))
-               tmp_ <- tf$transpose(tf$exp(tf$matmul(tf$transpose(tmp_),ilr_basis__t)))
+               tmp_ <- jnp$transpose(jnp$exp(tf$matmul(jnp$transpose(tmp_),ilr_basis__t)))
                pidk <- (tmp_ / (zero_ep+tf$reduce_sum(tmp_,axis = 0L,keepdims=T)))
              }
 
@@ -335,7 +335,7 @@ ml_build <- function(){
 
   # initial forward pass (with small batch size for speed)
   returnWeightsFxn <- c; regLambdaFxn <- c
-  tfConst <- function(x,ty=tf$float32){  tf$constant(x,dtype=ty)  }
+  tfConst <- function(x,ty=jnp$float32){  jnp$array(x,dtype=ty)  }
 
   # initial forward pass
   my_batch <- sample(1:length(Y), batch_size,replace=F)
@@ -369,7 +369,7 @@ rm(tmp_loss_grad)
       eval.parent(parse(text =
       'ClassProbProj$trainable_variables[[1]]$assign(KERNEL_LOC_INIT);
         ClassProbProj$trainable_variables[[2]]$assign(KERNEL_SCALE_INIT);
-        ClassProbProj$trainable_variables[[3]]$assign(tf$expand_dims(tf$constant(0.,tf$float32),0L))'))
+        ClassProbProj$trainable_variables[[3]]$assign(jnp$expand_dims(jnp$array(0.,jnp$float32),0L))'))
     }
     if(useVariational == F & K > 1){
      values_ <- unlist( lapply(strsplit(grep(names(ClassProbProj),pattern="initializer",value=T),
