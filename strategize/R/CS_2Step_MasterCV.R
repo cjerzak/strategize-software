@@ -61,23 +61,14 @@ cv.OptiConjoint       <-          function(
   # initialize environment
   {
     print("Initializing environment...")
-    library(tensorflow); library(keras)
     if(!is.null(conda_env)){
-      try(tensorflow::use_condaenv(conda_env,
+      try(reticulate::use_condaenv(conda_env,
                                    required = conda_env_required), T)
     }
-    CPUDevice <- tf$config$list_physical_devices()[[1]]
-    tf$config$set_visible_devices( CPUDevice )
-    tf$config$set_soft_device_placement(T)
-    dttf <- tf$float64
-    try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
-    try(tfp <- tf_probability(),T)
-    try(tfd <- tfp$distributions,T)
-    print(tf$version$VERSION)
 
     # import computational modules
-    jax <- tensorflow::import("jax",as="jax")
-    jnp <- tensorflow::import("jax.numpy")
+    jax <- reticulate::import("jax",as="jax")
+    jnp <- reticulate::import("jax.numpy")
     py_gc <- reticulate::import("gc")
 
     # setup numerical precision for delta method
