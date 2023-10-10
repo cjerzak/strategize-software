@@ -627,9 +627,6 @@ OptiConjoint       <-          function(
     dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(0L)))
     dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
 
-
-    # check the multinomial sampling
-    # plot(np$array(getMultinomialSamp_jit(p_vec_jnp, baseSeed = jnp$array(as.integer(runif(1,1,1000))))))
     gd_full_simplex <- T
     browser()
     q_with_pi_star_full <- getPiStar_gd(
@@ -661,6 +658,39 @@ OptiConjoint       <-          function(
       ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )),yes=NA) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
+
+    environment(QMonteIter) <- environment()
+    QMonteIter <- jax$jit( QMonteIter )
+    VectorizedQMonteLoop <- jax$jit( jax$vmap(function(TSAMP_ast, TSAMP_dag,
+                                                       TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
+
+                                                       a_i_ast,
+                                                       a_i_dag,
+                                                       INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                                       INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                                       INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                                       INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                                       P_VEC_FULL_ast_,
+                                                       P_VEC_FULL_dag_,
+                                                       LAMBDA_,
+                                                       Q_SIGN,
+                                                       SEED_IN_LOOP){
+      QMonteIter(TSAMP_ast, TSAMP_dag,
+                 TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
+
+                 a_i_ast,
+                 a_i_dag,
+                 INTERCEPT_ast_, COEFFICIENTS_ast_,
+                 INTERCEPT_dag_, COEFFICIENTS_dag_,
+                 INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                 INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                 P_VEC_FULL_ast_,
+                 P_VEC_FULL_dag_,
+                 LAMBDA_,
+                 Q_SIGN,
+                 SEED_IN_LOOP)
+    }, eval(parse(text = paste("list(1L,1L,1L,1L,",
+                               paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
 
     gd_full_simplex <- F
     pi_star_red <- getPiStar_gd(

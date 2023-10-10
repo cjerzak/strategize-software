@@ -56,16 +56,6 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 LAMBDA,
                                 jnp$array(-1.),
                                 jnp$add(BASE_SEED,jnp$array(as.integer(i)))  )
-
-      FullGetQStar_(a_i_ast, a_i_dag,
-                    INTERCEPT_ast_,  COEFFICIENTS_ast_,
-                    INTERCEPT_dag_,  COEFFICIENTS_dag_,
-                    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                    P_VEC_FULL_ast, P_VEC_FULL_dag,
-                    LAMBDA,
-                    jnp$array(-1.),
-                    jnp$add(BASE_SEED,jnp$array(as.integer(i)))  )
       if(i == 1){
         inv_learning_rate_da_dag <- jnp$maximum(jnp$array(0.001), jnp$multiply(10,  jnp$square(jnp$linalg$norm( grad_i_dag ))))
       }
@@ -102,7 +92,6 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                         inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_ast))
       }
 
-      #plot(grad_i$to_py(),grad_i_dag$to_py());abline(a=0,b=1)
       if(UseOptax){
         updates_and_opt_state_ast <- jit_update_ast( updates = grad_i_ast, state = opt_state_ast, params = a_i_ast)
         opt_state_ast <- updates_and_opt_state_ast[[2]]
@@ -122,6 +111,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     doMonte_Q <- ifelse(glm_family == "gaussian", yes = F, no = T)
     nMonte_Q <- ifelse(glm_family == "gaussian", yes = 1, no = nMonte_Qglm)
     q_star_f <- jnp$array(0.)
+
+
+    browser()
+
     for(monti_ii in 1:nMonte_Q){
       if( !doMonte_Q ){
         pi_star_ast_f <- pi_star_ast_
