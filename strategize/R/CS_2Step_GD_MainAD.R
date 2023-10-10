@@ -7,10 +7,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           LAMBDA,
                           BASE_SEED,
                           functionList,
-                          functionReturn = T){
+                          functionReturn = T, quiet = T){
   # set functions
-  dQ_da_dag <- functionList[[1]]
-  dQ_da_ast <- functionList[[2]]
+  dQ_da_ast <- functionList[[1]]
+  dQ_da_dag <- functionList[[2]]
   QFXN <- functionList[[3]]
   getMultinomialSamp_jit <- functionList[[4]]
 
@@ -43,7 +43,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0; maxIter<-nSGD;
   while(goOn == F){
     i<-i+1;
-    print(sprintf("[%s] SGD Iteration: %i of %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), i, nSGD) );
+    if(!quiet){ print(sprintf("[%s] SGD Iteration: %i of %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), i, nSGD) ) }
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & MaxMin ){
@@ -154,11 +154,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     }
     q_star_f <- jnp$divide(q_star_f, nMonte_Q)
 
-    browser()
     if( gd_full_simplex == T){ ret_array <- jnp$concatenate(list( q_star_, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ ) ) }
     if( gd_full_simplex == F){ ret_array <- jnp$concatenate(list( q_star_, pi_star_ast_, pi_star_dag_ ) ) }
     if(functionReturn == T){ ret_array <- list(ret_array,
-                                            list(dQ_da_dag, dQ_da_ast, QFXN, getMultinomialSamp_jit)
+                                            list(dQ_da_ast, dQ_da_dag, QFXN, getMultinomialSamp_jit)
                                             ) }
     return( ret_array  ) # ret_array$shape
   }

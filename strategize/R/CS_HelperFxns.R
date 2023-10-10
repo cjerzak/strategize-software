@@ -58,7 +58,7 @@ getMultinomialSamp <- function(pi_star_value, baseSeed){
       TSamp <- jnp$transpose( TSamp )
 
       # if implicit, drop a term to keep correct shapes
-      print("CONFIRM THAT DROPPING THE FIRST TERM IS CORRECT HERE IN Conjoint2StepMaster.R")
+      print("CONFIRM THAT DROPPING THE FIRST TERM IS CORRECT HERE IN getMultinomialSamp")
       #if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(0L:(length(zer)-1L)),axis=0L) } #drop last entry
       if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L) } #drop first entry
       if(length(zer) == 1){TSamp <- jnp$expand_dims(TSamp, 1L)}
@@ -72,17 +72,15 @@ getMultinomialSamp <- function(pi_star_value, baseSeed){
 }
 
 getPrettyPi <- function(pi_star_value){
-  # NB: NO RENORMALIZATION IS DONE
   if(ParameterizationType == "Full"){
     #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){jnp$take(pi_star_value,n2int(ai(zer-1L))) })
     pi_star_full <- pi_star_value
   }
   if(ParameterizationType == "Implicit"){
     pi_star_impliedTerms <- tapply(1:length(d_locator),d_locator,function(zer){
-
-      # check dims here
-      pi_implied <- OneTf - jnp$sum(jnp$take(pi_star_value,
-                                             n2int(ai(zer-1L)),0L)) })
+            pi_implied <- jnp$subtract(OneTf, jnp$sum(jnp$take(pi_star_value,
+                                             n2int(ai(zer-1L)),0L)))
+    })
 
     names(pi_star_impliedTerms) <- NULL
     pi_star_impliedTerms <- jnp$concatenate(pi_star_impliedTerms,0L)

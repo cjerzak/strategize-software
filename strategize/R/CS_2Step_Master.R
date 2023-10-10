@@ -347,8 +347,8 @@ OptiConjoint       <-          function(
   a2Simplex_optim <- ifelse( holdout_indicator == 1 ,
                              yes = list(a2Simplex),
                              no = list(a2FullSimplex) )[[1]]
-  pi_star_value_init_dag <- a2Simplex_optim( a_ = a_vec_init_dag )
-  pi_star_value_init_ast <- a2Simplex_optim( a_vec_init <- a_vec_init_ast )
+  pi_star_value_init_dag <- a2Simplex_optim( a_vec_init_dag )
+  pi_star_value_init_ast <- a2Simplex_optim( a_vec_init_ast )
 
   # define Q functions
   getQStar_single <- compile_fxn( getQStar_single )
@@ -442,7 +442,7 @@ OptiConjoint       <-          function(
     getFixedEntries <- compile_fxn(function(EST_COEFFICIENTS_tf){
         main_coef <- jnp$take(EST_COEFFICIENTS_tf, indices = main_indices_i0, axis=0L)
 
-        if(T == T){
+        {
         inter_coef <- jnp$take(EST_COEFFICIENTS_tf, indices = inter_indices_i0, axis=0L)
         # term 2 fix contribution
         term2_FC <- sapply(1:n_main_params,function(main_comp){
@@ -505,7 +505,6 @@ OptiConjoint       <-          function(
   }
 
   # define GD function
-  #REGRESSION_PARAMS_jax_dag <- REGRESSION_PARAMS_jax <- jnp$array(jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
   gather_fxn <- compile_fxn(function(x){
       INTERCEPT_ <- jnp$expand_dims(jnp$take(x,0L),0L)
       COEFFICIENTS_ <- jnp$take(x, jnp$array( jnp$arange( jnp$shape(x)[[1]] ) ) )
@@ -601,7 +600,6 @@ OptiConjoint       <-          function(
     vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast
     q_star_exact <- q_star <- np$array( jnp$take(results_vec, 0L) )
     pi_star_full <- np$array( jnp$take(results_vec, jnp$array(1L:(length(results_vec)-1L))) )
-    vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   }
 
   if(use_gd){
@@ -645,13 +643,15 @@ OptiConjoint       <-          function(
                              BASE_SEED = jax_seed,
                              functionList = list(dQ_da_dag, dQ_da_ast,
                                                  QFXN, getMultinomialSamp_jit),
-                             functionReturn = T
+                             functionReturn = T,  quiet = F
                              )
-    dQ_da_dag <- q_with_pi_star_full[[2]][[1]]
     dQ_da_ast <- q_with_pi_star_full[[2]][[1]]
+    dQ_da_dag <- q_with_pi_star_full[[2]][[2]]
+    QFXN <- q_with_pi_star_full[[2]][[3]]
+    getMultinomialSamp_jit <- q_with_pi_star_full[[2]][[4]]
+
     q_with_pi_star_full <- q_with_pi_star_full[[1]]
     q_with_pi_star_full <- jnp$array(q_with_pi_star_full, dtj)
-    # as.matrix(q_with_pi_star_full)[1:3]
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
       ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )), yes = NA) }) )
@@ -672,9 +672,9 @@ OptiConjoint       <-          function(
                         P_VEC_FULL_dag = p_vec_full_dag_jnp,
                         LAMBDA = lambda_jnp,
                         BASE_SEED = jax_seed,
-                        return_fxns = F,
-                        dQ_da_dag = dQ_da_dag,
-                        dQ_da_ast = dQ_da_ast
+                        functionList = list(dQ_da_dag, dQ_da_ast,
+                                            QFXN, getMultinomialSamp_jit),
+                        functionReturn = F
                         )
     pi_star_red <- np$array(pi_star_red)[-c(1:3),]
     pi_star_red_dag <- jnp$array(as.matrix(pi_star_red[-c(1:(length(pi_star_red)/2))]))
@@ -686,7 +686,6 @@ OptiConjoint       <-          function(
     #plot(pi_star_full_gd[1:(length(pi_star_full_gd)/2)]-pi_star_full_gd[-c(1:(length(pi_star_full_gd)/2))]); abline(h=0)
 
     # see https://github.com/google/jax/issues/1696 for debugging help
-    jacobian_time <- ""
     jacobian_mat_gd <- jacobian_mat <- matrix(0,
                               ncol = 4*REGRESSION_PARAMS_jax_ast$shape[[1]],
                               nrow = q_with_pi_star_full$shape[[1]])
@@ -696,10 +695,6 @@ OptiConjoint       <-          function(
                                        ncol = nrow(vcov_OutcomeModel_dag)*4)
     if(ComputeSEs){
       gd_full_simplex <- T
-      # jacfwd uses forward-mode automatic differentiation, which is more efficient for “tall” Jacobian matrices
-      # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
-      # For matrices that are near-square, jacfwd probably has an edge over jacrev.
-      # also, try the jacobian matrix product (you don't need full jacobian, just it's transformation)
 
       # first, compute vcov
       vcov_OutcomeModel_concat <- list(
@@ -710,9 +705,14 @@ OptiConjoint       <-          function(
       vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
       vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
 
+      # jacfwd uses forward-mode automatic differentiation, which is more efficient for “tall” Jacobian matrices
+      # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
+      # For matrices that are near-square, jacfwd probably has an edge over jacrev.
+      # also, try the jacobian matrix product (you don't need full jacobian, just it's transformation)
       # now, compute jacobian matrix product
-      jacobian_time <- system.time(jacobian_mat <-
-                          jax$jacobian(getPiStar_gd, 0L:3L)(
+      # 137.145   2.419 136.443
+      #   5.828   0.138   3.797
+      jacobian_mat <- jax$jacrev(getPiStar_gd, 0L:3L)(  # based on tests, jacrev is faster than jacfwd or jacobian
                                           REGRESSION_PARAMS_jax_ast,
                                           REGRESSION_PARAMS_jax_dag,
                                           REGRESSION_PARAMS_jax_ast0,
@@ -721,16 +721,13 @@ OptiConjoint       <-          function(
                                           p_vec_full_dag_jnp,
                                           lambda_jnp,
                                           jax_seed,
-                                          return_fxns = F,
-                                          dQ_da_dag = dQ_da_dag,
-                                          dQ_da_ast = dQ_da_ast))
+                                          functionList = list(dQ_da_dag, dQ_da_ast,
+                                                              QFXN, getMultinomialSamp_jit),
+                                          functionReturn = F
+                                          )
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
-        as.matrix( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
+        np$array( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
-
-      vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
-      #jacobian_mat_gd <- jacobian_mat <- as.matrix( jnp$squeeze(jnp$squeeze(jnp$array(jacobian_mat,dtj),1L),2L) )
-      print("Time Jacobian of GD Solution: ");print(jacobian_time)
     }
     # hist(c(jacobian_mat));image(jacobian_mat)
     # summary(lm(np$array(sol_gd)~np$array(sol_exact)))
@@ -739,6 +736,7 @@ OptiConjoint       <-          function(
   # print time of jacobian calculation
   # remember, the first three entries of output are:
   # Qhat_population, Qhat, Qhat_dag
+  vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
   pi_star_numeric <- np$array( pi_star_full )
@@ -746,9 +744,7 @@ OptiConjoint       <-          function(
   # 1*(  civ[1] <= trueQ & civ[2] >= trueQ)
 
   # drop the q part
-  if(diff == T){
-    pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] )
-  }
+  if(diff == T){ pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] ) }
   if(diff == F){
     take_indices <- 1:length( pi_star_numeric )
     if(use_gd){ take_indices <- 1:(length(pi_star_numeric)/2+1)  }
@@ -818,11 +814,10 @@ OptiConjoint       <-          function(
           names(ret_) <- names(pi_star_list[[k_]])[zer]
           return(    ret_   )   })
        return(l_) })
+    names(bound_) <- paste("k",1:length(bound_),sep="")
     if(sign_ == -1){ lowerList <- bound_ }
     if(sign_ == 1){ upperList <- bound_ }
   }
-
-  names(upperList) <- names(lowerList) <- paste("k",1:length(lowerList),sep="")
 
   if(!diff){
     pi_star_red_dag <- pi_star_red_ast <- pi_star_numeric
