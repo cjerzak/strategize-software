@@ -42,8 +42,7 @@ getMultinomialSamp <- function(pi_star_value, baseSeed){
 
     # get t samp
     T_star_samp_reduced <- tapply(1:length(d_locator_use),d_locator_use,function(zer){
-      zer <- ai(  zer  )
-      pi_selection <- jnp$take(pi_star_value, jnp$array(n2int(zer-1L)),0L)
+      pi_selection <- jnp$take(pi_star_value, jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
 
       # add additional entry if implicit t ype
       if(ParameterizationType == "Implicit"){
