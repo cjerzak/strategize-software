@@ -540,8 +540,7 @@ OptiConjoint       <-          function(
   print("Defining gd function...")
   {
     # bring functions into env and compile as needed
-    environment(getMultinomialSamp) <- environment()
-    getMultinomialSamp_jit <- jax$jit( getMultinomialSamp )
+    environment(getMultinomialSamp) <- environment(); getMultinomialSamp <- jax$jit( getMultinomialSamp )
 
     environment(getPiStar_gd) <- environment()
   }
@@ -621,14 +620,57 @@ OptiConjoint       <-          function(
     if(!MaxMin & diff){QFXN <- getQStar_diff_SingleGroup}
     if(MaxMin & diff){QFXN <- getQStar_diff_MultiGroup}
 
-    # setup FullGetQStar_
-    environment(FullGetQStar_) <- environment()
-    FullGetQStar_ <- jax$jit(FullGetQStar_)
+    # setup functions
+    environment(FullGetQStar_) <- environment(); FullGetQStar_ <- jax$jit(FullGetQStar_)
     dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(0L)))
     dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
 
+    environment(QMonteIter_optimize) <- environment(); QMonteIter_optimize <- jax$jit( QMonteIter_optimize )
+    VectorizedQMonteLoop_optimize <- jax$jit( jax$vmap(function(TSAMP_ast, TSAMP_dag,
+                                                                TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
+
+                                                                a_i_ast,
+                                                                a_i_dag,
+                                                                INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                                                INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                                                INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                                                INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                                                P_VEC_FULL_ast_,
+                                                                P_VEC_FULL_dag_,
+                                                                LAMBDA_,
+                                                                Q_SIGN,
+                                                                SEED_IN_LOOP){
+      QMonteIter_optimize(TSAMP_ast, TSAMP_dag,
+                          TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
+
+                          a_i_ast,
+                          a_i_dag,
+                          INTERCEPT_ast_, COEFFICIENTS_ast_,
+                          INTERCEPT_dag_, COEFFICIENTS_dag_,
+                          INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                          INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                          P_VEC_FULL_ast_,
+                          P_VEC_FULL_dag_,
+                          LAMBDA_,
+                          Q_SIGN,
+                          SEED_IN_LOOP)
+    }, eval(parse(text = paste("list(1L,1L,1L,1L,",
+                               paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
+
+    environment(QMonteIter) <- environment(); QMonteIter <- jax$jit( QMonteIter )
+    VectorizedQMonteLoop <- jax$jit( jax$vmap(function(pi_star_ast_f, pi_star_dag_f,
+                                                       INTERCEPT_ast_,
+                                                       COEFFICIENTS_ast_,
+                                                       INTERCEPT_dag_,
+                                                       COEFFICIENTS_dag_){
+      QMonteIter(pi_star_ast_f, pi_star_dag_f,
+                           INTERCEPT_ast_,
+                           COEFFICIENTS_ast_,
+                           INTERCEPT_dag_,
+                           COEFFICIENTS_dag_)
+    }, list(1L,1L,NULL,NULL,NULL,NULL)))
+
     gd_full_simplex <- T
-    browser()
     q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
                              REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag,
@@ -639,13 +681,12 @@ OptiConjoint       <-          function(
                              LAMBDA = lambda_jnp,
                              BASE_SEED = jax_seed,
                              functionList = list(dQ_da_dag, dQ_da_ast,
-                                                 QFXN, getMultinomialSamp_jit),
-                             functionReturn = T,  quiet = F
-                             )
+                                                 QFXN, getMultinomialSamp),
+                             functionReturn = T,  quiet = F)
     dQ_da_ast <- q_with_pi_star_full[[2]][[1]]
     dQ_da_dag <- q_with_pi_star_full[[2]][[2]]
     QFXN <- q_with_pi_star_full[[2]][[3]]
-    getMultinomialSamp_jit <- q_with_pi_star_full[[2]][[4]]
+    getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
 
     q_with_pi_star_full <- q_with_pi_star_full[[1]]
     q_with_pi_star_full <- jnp$array(q_with_pi_star_full, dtj)
@@ -659,39 +700,6 @@ OptiConjoint       <-          function(
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
 
-    environment(QMonteIter) <- environment()
-    QMonteIter <- jax$jit( QMonteIter )
-    VectorizedQMonteLoop <- jax$jit( jax$vmap(function(TSAMP_ast, TSAMP_dag,
-                                                       TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
-
-                                                       a_i_ast,
-                                                       a_i_dag,
-                                                       INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                                       INTERCEPT_dag_, COEFFICIENTS_dag_,
-                                                       INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                                                       INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                                                       P_VEC_FULL_ast_,
-                                                       P_VEC_FULL_dag_,
-                                                       LAMBDA_,
-                                                       Q_SIGN,
-                                                       SEED_IN_LOOP){
-      QMonteIter(TSAMP_ast, TSAMP_dag,
-                 TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
-
-                 a_i_ast,
-                 a_i_dag,
-                 INTERCEPT_ast_, COEFFICIENTS_ast_,
-                 INTERCEPT_dag_, COEFFICIENTS_dag_,
-                 INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                 INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                 P_VEC_FULL_ast_,
-                 P_VEC_FULL_dag_,
-                 LAMBDA_,
-                 Q_SIGN,
-                 SEED_IN_LOOP)
-    }, eval(parse(text = paste("list(1L,1L,1L,1L,",
-                               paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
-
     gd_full_simplex <- F
     pi_star_red <- getPiStar_gd(
                         REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
@@ -703,7 +711,7 @@ OptiConjoint       <-          function(
                         LAMBDA = lambda_jnp,
                         BASE_SEED = jax_seed,
                         functionList = list(dQ_da_dag, dQ_da_ast,
-                                            QFXN, getMultinomialSamp_jit),
+                                            QFXN, getMultinomialSamp),
                         functionReturn = F
                         )
     pi_star_red <- np$array(pi_star_red)[-c(1:3),]
@@ -740,9 +748,7 @@ OptiConjoint       <-          function(
       # For matrices that are near-square, jacfwd probably has an edge over jacrev.
       # also, try the jacobian matrix product (you don't need full jacobian, just it's transformation)
       # now, compute jacobian matrix product
-      # 137.145   2.419 136.443
-      #   5.828   0.138   3.797
-      jacobian_mat <- jax$jacrev(getPiStar_gd, 0L:3L)(  # based on tests, jacrev is faster than jacfwd or jacobian
+      jacobian_mat <- jax$jacrev(getPiStar_gd, 0L:3L)(
                                           REGRESSION_PARAMS_jax_ast,
                                           REGRESSION_PARAMS_jax_dag,
                                           REGRESSION_PARAMS_jax_ast0,
@@ -752,8 +758,8 @@ OptiConjoint       <-          function(
                                           lambda_jnp,
                                           jax_seed,
                                           functionList = list(dQ_da_dag, dQ_da_ast,
-                                                              QFXN, getMultinomialSamp_jit),
-                                          functionReturn = F
+                                                              QFXN, getMultinomialSamp),
+                                          functionReturn = F, quiet = F
                                           )
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
         np$array( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })

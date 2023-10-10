@@ -8,11 +8,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           BASE_SEED,
                           functionList,
                           functionReturn = T, quiet = T){
-  # set functions
   dQ_da_ast <- functionList[[1]]
   dQ_da_dag <- functionList[[2]]
   QFXN <- functionList[[3]]
-  getMultinomialSamp_jit <- functionList[[4]]
+  getMultinomialSamp <- functionList[[4]]
 
   REGRESSION_PARAMETERS_ast <- gather_fxn(REGRESSION_PARAMETERS_ast)
   INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
@@ -84,7 +83,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
                                LAMBDA, jnp$array(1.),
-                               jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer( i) ) ) ) )
+                               jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer( i+2) ) ) ) )
       if(i==1){ inv_learning_rate_da_ast <- jnp$maximum(jnp$array(0.001), jnp$multiply(10, jnp$square(jnp$linalg$norm(grad_i_ast))))  }
       if(!UseOptax){
         inv_learning_rate_da_ast <-  jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
@@ -107,51 +106,47 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   # save output
   {
     pi_star_ast_full_simplex_ <- getPrettyPi( pi_star_ast_ <- a2Simplex_diff_use( a_i_ast ) )
-    pi_star_dag_full_simplex_ <- getPrettyPi( pi_star_dag_ <- a2Simplex_diff_use( a_i_dag ))
+    pi_star_dag_full_simplex_ <- getPrettyPi( pi_star_dag_ <- a2Simplex_diff_use( a_i_dag ) )
     doMonte_Q <- ifelse(glm_family == "gaussian", yes = F, no = T)
     nMonte_Q <- ifelse(glm_family == "gaussian", yes = 1, no = nMonte_Qglm)
-    q_star_f <- jnp$array(0.)
-
-
-    browser()
-
-    for(monti_ii in 1:nMonte_Q){
+    pi_star_ast_f_all <- jnp$concatenate(sapply(1:nMonte_Q, function(monti_ii){
       if( !doMonte_Q ){
         pi_star_ast_f <- pi_star_ast_
+      }
+      if( doMonte_Q ){
+        SEED_IN_LOOP_ii <- jnp$multiply(jnp$array(as.integer(monti_ii)),jnp$array(345155L))
+        TSAMP_ast <- getMultinomialSamp(pi_star_ast_, baseSeed = jnp$add(jnp$array(100L),SEED_IN_LOOP_ii))
+        pi_star_ast_f <- TSAMP_ast
+      }
+      return(pi_star_ast_f)
+    }), 1L)
+    pi_star_dag_f_all <- jnp$concatenate(sapply(1:nMonte_Q, function(monti_ii){
+      if( !doMonte_Q ){
         pi_star_dag_f <- pi_star_dag_
       }
       if( doMonte_Q ){
         SEED_IN_LOOP_ii <- jnp$multiply(jnp$array(as.integer(monti_ii)),jnp$array(345155L))
-        TSAMP_ast <- getMultinomialSamp_jit(pi_star_ast_, baseSeed = jnp$add(jnp$array(100L),SEED_IN_LOOP_ii))
-        TSAMP_dag <- getMultinomialSamp_jit(pi_star_dag_, baseSeed = jnp$add(jnp$array(201L),SEED_IN_LOOP_ii))
-        pi_star_ast_f <- TSAMP_ast
+        TSAMP_dag <- getMultinomialSamp(pi_star_dag_, baseSeed = jnp$add(jnp$array(201L),SEED_IN_LOOP_ii))
         pi_star_dag_f <- TSAMP_dag
       }
+      return(pi_star_dag_f)
+    }), 1L)
 
-      if( diff ){
-        q_star_ <- QFXN(pi_star_ast_f, #pi_star_ast
-                        pi_star_dag_f, #pi_star_dag
-                        INTERCEPT_ast_,  #EST_INTERCEPT_tf_ast
-                        COEFFICIENTS_ast_, #EST_COEFFICIENTS_tf_ast
-                        INTERCEPT_dag_,  #EST_INTERCEPT_tf_dag
-                        COEFFICIENTS_dag_ #EST_COEFFICIENTS_tf_dag
-                        )
-      }
-      if( !diff  ){
-        q_star_ <- QFXN(pi_star_ast_f, #pi_star
-                        INTERCEPT_ast_, # EST_INTERCEPT_tf
-                        COEFFICIENTS_ast_ # EST_COEFFICIENTS_tf =
-                        )
-      }
-      q_star_f <- jnp$add(q_star_f,q_star_)
-    }
-    q_star_f <- jnp$divide(q_star_f, nMonte_Q)
+    q_star_f <- VectorizedQMonteLoop(pi_star_ast_f_all, pi_star_dag_f_all,
+                                      INTERCEPT_ast_,
+                                      COEFFICIENTS_ast_,
+                                      INTERCEPT_dag_,
+                                      COEFFICIENTS_dag_)
 
-    if( gd_full_simplex == T){ ret_array <- jnp$concatenate(list( q_star_, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ ) ) }
-    if( gd_full_simplex == F){ ret_array <- jnp$concatenate(list( q_star_, pi_star_ast_, pi_star_dag_ ) ) }
+    # sum and divide to form means
+    q_star_f <- jnp$expand_dims(jnp$divide(jnp$sum(q_star_f,0L), nMonte_Q),1L)
+
+    # setup restuls for returning
+    if( gd_full_simplex == T){ ret_array <- jnp$concatenate(list( q_star_f, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ ) ) }
+    if( gd_full_simplex == F){ ret_array <- jnp$concatenate(list( q_star_f, pi_star_ast_, pi_star_dag_ ) ) }
     if(functionReturn == T){ ret_array <- list(ret_array,
-                                            list(dQ_da_ast, dQ_da_dag, QFXN, getMultinomialSamp_jit)
+                                            list(dQ_da_ast, dQ_da_dag, QFXN, getMultinomialSamp)
                                             ) }
-    return( ret_array  ) # ret_array$shape
+    return( ret_array  )
   }
 }
