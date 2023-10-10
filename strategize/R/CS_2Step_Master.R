@@ -545,7 +545,8 @@ OptiConjoint       <-          function(
   print("Defining gd function...")
   {
     # bring functions into env and compile as needed
-    getMultinomialSamp <<- jax$jit( getMultinomialSamp )
+    environment(getMultinomialSamp) <- environment()
+    getMultinomialSamp_jit <- jax$jit( getMultinomialSamp )
 
     environment(getPiStar_gd) <- environment()
   }
@@ -620,6 +621,13 @@ OptiConjoint       <-          function(
     # plot( REGRESSION_PARAMS_jax$to_py(),REGRESSION_PARAMS_jax_dag$to_py() );abline(a=0,b=1)
     # plot(p_vec_full_dot_jnp$to_py(), p_vec_full_dag_jnp$to_py());abline(a=0,b=1)
 
+    # setup FullGetQStar_
+    environment(FullGetQStar_) <- environment()
+    FullGetQStar_ <- jax$jit(FullGetQStar_)
+    dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(0L)))
+    dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
+
+
     # check the multinomial sampling
     # plot(getMultinomialSamp(p_vec_jnp, baseSeed = jnp$array(55L))$to_py())
     gd_full_simplex <- T
@@ -638,15 +646,14 @@ OptiConjoint       <-          function(
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
       ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )), yes = NA) }) )
-    try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log =""),T)
+    try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y"),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
       ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )),yes=NA) }) ),T)
-    try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)"),T)
+    try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
 
     gd_full_simplex <- F
-    browser()
     pi_star_red <- getPiStar_gd(
                         REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
                         REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag,
@@ -656,7 +663,7 @@ OptiConjoint       <-          function(
                         P_VEC_FULL_dag = p_vec_full_dag_jnp,
                         LAMBDA = lambda_jnp,
                         BASE_SEED = jax_seed)
-    pi_star_red <- (pi_star_red$to_py()[-c(1:3),])
+    pi_star_red <- np$array(pi_star_red)[-c(1:3),]
     pi_star_red_dag <- jnp$array(as.matrix(pi_star_red[-c(1:(length(pi_star_red)/2))]))
     pi_star_red_ast <- jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
 
@@ -669,7 +676,7 @@ OptiConjoint       <-          function(
     jacobian_time <- ""
     jacobian_mat_gd <- jacobian_mat <- matrix(0,
                               ncol = 4*REGRESSION_PARAMS_jax_ast$shape[[1]],
-                              nrow = q_with_pi_star_full$shape$as_list()[1])
+                              nrow = q_with_pi_star_full$shape[[1]])
     diag(jacobian_mat_gd) <- diag(jacobian_mat) <- 1
     vcov_OutcomeModel_concat <- matrix(0,
                                        nrow = nrow(vcov_OutcomeModel_dag)*4,
@@ -677,7 +684,7 @@ OptiConjoint       <-          function(
     if(ComputeSEs){
       gd_full_simplex <- T
       jacobian_time <- system.time(jacobian_mat <-
-                          jax$jacobian(getPiStar_gd,0L:3L)(
+                          jax$jacobian(getPiStar_gd, 0L:3L)(
                                           REGRESSION_PARAMS_jax_ast,
                                           REGRESSION_PARAMS_jax_dag,
                                           REGRESSION_PARAMS_jax_ast0,
