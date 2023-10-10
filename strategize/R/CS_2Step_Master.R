@@ -67,7 +67,7 @@ OptiConjoint       <-          function(
     JaxKey <- function(int_){ jax$random$PRNGKey(int_)}
 
     # import computational modules
-    jax <- reticulate::import("jax",as="jax")
+    jax <- reticulate::import("jax")
     oryx <- reticulate::import("oryx")
     jnp <- reticulate::import("jax.numpy")
     np <- reticulate::import("numpy")
@@ -75,8 +75,8 @@ OptiConjoint       <-          function(
     optax <- reticulate::import("optax")
 
     # setup numerical precision for delta method
-    dtj <- jnp$float64
-    jax$config$update("jax_enable_x64", T)
+    #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # turn on float64
+    dtj <- jnp$float32; jax$config$update("jax_enable_x64", F) # turn off float64
   }
   print("Done initializing computational environment!")
 
@@ -354,19 +354,15 @@ OptiConjoint       <-          function(
   getQStar_single <- compile_fxn( getQStar_single )
 
   # multiround material
-  {
-  for(UseSinglePop in ifelse(MaxMin, yes = list(c(F,T)), no = list(T))[[1]]){
+  for(DisaggreateQ in ifelse(MaxMin, yes = list(c(F,T)), no = list(F))[[1]]){
     # general specifications
-    getQStar_diff_R <- paste(deparse(getQStar_diff_R),collapse="\n")
-    getQStar_diff_R <- gsub(getQStar_diff_R, pattern = "SINGLE_PROP_KEY", replace = sprintf("T == !%s",UseSinglePop))
-    getQStar_diff_R <- eval( parse( text = getQStar_diff_R ),envir = evaluation_environment )
+    getQStar_diff_ <- paste(deparse(getQStar_diff_BASE),collapse="\n")
+    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", replace = sprintf("T == %s", DisaggreateQ))
+    getQStar_diff_ <- eval( parse( text = getQStar_diff_ ),envir = evaluation_environment )
 
     # specifications for case
-    if(UseSinglePop){ getQStar_diff_R_multi <- getQStar_diff_R; name_ <-"Single" }
-    if(!UseSinglePop){ getQStar_diff_R <- getQStar_diff_R; name_ <-"Multi" }
-    eval(parse(text = sprintf("getQStar_diff_R_%sGroup <- getQStar_diff_R",name_)))
-    eval(parse(text = sprintf("getQStar_diff_%sGroup <- compile_fxn( getQStar_diff_R_%sGroup )",name_,name_)))
-  }
+    name_ <- ifelse(DisaggreateQ, yes = "Multi", no = "Single")
+    eval(parse(text = sprintf("getQStar_diff_%sGroup <- compile_fxn( getQStar_diff_ )", name_, name_)))
   }
 
   # Pretty Pi function
@@ -605,6 +601,7 @@ OptiConjoint       <-          function(
     vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast
     q_star_exact <- q_star <- np$array( jnp$take(results_vec, 0L) )
     pi_star_full <- np$array( jnp$take(results_vec, jnp$array(1L:(length(results_vec)-1L))) )
+    vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   }
 
   if(use_gd){
@@ -621,6 +618,11 @@ OptiConjoint       <-          function(
     # plot( REGRESSION_PARAMS_jax$to_py(),REGRESSION_PARAMS_jax_dag$to_py() );abline(a=0,b=1)
     # plot(p_vec_full_dot_jnp$to_py(), p_vec_full_dag_jnp$to_py());abline(a=0,b=1)
 
+    # define main Q function in different cases
+    if(!MaxMin & !diff){QFXN <- getQStar_single}
+    if(!MaxMin & diff){QFXN <- getQStar_diff_SingleGroup}
+    if(MaxMin & diff){QFXN <- getQStar_diff_MultiGroup}
+
     # setup FullGetQStar_
     environment(FullGetQStar_) <- environment()
     FullGetQStar_ <- jax$jit(FullGetQStar_)
@@ -629,9 +631,10 @@ OptiConjoint       <-          function(
 
 
     # check the multinomial sampling
-    # plot(getMultinomialSamp(p_vec_jnp, baseSeed = jnp$array(55L))$to_py())
+    # plot(np$array(getMultinomialSamp_jit(p_vec_jnp, baseSeed = jnp$array(as.integer(runif(1,1,1000))))))
     gd_full_simplex <- T
-    gd_time <- system.time( q_with_pi_star_full <- getPiStar_gd(
+    browser()
+    q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
                              REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag,
                              REGRESSION_PARAMETERS_ast0 = REGRESSION_PARAMS_jax_ast0,
@@ -639,10 +642,16 @@ OptiConjoint       <-          function(
                              P_VEC_FULL_ast = p_vec_full_ast_jnp,
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
                              LAMBDA = lambda_jnp,
-                             BASE_SEED = jax_seed ) )
+                             BASE_SEED = jax_seed,
+                             functionList = list(dQ_da_dag, dQ_da_ast,
+                                                 QFXN, getMultinomialSamp_jit),
+                             functionReturn = T
+                             )
+    dQ_da_dag <- q_with_pi_star_full[[2]][[1]]
+    dQ_da_ast <- q_with_pi_star_full[[2]][[1]]
+    q_with_pi_star_full <- q_with_pi_star_full[[1]]
     q_with_pi_star_full <- jnp$array(q_with_pi_star_full, dtj)
     # as.matrix(q_with_pi_star_full)[1:3]
-    print("Time GD: ");print(gd_time)
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
       ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )), yes = NA) }) )
@@ -662,7 +671,11 @@ OptiConjoint       <-          function(
                         P_VEC_FULL_ast = p_vec_full_ast_jnp,
                         P_VEC_FULL_dag = p_vec_full_dag_jnp,
                         LAMBDA = lambda_jnp,
-                        BASE_SEED = jax_seed)
+                        BASE_SEED = jax_seed,
+                        return_fxns = F,
+                        dQ_da_dag = dQ_da_dag,
+                        dQ_da_ast = dQ_da_ast
+                        )
     pi_star_red <- np$array(pi_star_red)[-c(1:3),]
     pi_star_red_dag <- jnp$array(as.matrix(pi_star_red[-c(1:(length(pi_star_red)/2))]))
     pi_star_red_ast <- jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -683,6 +696,21 @@ OptiConjoint       <-          function(
                                        ncol = nrow(vcov_OutcomeModel_dag)*4)
     if(ComputeSEs){
       gd_full_simplex <- T
+      # jacfwd uses forward-mode automatic differentiation, which is more efficient for “tall” Jacobian matrices
+      # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
+      # For matrices that are near-square, jacfwd probably has an edge over jacrev.
+      # also, try the jacobian matrix product (you don't need full jacobian, just it's transformation)
+
+      # first, compute vcov
+      vcov_OutcomeModel_concat <- list(
+        vcov_OutcomeModel_ast  ,
+        vcov_OutcomeModel_dag  ,
+        vcov_OutcomeModel_ast0 ,
+        vcov_OutcomeModel_dag0  )
+      vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
+      vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
+
+      # now, compute jacobian matrix product
       jacobian_time <- system.time(jacobian_mat <-
                           jax$jacobian(getPiStar_gd, 0L:3L)(
                                           REGRESSION_PARAMS_jax_ast,
@@ -692,17 +720,15 @@ OptiConjoint       <-          function(
                                           p_vec_full_ast_jnp,
                                           p_vec_full_dag_jnp,
                                           lambda_jnp,
-                                          jax_seed))
+                                          jax_seed,
+                                          return_fxns = F,
+                                          dQ_da_dag = dQ_da_dag,
+                                          dQ_da_ast = dQ_da_ast))
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
         as.matrix( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
-      vcov_OutcomeModel_concat <- list(
-                     vcov_OutcomeModel_ast  ,
-                     vcov_OutcomeModel_dag  ,
-                     vcov_OutcomeModel_ast0 ,
-                     vcov_OutcomeModel_dag0  )
-      vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
-      vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
+
+      vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
       #jacobian_mat_gd <- jacobian_mat <- as.matrix( jnp$squeeze(jnp$squeeze(jnp$array(jacobian_mat,dtj),1L),2L) )
       print("Time Jacobian of GD Solution: ");print(jacobian_time)
     }
@@ -713,7 +739,6 @@ OptiConjoint       <-          function(
   # print time of jacobian calculation
   # remember, the first three entries of output are:
   # Qhat_population, Qhat, Qhat_dag
-  vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
   pi_star_numeric <- np$array( pi_star_full )
@@ -815,7 +840,8 @@ OptiConjoint       <-          function(
                   "factor_levels" = factor_levels,
                   "PiSEStar_vec" = pi_star_se,
                   "pi_star_ave" = pi_star_ave,
-                  "q_ave" = q_ave, "q_dag_ave" = q_dag_ave,
+                  "q_ave" = q_ave,
+                  "q_dag_ave" = q_dag_ave,
                   "PiStar_lb" = lowerList,
                   "PiStar_ub" = upperList,
                   "Q_point" = c(q_star),
@@ -825,9 +851,7 @@ OptiConjoint       <-          function(
                   "p_list" = p_list,
 
                   # reconstruct q info
-                  "Qfxn" = ifelse(MaxMin,
-                                  yes = list(getQStar_diff_MultiGroup),
-                                  no = list(getQStar_diff_SingleGroup))[[1]],
+                  "Qfxn" = QFXN,
 
                   'p_vec_full_ast_jnp' = p_vec_full_ast_jnp,
                   'p_vec_full_dag_jnp' = p_vec_full_dag_jnp,
