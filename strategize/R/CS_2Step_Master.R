@@ -336,7 +336,7 @@ OptiConjoint       <-          function(
       tmp <- jnp$divide(  exp_a_zer, jnp$sum(exp_a_zer))
       return( list( tmp ) ) })
     names( aOnSimplex ) <- NULL
-    return(  jnp$expand_dims(jnp$stack(aOnSimplex,0L),1L) )
+    return( jnp$concatenate(aOnSimplex,0L)  )
   })
   OneTf <- jnp$array(matrix(1L),dtj)
   OneTf_flat <- jnp$array(1L,dtj)
@@ -347,8 +347,8 @@ OptiConjoint       <-          function(
   a2Simplex_optim <- ifelse( holdout_indicator == 1 ,
                              yes = list(a2Simplex),
                              no = list(a2FullSimplex) )[[1]]
+  pi_star_value_init_ast <- a2Simplex_optim( a_vec_init_ast ) # a_ = a_vec_init_ast
   pi_star_value_init_dag <- a2Simplex_optim( a_vec_init_dag )
-  pi_star_value_init_ast <- a2Simplex_optim( a_vec_init_ast )
 
   # define Q functions
   getQStar_single <- compile_fxn( getQStar_single )

@@ -126,7 +126,6 @@ cv.OptiConjoint       <-          function(
           diff = diff,
           MaxMin = MaxMin,
           conda_env = conda_env,
-          conda_loc = conda_loc,
           conda_env_required = conda_env_required)
         if("try-error" %in% class(Qoptimized__[[split_]])){ stop("Failed in Qoptimized__[[split_]]!");browser() }
       }
@@ -203,7 +202,6 @@ cv.OptiConjoint       <-          function(
                                 diff = diff,
                                 MaxMin = MaxMin,
                                 conda_env = conda_env,
-                                conda_loc = conda_loc,
                                 conda_env_required = conda_env_required)
     print("Done with final OptiConjoint run!")
   }
@@ -212,5 +210,5 @@ cv.OptiConjoint       <-          function(
   return(  c( Qoptimized_,
             "lambda" = lambda__,
             "qStar_lambda" = qStar_lambda,
-            "OptiConjointCVInfo" = list(outsamp_results )) )
+            "CVInfo" = list(outsamp_results )) )
 }

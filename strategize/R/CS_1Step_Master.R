@@ -36,7 +36,6 @@ OneStep.OptiConjoint <- function(
                               pi_init_vec = NULL,
                               constrain_ub = NULL,
                               nLambda = 10,
-                              useVariational = F,
                               penaltyType = "LogMaxProb",
                               testFraction = 0.5,
                               log_PrW = NULL,
@@ -64,24 +63,19 @@ OneStep.OptiConjoint <- function(
                               lambda_coef = 0.0001,
                               nFolds = 3, batch_size = 50,
                               confLevel = 0.90,
+                              conda_env = NULL,
+                              conda_env_required = F,
                               hypotheticalNInVarObj=NULL){
   # load in packages
   {
-    # tensorflow
-    #library(tensorflow); library(keras)
-    try(reticulate::use_python(python = "/Users/cjerzak/miniforge3/bin/python", required = T),T)
-    try(reticulate::use_condaenv("tensorflow_m1",required = T, conda = "~/miniforge3/bin/conda"), T)
-    #try(tf$config$experimental$set_memory_growth(tf$config$list_physical_devices('GPU')[[1]], T),T)
-    #try(tfp <- tf_probability(),T)
-    #try(tfd <- tfp$distributions,T)
-    #tf$random$set_seed(as.integer(runif(1,0,100000)))# critical - MUST SET SEED FOR ALL RANDOM GENERATION TO WORK
-    #print(tf$version$VERSION)
-
-    # jax
-    jax <- tensorflow::import("jax",as="jax")
+    # conda_env <- "tensorflow_m1" ; conda_env_required <- T
+    if(!is.null(conda_env)){
+      try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
+    }
+    jax <- tensorflow::import("jax")
     oryx <- tensorflow::import("oryx")
     jnp <- tensorflow::import("jax.numpy")
-    tf2jax <- tensorflow::import("tf2jax",as="tf2jax")
+    np <- tensorflow::import("numpy")
   }
 
   # define evaluation environment
@@ -207,8 +201,7 @@ OneStep.OptiConjoint <- function(
         TARGET_EPSILON_PI <- 0.01  #/ exp( length( p_list ) )
         CLUSTER_EPSILON <- 0.1
 
-        if(useVariational == T){ pi_init_type <- "rnorm" }
-        if(useVariational == F){ pi_init_type <- "runif" }
+        pi_init_type <- "runif"
         pi_init_list = replicate(nFolds+1,replicate(K,lapply(p_list,function(ze){
           if(normType == "alr"){systemit_init <- tmp <- ((c(rev(c(compositions::alr(t(rev(ze))))))))}
           if(normType == "ilr"){systemit_init <- tmp <- ((c((c(compositions::ilr(t((ze))))))))}
@@ -336,8 +329,8 @@ OneStep.OptiConjoint <- function(
       hypotheticalProbList_full <- hypotheticalProbList_split1 <- hypotheticalProbList
 
       # Get values from tf
-      Qhat_tf <- tf$constant( getQ_fxn(  split2_indices  ), tf$float32)
-      Qhat <- as.numeric( Qhat_tf )
+      Qhat_tf <- jnp$array( getQ_fxn(  split2_indices  ), jnp$float32)
+      Qhat <- np$array( Qhat_tf )
       Qhat_split1 <- Qhat_all <- Q_interval_split2 <- Q_interval_split1 <- Q_se_exact <- NULL
       Qhat_split2<-list();Qhat_split2$Qest <- as.numeric(Qhat_tf)
     }
