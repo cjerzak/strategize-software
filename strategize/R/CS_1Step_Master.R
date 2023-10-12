@@ -87,7 +87,6 @@ OneStep.OptiConjoint <- function(
   if(automatic_scaling == T){  X <- scale ( X  )  }
 
   useHajek <- T
-  if(openBrowser){browser()}
   if(any(unlist(lapply(p_list,class)) == "table")){
     for(ij in 1:length(p_list)){
       n_ <- names(p_list[[ij]] )
@@ -100,8 +99,8 @@ OneStep.OptiConjoint <- function(
   # SCALE Y
   mean_Y <- 0; sd_Y <- 1
   if(automatic_scaling == T){
-  mean_Y <- mean(Y); sd_Y <- sd(Y)
-  Y <-   (Y -  mean_Y) / sd_Y
+    mean_Y <- mean(Y); sd_Y <- sd(Y)
+    Y <-   (Y -  mean_Y) / sd_Y
   }
 
   FactorsMat_numeric <- sapply(1:ncol(W),function(ze){ match(W[,ze], names(p_list[[ze]]))  })
@@ -139,12 +138,10 @@ OneStep.OptiConjoint <- function(
   if(is.null(hypotheticalProbList)){
 
     # setup for m estimation
-    {
-      forceHajek <- T
-      zStar <- abs(qnorm((1-confLevel)/2))
-      varHat <- mean( (Y - (muHat <- mean(Y)) )^2   )
-      n_target <- ifelse(is.null(hypotheticalNInVarObj), yes = length(  split1_indices  ), no = hypotheticalNInVarObj)
-    }
+    forceHajek <- T
+    zStar <- abs(qnorm((1-confLevel)/2))
+    varHat <- mean( (Y - (muHat <- mean(Y)) )^2   )
+    n_target <- ifelse(is.null(hypotheticalNInVarObj), yes = length(  split1_indices  ), no = hypotheticalNInVarObj)
 
     # define number of treatment combinations
     treatment_combs <- exp(log_treatment_combs  <- sum(log(sapply(1:ncol(W),function(ze){ length(p_list[[ze]]) }) )))
@@ -177,7 +174,7 @@ OneStep.OptiConjoint <- function(
     sigma2_hat_split2 <- var( Yobs_split2)
 
     # obtain pr(w) so we don't need to recompute it at every step
-    if(is.null(log_PrW)){
+    if( is.null(log_PrW)  ){
       log_PrW    <-   as.vector(computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
                                                             Yobs_internal=Y,
                                                             hypotheticalProbList_internal = p_list,
@@ -195,16 +192,12 @@ OneStep.OptiConjoint <- function(
     print("Initialize pi values...")
     {
       if(is.null(pi_init_vec)){
-        normType <- "alr"
-        #normType <- "ilr"
-        print(sprintf("Using %s prob. norm.",toupper(normType)))
         TARGET_EPSILON_PI <- 0.01  #/ exp( length( p_list ) )
         CLUSTER_EPSILON <- 0.1
 
         pi_init_type <- "runif"
         pi_init_list = replicate(nFolds+1,replicate(K,lapply(p_list,function(ze){
-          if(normType == "alr"){systemit_init <- tmp <- ((c(rev(c(compositions::alr(t(rev(ze))))))))}
-          if(normType == "ilr"){systemit_init <- tmp <- ((c((c(compositions::ilr(t((ze))))))))}
+          systemit_init <- tmp <- ((c(rev(c(compositions::alr(t(rev(ze))))))))
           p_val <- prop.table(exp(ze))
           bounds_seq <- seq(0.001,0.25,length.out=100)
           epsilon_penalty_seq <- sapply(bounds_seq,function(b_){
@@ -212,13 +205,8 @@ OneStep.OptiConjoint <- function(
               {
                 if(pi_init_type == "runif"){ log_pi <- tmp + runif(length(tmp),min = -b_,  max = b_)}
                 if(pi_init_type == "rnorm"){ log_pi <- tmp + rnorm(length(tmp),mean = 0, sd = b_) }
-                if(normType == "alr"){
-                  log_pi <- c(0,log_pi)
-                  pi_val <- prop.table(exp(log_pi))
-                }
-                if(normType == "ilr"){
-                  pi_val <- f2n(compositions::ilrInv(t((log_pi))))
-                }
+                log_pi <- c(0,log_pi)
+                pi_val <- prop.table(exp(log_pi))
               }
               #epsilon_penalty <- max(abs(pi_val  - p_val))
               epsilon_penalty <- max( (pi_val  - p_val) )
@@ -248,7 +236,7 @@ OneStep.OptiConjoint <- function(
     # main cross-validation routine
     optim_max_hajek_list <- sapply(1:(length(lambda_seq)+1),function(er){
       list(matrix(NA,nrow = length( pi_init_vec), ncol = nFolds)) })
-    if ( length(lambda_seq) == 1){
+    if ( length(lambda_seq) == 1 ){
       LAMBDA_selected <- LAMBDA_ <- lambda_seq;
 
       FactorsMat_numeric_IN <- FactorsMat1_numeric <- FactorsMat2_numeric <- FactorsMat_numeric
@@ -291,10 +279,10 @@ OneStep.OptiConjoint <- function(
         ClassProbs <- as.array(  getClassProb(X) )
         performance_mat <- as.data.frame(
                           cbind("lambda" = REGULARIZATION_LAMBDA_SEQ_ORIG,
-                                "Q_out" = colMeans(performance_matrix_out),
-                                "Qse_out" = apply(performance_matrix_out,2,getSE),
-                                "Q_in" = colMeans(performance_matrix_in),
-                                "Qse_in" = apply(performance_matrix_in,2,getSE)) )
+                                "Qhat" = colMeans(performance_matrix_out),
+                                "Qse" = apply(performance_matrix_out,2,getSE)
+                                #"Q_in" = colMeans(performance_matrix_in), "Qse_in" = apply(performance_matrix_in,2,getSE))
+                                ))
         LAMBDA_ <- LAMBDA <- LAMBDA_selected
     }
     optim_max_hajek_split1 <- optim_max_hajek_full
@@ -368,7 +356,7 @@ OneStep.OptiConjoint <- function(
                "VarCov_ProbClust" = VarCov_ProbClust,
                "MarginalClusterProbEvolution"=marginalProb_m,
                "pi_init_next" = optim_max_hajek_full,
-               "performance_seq_mat" = performance_mat,
+               "CVInfo" = performance_mat,
                "optim_max_hajek_list" = optim_max_hajek_list,
                "PrXd_vec" = PrXd_vec,
                "X_factorized_complete"=ifelse(("X_factorized_complete" %in% ls()),yes=list(X_factorized_complete),no=list(NULL)),
