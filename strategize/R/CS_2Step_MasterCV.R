@@ -154,7 +154,7 @@ cv.OptiConjoint       <-          function(
       print(lambda_results_)
     }
     outsamp_results <- as.data.frame( t( do.call(cbind, lapply(outsamp_results,function(zer){zer[[1]]})) ) )
-    colnames(insamp_results) <- colnames(outsamp_results) <- c("lambda","Q","Qse")
+    colnames(insamp_results) <- colnames(outsamp_results) <- c("lambda","Qhat","Qse")
     # insight: in and out Q are dif when should be same - indexing off?
     #https://www.youtube.com/watch?v=AzwXNW6BYf0
     insamp_results <- as.data.frame( insamp_results )
