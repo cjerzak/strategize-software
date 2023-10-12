@@ -81,6 +81,7 @@ ml_build <- function(){
 
             # iterate over factors
             for(d__ in 1L:DFactors){
+              eval(parse(text=sprintf("av%sk%s <- ModelList_[[1]][[%s]][[%s]]", d__, k_,  k_, d__)))
               log_pidk <- jax$nn$log_softmax(jnp$concatenate(list( Zero1by1,
                                          eval(parse(text=sprintf("av%sk%s",d__, k_))) ),0L),axis = 0L)
               received_wd <- jnp$take(factorMat_, indices = d__ - 1L, axis = 1L)
@@ -115,7 +116,7 @@ ml_build <- function(){
   # define the class prob projection, the trainable vars, the baseline probs
   KFreeProbProj <- as.integer(K - 1L)
   b_proj <- 0.1
-  projectionList <- list()
+  ProjectionList <- list(jnp$array(0.))
   if(KFreeProbProj > 0){
     value_seq <- sapply(b_seq <- 10^seq(-10,1,length.out=100),function(b_){
        value_ <- mean(replicate(25,{
@@ -186,7 +187,6 @@ ml_build <- function(){
 
   # initialize
   initialize_avs()
-  browser()
 
   getPiList <- function(simplex=T,rename=T,return_SE = F,VarCov = NULL){
     FinalSEList <- FinalProbList <- eval(parse(text=paste("list(",paste(rep("list(),",times=K-1),collapse=""), "list())",collapse="")))
@@ -251,16 +251,18 @@ ml_build <- function(){
   # initial forward pass
   my_batch <- sample(1:length(Y), batch_size,replace=F)
   tmp_loss <- getProbRatio_tf(
+                         ModelList_ = list(AVSList, ProjectionList),
                          Y_ = tfConst(as.matrix(Y[my_batch])),
                          X_ = tfConst(X[my_batch,]),
                          factorMat_ = tfConst(FactorsMat_numeric_0Indexed[my_batch,],jnp$int32),
                          logProb_ = tfConst(as.matrix(log_PrW[my_batch])),
                          REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(lambda_seq[1])))
 
-  gradient_getLoss_tf <- jax$grad(getLoss_tf)
+  gradient_getLoss_tf <- jax$jit( jax$grad(getLoss_tf) )
 
-  # test
+  # test gradient
   gradient_init <- gradient_getLoss_tf(
+              list(AVSList, ProjectionList), # ModelList_ =
               tfConst(as.matrix(Y[my_batch])), # Y_ =
               tfConst(X[my_batch,]), # X_ =
               tfConst(FactorsMat_numeric_0Indexed[my_batch,],jnp$int32), # factorMat_ =
@@ -287,6 +289,7 @@ ml_build <- function(){
   #optimization_language <- "tf"
   optimization_language <- "jax"; adaptiveMomentum <- F
 
+  browser()
   # define training function - using tf
   trainStep <-  (function(y_,x_,f_,lp_,lambda_,applyGradients = T){
     if(is.null(dim(f_))){ f_ <- t( f_ );  x_ <- t( x_ ) }
