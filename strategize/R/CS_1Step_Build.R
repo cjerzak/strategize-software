@@ -151,7 +151,6 @@ ml_build <- function(){
                                                                                     jnp$array(X,jnp$float32)))),7L),collapse=','),sep=""))
   }
 
-
   # initialize pd -  assignment probabilities for penalty and pr(w)
     DFactors <- length( nLevels_vec <- apply(W,2,function(l){length(unique(l))}) )
     for(d_ in 1:(DFactors <- length(nLevels_vec))){
@@ -188,31 +187,32 @@ ml_build <- function(){
   # initialize
   initialize_avs()
 
-  getPiList <- function(simplex=T,rename=T,return_SE = F,VarCov = NULL){
+  getPiDk <- function(AiDk){
+    pidk <- jax$nn$softmax(jnp$concatenate(list(jnp$array(as.matrix(0L)),
+                                                AiDk ),0L),0L)
+  }
+  Jacobian_getPiDk <- jax$jit(jax$jacobian( getPiDk ))
+  getPiList <- function(SimplexList, simplex=T,rename=T,return_SE = F,VarCov = NULL){
+    # SimplexList is not on the simplex, but is projected to the simplex
     FinalSEList <- FinalProbList <- eval(parse(text=paste("list(",paste(rep("list(),",times=K-1),collapse=""), "list())",collapse="")))
     for(k_ in 1:K){
      for(d_ in 1:length(nLevels_vec)){
-          pidk <- as.numeric(jnp$concatenate(list(as.matrix(0L),
-                            eval(parse(text=sprintf("av%sk%s_()",d_,k_))) ),0L)); pidk[1] <- NA
+          pidk <- np$array( getPiDk( SimplexList[[k_]][[d_]] )  )
+          #pidk[1] <- NA
          if(simplex == T){
-           with(tf$GradientTape(persistent = T) %as% tape, {
-              pidk <- jax$nn$softmax(jnp$concatenate(list(as.matrix(0L),
-                               eval(parse(text=sprintf("av%sk%s_()",d_,k_))) ),0L),0L)
-           })
-            dpidk_davdk <- as.matrix(jnp$squeeze(jnp$squeeze(
-                 tape$jacobian( pidk,
-                    eval(parse(text=sprintf("av%sk%s",d_, k_)))),1L),2L))
            if(!is.null(VarCov) & return_SE == T){
+              dpidk_davdk <- np$array(jnp$squeeze(jnp$squeeze(
+                Jacobian_getPiDk( SimplexList[[k_]][[d_]] ),1L), 2L))
+
               VarCov_subset <- grep(row.names(VarCov),
-                              pattern = sprintf("av%sk%s",d_, k_))
-              VarCov_subset <- as.matrix(VarCov[VarCov_subset,VarCov_subset])
-              # CHECK ORDERING (lexiconographical problem)
-             #if(ncol(VarCov_subset) >= 10){browser()}
-             dpidk_davdk <- as.matrix(dpidk_davdk)
-             VarCov_transformation <- (dpidk_davdk) %*% VarCov_subset %*% t(dpidk_davdk)
-             pidk_se <- sqrt(diag(VarCov_transformation))
+                              pattern = sprintf("k%sav%sd",k_, d_) )
+              VarCov_subset <- as.matrix(VarCov[VarCov_subset,VarCov_subset]) # CHECK ORDER IN Ld > 2 case!!
+              # CHECK ORDERING (lexiconographical problem???)
+              #if(ncol(VarCov_subset) >= 10){browser()}
+              VarCov_transformation <- try((dpidk_davdk) %*% VarCov_subset %*% t(dpidk_davdk), T)
+              pidk_se <- sqrt(diag(VarCov_transformation))
            }
-           pidk <- as.numeric(pidk)
+           pidk <- np$array(pidk)
          }
 
         if(return_SE == T){
@@ -261,61 +261,15 @@ ml_build <- function(){
   gradient_getLoss_tf <- jax$jit( jax$grad(getLoss_tf) )
 
   # test gradient
+  ModelList_object <- list(AVSList, ProjectionList)
   gradient_init <- gradient_getLoss_tf(
-              list(AVSList, ProjectionList), # ModelList_ =
+              ModelList_object, # ModelList_ =
               tfConst(as.matrix(Y[my_batch])), # Y_ =
               tfConst(X[my_batch,]), # X_ =
               tfConst(FactorsMat_numeric_0Indexed[my_batch,],jnp$int32), # factorMat_ =
               tfConst(as.matrix(log_PrW[my_batch])), # logProb_ =
               tfConst(returnWeightsFxn(lambda_seq[1])) # REGULARIZATION_LAMBDA =
              )
-
-  reinitialize_all <- function(b_SCALE = 1){
-    # re-initialize avs
-    initialize_avs(b_SCALE = b_SCALE)
-
-    # re-initialize class proj variables
-    if( K > 1){
-     values_ <- unlist( lapply(strsplit(grep(names(ClassProbProj),pattern="initializer",value=T),
-                         split="_"),function(zer){zer[1]}) )
-     for(value_ in values_){
-      eval.parent(parse(text = sprintf("
-        ClassProbProj$%s$assign(ClassProbProj$%s_initializer(
-                tf$shape(ClassProbProj$%s)))",value_,value_,value_)))
-    }
-    }
-  }
-
-  #optimization_language <- "tf"
-  optimization_language <- "jax"; adaptiveMomentum <- F
-
-  browser()
-  # define training function - using tf
-  trainStep <-  (function(y_,x_,f_,lp_,lambda_,applyGradients = T){
-    if(is.null(dim(f_))){ f_ <- t( f_ );  x_ <- t( x_ ) }
-    with(tf$GradientTape(persistent = F, watch_accessed_variables = F) %as% tape, {
-      tape$watch(  tv_trainWith  )
-      myLoss_forGrad <- getLoss_tf(Y_ = tfConst(y_),
-                                   X_ = tfConst(x_),
-                                   factorMat_ = tfConst(f_,jnp$int32),
-                                   logProb_ = tfConst(lp_),
-                                   REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(lambda_)))
-    })
-    my_grads <<- tape$gradient( myLoss_forGrad, tv_trainWith )
-
-    # apply gradients
-    if(applyGradients == T){ optimizer_tf$apply_gradients( rzip_tf(my_grads, tv_trainWith) )}
-
-    # save information to global environment via <<-
-    currentLossGlobal <<- as.numeric(myLoss_forGrad)
-    L2_norm_squared <<- sum( unlist(lapply(my_grads, function(zer){
-                        zer <- as.numeric(zer); if(length(zer) == 0){  zer <- 0 }; zer }))^2 )
-  })
-
-  # define optimizer
-  if(sg_method == "cosine"){
-    optimizer_tf = tf$optimizers$Nadam(learning_rate = LEARNING_RATE_BASE, clipnorm = clipAT_factor)
-  }
 }
 
 }
