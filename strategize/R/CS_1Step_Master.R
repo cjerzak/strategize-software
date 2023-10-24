@@ -56,7 +56,6 @@ OneStep.OptiConjoint <- function(
                               knownNormalizationFactor = NULL,
                               split1_indices=NULL,
                               split2_indices=NULL,
-                              piSEtype  = "automatic",
                               openBrowser = F,
                               useHajekInOptimization = T, findMax = T,quiet = T,
                               lambda_seq = NULL,
@@ -72,10 +71,14 @@ OneStep.OptiConjoint <- function(
     if(!is.null(conda_env)){
       try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
     }
-    jax <- tensorflow::import("jax")
-    oryx <- tensorflow::import("oryx")
-    jnp <- tensorflow::import("jax.numpy")
-    np <- tensorflow::import("numpy")
+    jax <- reticulate::import("jax")
+    oryx <- reticulate::import("oryx")
+    optax <- reticulate::import("optax")
+    jnp <- reticulate::import("jax.numpy")
+    eq <- reticulate::import("equinox")
+    np <- reticulate::import("numpy")
+    py_gc <- reticulate::import("gc")
+    piSEtype  = "automatic"
   }
 
   # define evaluation environment
@@ -115,14 +118,16 @@ OneStep.OptiConjoint <- function(
                                        assignmentProbList_internal = p_list,
                                        hypotheticalProbList_internal = hypotheticalProbList,
                                        hajek = useHajek)
-    SE_Q_all <- computeQse_conjoint(W=FactorsMat_numeric,
-                                Y=Y,
-                                hypotheticalN = NULL,
-                                log_PrW = NULL,log_treatment_combs = NULL,
+    SE_Q_all <- computeQse_conjoint(FactorsMat = FactorsMat_numeric,
+                                Yobs = Y,
+                                # hypotheticalN = NULL,
+                                # log_PrW = NULL,
+                                # log_treatment_combs = NULL,
                                 hajek = useHajek,
                                 knownNormalizationFactor = knownNormalizationFactor,
-                                p_list=p_list, returnLog = F,
-                                hypotheticalProbList=hypotheticalProbList)
+                                assignmentProbList = p_list,
+                                returnLog = F,
+                                hypotheticalProbList = hypotheticalProbList)
     Q_interval_all <- c(Qhat_all$Qest - abs(qnorm((1-confLevel)/2))*SE_Q_all,
                         Qhat_all$Qest_all + abs(qnorm((1-confLevel)/2))*SE_Q_all)
     return(    list("Q_point_all" = RescaleFxn(Qhat_all$Qest, estMean = mean_Y, estSD = sd_Y),
@@ -273,10 +278,11 @@ OneStep.OptiConjoint <- function(
         eval(parse( text = trainText ),envir = evaluation_environment)
 
         # obtain the pi's
-        hypotheticalProbList <- getPiList();names(hypotheticalProbList) <- paste("k",1:K,sep="")
+        hypotheticalProbList <- getPiList( ModelList_object[[1]] );names(hypotheticalProbList) <- paste("k",1:K,sep="")
         FinalProbList <- hypotheticalProbList
-        optim_max_hajek_full <- na.omit(  unlist(getPiList(simplex=F)) )
-        ClassProbs <- as.array(  getClassProb(X) )
+        optim_max_hajek_full <- na.omit(  unlist(getPiList(ModelList_object[[1]], simplex=F)) )
+
+        ClassProbs <- NULL; if(K > 1){ ClassProbs <- as.array(  getClassProb(X) ) }
         performance_mat <- as.data.frame(
                           cbind("lambda" = REGULARIZATION_LAMBDA_SEQ_ORIG,
                                 "Qhat" = colMeans(performance_matrix_out),
@@ -285,6 +291,7 @@ OneStep.OptiConjoint <- function(
                                 ))
         LAMBDA_ <- LAMBDA <- LAMBDA_selected
     }
+
     optim_max_hajek_split1 <- optim_max_hajek_full
     if(length(REGULARIZATION_LAMBDA_SEQ_ORIG)>1){
     qStar <- 1
@@ -317,10 +324,10 @@ OneStep.OptiConjoint <- function(
       hypotheticalProbList_full <- hypotheticalProbList_split1 <- hypotheticalProbList
 
       # Get values from tf
-      Qhat_tf <- jnp$array( getQ_fxn(  split2_indices  ), jnp$float32)
+      Qhat_tf <- jnp$array( getQ_fxn( ModelList_object,  split2_indices  ), jnp$float32)
       Qhat <- np$array( Qhat_tf )
       Qhat_split1 <- Qhat_all <- Q_interval_split2 <- Q_interval_split1 <- Q_se_exact <- NULL
-      Qhat_split2<-list();Qhat_split2$Qest <- as.numeric(Qhat_tf)
+      Qhat_split2<-list();Qhat_split2$Qest <- np$array(Qhat_tf)
     }
 
     # get SEs

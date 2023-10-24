@@ -1,6 +1,5 @@
 initialize_m <- function(){
-  ### initializations for fast m estimation
-  {
+    ### initializations for fast m estimation
     {
       GRADIENT_FXN_vectorized <- function(FactorsMat_DATA,
                                           Yobs_DATA,
@@ -245,5 +244,4 @@ initialize_m <- function(){
       #vec2list(pi_init_vec)[[1]] - toSimplex(c(0,pi_init_vec[1:6]))
       #sum(abs(unlist(vec2list(pi_init_vec))-unlist(p_list))) # test: should be close to 0
     }
-  }
 }

@@ -45,114 +45,63 @@ for(trainIndicator in trainIndicator_pool){
 
       # Re-initialize trainable variables right before new training begins
       # IF warmstarts OFF or FOLD == 1 or TESTING
-      if(REINIT_BOOL <- (!warmStart | lambda_counter == 1 | trainIndicator == F)){
-        print("Reinitializing variables...")
-        reinitialize_all(b_SCALE = selected_bscale)
-      }
-      if(!REINIT_BOOL){print("NOT reinitializing variables...")}
-
-      # get initial LR
-      L2_squared_init <- 1*median(replicate(5, {
-          # generate batch indices
-          my_batch <- availableTrainIndices_train_seq[[sample(1:length(availableTrainIndices_train_seq),1) ]]
-
-          # train
-          trainStep( y_  = as.matrix(Y[my_batch]),
-                     x_  = X[my_batch,],
-                     f_  = FactorsMat_numeric_0Indexed[my_batch,],
-                     lp_ = as.matrix(log_PrW[my_batch]),
-                     lambda_ = returnWeightsFxn(REGULARIZATION_LAMBDA),
-                     applyGradients = F)
-          L2_norm_squared
-      }))
-
-      # initialize initial LR on this basis for adaptive LR methods
-      if(sg_method %in% c("adanorm", "wngrad")){
-        optimizer_tf$learning_rate$assign( sqrt( 1/L2_squared_init  ) )
-      }
+      if(REINIT_BOOL <- (!warmStart | lambda_counter == 1 | trainIndicator == F)){ print("Reinitializing...") }
+      if(!REINIT_BOOL){  print("NOT reinitializing variables...")   }
 
       # start training process
       AdagradLR_vec_eff <- AdagradLR_vec <- MomenetumNextIter_seq <- LR_effective <- InvLR_tracker <- L2_norm_squared_vec <- loss_vec <- rep(NA,times = nSGD)
-      InvLR_tracker <- c(L2_squared_init, InvLR_tracker)
       {
         marginalProb_m <- c()
-        i_eff <- 1; SquaredL2Grad_accumulations <- L2_squared_init
+        i_eff <- 1;
         gc(); py_gc$collect()
         for(i in 1:nSGD){
           if(i %% 50){ gc(); py_gc$collect() }
           # generate batch indices
           my_batch <- availableTrainIndices_train_seq[[i]]
 
-          #get marginals
-          #marginalProb_m <- rbind(marginalProb_m,t( colMeans(as.array(getClassProb(X[my_batch,]) ))))
-
           # train
-          if(optimization_language == "tf"){
-            trainStep( y_  = as.matrix(Y[my_batch]),
-                       x_  = X[my_batch,],
-                       f_  = FactorsMat_numeric_0Indexed[my_batch,],
-                       lp_ = as.matrix( log_PrW[my_batch] ),
-                       lambda_ = returnWeightsFxn(REGULARIZATION_LAMBDA),
-                       applyGradients = T)
-          }
-
-          if(optimization_language == "jax"){
+          {
             #my_batch_jax <- my_batch[ jax_batch_select <- (1:(length(my_batch) )) ]
             my_batch_jax <- my_batch[ jax_batch_select <- (1:(length(my_batch)-2L) ) ]
 
             # define training function via jax
             if(i == 1 & lambda_counter == 1){
-              jax <- tensorflow::import("jax")
-              jnp <- tensorflow::import("jax.numpy")
-              optax <- reticulate::import("optax")
               batch_size_jax <- length(my_batch_jax)
 
               # convert
-              jax_fxn_raw <- tf2jax$convert(getLoss_tf, Y_  = jnp$array(as.matrix(Y[my_batch_jax]),jnp$float32),
-                                            X_  = jnp$array(X[my_batch_jax,],jnp$float32),
-                                            factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,],jnp$int32),
-                                            logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax]),jnp$float32),
-                                            REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA),jnp$float32))
-              param_set <- jax_fxn_raw[[2]]
-
-              # convert fxn with eval+params output into eval only
-              def_sig <- gsub(jax_fxn_raw[[1]]$signature,pattern="\\<Signature ",replace="")
-              def_sig  <- gsub(gsub(def_sig,pattern ="\\(",replace=""),pattern="\\)",replace="")
-              input_sig  <- gsub(gsub(def_sig,pattern ="\\(",replace=""),pattern="\\)",replace="")
-              input_sig_sep <- strsplit(input_sig,split=", ")[[1]]
-              jax_fxn <- sprintf('function(params,%s){
-                                 out_ <- jax_fxn_raw[[1]](params,%s)[[1]];
-                                 return( jnp$reshape(out_,list()) )
-                                 }', def_sig ,input_sig)
-              jax_fxn <- eval(parse(text = jax_fxn))
-              v_and_grad_jax_fxn_raw <- jax$value_and_grad(jax_fxn,argnums = 0L)
+              jax_fxn_raw <- getLoss_tf(
+                                        ModelList_ = ModelList_object,
+                                        Y_  = jnp$array(as.matrix(Y[my_batch_jax]),jnp$float32),
+                                        X_  = jnp$array(X[my_batch_jax,],jnp$float32),
+                                        factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,],jnp$int32),
+                                        logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax]),jnp$float32),
+                                        REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA),jnp$float32)
+                                        )
 
               # compile
-              jax_fxn <- jax$jit(  jax_fxn  )
+              jax_fxn <- jax$jit(  getLoss_tf  )
+              v_and_grad_jax_fxn_raw <- jax$value_and_grad(getLoss_tf,argnums = 0L)
               v_and_grad_jax_fxn <- jax$jit(   v_and_grad_jax_fxn_raw  )
 
               # test the function
               jax_eval <- jax_fxn(
-                param_set,
+                ModelList_object,
                 Y_  = jnp$array(as.matrix(Y[my_batch_jax])),
                 X_  = jnp$array(X[my_batch_jax,]),
                 factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
                 logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
                 REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA))
               )
-              param_set_names <- names( param_set )
             }
 
-            # need to reset param_set at i == 1
+            # need to reset ModelList_object at i == 1
             if( i == 1 ){
               if(lambda_counter == 1){
-                param_set_new_init <- lapply(tv_trainWith,function(zer){ as.array(  zer$value() )} )
-                names(param_set_new_init) <- names( param_set )
+                ModelList_object_new_init <- ModelList_object
+                #names(ModelList_object_new_init) <- names( ModelList_object )
               }
-              param_set <- param_set_new_init;
-              param_set <- lapply(param_set,function(zer){jnp$array(zer)})
-              #plot(unlist(param_set))
-              #cbind(names( param_set),unlist( lapply(tv_trainWith,function(zer){zer$name})))
+              ModelList_object <- ModelList_object_new_init;
+
               # setup optimizer
               OptimType <- "Other"
               if(OptimType == "SecondOrder"){
@@ -162,12 +111,6 @@ for(trainIndicator in trainIndicator_pool){
                   optax$zero_nans(),
                   optax$scale(1) )
               }
-              if(OptimType == "AdagradNorm"){
-                  optax_optimizer <-  optax$chain(
-                    optax$adaptive_grad_clip(0.25, eps=0.0001),
-                    optax$scale(-1)
-                  )
-              }
               if(OptimType == "Other"){
                 LR_schedule <- optax$warmup_cosine_decay_schedule(
                   init_value = (LEARNING_RATE_BASE<- .1)/2,
@@ -176,16 +119,17 @@ for(trainIndicator in trainIndicator_pool){
                 optax_optimizer <-  optax$chain(
                   #optax$sgd(momentum = 0.90, nesterov = T,
                   #optax$scale_by_schedule(LR_schedule),
-                  #optax$adaptive_grad_clip(0.5, eps=0.0001),
+                  optax$adaptive_grad_clip(0.1, eps=0.0001),
                   #optax$fromage(learning_rate = 0.1)
-                  optax$clip(1.),
-                  optax$scale_by_rss(), optax$scale(-1)
+                  #optax$clip(1.),
+                  optax$adabelief(learning_rate=0.01),
+                  #optax$scale_by_rss(), optax$scale(-1)
                   #optax$scale_by_rss(), optax$noisy_sgd(learning_rate = 1)
                   )
               }
 
               # model partition + setup state
-              opt_state <- optax_optimizer$init( param_set )
+              opt_state <- optax_optimizer$init( ModelList_object )
               jit_apply_updates <- eq$filter_jit(optax$apply_updates)
               jit_update <- eq$filter_jit(optax_optimizer$update)
             }
@@ -197,7 +141,7 @@ for(trainIndicator in trainIndicator_pool){
 
             {
             # updates + derivatives using jax
-            v_and_grad_eval <- v_and_grad_jax_fxn( param_set[param_set_names],
+            v_and_grad_eval <- v_and_grad_jax_fxn( ModelList_object,
                               Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
                               X_ = jnp$array(X[my_batch_jax,]),
                               factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
@@ -205,42 +149,19 @@ for(trainIndicator in trainIndicator_pool){
                               REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
 
             # subset
-            #if(lambda_counter > 1){browser()}
             currentLossGlobal <- v_and_grad_eval[[1]]$tolist()
             grad_set <- v_and_grad_eval[[2]] #jax$grad screws up name orders
-            param_set_names_jax_order <- names(grad_set)
             L2_norm <- optax$global_norm(grad_set)$tolist()
             L2_norm_squared_vec[i] <- L2_norm_squared <- L2_norm^2
 
-            # add noise to the gradients
-            if(T == T){
-              if(i == 1){
-              JaxKey <- jax$jit(function(int_){ jax$random$PRNGKey(int_)})
-              PercentJitterFxn <-  jax$jit( function(x,seed){
-                abs_x_frac <- jnp$multiply(jnp$array(0.25),jnp$abs(x))
-                ep_noise <- oryx$distributions$Uniform(jnp$negative(abs_x_frac),abs_x_frac)
-                ep_noise <- ep_noise$sample(seed = JaxKey(seed))
-                jnp$add(x,ep_noise)
-              })  }
-              grad_set <- jax$tree_map(function(z){ PercentJitterFxn(z,jnp$array(as.integer(runif(1,0,10000))))},grad_set)
-            }
-
-            if(OptimType == "AdagradNorm"){
-              SquaredL2Grad_accumulations <- SquaredL2Grad_accumulations + L2_norm^2
-              AdagradLR <-  jnp$array(  0.5 / SquaredL2Grad_accumulations^0.5 )
-              AdagradLR_vec[i] <- AdagradLR$tolist()
-              AdagradLR_vec_eff[i] <- AdagradLR_use <- AdagradLR_vec[i_eff]
-              AdagradLR_use <- jnp$array(AdagradLR_use)
-              grad_set <- jax$tree_util$tree_map(function(x){jnp$multiply(x,AdagradLR_use)}, grad_set)[names(grad_set)]
-            }
             if(OptimType == "SecondOrder"){
-              hessian_value <- hessian_fxn(param_set[param_set_names],
+              hessian_value <- hessian_fxn(ModelList_object,
                                            Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
                                            X_ = jnp$array(X[my_batch_jax,]),
                                            factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
                                            logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
                                            REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
-              HessianMat <- matrix(list(),nrow = length(param_set),ncol=length(param_set))
+              HessianMat <- matrix(list(),nrow = length(ModelList_object),ncol=length(ModelList_object))
               row.names(HessianMat) <- colnames(HessianMat) <- names(hessian_value)
               for(jaa in names(hessian_value)){ for(ja in names(hessian_value)){
                 HessianMat[jaa,ja] <- list(eval(parse(text = sprintf("jnp$squeeze(jnp$squeeze(hessian_value$`%s`$`%s`,1L),2L)",jaa,ja))))
@@ -278,9 +199,9 @@ for(trainIndicator in trainIndicator_pool){
                                                    NetwornDir)
                 SecondOrderUpdates <-  grad_vec[[2]](SecondOrderUpdates)
 
-                param_set_test <- jit_apply_updates(params = param_set,
+                ModelList_object_test <- jit_apply_updates(params = ModelList_object,
                                     updates = SecondOrderUpdates)
-                f_x_updated <- jax_fxn( param_set_test[param_set_names],
+                f_x_updated <- jax_fxn( ModelList_object_test,
                                             Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
                                             X_ = jnp$array(X[my_batch_jax,]),
                                             factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
@@ -299,23 +220,20 @@ for(trainIndicator in trainIndicator_pool){
             updates_and_opt_state <- jit_update(
               updates = grad_set,
               state = opt_state,
-              params = param_set[param_set_names_jax_order])
+              params = ModelList_object)
             optax_updates <- updates_and_opt_state[[1]]
             opt_state <- updates_and_opt_state[[2]]
 
-            param_set <- jit_apply_updates(params = param_set,
-                      updates = optax_updates)[param_set_names]
+            ModelList_object <- jit_apply_updates(params = ModelList_object,
+                      updates = optax_updates)
             }
-          if(OptimType == "AdagradNorm"){
-              if(cycle_width < Inf){if(i %% cycle_width == 0 & i < nSGD / 2){ i_eff <- 1 } }
-          }
-
           }
 
           # report on performance 1 + 4 times during training
-          if(i %% max(round( nSGD/4 ),1) == 0 | i == 1){
-            try_ <- try(print(sprintf("Iter %i - Fold %i - Lambda %i of %i - Current obj: %.3f",
-                                      i, fold_, lambda_counter, length(lambda_seq), currentLossGlobal)),T)
+          if(i %% max(round( nSGD/4 ), 1) == 0 | i == 1){
+            try_ <- try(print(sprintf("[%s] Iter %i of - Fold %i - Lambda %i of %i - Current obj: %.3f",
+                                      format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+                                      i, nSGD, fold_, lambda_counter, length(lambda_seq), currentLossGlobal)),T)
             if("try-error" %in% class(try_)){browser()}
           }
 
@@ -335,39 +253,6 @@ for(trainIndicator in trainIndicator_pool){
 
           # cosine LR
           if(sg_method == "cosine"){LR_effective[i] <- LEARNING_RATE_BASE*abs(cos(i/nSGD*cycle_width)  )*(i<nSGD/2) + NA20(LEARNING_RATE_BASE*(i>=nSGD/2)/(i-nSGD/2)^0.2*(i>nSGD/2)) }
-          if(optimization_language == "tf"){ optimizer_tf$learning_rate$assign( LR_effective[i] )}
-
-          if(adaptiveMomentum == T){ #https://arxiv.org/pdf/2110.09057.pdf
-            if(optimization_language == "tf"){
-              x_k <- as.numeric( jnp$concatenate((lapply(tv_trainWith, function(zer){jnp$reshape(zer,-1L)})),0L))
-              grad_k <- as.numeric( jnp$concatenate((lapply(my_grads, function(zer){jnp$reshape(zer,-1L)})),0L))
-            }
-            if(optimization_language == "jax"){
-              x_k <- unlist( param_set)
-              grad_k <- unlist( lapply(grad_set, function(zer){zer$tolist()}))
-            }
-            if(i >= 3){
-              DENOM <- sqrt( sum((x_k  -  x_k_minus_1)^2))
-              NUM <- sqrt( sum((grad_k  -   grad_k_minus_1)^2))
-              if(sg_method == "cosine"){ LR_current <- as.numeric( optimizer_tf$beta_1)}
-              if(sg_method %in% c("wngrad","adanorm")){ LR_current <- as.numeric( optimizer_tf$learning_rate)}
-              MomenetumNextIter_seq[i] <- MomenetumNextIter <- max(0., min( (1 - sqrt(LR_current * NUM / (0.000001+DENOM)))^2,
-                                                                        1 - 10^(-2) ))
-              if(sg_method == "cosine"){optimizer_tf$beta_1$assign(MomenetumNextIter)}
-              if(sg_method == c("wngrad","adanorm")){optimizer_tf$momentum$assign(MomenetumNextIter)}
-            }
-            x_k_minus_1 <- x_k
-            grad_k_minus_1 <- grad_k
-          }
-        }
-
-        if(optimization_language=="jax"){
-          # check names alignment
-          print( sprintf("Is True? %s", 1 == mean(gsub(unlist( unlist( lapply(tv_trainWith,function(zer){zer$name}) )),pattern=":0",replace="") == names(param_set)) ))
-
-          # make sure gets updated params
-          lapply(1:length(tv_trainWith),function(zer){
-            tv_trainWith[[zer]]$assign( param_set[[zer]] ) })
         }
 
         # figs to figure out dynamics
@@ -379,33 +264,34 @@ for(trainIndicator in trainIndicator_pool){
           try(plot(  loss_vec   ),T)
           try(points(lowess(loss_vec),type = "l",lwd = 5, col = "red"),T)
           if(K > 1){
-            print(sprintf("Mean Abs Coef: %.5f:", mean(abs(as.array(ClassProbProj$kernel)))))
-            try(plot( as.matrix(getClassProb(tfConst(X[availableTrainIndices,])))[,2] ),T)
+              try(plot( as.matrix(getClassProb(tfConst(X[availableTrainIndices,])))[,2] ),T)
           }
         }
       }
-      # in sample objective
 
-      try(plot(unlist( lapply(getPiList(),function(zer){ unlist(zer) - unlist(p_list) }) ) ),T)
-      getQ_fxn <- function(indices_){
+      # in sample objective
+      #try(plot(unlist( lapply(getPiList(  ModelList_object[[1]]   ),function(zer){ unlist(zer) - unlist(p_list) }) ) ),T)
+      getQ_fxn <- function(ModelList_, indices_){
           # broken up indices
           # batch_indices_Q <- tapply(sample(indices_),1:length(indices_) %% round(length(indices_)/batch_size),c)
 
           # all together indices
           batch_indices_Q <- list( indices_ )
           Qhat_value <- mean( unlist( lapply(batch_indices_Q, function(use_i){
-            finalWts_ <- prop.table( as.matrix(  getProbRatio_tf(Y_ = tfConst(as.matrix(Y[use_i])),
+            finalWts_ <- prop.table( np$array(  getProbRatio_tf(
+                                                                 ModelList_ = ModelList_,
+                                                                 Y_ = tfConst(as.matrix(Y[use_i])),
                                                                  X_ = tfConst(X[use_i,]),
                                                                  factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],jnp$int32),
                                                                  logProb_ = tfConst(as.matrix(log_PrW[use_i])),
-                                                                 REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(REGULARIZATION_LAMBDA))) ) )
+                                                                 REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(REGULARIZATION_LAMBDA)))  ) )
             Qhat_ <- sum(as.matrix(Y[use_i])*finalWts_)
           } )))
           return( Qhat_value )
       }
 
-      Qhat_inSamp <- getQ_fxn(  availableTrainIndices  )
-      Qhat_hold  <- getQ_fxn(  holdIndices  )
+      Qhat_inSamp <- getQ_fxn(  ModelList_object, availableTrainIndices  )
+      Qhat_hold  <- getQ_fxn(  ModelList_object, holdIndices  )
       if(trainIndicator == 1){
         print("---Current Q: IN, OUT---");print(c(Qhat_inSamp,Qhat_hold))
         performance_matrix_out[fold_,lambda_counter] <- Qhat_hold
