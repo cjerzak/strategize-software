@@ -71,7 +71,7 @@ getMultinomialSamp <- function(pi_star_value, baseSeed){
   return( T_star_samp_reduced )
 }
 
-getPrettyPi <- function(pi_star_value){
+getPrettyPi <- function( pi_star_value ){
   if(ParameterizationType == "Full"){
     #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){jnp$take(pi_star_value,n2int(ai(zer-1L))) })
     pi_star_full <- pi_star_value
@@ -79,14 +79,13 @@ getPrettyPi <- function(pi_star_value){
   if(ParameterizationType == "Implicit"){
     pi_star_impliedTerms <- tapply(1:length(d_locator),d_locator,function(zer){
             pi_implied <- jnp$subtract(OneTf, jnp$sum(jnp$take(pi_star_value,
-                                             n2int(ai(zer-1L)),0L)))
-    })
+                                             n2int(ai(zer-1L)),0L))) })
 
     names(pi_star_impliedTerms) <- NULL
     pi_star_impliedTerms <- jnp$concatenate(pi_star_impliedTerms,0L)
 
-    pi_star_full <- jnp$add(jnp$matmul(main_comp_mat, pi_star_value),
-                            jnp$matmul(shadow_comp_mat, pi_star_impliedTerms))
+    pi_star_full <- jnp$add(jnp$matmul(main_comp_mat, pi_star_value)$flatten(),
+                            jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten())
   }
 
   return( pi_star_full )
