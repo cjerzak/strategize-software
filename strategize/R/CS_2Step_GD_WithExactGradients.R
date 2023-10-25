@@ -9,9 +9,7 @@ generate_GD_WithExactGradients <- function(){
                                     paste(fc2b <- paste("term2_FC_b",1:n_main_params,sep = ""),paste("fe$",fc2b,sep=""),sep="="),
                                     paste(fc4b <- paste("term4_FC_b",1:n_main_params,sep = ""),paste("fe$",fc4b,sep=""),sep="="),
                                     sep=","),collapse=","))
-  doUpdate_conv  <-   eval(parse(text=sprintf("tf2jax$convert_functional(doUpdate_simp, a_vec = a_vec_init,
-                                                    inv_learning_rate = inv_learning_rate,
-                                                    %s)",messy_gd_update_text)))
+  #doUpdate_conv  <-   eval(parse(text=sprintf("tf2jax$convert_functional(doUpdate_simp, a_vec = a_vec_init, inv_learning_rate = inv_learning_rate, %s)",messy_gd_update_text)))
   getPiStar_gd <- function(REGRESSION_PARAMETERS){
     REGRESSION_PARAMETERS <- gather_conv(REGRESSION_PARAMETERS)
     INTERCEPT_dag_ <- INTERCEPT_ <- REGRESSION_PARAMETERS[[1]]
@@ -27,7 +25,7 @@ generate_GD_WithExactGradients <- function(){
     goOn <- F; i<-0;maxIter<-nSGD;while(goOn == F){ i<-i+1;
 
     # compute gradient
-    state_i <- eval(parse( text = sprintf("doUpdate_conv(a_vec = a_i,
+    state_i <- eval(parse( text = sprintf("doUpdate_simp(a_vec = a_i,
                                  inv_learning_rate = inv_learning_rate_i,%s)",messy_gd_update_text) ))
 
     # save for next iteration

@@ -64,19 +64,19 @@ OptiConjoint       <-          function(
       try(reticulate::use_condaenv(conda_env,
                                    required = conda_env_required), T)
     }
-    JaxKey <- function(int_){ jax$random$PRNGKey(int_)}
+    JaxKey <<- function(int_){ jax$random$PRNGKey(int_)}
 
     # import computational modules
-    jax <- reticulate::import("jax")
-    oryx <- reticulate::import("oryx")
-    jnp <- reticulate::import("jax.numpy")
-    np <- reticulate::import("numpy")
-    py_gc <- reticulate::import("gc")
-    optax <- reticulate::import("optax")
+    jax <<- reticulate::import("jax")
+    oryx <<- reticulate::import("oryx")
+    jnp <<- reticulate::import("jax.numpy")
+    np <<- reticulate::import("numpy")
+    py_gc <<- reticulate::import("gc")
+    optax <<- reticulate::import("optax")
 
     # setup numerical precision for delta method
     #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # turn on float64
-    dtj <- jnp$float32; jax$config$update("jax_enable_x64", F) # turn off float64
+    dtj <<- jnp$float32; jax$config$update("jax_enable_x64", F) # turn off float64
   }
   print("Done initializing computational environment!")
 
@@ -276,16 +276,16 @@ OptiConjoint       <-          function(
   if(OptimType != "gd"){
   if(ParameterizationType == "Implicit"){
     print("Initializing manual exact solution code... (Implicit mode)")
-    initialize_ExactSol <- paste(deparse(generate_ExactSol),collapse="\n")
-    initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)",replace="")
-    eval( parse( text = initialize_ExactSol ),envir = evaluation_environment )
+    initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
+    initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
+    eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
     getPiStar_exact <- generate_ExactSolImplicit
   }
   if(ParameterizationType == "Full"){
     print("Initializing manual exact solution code... (Full mode)")
-    initialize_ExactSol <- paste(deparse(generate_ExactSol),collapse="\n")
-    initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)",replace="")
-    eval( parse( text = initialize_ExactSol ),envir = evaluation_environment )
+    initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
+    initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
+    eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
     getPiStar_exact <- generate_ExactSolExplicit
   }
   }
@@ -296,11 +296,10 @@ OptiConjoint       <-          function(
   #compile_fxn <- function(x){x}
   compile_fxn <- function(x){jax$jit(x)}
 
-  # initialize manual gradient updates
-  #print("Initializing manual gradient updates...") # Dereciated
-  #initialize_ManualDoUpdates <- paste(deparse(generate_ManualDoUpdates),collapse="\n")
-  #initialize_ManualDoUpdates <- gsub(initialize_ManualDoUpdates,pattern="function \\(\\)",replace="")
-  #eval( parse( text = initialize_ManualDoUpdates ),envir = evaluation_environment )
+  # initialize manual gradient updates if needed
+  initialize_ManualDoUpdates <- paste(deparse(generate_ManualDoUpdates),collapse="\n")
+  initialize_ManualDoUpdates <- gsub(initialize_ManualDoUpdates,pattern="function \\(\\)",replace="")
+  eval( parse( text = initialize_ManualDoUpdates ), envir = evaluation_environment )
 
   # LR updates, etc.
   GetInvLR <- compile_fxn(function(inv_learning_rate,grad_i){
@@ -338,9 +337,8 @@ OptiConjoint       <-          function(
     names( aOnSimplex ) <- NULL
     return( jnp$concatenate(aOnSimplex,0L)  )
   })
-  OneTf <- jnp$array(matrix(1L),dtj)
-  OneTf_flat <- jnp$array(1L,dtj)
-  Neg2_tf <- jnp$array(-2.,dtj)
+  OneTf_flat <- jnp$squeeze(OneTf <- jnp$array(matrix(1L), dtj)$flatten(), 0L)
+  Neg2_tf <- jnp$array(-2., dtj)
 
   # Q functions
   print("Defining Q functions..")
@@ -351,6 +349,7 @@ OptiConjoint       <-          function(
   pi_star_value_init_dag <- a2Simplex_optim( a_vec_init_dag )
 
   # define Q functions
+  environment(getQStar_single) <- evaluation_environment
   getQStar_single <- compile_fxn( getQStar_single )
 
   # multiround material
@@ -358,11 +357,11 @@ OptiConjoint       <-          function(
     # general specifications
     getQStar_diff_ <- paste(deparse(getQStar_diff_BASE),collapse="\n")
     getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", replace = sprintf("T == %s", DisaggreateQ))
-    getQStar_diff_ <- eval( parse( text = getQStar_diff_ ),envir = evaluation_environment )
+    getQStar_diff_ <- eval( parse( text = getQStar_diff_ ), envir = evaluation_environment )
 
     # specifications for case
     name_ <- ifelse(DisaggreateQ, yes = "Multi", no = "Single")
-    eval(parse(text = sprintf("getQStar_diff_%sGroup <- compile_fxn( getQStar_diff_ )", name_, name_)))
+    eval(parse(text = sprintf("getQStar_diff_%sGroup <- compile_fxn( getQStar_diff_ )", name_)))
   }
 
   # Pretty Pi function
@@ -375,41 +374,41 @@ OptiConjoint       <-          function(
     # d_locator + add_to_term - CONFIRM DROP ??
     pi_star_value_loc <- rep(NA, times = n_main_params)
     if(ParameterizationType == "Implicit"){
-    pi_star_value_loc_shadow <- rep(NA,times=length(unique(d_locator)))
-    atShadow <- atSpot <- 0; for(ra in 1:length(pi_star_value_loc)){
-      isLast <- sum(d_locator[ra:length(d_locator)] %in% d_locator[ra])==1
-      if(!isLast){
-        atSpot <- atSpot + 1 ;pi_star_value_loc[ra] <- atSpot
+      pi_star_value_loc_shadow <- rep(NA,times=length(unique(d_locator)))
+      atShadow <- atSpot <- 0; for(ra in 1:length(pi_star_value_loc)){
+        isLast <- sum(d_locator[ra:length(d_locator)] %in% d_locator[ra])==1
+        if(!isLast){
+          atSpot <- atSpot + 1 ;pi_star_value_loc[ra] <- atSpot
+        }
+        if(isLast){
+          atSpot <- atSpot + 1
+          pi_star_value_loc[ra] <- atSpot
+
+          # account for shadow component
+          atShadow <- atShadow + 1
+          atSpot <- atSpot + 1
+          pi_star_value_loc_shadow[atShadow] <- atSpot
+        }
       }
-      if(isLast){
-        atSpot <- atSpot + 1
-        pi_star_value_loc[ra] <- atSpot
 
-        # account for shadow component
-        atShadow <- atShadow + 1
-        atSpot <- atSpot + 1
-        pi_star_value_loc_shadow[atShadow] <- atSpot
+      # re-normalize - go back from pretty for q
+      {
+        split_vec <- rep(0,times = length_simplex_use )
+        split_vec[pi_star_value_loc_shadow] <- 1
+        split_vec <- rev(cumsum(rev(split_vec)))
+        split_vec <- cumsum(!duplicated(split_vec))
       }
-    }
+      main_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
+      main_comp_mat <- sapply(1:length(pi_star_value_loc),function(zer){
+        main_comp_mat[pi_star_value_loc[zer],zer] <- 1
+        return( main_comp_mat[,zer] ) })
+      main_comp_mat <- jnp$array(main_comp_mat,dtj)
 
-    # re-normalize - go back from pretty for q
-    {
-      split_vec <- rep(0,times = length_simplex_use )
-      split_vec[pi_star_value_loc_shadow] <- 1
-      split_vec <- rev(cumsum(rev(split_vec)))
-      split_vec <- cumsum(!duplicated(split_vec))
-    }
-    main_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
-    main_comp_mat <- sapply(1:length(pi_star_value_loc),function(zer){
-      main_comp_mat[pi_star_value_loc[zer],zer] <- 1
-      return( main_comp_mat[,zer] ) })
-    main_comp_mat <- jnp$array(main_comp_mat,dtj)
-
-    shadow_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
-    shadow_comp_mat <- sapply(1:length(pi_star_value_loc_shadow),function(zer){
-      shadow_comp_mat[pi_star_value_loc_shadow[zer],zer] <- 1
-      return( shadow_comp_mat[,zer] ) })
-    shadow_comp_mat <- jnp$array(shadow_comp_mat,dtj)
+      shadow_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
+      shadow_comp_mat <- sapply(1:length(pi_star_value_loc_shadow),function(zer){
+        shadow_comp_mat[pi_star_value_loc_shadow[zer],zer] <- 1
+        return( shadow_comp_mat[,zer] ) })
+      shadow_comp_mat <- jnp$array(shadow_comp_mat,dtj)
     }
 
     split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
@@ -419,7 +418,7 @@ OptiConjoint       <-          function(
                             yes = list(split_vec), no = list(split_vec_full))[[1]]
   }
 
-  environment(getPrettyPi) <- environment()
+  environment(getPrettyPi) <- evaluation_environment
   getPrettyPi <- compile_fxn( getPrettyPi )
 
   getPrettyPi_diff <- ifelse(ParameterizationType=="Implicit",
@@ -432,7 +431,7 @@ OptiConjoint       <-          function(
   ## get exact result
   pi_star_exact <- -10
   if(OptimType %in% c("tryboth") & diff == F){
-    pi_star_exact <- np$array(getPrettyPi(getPiStar_exact(EST_COEFFICIENTS_tf)))
+    pi_star_exact <- np$array(getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  )) # pi_star_value =
   }
 
   use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
@@ -512,7 +511,7 @@ OptiConjoint       <-          function(
   if(diff == F){
     initialize_GD_WithExactGradients <- paste(deparse(generate_GD_WithExactGradients),collapse="\n")
     initialize_GD_WithExactGradients <- gsub(initialize_GD_WithExactGradients,pattern="function \\(\\)",replace="")
-    eval( parse( text = initialize_GD_WithExactGradients ),envir = evaluation_environment )
+    eval( parse( text = initialize_GD_WithExactGradients ), envir = evaluation_environment )
   }
 
   p_vec_jnp <- jnp$array(   as.matrix(p_vec)   )
@@ -540,9 +539,8 @@ OptiConjoint       <-          function(
   print("Defining gd function...")
   {
     # bring functions into env and compile as needed
-    environment(getMultinomialSamp) <- environment(); getMultinomialSamp <- jax$jit( getMultinomialSamp )
-
-    environment(getPiStar_gd) <- environment()
+    environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- jax$jit( getMultinomialSamp )
+    environment(getPiStar_gd) <- evaluation_environment
   }
 
   # get initial learning rate for gd result
@@ -575,7 +573,7 @@ OptiConjoint       <-          function(
   if(use_exact){
     print("Optimization type: Exact solution")
     #results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
-    FxnForJacobian <- function(INPUT_){
+    FxnForJacobian <- function(  INPUT_  ){
       EST_INTERCEPT_tf_ <- INPUT_[[1]]
       EST_COEFFICIENTS_tf_  <- INPUT_[[2]]
       pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- getPiStar_exact(EST_COEFFICIENTS_tf_))
@@ -585,7 +583,7 @@ OptiConjoint       <-          function(
       results_vec <- jnp$concatenate(list(q_star, pi_star_full),0L)
       return( results_vec )
     }
-    results_vec <- FxnForJacobian(list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf))
+    results_vec <- FxnForJacobian( list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) )
     jacobian_mat <- jax$jacobian(FxnForJacobian,0L)( (INPUT_  <- list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf)))
 
     # old code
@@ -601,6 +599,7 @@ OptiConjoint       <-          function(
     pi_star_full <- np$array( jnp$take(results_vec, jnp$array(1L:(length(results_vec)-1L))) )
   }
 
+    browser()
   if(use_gd){
     print("Optimization type: Gradient ascent")
 
@@ -621,11 +620,11 @@ OptiConjoint       <-          function(
     if(MaxMin & diff){QFXN <- getQStar_diff_MultiGroup}
 
     # setup functions
-    environment(FullGetQStar_) <- environment(); FullGetQStar_ <- jax$jit(FullGetQStar_)
+    environment(FullGetQStar_) <- evaluation_environment; FullGetQStar_ <- jax$jit(FullGetQStar_)
     dQ_da_ast <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(0L)))
     dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
 
-    environment(QMonteIter_optimize) <- environment(); QMonteIter_optimize <- jax$jit( QMonteIter_optimize )
+    environment(QMonteIter_optimize) <- evaluation_environment; QMonteIter_optimize <- jax$jit( QMonteIter_optimize )
     VectorizedQMonteLoop_optimize <- jax$jit( jax$vmap(function(TSAMP_ast, TSAMP_dag,
                                                                 TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
 
@@ -657,7 +656,7 @@ OptiConjoint       <-          function(
     }, eval(parse(text = paste("list(1L,1L,1L,1L,",
                                paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
 
-    environment(QMonteIter) <- environment(); QMonteIter <- jax$jit( QMonteIter )
+    environment(QMonteIter) <- evaluation_environment; QMonteIter <- jax$jit( QMonteIter )
     VectorizedQMonteLoop <- jax$jit( jax$vmap(function(pi_star_ast_f, pi_star_dag_f,
                                                        INTERCEPT_ast_,
                                                        COEFFICIENTS_ast_,
