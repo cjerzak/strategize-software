@@ -599,7 +599,11 @@ OptiConjoint       <-          function(
     pi_star_full <- np$array( jnp$take(results_vec, jnp$array(1L:(length(results_vec)-1L))) )
   }
 
-    browser()
+  # define main Q function in different cases
+  if(!MaxMin & !diff){QFXN <- getQStar_single}
+  if(!MaxMin & diff){QFXN <- getQStar_diff_SingleGroup}
+  if(MaxMin & diff){QFXN <- getQStar_diff_MultiGroup}
+
   if(use_gd){
     print("Optimization type: Gradient ascent")
 
@@ -613,11 +617,6 @@ OptiConjoint       <-          function(
     # optimize q for pi* then for pi_dag and so forth, change iterative
     # plot( REGRESSION_PARAMS_jax$to_py(),REGRESSION_PARAMS_jax_dag$to_py() );abline(a=0,b=1)
     # plot(p_vec_full_dot_jnp$to_py(), p_vec_full_dag_jnp$to_py());abline(a=0,b=1)
-
-    # define main Q function in different cases
-    if(!MaxMin & !diff){QFXN <- getQStar_single}
-    if(!MaxMin & diff){QFXN <- getQStar_diff_SingleGroup}
-    if(MaxMin & diff){QFXN <- getQStar_diff_MultiGroup}
 
     # setup functions
     environment(FullGetQStar_) <- evaluation_environment; FullGetQStar_ <- jax$jit(FullGetQStar_)

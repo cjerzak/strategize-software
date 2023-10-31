@@ -106,7 +106,11 @@ generate_ModelOutcome <- function(){
         Y_glm <- Y_
         varcov_cluster_variable_glm <- varcov_cluster_variable_
       }
-      interacted_dat <- interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat,2,sd)>0]
+      interacted_dat <- try(as.matrix(interacted_dat[,indicator_InteractionVariation <- apply(as.matrix(interacted_dat), 2, sd)>0]), T)
+      if('try-error' %in% class(interacted_dat)){
+        print("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
+        browser();browser();browser()
+      }
       interaction_info <- interaction_info[indicator_InteractionVariation,]
       interaction_info$inter_index <- 1:nrow(interaction_info)
 

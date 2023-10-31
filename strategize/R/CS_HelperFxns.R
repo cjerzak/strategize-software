@@ -84,13 +84,12 @@ getPrettyPi <- function( pi_star_value ){
     names(pi_star_impliedTerms) <- NULL
     pi_star_impliedTerms <- jnp$concatenate(pi_star_impliedTerms,0L)
 
-    pi_star_full <- jnp$add(jnp$matmul(main_comp_mat, pi_star_value)$flatten(),
-                            jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten())
+    pi_star_full <- jnp$expand_dims(jnp$add(jnp$matmul(main_comp_mat, pi_star_value)$flatten(),
+                            jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten()),1L)
   }
 
   return( pi_star_full )
 }
-
 
 computeQ_conjoint_internal <- function(FactorsMat_internal,
                                        Yobs_internal,
