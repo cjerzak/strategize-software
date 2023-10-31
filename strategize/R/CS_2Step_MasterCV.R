@@ -158,12 +158,12 @@ cv.OptiConjoint       <-          function(
     # insight: in and out Q are dif when should be same - indexing off?
     #https://www.youtube.com/watch?v=AzwXNW6BYf0
     insamp_results <- as.data.frame( insamp_results )
-    outsamp_results$l_bound <- outsamp_results$Q - (qStar_lambda <- 1) * outsamp_results$Qse
-    outsamp_results$u_bound <- outsamp_results$Q + qStar_lambda * outsamp_results$Qse
+    outsamp_results$l_bound <- outsamp_results$Qhat - (qStar_lambda <- 1) * outsamp_results$Qse
+    outsamp_results$u_bound <- outsamp_results$Qhat + qStar_lambda * outsamp_results$Qse
     #plot(insamp_results$Q,outsamp_results$Q);abline(a=0,b=1)
     #plot(insamp_results$Q-outsamp_results$Q);abline(a=0,b=1)
     #plot(log(outsamp_results$lambda), outsamp_results$Q,pch = as.character(  rank(-outsamp_results$l_bound)) )
-    lambda__ <- lambda_seq[which(max(outsamp_results$Q) <= outsamp_results$u_bound)[1]] # 1 se rule
+    lambda__ <- lambda_seq[which(max(outsamp_results$Qhat) <= outsamp_results$u_bound)[1]] # 1 se rule
     print("Done with CV sequence!")
   }
 
