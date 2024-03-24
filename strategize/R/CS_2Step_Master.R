@@ -68,7 +68,7 @@ OptiConjoint       <-          function(
 
     # import computational modules
     jax <<- reticulate::import("jax")
-    oryx <<- reticulate::import("oryx")
+    oryx <<- reticulate::import("tensorflow_probability.substrates.jax") #
     jnp <<- reticulate::import("jax.numpy")
     np <<- reticulate::import("numpy")
     py_gc <<- reticulate::import("gc")

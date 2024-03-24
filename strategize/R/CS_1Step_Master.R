@@ -72,7 +72,7 @@ OneStep.OptiConjoint <- function(
       try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
     }
     jax <- reticulate::import("jax")
-    oryx <- reticulate::import("oryx")
+    oryx <- reticulate::import("tensorflow_probability.substrates.jax") #
     optax <- reticulate::import("optax")
     jnp <- reticulate::import("jax.numpy")
     eq <- reticulate::import("equinox")
