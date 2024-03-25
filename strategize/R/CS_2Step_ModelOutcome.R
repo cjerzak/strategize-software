@@ -131,7 +131,6 @@ generate_ModelOutcome <- function(){
       if( UseRegularization == T & ok_counter == 1 | K > 1){
         # original keys
         UsedRegularization <- T
-        {
         if(K == 1){
             library(glinternet)
             InteractionPairs <- t(combn(1:nrow(main_info), m = 2))
@@ -252,15 +251,12 @@ generate_ModelOutcome <- function(){
             ok_ <- T
         }
 
-          # perform get adjustments
-          {
-            dl_vec <- paste(interaction_info$d,interaction_info$l,sep ="_")
-            dplp_vec <- paste(interaction_info$dp,interaction_info$lp,sep ="_")
-            base_dl_vec <- paste(main_info$d,main_info$l,sep ="_")
-            interaction_info$dl_index_adj <-  (1:length(base_dl_vec))[match(dl_vec,base_dl_vec)]
-            interaction_info$dplp_index_adj <- (1:length(base_dl_vec))[match(dplp_vec,base_dl_vec)]
-          }
-        }
+        # perform get adjustments
+        dl_vec <- paste(interaction_info$d,interaction_info$l,sep ="_")
+        dplp_vec <- paste(interaction_info$dp,interaction_info$lp,sep ="_")
+        base_dl_vec <- paste(main_info$d,main_info$l,sep ="_")
+        interaction_info$dl_index_adj <-  (1:length(base_dl_vec))[match(dl_vec,base_dl_vec)]
+        interaction_info$dplp_index_adj <- (1:length(base_dl_vec))[match(dplp_vec,base_dl_vec)]
         UseRegularization <- F
       }
     }
@@ -274,12 +270,10 @@ generate_ModelOutcome <- function(){
   # fit outcome model, post regularization
   {
   # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
-  # solve(t(main_dat) %*% main_dat)
-  # solve(t(interacted_dat) %*% interacted_dat)
+  # solve(t(main_dat) %*% main_dat); solve(t(interacted_dat) %*% interacted_dat)
   #  + 0 + 1 to get the glm to return the var-covar for the intercept
   my_model <- glm(Y_glm ~ cbind(main_dat, interacted_dat ), family = glm_family)
   # summary(  my_model  )
-  # sum(is.na(coef(my_model)))
   if(any(is.na(coef(my_model)))){
     browser()
     stop("WARNING: Some coefficients NA... This case hasn't been sufficiently tested!")
@@ -325,19 +319,15 @@ generate_ModelOutcome <- function(){
   }
 
   # vcov adjust - check this in regularization case!
-  {
-    vcov_OutcomeModel_full <- matrix(0, nrow = length(my_mean)+1, ncol = length(my_mean)+1)
-    interaction_info$IntoPreRegIndex_vcov <- 1+interaction_info$IntoPreRegIndex+nrow(main_info_PreRegularization)
-    vcov_OutcomeModel_full[c(1,main_info$d_index+1,interaction_info$IntoPreRegIndex_vcov),
+  vcov_OutcomeModel_full <- matrix(0, nrow = length(my_mean)+1, ncol = length(my_mean)+1)
+  interaction_info$IntoPreRegIndex_vcov <- 1+interaction_info$IntoPreRegIndex+nrow(main_info_PreRegularization)
+  vcov_OutcomeModel_full[c(1,main_info$d_index+1,interaction_info$IntoPreRegIndex_vcov),
                            c(1,main_info$d_index+1,interaction_info$IntoPreRegIndex_vcov)] <- vcov_OutcomeModel
-  }
 
   # reset names
-  {
-    main_info <- main_info_PreRegularization
-    interaction_info <- interaction_info_PreRegularization
-    vcov_OutcomeModel <- vcov_OutcomeModel_full
-    regularization_adjust_hash <- regularization_adjust_hash_PreRegularization
-  }
+  main_info <- main_info_PreRegularization
+  interaction_info <- interaction_info_PreRegularization
+  vcov_OutcomeModel <- vcov_OutcomeModel_full
+  regularization_adjust_hash <- regularization_adjust_hash_PreRegularization
   }
 }

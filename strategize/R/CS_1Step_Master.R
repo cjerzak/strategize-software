@@ -188,13 +188,13 @@ OneStep.OptiConjoint <- function(
     }
 
     # INITIALIZE M ESTIMATION
-    print("Initialize M-Estimation...")
+    print2("Initialize M-Estimation...")
     initialMtext <- paste(deparse(initialize_m),collapse="\n")
     initialMtext <- gsub(initialMtext,pattern="function \\(\\)",replace="")
     eval(parse( text = initialMtext ),envir = evaluation_environment)
 
     # get initial pi values
-    print("Initialize pi values...")
+    print2("Initialize pi values...")
     {
       if(is.null(pi_init_vec)){
         TARGET_EPSILON_PI <- 0.01  #/ exp( length( p_list ) )
@@ -266,13 +266,13 @@ OneStep.OptiConjoint <- function(
         if(length(lambda_seq) == 1){warning(sprintf("NO CV SELCTION OF LAMBDA, FORCING LAMBDA = %.5f|",lambda_seq)); trainIndicator_pool <- 0}
 
         # Build Model
-        print("Building...")
+        print2("Building...")
         buildText <- paste(deparse(ml_build),collapse="\n")
         buildText <- gsub(buildText,pattern="function \\(\\)",replace="")
         eval(parse( text = buildText ),envir = evaluation_environment)
 
         # Train Model + Perform CV
-        print("Training...")
+        print2("Training...")
         trainText <- paste(deparse(ml_train),collapse="\n")
         trainText <- gsub(trainText,pattern="function \\(\\)",replace="")
         eval(parse( text = trainText ),envir = evaluation_environment)

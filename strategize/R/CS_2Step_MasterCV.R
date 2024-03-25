@@ -86,6 +86,7 @@ cv.OptiConjoint       <-          function(
     print("Starting CV sequence...")
     cv_info_orig <- outsamp_results <- replicate(length(lambda_seq),list())
     insamp_results <- c() ; lambda_counter <- 0;
+
     for(lambda__ in lambda_seq){
       gc(); py_gc$collect()
       print(lambda__)
@@ -93,11 +94,13 @@ cv.OptiConjoint       <-          function(
       Qoptimized__ <- replicate(n = folds, list())
       if(is.null(respondent_id)){ respondent_id <- 1:length(Y) }
       indi_list <- tapply( 1:length(Y), respondent_id,  c  )
+
       split_i1 <- sample(1:length(indi_list),length(indi_list)/folds)
       split_i2 <- (1:length(indi_list))[! 1:length(indi_list) %in% split_i1 ]
       indi_list <- list(unlist(indi_list[split_i1]),unlist(indi_list[split_i2]))
 
       # CV sequence
+
       for(split_ in c(1:folds)){
         Qoptimized__[[split_]] <- OptiConjoint(
 
