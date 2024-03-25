@@ -19,7 +19,7 @@ get_se <- function(){
           psi_list <- neg_jacobian_list <- list()
           counter_ji <- 0; for(ji in split2_indices){
             counter_ji <- counter_ji + 1
-            if(counter_ji %% 100 == 0){print(sprintf("M Estimation Iteration %i of %i",counter_ji,length(split2_indices)))}
+            if(counter_ji %% 100 == 0){print2(sprintf("M Estimation Iteration %i of %i",counter_ji,length(split2_indices)))}
 
             # jax calc
             {
@@ -155,7 +155,7 @@ get_se <- function(){
         jacob_NAs <- unlist( lapply(neg_jacobian_list,function(l_){is.na(sum(l_))}) )
         # X[which( jacob_NAs ),]
         # FactorsMat_numeric_0Indexed[which( jacob_NAs ),]
-        if(sum(jacob_NAs) > 0){ print("Warning: Jacobian contains NAs! Dropping...") }
+        if(sum(jacob_NAs) > 0){ print2("Warning: Jacobian contains NAs! Dropping...") }
         psi_list <- psi_list[!jacob_NAs]
         neg_jacobian_list <- neg_jacobian_list[!jacob_NAs]
         rm( JacobianComponents )

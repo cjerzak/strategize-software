@@ -16,7 +16,7 @@
 #' # Perform analysis
 #' OptiConjoint_analysis <- OptiConjoint()
 #'
-#' print( OptiConjoint_analysis )
+#' print2( OptiConjoint_analysis )
 #'
 #' @export
 #'
@@ -52,20 +52,16 @@ OptiConjoint       <-          function(
                                             nMonte_MaxMin = 5L,
                                             nMonte_Qglm = 100L,
                                             jax_seed = as.integer(Sys.time()),
-                                            OptimType = "default"){
+                                            OptimType = "tryboth"){
   # define evaluation environment
   evaluation_environment <- environment()
 
   # load in packages - may help memory bugs to load them in thru package
-  print("Initializing computational environment...")
-  # conda_env <- "tensorflow_m1"; conda_env_required <- T
+  print2("Initializing computational environment...")
   {
     if(!is.null(conda_env)){
-      try(reticulate::use_condaenv(conda_env,
-                                   required = conda_env_required), T)
+      try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
     }
-    JaxKey <<- function(int_){ jax$random$PRNGKey(int_)}
-
     # import computational modules
     jax <<- reticulate::import("jax")
     oryx <<- reticulate::import("tensorflow_probability.substrates.jax") #
@@ -73,12 +69,13 @@ OptiConjoint       <-          function(
     np <<- reticulate::import("numpy")
     py_gc <<- reticulate::import("gc")
     optax <<- reticulate::import("optax")
+    JaxKey <<- function(int_){ jax$random$PRNGKey(int_)}
 
     # setup numerical precision for delta method
     #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # turn on float64
     dtj <<- jnp$float32; jax$config$update("jax_enable_x64", F) # turn off float64
   }
-  print("Done initializing computational environment!")
+  print2("Done initializing computational environment!")
 
   # setup pretty pi functions
   {
@@ -111,15 +108,10 @@ OptiConjoint       <-          function(
   nSGD_orig <- nSGD
   ai <- as.integer
   w_orig <- W
-  #usedRegularization <- F
   MaxMinType <- "TwoRoundSingle"
 
   glm_family = "gaussian";
-  if(!ForceGaussianFamily){
-    if(mean(unique(Y) %in% c(0,1)) == 1){
-      glm_family = "binomial";
-    }
-  }
+  if(!ForceGaussianFamily){ if(mean(unique(Y) %in% c(0,1)) == 1){ glm_family = "binomial" } }
 
   # ensure naming conventions are correct (i.e. in alignment with p_list if available)
   if(is.null(p_list) | is.null(names(p_list[[1]]))){
@@ -134,12 +126,8 @@ OptiConjoint       <-          function(
   # get info about # of levels per factor
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
-  #initialize_ModelOutcome_FindIt <- paste(deparse(generate_ModelOutcome_FindIt),collapse="\n")
-  #initialize_ModelOutcome_FindIt <- gsub(initialize_ModelOutcome_FindIt,pattern="function \\(\\)",replace="")
-  #eval( parse( text = initialize_ModelOutcome_FindIt ),envir = evaluation_environment )
-
   # obtain outcome models
-  print("Initializing outcome models...")
+  print2("Initializing outcome models...")
   if(T == T){
     if(K > 1 & !UseRegularization){
       warning("K > 1; Forcing regularization...");UseRegularization <- T
@@ -201,7 +189,7 @@ OptiConjoint       <-          function(
       }
       if( !dag_condition ){
           tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_ast%s <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
-          rm(tmp)
+          rm( tmp )
        }
     }
     }
@@ -225,10 +213,10 @@ OptiConjoint       <-          function(
     EST_COEFFICIENTS_tf_ast <- EST_COEFFICIENTS_tf_dag
     REGRESSION_PARAMS_jax_ast <- REGRESSION_PARAMS_jax_dag
   }
-  print("Done initializing outcome models!...")
+  print2("Done initializing outcome models!...")
 
   # setup glm transform in tf / jax
-  print("Starting optimization sequence...")
+  print2("Starting optimization sequence...")
   glm_outcome_transform <- function(x){x} # identity function
   if(!ForceGaussianFamily){
     if(mean(unique(Y) %in% c(0,1)) == 1){
@@ -275,14 +263,14 @@ OptiConjoint       <-          function(
 
   if(OptimType != "gd"){
   if(ParameterizationType == "Implicit"){
-    print("Initializing manual exact solution code... (Implicit mode)")
+    print2("Initializing manual exact solution code... (Implicit mode)")
     initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
     eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
     getPiStar_exact <- generate_ExactSolImplicit
   }
   if(ParameterizationType == "Full"){
-    print("Initializing manual exact solution code... (Full mode)")
+    print2("Initializing manual exact solution code... (Full mode)")
     initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
     eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
@@ -293,7 +281,6 @@ OptiConjoint       <-          function(
   # pi in constrained space using gradient ascent
   p_vec_tf <- jnp$array(as.matrix(p_vec_use),dtype = dtj)
   inv_learning_rate <- jnp$array(1., dtype = dtj)
-  #compile_fxn <- function(x){x}
   compile_fxn <- function(x){jax$jit(x)}
 
   # initialize manual gradient updates if needed
@@ -341,7 +328,7 @@ OptiConjoint       <-          function(
   Neg2_tf <- jnp$array(-2., dtj)
 
   # Q functions
-  print("Defining Q functions..")
+  print2("Defining Q functions..")
   a2Simplex_optim <- ifelse( holdout_indicator == 1 ,
                              yes = list(a2Simplex),
                              no = list(a2FullSimplex) )[[1]]
@@ -399,16 +386,14 @@ OptiConjoint       <-          function(
         split_vec <- cumsum(!duplicated(split_vec))
       }
       main_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
-      main_comp_mat <- sapply(1:length(pi_star_value_loc),function(zer){
+      main_comp_mat <- jnp$array(sapply(1:length(pi_star_value_loc),function(zer){
         main_comp_mat[pi_star_value_loc[zer],zer] <- 1
-        return( main_comp_mat[,zer] ) })
-      main_comp_mat <- jnp$array(main_comp_mat,dtj)
+        return( main_comp_mat[,zer] ) }),dtj)
 
       shadow_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
-      shadow_comp_mat <- sapply(1:length(pi_star_value_loc_shadow),function(zer){
+      shadow_comp_mat <- jnp$array( sapply(1:length(pi_star_value_loc_shadow),function(zer){
         shadow_comp_mat[pi_star_value_loc_shadow[zer],zer] <- 1
-        return( shadow_comp_mat[,zer] ) })
-      shadow_comp_mat <- jnp$array(shadow_comp_mat,dtj)
+        return( shadow_comp_mat[,zer] ) }),dtj)
     }
 
     split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
@@ -536,7 +521,7 @@ OptiConjoint       <-          function(
       jit_update_dag <- jax$jit(optax_optimizer_jax$update)
   }
 
-  print("Defining gd function...")
+  print2("Defining gd function...")
   {
     # bring functions into env and compile as needed
     environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- jax$jit( getMultinomialSamp )
@@ -551,12 +536,12 @@ OptiConjoint       <-          function(
   jax_seed <- jnp$array(as.integer(c(jax_seed)))
 
   # Obtain solution via exact calculation
-  print("Starting optimization...")
+  print2("Starting optimization...")
   pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
   q_star_OUTER <- q_star_se_OUTER <- replicate(n = K, list())
   for(k_clust in 1:K){
   if(K > 1){
-    print(sprintf("Optimizing cluster %s of %s...",k_clust, K))
+    print2(sprintf("Optimizing cluster %s of %s...",k_clust, K))
     ################################################
     # WARNING: Operational only in average case mode
     # reset means
@@ -571,7 +556,7 @@ OptiConjoint       <-          function(
   }
 
   if(use_exact){
-    print("Optimization type: Exact solution")
+    print2("Optimization type: Exact solution")
     #results_vec_list <- replicate(length(unlist(p_list_full))+1,list()) # + 1 for intercept
     FxnForJacobian <- function(  INPUT_  ){
       EST_INTERCEPT_tf_ <- INPUT_[[1]]
@@ -605,7 +590,7 @@ OptiConjoint       <-          function(
   if(MaxMin & diff){QFXN <- getQStar_diff_MultiGroup}
 
   if(use_gd){
-    print("Optimization type: Gradient ascent")
+    print2("Optimization type: Gradient ascent")
 
     # perform main gd runs + inference
     nSGD <- nSGD_orig
@@ -667,7 +652,6 @@ OptiConjoint       <-          function(
                            INTERCEPT_dag_,
                            COEFFICIENTS_dag_)
     }, list(1L,1L,NULL,NULL,NULL,NULL)))
-
     gd_full_simplex <- T
     q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast,
@@ -685,9 +669,7 @@ OptiConjoint       <-          function(
     dQ_da_dag <- q_with_pi_star_full[[2]][[2]]
     QFXN <- q_with_pi_star_full[[2]][[3]]
     getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
-
-    q_with_pi_star_full <- q_with_pi_star_full[[1]]
-    q_with_pi_star_full <- jnp$array(q_with_pi_star_full, dtj)
+    q_with_pi_star_full <- jnp$array(q_with_pi_star_full[[1]], dtj)
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
       ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )), yes = NA) }) )
@@ -710,8 +692,7 @@ OptiConjoint       <-          function(
                         BASE_SEED = jax_seed,
                         functionList = list(dQ_da_dag, dQ_da_ast,
                                             QFXN, getMultinomialSamp),
-                        functionReturn = F
-                        )
+                        functionReturn = F)
     pi_star_red <- np$array(pi_star_red)[-c(1:3),]
     pi_star_red_dag <- jnp$array(as.matrix(pi_star_red[-c(1:(length(pi_star_red)/2))]))
     pi_star_red_ast <- jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -719,24 +700,21 @@ OptiConjoint       <-          function(
     q_star_gd <- q_star <- np$array(  q_with_pi_star_full )[1]
     pi_star_full_gd <- pi_star_full <- np$array( q_with_pi_star_full )[-c(1:3)]
     #plot(pi_star_full_gd[1:(length(pi_star_full_gd)/2)],pi_star_full_gd[-c(1:(length(pi_star_full_gd)/2))]); abline(a=0,b=1)
-    #plot(pi_star_full_gd[1:(length(pi_star_full_gd)/2)]-pi_star_full_gd[-c(1:(length(pi_star_full_gd)/2))]); abline(h=0)
 
     # see https://github.com/google/jax/issues/1696 for debugging help
-    jacobian_mat_gd <- jacobian_mat <- matrix(0,
-                              ncol = 4*REGRESSION_PARAMS_jax_ast$shape[[1]],
-                              nrow = q_with_pi_star_full$shape[[1]])
+    jacobian_mat_gd <- jacobian_mat <- matrix(0, ncol = 4*REGRESSION_PARAMS_jax_ast$shape[[1]],
+                                                 nrow = q_with_pi_star_full$shape[[1]])
     diag(jacobian_mat_gd) <- diag(jacobian_mat) <- 1
-    vcov_OutcomeModel_concat <- matrix(0,
-                                       nrow = nrow(vcov_OutcomeModel_dag)*4,
-                                       ncol = nrow(vcov_OutcomeModel_dag)*4)
+    vcov_OutcomeModel_concat <- matrix(0, nrow = nrow(vcov_OutcomeModel_dag)*4,
+                                          ncol = nrow(vcov_OutcomeModel_dag)*4)
     if(ComputeSEs){
       gd_full_simplex <- T
 
       # first, compute vcov
       vcov_OutcomeModel_concat <- list(
-        vcov_OutcomeModel_ast  ,
-        vcov_OutcomeModel_dag  ,
-        vcov_OutcomeModel_ast0 ,
+        vcov_OutcomeModel_ast,
+        vcov_OutcomeModel_dag,
+        vcov_OutcomeModel_ast0,
         vcov_OutcomeModel_dag0  )
       vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
       vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
@@ -774,7 +752,7 @@ OptiConjoint       <-          function(
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
   pi_star_numeric <- np$array( pi_star_full )
-  #trueQ;print(civ<-c(q_star - abs(qnorm((1-ConfLevel)/2))*q_star_se,q_star + abs(qnorm((1-ConfLevel)/2))*q_star_se))
+  #trueQ;print2(civ<-c(q_star - abs(qnorm((1-ConfLevel)/2))*q_star_se,q_star + abs(qnorm((1-ConfLevel)/2))*q_star_se))
   # 1*(  civ[1] <= trueQ & civ[2] >= trueQ)
 
   # drop the q part

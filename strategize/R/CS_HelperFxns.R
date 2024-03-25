@@ -1,3 +1,7 @@
+print2 <- function(text, quiet = F){
+  if(!quiet){ print( sprintf("[%s] %s" ,format(Sys.time(), "%Y-%m-%d %H:%M:%S"),text) ) }
+}
+
 ess_fxn <- function(wz){ sum(wz)^2 / sum(wz^2)}
 
 toSimplex = function(x){

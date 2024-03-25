@@ -64,7 +64,6 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, grad_i = grad_i_dag,
                                              inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_dag))
       }
-
       if(UseOptax){
         updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, state = opt_state_dag, params = a_i_dag)
         opt_state_dag <- updates_and_opt_state_dag[[2]]
@@ -99,7 +98,6 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
       grad_mag_ast_vec[i] <<- list( jnp$linalg$norm( grad_i_ast ) )
     }
-
     if(i >= maxIter){goOn <- T}
   }
 
@@ -133,10 +131,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     }), 1L)
 
     q_star_f <- VectorizedQMonteLoop(pi_star_ast_f_all, pi_star_dag_f_all,
-                                      INTERCEPT_ast_,
-                                      COEFFICIENTS_ast_,
-                                      INTERCEPT_dag_,
-                                      COEFFICIENTS_dag_)
+                                     INTERCEPT_ast_,
+                                     COEFFICIENTS_ast_,
+                                     INTERCEPT_dag_,
+                                     COEFFICIENTS_dag_)
 
     # sum and divide to form means
     q_star_f <- jnp$expand_dims(jnp$divide(jnp$sum(q_star_f,0L), nMonte_Q),1L)
@@ -145,8 +143,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     if( gd_full_simplex == T){ ret_array <- jnp$concatenate(list( q_star_f, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ ) ) }
     if( gd_full_simplex == F){ ret_array <- jnp$concatenate(list( q_star_f, pi_star_ast_, pi_star_dag_ ) ) }
     if(functionReturn == T){ ret_array <- list(ret_array,
-                                            list(dQ_da_ast, dQ_da_dag, QFXN, getMultinomialSamp)
-                                            ) }
-    return( ret_array  )
+                                               list(dQ_da_ast, dQ_da_dag,
+                                                    QFXN, getMultinomialSamp) ) }
+    return( ret_array )
   }
 }
