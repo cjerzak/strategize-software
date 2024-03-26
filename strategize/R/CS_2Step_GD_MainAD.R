@@ -42,7 +42,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0; maxIter<-nSGD;
   while(goOn == F){
     i<-i+1;
-    if(!quiet){ print(sprintf("[%s] SGD Iteration: %i of %s", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), i, nSGD) ) }
+    if(i %% 10 == 0 | i < 10){ print2(sprintf("SGD Iteration: %i of %s", i, nSGD) ) }
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & MaxMin ){
