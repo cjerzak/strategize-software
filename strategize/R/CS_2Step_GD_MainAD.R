@@ -4,6 +4,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           REGRESSION_PARAMETERS_dag0,
                           P_VEC_FULL_ast,
                           P_VEC_FULL_dag,
+                          SLATE_VEC_ast, 
+                          SLATE_VEC_dag,
                           LAMBDA,
                           BASE_SEED,
                           functionList,
@@ -46,12 +48,14 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & MaxMin ){
+      # dQ_da_dag built off FullGetQStar_
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                 INTERCEPT_dag_,  COEFFICIENTS_dag_,
                                 INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                                 INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                 P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                SLATE_VEC_ast, SLATE_VEC_dag,
                                 LAMBDA,
                                 jnp$array(-1.),
                                 jnp$add(BASE_SEED,jnp$array(as.integer(i)))  )
@@ -81,6 +85,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                                INTERCEPT_dag0_, COEFFICIENTS_dag0_,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
+                               SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, jnp$array(1.),
                                jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer( i+2) ) ) ) )
       if(i==1){ inv_learning_rate_da_ast <- jnp$maximum(jnp$array(0.001), jnp$multiply(10, jnp$square(jnp$linalg$norm(grad_i_ast))))  }
