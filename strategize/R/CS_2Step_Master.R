@@ -17,6 +17,8 @@
 #' OptiConjoint_analysis <- OptiConjoint()
 #'
 #' print2( OptiConjoint_analysis )
+#' 
+#' @import glinternet, sandwich
 #'
 #' @export
 #'
@@ -36,6 +38,7 @@ OptiConjoint       <-          function(
                                             respondent_task_id = NULL,
                                             profile_order = NULL,
                                             p_list = NULL,
+                                            slate_list = NULL,
                                             K = 1,
                                             nSGD = 100,
                                             diff = F, MaxMin = F,
@@ -53,6 +56,13 @@ OptiConjoint       <-          function(
                                             nMonte_Qglm = 100L,
                                             jax_seed = as.integer(Sys.time()),
                                             OptimType = "tryboth"){
+  # dag then ast - confirm 
+  # dag is 1, based on sort(unique(competing_group_variable_candidate))
+  # ast is 2, based on sort(unique(competing_group_variable_candidate))
+  # check ordering of ast and dag and so on 
+  # confirm last indexing of simplex
+  print("PERFORM EMERGENCY CHECKS")
+  
   # define evaluation environment
   evaluation_environment <- environment()
 
@@ -92,7 +102,6 @@ OptiConjoint       <-          function(
       for(k_ in 1:length(pi_)){
         updates_ <- pi_[[k_]]
         pi_[[k_]] <- p_list_PreRegularization
-        p_list_PreRegularization[]
         pi_[[k_]][update_these] <- updates_
         if(isSE){
           pi_[[k_]][-update_these] <- lapply(pi_[[k_]][-update_these],
@@ -181,14 +190,14 @@ OptiConjoint       <-          function(
       # rename as appropriate
       ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
             "REGRESSION_PARAMS_jax","regularization_adjust_hash","main_dat", "my_mean","EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
-      dag_condition <- (GroupCounter == 1) | (MaxMin == F)
+      doAst <- (GroupCounter == 1) | (MaxMin == F)
       round_text <- ifelse( Round_==0, yes="0", no="")
-      if( dag_condition ){
-          tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_dag%s <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
+      if( doAst ){
+          tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_ast%s <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
           rm(tmp)
       }
-      if( !dag_condition ){
-          tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_ast%s <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
+      if( !doAst ){
+          tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_dag%s <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
           rm( tmp )
        }
     }
@@ -501,6 +510,20 @@ OptiConjoint       <-          function(
 
   p_vec_jnp <- jnp$array(   as.matrix(p_vec)   )
   p_vec_full_jnp <- jnp$array( as.matrix( p_vec_full ) )
+  
+  SLATE_VEC_ast_jnp <- SLATE_VEC_dag_jnp <- p_vec_jnp
+  if(!is.null(slate_list)){ 
+    SLATE_VEC_dag_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[1]],function(zer){
+      #return( zer[-1] )# if doing position 1 holdout 
+      return( zer[-length(zer)] )# if doing last position holdout 
+      })) ) )
+    SLATE_VEC_ast_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[2]],function(zer){
+      #return( zer[-1] )# if doing position 1 holdout 
+      return( zer[-length(zer)] )# if doing last position holdout 
+      })) ) )
+    #names(unlist(slate_list[[1]])) == names(unlist(slate_list[[2]]))
+  }
+  
   lambda_jnp <-  jnp$array(  lambda  )
   {
       UseOptax <- F
@@ -660,6 +683,8 @@ OptiConjoint       <-          function(
                              REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0,
                              P_VEC_FULL_ast = p_vec_full_ast_jnp,
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
+                             SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
+                             SLATE_VEC_dag = SLATE_VEC_dag_jnp,
                              LAMBDA = lambda_jnp,
                              BASE_SEED = jax_seed,
                              functionList = list(dQ_da_dag, dQ_da_ast,
@@ -688,6 +713,8 @@ OptiConjoint       <-          function(
                         REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0,
                         P_VEC_FULL_ast = p_vec_full_ast_jnp,
                         P_VEC_FULL_dag = p_vec_full_dag_jnp,
+                        SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
+                        SLATE_VEC_dag = SLATE_VEC_dag_jnp,
                         LAMBDA = lambda_jnp,
                         BASE_SEED = jax_seed,
                         functionList = list(dQ_da_dag, dQ_da_ast,
@@ -724,6 +751,8 @@ OptiConjoint       <-          function(
       # For matrices that are near-square, jacfwd probably has an edge over jacrev.
       # also, try the jacobian matrix product (you don't need full jacobian, just it's transformation)
       # now, compute jacobian matrix product
+      # note: do not jit compile as computation only used once 
+      # and compilation induces large overhead 
       jacobian_mat <- jax$jacrev(getPiStar_gd, 0L:3L)(
                                           REGRESSION_PARAMS_jax_ast,
                                           REGRESSION_PARAMS_jax_dag,
@@ -731,6 +760,8 @@ OptiConjoint       <-          function(
                                           REGRESSION_PARAMS_jax_dag0,
                                           p_vec_full_ast_jnp,
                                           p_vec_full_dag_jnp,
+                                          SLATE_VEC_ast_jnp, 
+                                          SLATE_VEC_dag_jnp,
                                           lambda_jnp,
                                           jax_seed,
                                           functionList = list(dQ_da_dag, dQ_da_ast,
@@ -741,7 +772,7 @@ OptiConjoint       <-          function(
         np$array( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
     }
-    # hist(c(jacobian_mat));image(jacobian_mat)
+    # image(jacobian_mat)
     # summary(lm(np$array(sol_gd)~np$array(sol_exact)))
   }
 
@@ -837,6 +868,7 @@ OptiConjoint       <-          function(
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full
   }
 
+  print2("Done with strategic analysis!")
   return( list(   "PiStar_point" = pi_star_list,
                   "PiStar_se" = pi_star_se_list,
                   "Q_point_mEst" = q_star,
@@ -856,6 +888,7 @@ OptiConjoint       <-          function(
                   "p_vec_full" = p_vec_full,
                   "regularization_adjust_hash" = regularization_adjust_hash,
                   "p_list" = p_list,
+                  "slate_list" = slate_list, 
 
                   # reconstruct q info
                   "Qfxn" = QFXN,

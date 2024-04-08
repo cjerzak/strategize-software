@@ -69,8 +69,8 @@ FullGetQStar_ <- function(a_i_ast,
                           INTERCEPT_dag_, COEFFICIENTS_dag_,
                           INTERCEPT_ast0_, COEFFICIENTS_ast0_,
                           INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                          P_VEC_FULL_ast_,
-                          P_VEC_FULL_dag_,
+                          P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+                          SLATE_VEC_ast_, SLATE_VEC_dag_,
                           LAMBDA_,
                           Q_SIGN,
                           SEED_IN_LOOP){
@@ -115,22 +115,24 @@ FullGetQStar_ <- function(a_i_ast,
       SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
       TSAMP_dag <- getMultinomialSamp(pi_star_i_dag, jnp$add(jnp$array(29L),SEED_IN_LOOP_i)) }), 1L)
 
-    # sample primary competitor features from same distribution or uniformly (stopping gradient)
+    # sample primary competitor features uniformly or using slates 
     TSAMP_ast_PrimaryComp_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
       SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
-      TSAMP_ast_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
+      TSAMP_ast_PrimaryComp <- getMultinomialSamp(SLATE_VEC_ast_, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
+      #TSAMP_ast_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
       #TSAMP_ast_PrimaryComp <- jax$lax$stop_gradient(getMultinomialSamp(pi_star_i_ast, jnp$add(jnp$array(3L),SEED_IN_LOOP_i)))
       return( TSAMP_ast_PrimaryComp )
     }), 1L)
     TSAMP_dag_PrimaryComp_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
       SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
-      TSAMP_dag_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(49L),SEED_IN_LOOP_i))
+      TSAMP_dag_PrimaryComp <- getMultinomialSamp(SLATE_VEC_dag_, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
+      #TSAMP_dag_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(49L),SEED_IN_LOOP_i))
       #TSAMP_dag_PrimaryComp <- jax$lax$stop_gradient(getMultinomialSamp(pi_star_i_dag, jnp$add(jnp$array(4L),SEED_IN_LOOP_i)))
       return( TSAMP_dag_PrimaryComp )
     }), 1L)
 
     VectorizedQMonteLoop_res <- VectorizedQMonteLoop_optimize(TSAMP_ast_all, TSAMP_dag_all,
-                        TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all ,
+                        TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
 
                         a_i_ast,
                         a_i_dag,
