@@ -18,7 +18,7 @@
 #'
 #' print2( OptiConjoint_analysis )
 #' 
-#' @import glinternet, sandwich
+#' @import glinternet, sandwich, compositions
 #'
 #' @export
 #'
@@ -56,9 +56,9 @@ OptiConjoint       <-          function(
                                             nMonte_Qglm = 100L,
                                             jax_seed = as.integer(Sys.time()),
                                             OptimType = "tryboth"){
-  # dag then ast - confirm 
-  # dag is 1, based on sort(unique(competing_group_variable_candidate))
-  # ast is 2, based on sort(unique(competing_group_variable_candidate))
+  # ast then dag 
+  # ast is 1, based on sort(unique(competing_group_variable_candidate))[1]
+  # dag is 2, based on sort(unique(competing_group_variable_candidate))[2]
   # check ordering of ast and dag and so on 
   # confirm last indexing of simplex
   print("PERFORM EMERGENCY CHECKS")
@@ -114,7 +114,6 @@ OptiConjoint       <-          function(
   nMonte_MaxMin <- as.integer( nMonte_MaxMin )
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
   if(OpenBrowser == T){ browser() }
-  nSGD_orig <- nSGD
   ai <- as.integer
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
@@ -160,16 +159,19 @@ OptiConjoint       <-          function(
       if(MaxMin == F){ indi_ <- 1:length( Y )  }
       if(MaxMin == T){
         if(Round_ == 0){
-          indi_ <- which( competing_group_variable_respondent == GroupsPool[ GroupCounter ] &
+          indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                       ( competing_group_competition_variable_candidate == "Same" &
-                          competing_group_variable_candidate == GroupsPool[GroupCounter]) )
+                          competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
         }
         if(Round_ == 1){
-          indi_ <- which( competing_group_variable_respondent == GroupsPool[ GroupCounter ] &
+          indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                             ( competing_group_competition_variable_candidate == "Different" &
                                 competing_group_variable_candidate %in% GroupsPool) )
         }
-        DagProp <- prop.table(table(competing_group_variable_respondent[competing_group_variable_respondent %in% GroupsPool]))[2]
+        AstProp <- prop.table(table(competing_group_variable_respondent[
+                      competing_group_variable_respondent %in% GroupsPool]))[1]
+        DagProp <- prop.table(table(competing_group_variable_respondent[
+                          competing_group_variable_respondent %in% GroupsPool]))[2]
       }
 
       # subset data
@@ -185,7 +187,7 @@ OptiConjoint       <-          function(
       initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
 
-      REGRESSION_PARAMS_jax <- jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L)
+      REGRESSION_PARAMS_jax <- jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf), 0L)
 
       # rename as appropriate
       ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
@@ -204,25 +206,25 @@ OptiConjoint       <-          function(
     }
   }
 
-  if(!"vcov_OutcomeModel_dag0" %in% ls()){
-    vcov_OutcomeModel_dag0 <- vcov_OutcomeModel_dag
-    EST_INTERCEPT_tf_dag0 <- EST_INTERCEPT_tf_dag
-    EST_COEFFICIENTS_tf_dag0 <- EST_COEFFICIENTS_tf_dag
-    REGRESSION_PARAMS_jax_dag0 <- REGRESSION_PARAMS_jax_dag
-  }
   if(!"vcov_OutcomeModel_ast0" %in% ls()){
-    vcov_OutcomeModel_ast0 <- vcov_OutcomeModel_dag
-    EST_INTERCEPT_tf_ast0 <- EST_INTERCEPT_tf_dag
-    EST_COEFFICIENTS_tf_ast0 <- EST_COEFFICIENTS_tf_dag
-    REGRESSION_PARAMS_jax_ast0 <- REGRESSION_PARAMS_jax_dag
+    vcov_OutcomeModel_ast0 <- vcov_OutcomeModel_ast
+    EST_INTERCEPT_tf_ast0 <- EST_INTERCEPT_tf_ast
+    EST_COEFFICIENTS_tf_ast0 <- EST_COEFFICIENTS_tf_ast
+    REGRESSION_PARAMS_jax_ast0 <- REGRESSION_PARAMS_jax_ast
   }
-  if(!"vcov_OutcomeModel_ast" %in% ls()){
-    vcov_OutcomeModel_ast <- vcov_OutcomeModel_dag
-    EST_INTERCEPT_tf_ast <- EST_INTERCEPT_tf_dag
-    EST_COEFFICIENTS_tf_ast <- EST_COEFFICIENTS_tf_dag
-    REGRESSION_PARAMS_jax_ast <- REGRESSION_PARAMS_jax_dag
+  if(!"vcov_OutcomeModel_dag0" %in% ls()){
+    vcov_OutcomeModel_dag0 <- vcov_OutcomeModel_ast
+    EST_INTERCEPT_tf_dag0 <- EST_INTERCEPT_tf_ast
+    EST_COEFFICIENTS_tf_dag0 <- EST_COEFFICIENTS_tf_ast
+    REGRESSION_PARAMS_jax_dag0 <- REGRESSION_PARAMS_jax_ast
   }
-  print2("Done initializing outcome models!...")
+  if(!"vcov_OutcomeModel_dag" %in% ls()){
+    vcov_OutcomeModel_dag <- vcov_OutcomeModel_ast
+    EST_INTERCEPT_tf_dag <- EST_INTERCEPT_tf_ast
+    EST_COEFFICIENTS_tf_dag <- EST_COEFFICIENTS_tf_ast
+    REGRESSION_PARAMS_jax_dag <- REGRESSION_PARAMS_jax_ast
+  }
+  print2("Done initializing outcome models!")
 
   # setup glm transform in tf / jax
   print2("Starting optimization sequence...")
@@ -513,15 +515,15 @@ OptiConjoint       <-          function(
   
   SLATE_VEC_ast_jnp <- SLATE_VEC_dag_jnp <- p_vec_jnp
   if(!is.null(slate_list)){ 
-    SLATE_VEC_dag_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[1]],function(zer){
+    SLATE_VEC_ast_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[1]],function(zer){
       #return( zer[-1] )# if doing position 1 holdout 
       return( zer[-length(zer)] )# if doing last position holdout 
       })) ) )
-    SLATE_VEC_ast_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[2]],function(zer){
+    SLATE_VEC_dag_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[2]],function(zer){
       #return( zer[-1] )# if doing position 1 holdout 
       return( zer[-length(zer)] )# if doing last position holdout 
       })) ) )
-    #names(unlist(slate_list[[1]])) == names(unlist(slate_list[[2]]))
+    # mean( names(unlist(slate_list[[1]])) == names(unlist(slate_list[[2]])) ) # target of 1 
   }
   
   lambda_jnp <-  jnp$array(  lambda  )
@@ -550,9 +552,6 @@ OptiConjoint       <-          function(
     environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- jax$jit( getMultinomialSamp )
     environment(getPiStar_gd) <- evaluation_environment
   }
-
-  # get initial learning rate for gd result
-  nSGD <- nSGD_orig
   }
 
   # get jax seed into correct type
@@ -616,8 +615,6 @@ OptiConjoint       <-          function(
     print2("Optimization type: Gradient ascent")
 
     # perform main gd runs + inference
-    nSGD <- nSGD_orig
-
     # first do ave case analysis
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full_jnp
 
