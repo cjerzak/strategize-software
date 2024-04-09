@@ -52,13 +52,11 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
       EST_INTERCEPT_tf_dag,
       jnp$matmul(jnp$transpose(main_coef_dag), DELTA_ast_dag )),
       jnp$sum(jnp$multiply(inter_coef_dag, DELTA_ast_dag_prod ), keepdims=T)) )
-    # Pr(Win D_c Among All | R_c Opp) = Pr(Win D_c Among All | R_c Opp, R voters) Pr(R voters) +
-    #Pr(Win D_c Among All | R_c Opp, D voters) Pr(D voters) +
-    #Pr(Win D_c Among All | R_c Opp, I voters) Pr(I voters)
-    Qhat_population <- jnp$add(
-      jnp$multiply(Qhat_ast, jnp$subtract(1,DagProp)),
-      jnp$multiply(Qhat_dag, DagProp)
-    )
+    # Pr(Win D_c Among All | R_c Opp) = 
+    #   Pr(Win D_c Among All | R_c Opp, R voters) Pr(R voters) +
+    #   Pr(Win D_c Among All | R_c Opp, D voters) Pr(D voters) +
+    #   Pr(Win D_c Among All | R_c Opp, I voters) Pr(I voters) # dropped 
+    Qhat_population <- Qhat_ast * AstProp +  Qhat_dag * DagProp
   }
   return( jnp$concatenate(list(Qhat_population, Qhat_ast, Qhat_dag),0L)  )
 }
@@ -77,8 +75,8 @@ FullGetQStar_ <- function(a_i_ast,
   pi_star_full_i_ast <- getPrettyPi_diff( pi_star_i_ast <- a2Simplex_diff_use( a_i_ast ))
   pi_star_full_i_dag <- getPrettyPi_diff( pi_star_i_dag <- a2Simplex_diff_use( a_i_dag ))
 
-  cond_UseDag <- jnp$multiply(jnp$array(0.5),jnp$subtract(jnp$array(1.), Q_SIGN))
   cond_UseAst <- jnp$multiply(jnp$array(0.5),jnp$add(jnp$array(1.), Q_SIGN))
+  cond_UseDag <- jnp$multiply(jnp$array(0.5),jnp$subtract(jnp$array(1.), Q_SIGN))
 
   if(!MaxMin){
     if(!diff){
@@ -120,14 +118,12 @@ FullGetQStar_ <- function(a_i_ast,
       SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
       TSAMP_ast_PrimaryComp <- getMultinomialSamp(SLATE_VEC_ast_, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
       #TSAMP_ast_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
-      #TSAMP_ast_PrimaryComp <- jax$lax$stop_gradient(getMultinomialSamp(pi_star_i_ast, jnp$add(jnp$array(3L),SEED_IN_LOOP_i)))
       return( TSAMP_ast_PrimaryComp )
     }), 1L)
     TSAMP_dag_PrimaryComp_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
       SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
       TSAMP_dag_PrimaryComp <- getMultinomialSamp(SLATE_VEC_dag_, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
       #TSAMP_dag_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(49L),SEED_IN_LOOP_i))
-      #TSAMP_dag_PrimaryComp <- jax$lax$stop_gradient(getMultinomialSamp(pi_star_i_dag, jnp$add(jnp$array(4L),SEED_IN_LOOP_i)))
       return( TSAMP_dag_PrimaryComp )
     }), 1L)
 
@@ -155,10 +151,8 @@ FullGetQStar_ <- function(a_i_ast,
                            jnp$add(jnp$array(0.001),jnp$sum(VectorizedQMonteLoop_res[[4]][[1]])))
 
     # quantity to maximize
-    q_max <- jnp$add(
-      jnp$multiply(cond_UseDag,jnp$add( AveProdAst_DagOpti, AveProdDag_DagOpti )),
-      jnp$multiply(cond_UseAst,jnp$add( AveProdAst_AstOpti, AveProdDag_AstOpti ))
-    )
+    q_max <-  jnp$multiply(cond_UseDag,jnp$add( AveProdAst_DagOpti, AveProdDag_DagOpti )) + 
+                jnp$multiply(cond_UseAst,jnp$add( AveProdAst_AstOpti, AveProdDag_AstOpti ))
   }
 
   # regularization
@@ -189,5 +183,5 @@ FullGetQStar_ <- function(a_i_ast,
     }
   }
 
-  return( jnp$add( jnp$add( q_max, var_pen_ast__), var_pen_dag__) )
+  return( q_max + var_pen_ast__ + var_pen_dag__ )
 }
