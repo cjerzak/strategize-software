@@ -107,27 +107,26 @@ FullGetQStar_ <- function(a_i_ast,
 
     # sample main competitor features
     TSAMP_ast_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
-      SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
-      TSAMP_ast <- getMultinomialSamp(pi_star_i_ast, jnp$add(jnp$array(19L),SEED_IN_LOOP_i))  }), 1L)
+      SEED_IN_LOOP_i <- jnp$array(as.integer(monti_i)) * SEED_IN_LOOP
+      return( TSAMP_ast <- getMultinomialSamp(pi_star_i_ast, jnp$add(jnp$array(19L),SEED_IN_LOOP_i)) )
+      }), 1L)
     TSAMP_dag_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
-      SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
-      TSAMP_dag <- getMultinomialSamp(pi_star_i_dag, jnp$add(jnp$array(29L),SEED_IN_LOOP_i)) }), 1L)
+      SEED_IN_LOOP_i <- jnp$array(as.integer(monti_i)) * SEED_IN_LOOP
+      return( TSAMP_dag <- getMultinomialSamp(pi_star_i_dag, jnp$add(jnp$array(29L),SEED_IN_LOOP_i))  ) 
+      }), 1L)
 
     # sample primary competitor features uniformly or using slates 
     TSAMP_ast_PrimaryComp_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
-      SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
-      TSAMP_ast_PrimaryComp <- getMultinomialSamp(SLATE_VEC_ast_, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
-      #TSAMP_ast_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
-      return( TSAMP_ast_PrimaryComp )
+      SEED_IN_LOOP_i <- jnp$array(as.integer(monti_i)) * SEED_IN_LOOP
+      return( TSAMP_ast_PrimaryComp <- getMultinomialSamp(SLATE_VEC_ast_, jnp$add(jnp$array(399L),SEED_IN_LOOP_i)) )  
     }), 1L)
     TSAMP_dag_PrimaryComp_all <- jnp$concatenate(sapply(1:nMonte_MaxMin, function(monti_i){
       SEED_IN_LOOP_i <- jnp$multiply(jnp$array(as.integer(monti_i)),SEED_IN_LOOP)
-      TSAMP_dag_PrimaryComp <- getMultinomialSamp(SLATE_VEC_dag_, jnp$add(jnp$array(39L),SEED_IN_LOOP_i))
-      #TSAMP_dag_PrimaryComp <- getMultinomialSamp(p_vec_jnp, jnp$add(jnp$array(49L),SEED_IN_LOOP_i))
-      return( TSAMP_dag_PrimaryComp )
+      return( TSAMP_dag_PrimaryComp <- getMultinomialSamp(SLATE_VEC_dag_, jnp$add(jnp$array(499L),SEED_IN_LOOP_i)) ) 
     }), 1L)
 
-    VectorizedQMonteLoop_res <- VectorizedQMonteLoop_optimize(TSAMP_ast_all, TSAMP_dag_all,
+    VectorizedQMonteLoop_res <- VectorizedQMonteLoop_optimize(
+                        TSAMP_ast_all, TSAMP_dag_all,
                         TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
 
                         a_i_ast,
@@ -141,18 +140,20 @@ FullGetQStar_ <- function(a_i_ast,
                         LAMBDA_,
                         Q_SIGN,
                         SEED_IN_LOOP)
-    AveProdAst_AstOpti <- jnp$divide(jnp$sum(VectorizedQMonteLoop_res[[1]][[1]]),
-                           jnp$add(jnp$array(0.001),jnp$sum(VectorizedQMonteLoop_res[[1]][[1]])))
-    AveProdDag_AstOpti <- jnp$divide(jnp$sum(VectorizedQMonteLoop_res[[2]][[1]]),
-                           jnp$add(jnp$array(0.001),jnp$sum(VectorizedQMonteLoop_res[[2]][[1]])))
-    AveProdAst_DagOpti <- jnp$divide(jnp$sum(VectorizedQMonteLoop_res[[3]][[1]]),
-                           jnp$add(jnp$array(0.001),jnp$sum(VectorizedQMonteLoop_res[[3]][[1]])))
-    AveProdDag_DagOpti <- jnp$divide(jnp$sum(VectorizedQMonteLoop_res[[4]][[1]]),
-                           jnp$add(jnp$array(0.001),jnp$sum(VectorizedQMonteLoop_res[[4]][[1]])))
+    
+    # Sum Quantity Given Condition / (ep + sum( Sum Condition))
+    AveProdAst_AstOpti <- jnp$sum(VectorizedQMonteLoop_res[[1]][[1]]) / 
+                        (jnp$array(0.001) + jnp$sum(VectorizedQMonteLoop_res[[1]][[2]]))
+    AveProdDag_AstOpti <- jnp$sum(VectorizedQMonteLoop_res[[2]][[1]]) / 
+                        (jnp$array(0.001) + jnp$sum(VectorizedQMonteLoop_res[[2]][[2]]))
+    AveProdAst_DagOpti <- jnp$sum(VectorizedQMonteLoop_res[[3]][[1]]) /
+                        (jnp$array(0.001) + jnp$sum(VectorizedQMonteLoop_res[[3]][[2]]))
+    AveProdDag_DagOpti <- jnp$sum(VectorizedQMonteLoop_res[[4]][[1]]) /
+                        (jnp$array(0.001) + jnp$sum(VectorizedQMonteLoop_res[[4]][[2]]))
 
     # quantity to maximize
-    q_max <-  jnp$multiply(cond_UseDag,jnp$add( AveProdAst_DagOpti, AveProdDag_DagOpti )) + 
-                jnp$multiply(cond_UseAst,jnp$add( AveProdAst_AstOpti, AveProdDag_AstOpti ))
+    q_max <-  cond_UseDag * ( AveProdAst_DagOpti + AveProdDag_DagOpti ) + 
+                cond_UseAst * ( AveProdAst_AstOpti + AveProdDag_AstOpti )
   }
 
   # regularization

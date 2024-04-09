@@ -54,19 +54,19 @@ OptiConjoint       <-          function(
                                             nFolds_glm = 3L,
                                             nMonte_MaxMin = 5L,
                                             nMonte_Qglm = 100L,
+                                            UseOptax = F, 
                                             jax_seed = as.integer(Sys.time()),
                                             OptimType = "tryboth"){
   # ast then dag 
   # ast is 1, based on sort(unique(competing_group_variable_candidate))[1]
   # dag is 2, based on sort(unique(competing_group_variable_candidate))[2]
-  # check ordering of ast and dag and so on 
-  # confirm last indexing of simplex
-  print("PERFORM EMERGENCY CHECKS")
+  
+  # when simplex constrained with holdout, LAST entry is held out 
   
   # define evaluation environment
   evaluation_environment <- environment()
 
-  # load in packages - may help memory bugs to load them in thru package
+  # load in packages
   print2("Initializing computational environment...")
   {
     if(!is.null(conda_env)){
@@ -82,8 +82,8 @@ OptiConjoint       <-          function(
     JaxKey <<- function(int_){ jax$random$PRNGKey(int_)}
 
     # setup numerical precision for delta method
-    #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # turn on float64
-    dtj <<- jnp$float32; jax$config$update("jax_enable_x64", F) # turn off float64
+    #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # use float64
+    dtj <<- jnp$float32; jax$config$update("jax_enable_x64", F) # use float32
   }
   print2("Done initializing computational environment!")
 
@@ -137,9 +137,7 @@ OptiConjoint       <-          function(
   # obtain outcome models
   print2("Initializing outcome models...")
   if(T == T){
-    if(K > 1 & !UseRegularization){
-      warning("K > 1; Forcing regularization...");UseRegularization <- T
-    }
+    if(K > 1 & !UseRegularization){ warning("K > 1; Forcing regularization...");UseRegularization <- T }
     UseRegularization_ORIG <- UseRegularization
     Rounds <- c(0,1)
 
@@ -178,9 +176,7 @@ OptiConjoint       <-          function(
       W_ <- W[indi_,]; Y_ <- Y[indi_];
       varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
       pair_id_ <- pair_id[ indi_ ]
-      #table(full_dat_$Party.affiliation_clean)
-      #table(full_dat_$R_Partisanship)
-      #table(table(pair_id_))
+      #table(full_dat_$Party.affiliation_clean); table(full_dat_$R_Partisanship); table(table(pair_id_))
 
       # run models with inputs: W_; Y_; varcov_cluster_variable_;
       initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")
@@ -360,6 +356,9 @@ OptiConjoint       <-          function(
     # specifications for case
     name_ <- ifelse(DisaggreateQ, yes = "Multi", no = "Single")
     eval(parse(text = sprintf("getQStar_diff_%sGroup <- compile_fxn( getQStar_diff_ )", name_)))
+    
+    # here are defined: 
+    # getQStar_diff_MultiGroup; getQStar_diff_SingleGroup; getQStar_single
   }
 
   # Pretty Pi function
@@ -425,8 +424,7 @@ OptiConjoint       <-          function(
                                no = list(a2FullSimplex))[[1]]
 
   ## get exact result
-  pi_star_exact <- -10
-  if(OptimType %in% c("tryboth") & diff == F){
+  pi_star_exact <- -10; if(OptimType %in% c("tryboth") & diff == F){
     pi_star_exact <- np$array(getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  )) # pi_star_value =
   }
 
@@ -516,23 +514,28 @@ OptiConjoint       <-          function(
   SLATE_VEC_ast_jnp <- SLATE_VEC_dag_jnp <- p_vec_jnp
   if(!is.null(slate_list)){ 
     SLATE_VEC_ast_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[1]],function(zer){
-      #return( zer[-1] )# if doing position 1 holdout 
-      return( zer[-length(zer)] )# if doing last position holdout 
+      return( zer[-length(zer)] )# last position holdout 
       })) ) )
     SLATE_VEC_dag_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[2]],function(zer){
-      #return( zer[-1] )# if doing position 1 holdout 
-      return( zer[-length(zer)] )# if doing last position holdout 
+      return( zer[-length(zer)] )# last position holdout 
       })) ) )
     # mean( names(unlist(slate_list[[1]])) == names(unlist(slate_list[[2]])) ) # target of 1 
   }
   
   lambda_jnp <-  jnp$array(  lambda  )
   {
-      UseOptax <- F
+      LEARNING_RATE_MAX <- 0.01
+      LR_schedule <- optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),
+                                                        decay_steps = max(c(21L,nSGD-100L)),
+                                                        init_value = LEARNING_RATE_MAX/100, peak_value = LEARNING_RATE_MAX, end_value =  LEARNING_RATE_MAX/100)
+    
       # model partition + setup state
       optax_optimizer_ast <-  optax$chain(
         #optax$scale(0.01),optax$scale_by_adam() #optax$adam( learning_rate = LR_schedule, eps_root = 1e-6)
-        optax$scale(1),optax$scale_by_rss(initial_accumulator_value = 0.001)  )
+        # optax$scale(1),optax$scale_by_rss(initial_accumulator_value = 0.001)  
+        # optax$scale(1),optax$scale_by_rss(initial_accumulator_value = 0.001)  
+        optax$scale(-1), optax$adabelief(LR_schedule)
+        )
       opt_state_ast <- optax_optimizer_ast$init(jnp$array( a_vec_init_ast ))
       jit_apply_updates_ast <- jax$jit(optax$apply_updates)
       jit_update_ast <- jax$jit(optax_optimizer_ast$update)
@@ -540,18 +543,19 @@ OptiConjoint       <-          function(
       # model partition + setup state
       optax_optimizer_jax <-  optax$chain(
         #optax$scale(0.01),optax$scale_by_adam() #optax$adam( learning_rate = LR_schedule, eps_root = 1e-6)
-        optax$scale(1),optax$scale_by_rss(initial_accumulator_value = 0.001)  )
+        #optax$scale(1),optax$scale_by_rss(initial_accumulator_value = 0.001)  
+        #optax$scale_by_learning_rate(LR_schedule), optax$scale_by_belief(LR_schedule)
+        optax$scale(-1), optax$adabelief(LR_schedule)
+        )
       opt_state_dag <- optax_optimizer_jax$init(jnp$array( a_vec_init_dag ))
       jit_apply_updates_dag <- jax$jit(optax$apply_updates)
       jit_update_dag <- jax$jit(optax_optimizer_jax$update)
   }
 
   print2("Defining gd function...")
-  {
-    # bring functions into env and compile as needed
-    environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- jax$jit( getMultinomialSamp )
-    environment(getPiStar_gd) <- evaluation_environment
-  }
+  # bring functions into env and compile as needed
+  environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- jax$jit( getMultinomialSamp )
+  environment(getPiStar_gd) <- evaluation_environment
   }
 
   # get jax seed into correct type
@@ -593,9 +597,6 @@ OptiConjoint       <-          function(
     results_vec <- FxnForJacobian( list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) )
     jacobian_mat <- jax$jacobian(FxnForJacobian,0L)( (INPUT_  <- list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf)))
 
-    # old code
-    # for(ia in 1:length(results_vec_list)){results_vec_list[[ia]] <- jnp$reshape(jnp$take(results_vec,n2int(ai(ia-1L)),axis=0L),shape=list()) }
-
     # reshape jacobian and process results
     jacobian_mat_exact <- jacobian_mat <- cbind(
                           np$array(jnp$squeeze(jnp$squeeze(jnp$squeeze(jacobian_mat[[1]],1L),1L))),
@@ -629,6 +630,7 @@ OptiConjoint       <-          function(
     dQ_da_dag <- jax$jit(jax$grad(FullGetQStar_, argnums = jnp$array(1L)))
 
     environment(QMonteIter_optimize) <- evaluation_environment; QMonteIter_optimize <- jax$jit( QMonteIter_optimize )
+    #VectorizedQMonteLoop_optimize <- ( jax$vmap(function(TSAMP_ast, TSAMP_dag,
     VectorizedQMonteLoop_optimize <- jax$jit( jax$vmap(function(TSAMP_ast, TSAMP_dag,
                                                                 TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
 
@@ -687,18 +689,25 @@ OptiConjoint       <-          function(
                              functionList = list(dQ_da_dag, dQ_da_ast,
                                                  QFXN, getMultinomialSamp),
                              functionReturn = T,  quiet = F)
+    print("Check optax for updates to it")
     dQ_da_ast <- q_with_pi_star_full[[2]][[1]]
     dQ_da_dag <- q_with_pi_star_full[[2]][[2]]
     QFXN <- q_with_pi_star_full[[2]][[3]]
     getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
     q_with_pi_star_full <- jnp$array(q_with_pi_star_full[[1]], dtj)
+    
+    if(!UseOptax){
+      inv_learning_rate_ast_vec <- unlist(  lapply(inv_learning_rate_ast_vec,function(zer){ np$array(zer) }))
+      try(plot( 1/inv_learning_rate_ast_vec , main = "Inv LR (ast)",log="y"),T)
+    }
 
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
-      ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )), yes = NA) }) )
+          np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) ))  }) )
     try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y"),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
+    
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
-      ifelse(is.na(zer),no = np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )),yes=NA) }) ),T)
+      np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
 
@@ -740,8 +749,7 @@ OptiConjoint       <-          function(
         vcov_OutcomeModel_dag,
         vcov_OutcomeModel_ast0,
         vcov_OutcomeModel_dag0  )
-      vcov_OutcomeModel_concat <- Matrix::bdiag( vcov_OutcomeModel_concat )
-      vcov_OutcomeModel_concat <- as.matrix(  vcov_OutcomeModel_concat )
+      vcov_OutcomeModel_concat <- as.matrix( Matrix::bdiag( vcov_OutcomeModel_concat ) ) 
 
       # jacfwd uses forward-mode automatic differentiation, which is more efficient for “tall” Jacobian matrices
       # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
@@ -768,14 +776,23 @@ OptiConjoint       <-          function(
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
         np$array( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
+      # plot(colMeans(abs(jacobian_mat_gd)))
+      # plot(rowMeans(abs(jacobian_mat_gd)))
     }
-    # image(jacobian_mat)
-    # summary(lm(np$array(sol_gd)~np$array(sol_exact)))
   }
 
   # print time of jacobian calculation
   # remember, the first three entries of output are:
   # Qhat_population, Qhat, Qhat_dag
+  # xxx 
+  # tmp <- getMultinomialSamp(SLATE_VEC_ast_jnp, baseSeed = jnp$add(jnp$array(201L),1L))
+  # tmp1 <- getMultinomialSamp(SLATE_VEC_ast_jnp, baseSeed = jnp$add(jnp$array(201L),2L))
+  # plot(np$array(tmp),np$array(tmp1))
+  # plot(diag(vcov_OutcomeModel_concat))
+  # plot(c(jacobian_mat))
+  # plot(c(jacobian_mat)-0)
+  # xxx
+  
   vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
@@ -898,6 +915,8 @@ OptiConjoint       <-          function(
                   "EST_COEFFICIENTS_jnp" = jnp$array(EST_COEFFICIENTS_tf),
 
                   "vcov_OutcomeModel" = vcov_OutcomeModel,
+                  "vcov_OutcomeModel_concat" = vcov_OutcomeModel_concat, 
+                  "jacobian_mat" = jacobian_mat, 
                   "OptimType" = OptimType,
                   "ForceGaussianFamily" = ForceGaussianFamily,
                   "UsedRegularization" = UsedRegularization,

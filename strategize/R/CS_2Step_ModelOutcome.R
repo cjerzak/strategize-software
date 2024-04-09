@@ -6,14 +6,13 @@ generate_ModelOutcome <- function(){
     # main_info + a_structure
     for(nrp in 1:2){
       main_info <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
-        list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_] - ifelse(nrp == 1,
-                                                                           yes = 1,
-                                                                           no = holdout_indicator) )))}))
+        list(data.frame("d" = d_, 
+                        "l" = 1:max(1,factor_levels[d_] - ifelse(nrp == 1,
+                                                                 yes = 1,
+                                                                 no = holdout_indicator) )))}))
       heldout_levels_list <- lapply(factor_levels,function(xer){xer})
       main_info <- cbind(main_info,"d_index"=1:nrow(main_info))
-      if(nrp == 1){
-        a_structure <- main_info
-      }
+      if(nrp == 1){ a_structure <- main_info }
     }
 
     if(holdout_indicator == 0){

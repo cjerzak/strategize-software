@@ -40,8 +40,9 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   a_i_dag <- jnp$array( a_vec_init_dag )
 
   # gradient descent iterations
-  grad_mag_dag_vec <<- grad_mag_ast_vec <<- rep(NA, times = nSGD)
-  goOn <- F; i<-0; maxIter<-nSGD;
+  grad_mag_ast_vec <<- grad_mag_dag_vec <<- rep(NA, times = nSGD)
+  inv_learning_rate_ast_vec <<- inv_learning_rate_dag_vec <<- rep(NA, times = nSGD)
+  goOn <- F; i<-0
   while(goOn == F){
     i<-i+1;
     if(i %% 100 == 0 | i < 10){ print2(sprintf("SGD Iteration: %i of %s", i, nSGD) ) }
@@ -66,15 +67,19 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       if(!UseOptax){
         inv_learning_rate_da_dag <-  jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, grad_i = grad_i_dag,
-                                             inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_dag))
+                                        inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_dag))
       }
       if(UseOptax){
-        updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, state = opt_state_dag, params = a_i_dag)
+        updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, 
+                                                     state = opt_state_dag, 
+                                                     params = a_i_dag)
         opt_state_dag <- updates_and_opt_state_dag[[2]]
-        a_i_dag <- jit_apply_updates_dag(params = grad_i_dag, updates = updates_and_opt_state_dag[[1]])
+        a_i_dag <- jit_apply_updates_dag(params = grad_i_dag, 
+                                         updates = updates_and_opt_state_dag[[1]])
       }
 
       grad_mag_dag_vec[i] <<- list(jnp$linalg$norm( grad_i_dag ))
+      if(!UseOptax){ inv_learning_rate_dag_vec[i] <<- list( inv_learning_rate_da_dag ) }
     }
 
     # da updates (max step)
@@ -87,23 +92,28 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, jnp$array(1.),
-                               jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer( i+2) ) ) ) )
+                               jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(as.integer(nSGD+i +2) ) ) ) )
       if(i==1){ inv_learning_rate_da_ast <- jnp$maximum(jnp$array(0.001), jnp$multiply(10, jnp$square(jnp$linalg$norm(grad_i_ast))))  }
       if(!UseOptax){
         inv_learning_rate_da_ast <-  jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
-        a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, grad_i = grad_i_ast,
+        a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
+                                        grad_i = grad_i_ast,
                                         inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_ast))
       }
 
       if(UseOptax){
-        updates_and_opt_state_ast <- jit_update_ast( updates = grad_i_ast, state = opt_state_ast, params = a_i_ast)
+        updates_and_opt_state_ast <- jit_update_ast( updates = grad_i_ast, 
+                                                     state = opt_state_ast, 
+                                                     params = a_i_ast)
         opt_state_ast <- updates_and_opt_state_ast[[2]]
-        a_i_ast <- jit_apply_updates_ast(params = grad_i_ast, updates = updates_and_opt_state_ast[[1]])
+        a_i_ast <- jit_apply_updates_ast(params = grad_i_ast, 
+                                         updates = updates_and_opt_state_ast[[1]])
       }
 
       grad_mag_ast_vec[i] <<- list( jnp$linalg$norm( grad_i_ast ) )
+      if(!UseOptax){ inv_learning_rate_ast_vec[i] <<- list( inv_learning_rate_da_ast ) }
     }
-    if(i >= maxIter){goOn <- T}
+    if(i >= nSGD){goOn <- T}
   }
 
   # save output
@@ -132,8 +142,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         TSAMP_dag <- getMultinomialSamp(pi_star_dag_, baseSeed = jnp$add(jnp$array(201L),SEED_IN_LOOP_ii))
         pi_star_dag_f <- TSAMP_dag
       }
-      return(pi_star_dag_f)
-    }), 1L)
+      return(pi_star_dag_f) }), 1L)
 
     q_star_f <- VectorizedQMonteLoop(pi_star_ast_f_all, pi_star_dag_f_all,
                                      INTERCEPT_ast_,
