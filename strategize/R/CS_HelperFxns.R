@@ -62,9 +62,9 @@ getMultinomialSamp <- function(pi_star_value, baseSeed){
       TSamp <- jnp$transpose( TSamp )
 
       # if implicit, drop a term to keep correct shapes
-      print("CONFIRM THAT DROPPING THE FIRST TERM IS CORRECT HERE IN getMultinomialSamp")
-      #if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(0L:(length(zer)-1L)),axis=0L) } #drop last entry
-      if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L) } #drop first entry
+      print("CONFIRM THAT DROPPING THE SPECIFIED TERM IS CORRECT HERE IN getMultinomialSamp")
+      if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop last entry
+      #if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L) } #drop first entry
       if(length(zer) == 1){TSamp <- jnp$expand_dims(TSamp, 1L)}
       return (  TSamp   )
     })
@@ -107,7 +107,6 @@ computeQ_conjoint_internal <- function(FactorsMat_internal,
     log_pr_w_internal <- log( sapply(1:ncol(FactorsMat_internal),function(ze){
       (assignmentProbList_internal[[ze]][ FactorsMat_internal[,ze] ]) }) )
     if(all(class(log_pr_w_internal) == "numeric")){ log_pr_w_internal <- sum(log_pr_w_internal)}
-    #if(any(class(log_pr_w_internal) != "numeric")){ log_pr_w_internal = rowsums(log_pr_w_internal)}
     if(any(class(log_pr_w_internal) != "numeric")){ log_pr_w_internal = rowSums(log_pr_w_internal)}
   }
 
