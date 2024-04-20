@@ -4,6 +4,8 @@ print2 <- function(text, quiet = F){
 
 ess_fxn <- function(wz){ sum(wz)^2 / sum(wz^2)}
 
+ai <- as.integer
+
 toSimplex = function(x){
   x[x>22] <- 22; x[x< -22] <- -22
   sim_x = exp(x)/sum(exp(x))
@@ -12,13 +14,10 @@ toSimplex = function(x){
 }
 
 RescaleFxn <- function(x, estMean=NULL, estSD=NULL, center=T){
-  if(center == T){ x <- x *  estSD + estMean }
-  if(center == F){ x <- x *  estSD }
-  return( x )   }
+  return(  x*estSD + ifelse(center, yes = estMean, no = 0) ) 
+}
 
 NA20 <- function(zer){zer[is.na(zer)]<-0;zer}
-
-rzip_tf <- (rzip<-function(l1,l2){  fl<-list(); for(aia in 1:length(l1)){ fl[[aia]] <- list(l1[[aia]], l2[[aia]]) }; return( fl  ) })
 
 getSE <- function(er){ sqrt( var(er,na.rm=T) /  length(na.omit(er)) )  }
 
@@ -38,41 +37,38 @@ logPrWGivenPi_fxn = function(doc_indices,pi_mat,terms_posterior,log_=F,
 
 se <- function(.){sqrt(1/length(.) * var(.))}
 
-getMultinomialSamp <- function(pi_star_value, baseSeed){
-  {
-    # define d locator
-    d_locator_use <- ifelse(ParameterizationType == "Implicit",
-                            yes = list(d_locator), no = list(d_locator_full))[[1]]
+getMultinomialSamp <- function(pi_value, temperature, jax_seed){
+  # define d locator
+  d_locator_use <- ifelse(ParameterizationType == "Implicit",
+                          yes = list(d_locator), no = list(d_locator_full))[[1]]
 
-    # get t samp
-    T_star_samp_reduced <- tapply(1:length(d_locator_use),d_locator_use,function(zer){
-      pi_selection <- jnp$take(pi_star_value, jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
+  # get t samp
+  T_star_samp <- tapply(1:length(d_locator_use),d_locator_use,function(zer){
+    pi_selection <- jnp$take(pi_value, jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
 
-      # add additional entry if implicit t ype
-      if(ParameterizationType == "Implicit"){
-        if(length(zer) == 1){ pi_selection <- jnp$expand_dims(pi_selection,0L) }
-        pi_implied <- jnp$expand_dims(jnp$expand_dims(jnp$subtract(jnp$array(1.), jnp$sum(pi_selection)),0L),0L)
-        pi_selection <- jnp$concatenate(list(pi_implied,pi_selection))
-      }
+    # add additional entry if implicit t ype
+    if(ParameterizationType == "Implicit"){
+      if(length(zer) == 1){ pi_selection <- jnp$expand_dims(pi_selection,0L) }
+      pi_implied <- jnp$expand_dims(jnp$expand_dims(jnp$subtract(jnp$array(1.), jnp$sum(pi_selection)),0L),0L)
+      
+      # add holdout 
+      # pi_selection <- jnp$concatenate(list(pi_implied, pi_selection)) # add FIRST entry 
+      pi_selection <- jnp$concatenate(list(pi_selection, pi_implied)) # add LAST entry 
+    }
 
-      TDist <- oryx$distributions$RelaxedOneHotCategorical(
-        probs = jnp$transpose(pi_selection),# row = simplex entry
-        temperature = jnp$array(0.5))
-      TSamp <- TDist$sample(size = 1L, seed = JaxKey( jnp$add(jnp$take(jnp$array(zer),0L),baseSeed)))
-      TSamp <- jnp$transpose( TSamp )
+    TSamp <- oryx$distributions$RelaxedOneHotCategorical(
+      probs = pi_selection$transpose(),
+      temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
 
-      # if implicit, drop a term to keep correct shapes
-      print("CONFIRM THAT DROPPING THE SPECIFIED TERM IS CORRECT HERE IN getMultinomialSamp")
-      if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop last entry
-      #if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L) } #drop first entry
-      if(length(zer) == 1){TSamp <- jnp$expand_dims(TSamp, 1L)}
-      return (  TSamp   )
-    })
-    names(T_star_samp_reduced) <- NULL # drop name to allow concatenation
-    T_star_samp_reduced <-  jnp$concatenate(unlist(T_star_samp_reduced),0L)
-  }
-
-  return( T_star_samp_reduced )
+    # if implicit, drop a term to keep correct shapes
+    #if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L) } #drop FIRST entry
+    if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop LAST entry
+    
+    if(length(zer) == 1){TSamp <- jnp$expand_dims(TSamp, 1L)}
+    return (  TSamp   )
+  })
+  names(T_star_samp) <- NULL # drop name to allow concatenation
+  return( T_star_samp <-  jnp$concatenate(unlist(T_star_samp),0L) ) 
 }
 
 getPrettyPi <- function( pi_star_value ){
@@ -113,7 +109,6 @@ computeQ_conjoint_internal <- function(FactorsMat_internal,
   # new probability
   if(!is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped[] <- log(unlist(hypotheticalProbList_internal)[FactorsMat_internal_mapped])}
   if(is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped <- log( sapply(1:ncol(FactorsMat_internal),function(ze){hypotheticalProbList_internal[[ze]][ FactorsMat_internal[,ze] ]  })  )}
-  #if(any(class(FactorsMat_internal_mapped) != "numeric")){ log_pr_w_new <- rowsums(FactorsMat_internal_mapped)}
   if(any(class(FactorsMat_internal_mapped) != "numeric")){ log_pr_w_new <- rowSums(FactorsMat_internal_mapped)}
   if(all(class(FactorsMat_internal_mapped) == "numeric")){ log_pr_w_new <- sum(FactorsMat_internal_mapped)}
   my_wts <- exp(  log_pr_w_new   - log_pr_w_internal  )
@@ -152,8 +147,7 @@ vec2list_noTransform0 <- function(vec_){# adds 0 entries
   zeros_vec[nonZero_indices] <- vec_
   return( split(zeros_vec,f = splitIndices) )   }
 
-vec2list_noTransform <- function(vec_){
-  return( split(vec_,f = splitIndices)) }
+vec2list_noTransform <- function(vec_){ return( split(vec_,f = splitIndices)) }
 
 
 computeQse_conjoint <- function(FactorsMat, Yobs,
@@ -180,7 +174,6 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
         (assignmentProbList[[ze]][ FactorsMat[,ze] ]) })
     )
     if(all(class(log_pr_w) == "numeric")){ log_pr_w <- sum(log_pr_w)}
-    #if(any(class(log_pr_w) != "numeric")){ log_pr_w <- rowsums(log_pr_w)}
     if(any(class(log_pr_w) != "numeric")){ log_pr_w <- rowSums(log_pr_w)}
   }
 
@@ -189,7 +182,6 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   {
     if(!is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped[] <- log(unlist(hypotheticalProbList)[FactorsMat_internal_mapped])}
     if(is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped <- log( sapply(1:ncol(FactorsMat),function(ze){hypotheticalProbList[[ze]][ FactorsMat[,ze] ]  })  )}
-    #if(any(class(FactorsMat_internal_mapped) != "numeric")){ log_pr_w_new <- rowsums(FactorsMat_internal_mapped)}
     if(any(class(FactorsMat_internal_mapped) != "numeric")){ log_pr_w_new <- rowSums(FactorsMat_internal_mapped)}
     if(all(class(FactorsMat_internal_mapped) == "numeric")){ log_pr_w_new <- sum(FactorsMat_internal_mapped)}
 
@@ -212,8 +204,7 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   if(is.null(knownSigma2)){ sigma2_hat <- var(Yobs) }
 
   # Combine terms to get VE and EV
-  logN <- log(length(Yobs))
-  if(!is.null(hypotheticalN)){logN <- log(hypotheticalN)}
+  logN <- ifelse(is.null(hypotheticalN), yes = log(length(Yobs)), no = log(hypotheticalN))
   upperBound_se_VE_log = (log(scaleFactor) + log_treatment_combs + log_maxProb - logN)
   upperBound_se_EV_log = (log(sigma2_hat) + log_treatment_combs + log_maxProb - logN)
   upperBound_se_ <- 0.5*matrixStats::logSumExp(c(upperBound_se_EV_log,upperBound_se_VE_log))#0.5 for sqrt

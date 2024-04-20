@@ -1,4 +1,3 @@
-
 ml_build <- function(){
 
   zero_ep <- jnp$array(1e-5,jnp$float32)
@@ -114,7 +113,7 @@ ml_build <- function(){
 ## start  building model
 {
   # define the class prob projection, the trainable vars, the baseline probs
-  KFreeProbProj <- as.integer(K - 1L)
+  KFreeProbProj <- ai(K - 1L)
   b_proj <- 0.1
   ProjectionList <- list(jnp$array(0.))
   if(KFreeProbProj > 0){
