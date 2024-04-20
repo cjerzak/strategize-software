@@ -269,18 +269,23 @@ OptiConjoint       <-          function(
     return( (jnp$add(inv_learning_rate,jnp$sum(jnp$square(grad_i)))))
   })
   GetUpdatedParameters <- compile_fxn(function(a_vec, grad_i, inv_learning_rate_i){
-    return( jnp$add(a_vec, jnp$multiply(jnp$reciprocal(inv_learning_rate_i),grad_i)))
+    return( jnp$add(a_vec, jnp$multiply(jnp$reciprocal(inv_learning_rate_i), grad_i)))
   })
 
   a_vec_init_mat <- as.matrix(unlist( lapply(p_list, function(zer){ c(compositions::alr( t((zer)))) }) ) )
   a_vec_init_ast <- jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD), dtj)
   a_vec_init_dag <- jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin), dtj)
+  
+  # LabelSmoothingFxn <- function(x){x}
+  LabelSmoothingFxn <- function(x, epsilon = 0.01){
+      return( (1 - epsilon) * x + epsilon / jnp$array( x$shape[[1]] )$astype(x$dtype) ) }
   a2Simplex <- compile_fxn(function(a_){
     exp_a_ <- jnp$exp(a_)
     aOnSimplex <- tapply(1:nrow(a_structure),a_structure$d,function(zer){
-      tmp <- jnp$divide(  jnp$take(exp_a_, n2int(as.matrix(zer-1L) )),
+      OnSimplex_ <- jnp$divide(  jnp$take(exp_a_, n2int(as.matrix(zer-1L) )),
                         jnp$add(OneTf_flat,jnp$sum(jnp$take(exp_a_, n2int(zer-1L) ) )))
-      return( list( tmp ) ) })
+      OnSimplex_ <- LabelSmoothingFxn( OnSimplex_ )
+      return( list( OnSimplex_ ) ) })
     names(aOnSimplex) <- NULL
     return(  jnp$concatenate(aOnSimplex,0L) )
   })
@@ -291,8 +296,9 @@ OptiConjoint       <-          function(
       exp_a_zer <- jnp$concatenate(list(jnp$take(exp_a_, n2int(as.matrix(as.array(zer - 1L) ))),
                                   jnp$array(as.matrix(1.))), # last category is exp(0) = 1
                                   axis = 0L)
-      tmp <- jnp$divide(  exp_a_zer, jnp$sum(exp_a_zer))
-      return( list( tmp ) ) })
+      OnSimplex_ <- jnp$divide(  exp_a_zer, jnp$sum(exp_a_zer))
+      OnSimplex_ <- LabelSmoothingFxn( OnSimplex_ )
+      return( list( OnSimplex_ ) ) })
     names( aOnSimplex ) <- NULL
     return( jnp$concatenate(aOnSimplex,0L)  )
   })
