@@ -276,9 +276,9 @@ OptiConjoint       <-          function(
   a_vec_init_ast <- jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD), dtj)
   a_vec_init_dag <- jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin), dtj)
   
-  # LabelSmoothingFxn <- function(x){x}
-  LabelSmoothingFxn <- function(x, epsilon = 0.01){
-      return( (1 - epsilon) * x + epsilon / jnp$array( x$shape[[1]] )$astype(x$dtype) ) }
+  LabelSmoothingFxn <- function(x){x}
+  #LabelSmoothingFxn <- function(x, epsilon = 0.01){
+      #return( (1 - epsilon) * x + epsilon / jnp$array( x$shape[[1]] )$astype(x$dtype) ) }
   a2Simplex <- compile_fxn(function(a_){
     exp_a_ <- jnp$exp(a_)
     aOnSimplex <- tapply(1:nrow(a_structure),a_structure$d,function(zer){
