@@ -211,7 +211,7 @@ that keeps the learned distribution close to the original design distribution. I
 incorporate institutional rules (e.g., primaries, multiple stages of choice) by specifying
 additional arguments. Estimation can be done under standard generalized linear modeling assumptions
 or more advanced approaches. The function returns estimates of the learned distribution and
-the associated performance quantity (\eqn{Q(\bpi^\ast)}) along with optional inference based on
+the associated performance quantity (\eqn{Q(\boldsymbol{\pi}^\ast)}) along with optional inference based on
 the (asymptotic) delta method.
 }
 \details{
