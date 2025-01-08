@@ -1,28 +1,237 @@
-#' Implements...
+#' Estimate an Optimal (or Adversarial) Stochastic Intervention for Conjoint Analysis Using a One-Step M-estimation Approach
+#'
+#' @description
+#' \code{OneStep.OptiConjoint} implements a single-step (\dQuote{one-step}) approach to estimating a
+#' target quantity of interest in high-dimensional conjoint (or factorial) experiments, such as
+#' finding an \emph{optimal stochastic intervention} over factor levels. This method can incorporate
+#' adversarial or non-adversarial settings, regularization, multi-stage structures (e.g., primaries
+#' followed by a general election), and a variety of user-specified outcome models. It returns
+#' estimated distributions of factor levels \emph{(e.g., candidate attributes)} that maximize or
+#' minimize an outcome (e.g., vote share), including optional standard errors via M-estimation
+#' or the delta method.
 #'
 #' @usage
+#' OneStep.OptiConjoint(
+#'   W,
+#'   Y,
+#'   X = NULL,
+#'   K = 1,
+#'   warmStart = FALSE,
+#'   automatic_scaling = TRUE,
+#'   p_list = NULL,
+#'   hypotheticalProbList = NULL,
+#'   pi_init_vec = NULL,
+#'   constrain_ub = NULL,
+#'   nLambda = 10,
+#'   penaltyType = "LogMaxProb",
+#'   testFraction = 0.5,
+#'   log_PrW = NULL,
+#'   LEARNING_RATE_BASE = 0.01,
+#'   cycle_width  = 50,
+#'   cycle_number = 4,
+#'   nSGD = 500,
+#'   nEpoch = NULL,
+#'   X_factorized = NULL,
+#'   momentum = 0.99,
+#'   nFullCycles_noRestarts = 1,
+#'   optim_method = "tf",
+#'   sg_method = NULL,
+#'   forceSEs = FALSE,
+#'   clipAT_factor = 100000,
+#'   adaptiveMomentum = FALSE,
+#'   PenaltyType = "L2",
+#'   knownNormalizationFactor = NULL,
+#'   split1_indices = NULL,
+#'   split2_indices = NULL,
+#'   openBrowser = FALSE,
+#'   useHajekInOptimization = TRUE,
+#'   findMax = TRUE,
+#'   quiet = TRUE,
+#'   lambda_seq = NULL,
+#'   lambda_coef = 0.0001,
+#'   nFolds = 3,
+#'   batch_size = 50,
+#'   confLevel = 0.90,
+#'   conda_env = NULL,
+#'   conda_env_required = FALSE,
+#'   hypotheticalNInVarObj = NULL
+#' )
 #'
-#' OneStep.OptiConjoint(...)
+#' @param W A matrix or data frame of assigned factor levels in the conjoint. For forced-choice designs,
+#'   each row generally represents a single profile or a single respondent-task-profile combination.
+#'   Must have integer, factor, or character columns representing factor levels.
+#' @param Y A numeric or binary outcome vector. Typically \code{Y} is \code{1} if a profile is chosen
+#'   over its competitor, and \code{0} otherwise. If \code{findMax = FALSE}, the sign is flipped,
+#'   effectively minimizing \code{Y}.
+#' @param X Optional matrix or data frame of covariates (or respondent-level features). Can be used
+#'   for multi-cluster modeling with \code{K>1}.
+#' @param K An integer for the number of mixture components or latent clusters if multi-cluster
+#'   modeling is desired. Defaults to \code{1} (no clusters).
+#' @param warmStart Logical. If \code{TRUE}, attempts to re-initialize from previous solutions each
+#'   time \code{lambda} or other hyperparameters change. Defaults to \code{FALSE}.
+#' @param automatic_scaling Logical indicating whether to center or scale \code{X} and \code{Y} automatically.
+#'   Defaults to \code{TRUE}.
+#' @param p_list A list of baseline factor-level probabilities in the design or assignment mechanism
+#'   (e.g., the original random assignment distribution). If \code{NULL}, the function may assume
+#'   uniform or empirical distributions.
+#' @param hypotheticalProbList An optional list specifying a counterfactual distribution over factor
+#'   levels. If provided, \code{OneStep.OptiConjoint} directly computes and returns the performance
+#'   or value under that distribution instead of estimating a new optimal distribution.
+#' @param pi_init_vec A numeric vector for initializing the simplex-based representation of factor-level
+#'   probabilities to be optimized. If \code{NULL}, a random initialization is used internally.
+#' @param constrain_ub Optional numeric or vector of upper bounds on factor probabilities. If not
+#'   \code{NULL}, can help to enforce constraints in optimization.
+#' @param nLambda Integer specifying the number of penalty values considered if cross-validation
+#'   is performed. Defaults to 10.
+#' @param penaltyType A character specifying the type of penalty for shifting probabilities (e.g.,
+#'   \code{"LogMaxProb"}, \code{"L2"}, or \code{"KL"}). This is an additional penalization on top of
+#'   \code{PenaltyType} for the outcome model. Defaults to \code{"LogMaxProb"}.
+#' @param testFraction Fraction of samples used for holdout in cross-validation. Defaults to 0.5
+#'   for a basic split. If \code{NULL}, no split is performed.
+#' @param log_PrW Optional numeric vector of log probabilities for each row in \code{W}. If omitted,
+#'   the function will compute \code{log_PrW} from \code{p_list} given the assumption of independent
+#'   factor-level assignments.
+#' @param LEARNING_RATE_BASE Base learning rate for gradient-based optimizers. Defaults to 0.01.
+#' @param cycle_width Numeric controlling the frequency of restarts or adaptive learning-rate schedules.
+#' @param cycle_number Number of cycles used in the learning-rate schedule.
+#' @param nSGD Number of gradient-descent updates. If \code{nEpoch} is provided, that takes precedence.
+#' @param nEpoch Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
+#'   mini-batches. If provided, overrides \code{nSGD}.
+#' @param X_factorized An optional matrix or data frame representing factorized (dummy-coded) versions
+#'   of \code{X} for advanced modeling. If \code{NULL}, the function may factorize internally.
+#' @param momentum Numeric specifying momentum for stochastic gradient descent. Defaults to 0.99.
+#' @param nFullCycles_noRestarts If \code{>1}, repeats training cycles without restarts for a total
+#'   number of gradient steps. Useful for stability checks.
+#' @param optim_method A character specifying the optimization backend (e.g., \code{"tf"} for
+#'   TensorFlow-based, or \code{"jax"} for JAX-based). Defaults to \code{"tf"} if available.
+#' @param sg_method A character controlling the type of gradient updates (e.g., \code{"adanorm"}, \code{"wngrad"}).
+#'   If \code{NULL}, a default method is chosen.
+#' @param forceSEs Logical. If \code{TRUE}, attempts to compute standard errors by M-estimation or the
+#'   delta method, even if no cross-validation is done.
+#' @param clipAT_factor A large numeric to clip gradient norms if they exceed \code{clipAT_factor}.
+#' @param adaptiveMomentum Logical. If \code{TRUE}, momentum is adapted automatically as the optimization
+#'   proceeds. Defaults to \code{FALSE}.
+#' @param PenaltyType A character specifying the type of penalty (e.g., \code{"L2"}) for the outcome
+#'   model. Used only if a penalized approach to outcome model fitting is internally performed.
+#' @param knownNormalizationFactor An optional numeric to normalize reweighting for Hajek-based
+#'   estimators. If \code{NULL}, it is inferred from the sum of weights.
+#' @param split1_indices,split2_indices Optional vectors of indices partitioning the data for
+#'   cross-validation or holdout. If \code{NULL}, a random partition is done internally.
+#' @param openBrowser Logical for debugging. If \code{TRUE}, may open an interactive browser for
+#'   advanced inspection.
+#' @param useHajekInOptimization Logical. If \code{TRUE}, uses a Hajek-based reweighting in objective
+#'   functions for computing the expected outcome under counterfactual probability shifts. Defaults
+#'   to \code{TRUE}.
+#' @param findMax Logical. If \code{TRUE}, maximizes \code{Y}; if \code{FALSE}, treats \code{Y} as
+#'   negative of interest (e.g., adversity minimization).
+#' @param quiet Logical controlling the verbosity of printed messages.
+#' @param lambda_seq Optional numeric vector of penalty values for cross-validation. If \code{NULL},
+#'   the function attempts a default sequence or single value.
+#' @param lambda_coef Numeric constant controlling the magnitude of the penalty for the outcome
+#'   model. Defaults to 0.0001.
+#' @param nFolds Number of folds for cross-validation. Defaults to 3.
+#' @param batch_size Positive integer specifying the size of mini-batches in each gradient
+#'   iteration. Defaults to 50.
+#' @param confLevel Numeric in \((0,1)\), specifying the confidence level for intervals around
+#'   estimated probabilities or performance measures. Defaults to 0.90.
+#' @param conda_env Optional name of a Conda environment with \pkg{jax}, \pkg{optax}, etc. If
+#'   \code{NULL}, attempts a default environment.
+#' @param conda_env_required Logical. If \code{TRUE}, errors if the environment \code{conda_env}
+#'   cannot be found. Otherwise attempts to proceed gracefully.
+#' @param hypotheticalNInVarObj Optional numeric specifying an alternative \code{n} for certain
+#'   variance calculations (e.g., hypothesized population size). If \code{NULL}, uses the observed
+#'   sample size.
 #'
-#' @param x Description
+#' @return A named \code{list} with components, often including:
+#' \itemize{
+#'   \item \code{PiStar_point}: The estimated optimal or learned distribution(s) over factor levels.
+#'         If \code{K>1} or if adversarial competition is considered, may return multiple
+#'         distributions (\code{k1}, \code{k2}, etc.).
+#'   \item \code{Q_point}: The estimated performance measure under the learned distribution(s).
+#'         For example, the average or adversarially optimized outcome. 
+#'   \item \code{Q_se_mEst}: If available, standard errors via M-estimation or the delta method.
+#'   \item \code{PiStar_lb}, \code{PiStar_ub}: Lower and upper confidence intervals for factor-level
+#'         probabilities, if standard errors are computed.
+#'   \item \code{CVInfo}: A data frame or list summarizing cross-validation performance for each
+#'         candidate \code{lambda}.
+#'   \item \code{ClassProbsXobs}, \code{VarCov_ProbClust}, \code{pi_init_next}, \code{optim_max_hajek_list}:
+#'         Additional objects storing advanced details of the optimization or M-estimation procedure.
+#'   \item \code{Output.Description}: Additional messages describing the run.
+#' }
 #'
-#' @return `z` Description
-#' @export
+#' @details
+#' This function implements a \emph{one-step M-estimation} approach for directly estimating the
+#' \dQuote{optimal} probability distributions over high-dimensional factors in conjoint or factorial
+#' experiments. Rather than a multi-step procedure of (1) outcome modeling followed by (2) re-optimizing
+#' factor distributions, the one-step approach can iteratively re-estimate distribution parameters
+#' while simultaneously adjusting the outcome model. This allows regularization or advanced modeling
+#' to be integrated into the \emph{same} optimization objective, potentially improving finite-sample
+#' performance. Support for adversarial or multiple clusters is also available.
 #'
-#' @details `OneStep.OptiConjoint` Description
+#' By default, \code{OneStep.OptiConjoint} attempts to find the distribution(s) \eqn{\bpi^\ast} that
+#' maximizes the average outcome if \code{findMax = TRUE} (e.g., maximizing candidate choice share).
+#' In adversarial contexts, each cluster or \dQuote{player} can simultaneously learn a best response.
+#' The function is flexible enough to incorporate sub-populations or multiple stages (e.g., primaries
+#' plus general elections).
 #'
-#' - Description
+#' If a user-supplied \code{hypotheticalProbList} is given, the function directly computes \eqn{Q(\bpi)}
+#' for that distribution instead of estimating. This is useful for evaluating the performance of a
+#' known or hypothesized distribution (e.g., \dQuote{status quo}).
+#'
+#' Most users do not need to call \code{OneStep.OptiConjoint} directly, as this is a lower-level
+#' routine. The \code{\link{OptiConjoint}} or \code{\link{cv.OptiConjoint}} functions may suffice
+#' in many typical workflows.
+#'
+#' @note
+#' Advanced arguments like \code{X_factorized}, \code{conda_env}, \code{optim_method}, or specifying
+#' \code{adaptiveMomentum} are only needed for specialized or larger-scale (GPU-based) computations.
+#'
+#' @references
+#' - Goplerud, M. & Titiunik, R. (2022). \emph{Analysis of High-Dimensional Factorial Experiments:
+#'   Estimation of Interactive and Non-Interactive Effects.} ArXiv preprint.
+#' - Egami, N. & Imai, K. (2019). \emph{Causal Interaction in Factorial Experiments: Application
+#'   to Conjoint Analysis.} Journal of the American Statistical Association, 114(526), 529–540.
+#' - Hainmueller, J., Hopkins, D. J., & Yamamoto, T. (2014). \emph{Causal Inference in Conjoint
+#'   Analysis: Understanding Multidimensional Choices via Stated Preference Experiments.}
+#'   Political Analysis, 22(1), 1–30.
+#' - (Paper Reference) A forthcoming or accompanying manuscript describing in detail the methods for
+#'   \emph{optimal} or \emph{adversarial} stochastic interventions in conjoint settings.
+#'
+#' @seealso
+#' \code{\link{OptiConjoint}} for an approach that first fits an outcome model and then re-optimizes
+#' factor-level probabilities. \\
+#' \code{\link{cv.OptiConjoint}} for cross-validation across candidate values of \code{lambda}.
 #'
 #' @examples
+#' \dontrun{
+#' # Suppose we have a forced-choice conjoint dataset (W, Y) and baseline probabilities p_list.
+#' # We want to estimate an optimal distribution that maximizes average Y.
 #'
-#' # Analysis
-#' OptiConjoint_analysis <- OneStep.OptiConjoint()
+#' set.seed(123)
+#' # X could be respondent covariates, if any
+#' X <- matrix(rnorm(nrow(W)*2), nrow(W), 2)
 #'
-#' print( OptiConjoint_analysis )
+#' result_one_step <- OneStep.OptiConjoint(
+#'   W = W,
+#'   Y = Y,
+#'   X = X,
+#'   p_list = p_list,
+#'   nSGD = 400,
+#'   useHajekInOptimization = TRUE,
+#'   penaltyType = "LogMaxProb",
+#'   PenaltyType = "L2",
+#'   lambda_seq = c(0.01, 0.1),
+#'   testFraction = 0.3
+#' )
+#'
+#' # Inspect the estimated distribution over factor levels
+#' str(result_one_step$PiStar_point)
+#'
+#' # Evaluate estimated performance
+#' print( result_one_step$Q_point )
+#' }
 #'
 #' @export
-#'
-#' @md
 
 OneStep.OptiConjoint <- function(
                               W,

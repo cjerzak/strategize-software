@@ -1,26 +1,178 @@
-#' Implements...
+#' Cross-validation for Optimal Stochastic Interventions in Conjoint Analysis
 #'
-#' @usage
+#' Performs cross-validation to select the regularization parameter \eqn{\lambda} 
+#' (and, if desired, other hyperparameters) for the \code{\link{OptiConjoint}} function. 
+#' This function splits the data by respondent (or user-specified units), trains
+#' candidate models under a grid of \eqn{\lambda} values, and evaluates out-of-sample
+#' performance, returning the model that maximizes a chosen criterion (e.g., out-of-sample 
+#' expected utility or log-likelihood).
 #'
-#' cv.OptiConjoint(...)
+#' @param Y A numeric or binary response vector. If binary (e.g., 0--1), it should 
+#'   correspond to forced-choice outcomes (1 if candidate \code{A} is chosen; 0 if 
+#'   candidate \code{B} is chosen). If numeric, please see details in 
+#'   \code{\link{OptiConjoint}} for how outcomes are handled.
+#' @param W A data frame or matrix representing the randomized conjoint attributes. 
+#'   Each column is a factor or character vector indicating attribute levels for a 
+#'   particular dimension. Multiple columns can be used if the conjoint has multiple
+#'   attributes. 
+#' @param X Optional covariate matrix or data frame for modeling systematic 
+#'   heterogeneity. If \code{K > 1}, this is typically required for multi-class or 
+#'   cluster-based models. Otherwise, set \code{X = NULL}.
+#' @param lambda_seq A numeric vector of candidate \eqn{\lambda} values for 
+#'   cross-validation. If \code{NULL} and \code{lambda} is also \code{NULL}, 
+#'   a sequence of values is automatically generated (e.g., via 
+#'   \code{10^seq(-4, 0, length.out = 5) * sd(Y)}).
+#' @param lambda A single user-specified \eqn{\lambda} value. If provided, 
+#'   cross-validation is effectively disabled unless \code{lambda_seq} is also 
+#'   supplied. 
+#' @param folds An integer or user-specified partitioning indicating the number of 
+#'   cross-validation folds. Defaults to 2. See Details for how data splitting is done.
+#' @param varcov_cluster_variable An optional clustering variable for robust standard 
+#'   errors. For instance, if the data is from multiple respondents, specify respondent 
+#'   IDs here for cluster-robust inference (via sandwich estimation). If \code{NULL}, no 
+#'   cluster-based variance correction is used.
+#' @param competing_group_variable_respondent Optional vector for multi-round or 
+#'   multi-group setups, indicating which respondent belongs to which group. Used for 
+#'   advanced or adversarial designs (e.g., dual-party contexts). If \code{NULL}, 
+#'   standard usage is assumed.
+#' @param competing_group_variable_candidate Similar to 
+#'   \code{competing_group_variable_respondent}, but for candidate-level grouping. 
+#'   If \code{NULL}, standard usage is assumed.
+#' @param competing_group_competition_variable_candidate An optional variable for 
+#'   specifying which candidate is in competition with which group. Relevant if 
+#'   multi-step adversarial frameworks are used.
+#' @param pair_id An optional vector (same length as \code{Y}) identifying which 
+#'   rows (candidate pairs) belong to the same forced choice. For example, if each 
+#'   respondent evaluates multiple pairs, this ID ensures correct grouping. 
+#'   Required only in certain advanced difference-in-differences or paired analyses.
+#' @param respondent_id A user-specified ID to denote respondent-level grouping, 
+#'   typically used to cluster standard errors or to perform out-of-sample validation 
+#'   by respondent. If \code{NULL}, a simple row index is used for splitting.
+#' @param respondent_task_id Another optional ID for tasks (e.g., each respondent 
+#'   might see multiple tasks). Helps in advanced designs. If \code{NULL}, ignored.
+#' @param profile_order An optional vector capturing the ordering of candidate 
+#'   profiles within tasks, if multiple profiles are being shown. Used in difference 
+#'   or extended hierarchical modeling.
+#' @param p_list A list of assignment probabilities for each attribute, if known 
+#'   or desired as a baseline. If \code{NULL}, each level is assumed to have 
+#'   uniform probability or derived from empirical frequencies in \code{W}.
+#' @param slate_list An optional list specifying alternative or restricted sets of 
+#'   attribute levels. Used when a subset of attributes is feasible or when bounding 
+#'   certain strategies in an adversarial design.
+#' @param UseOptax Logical. If \code{TRUE}, uses the \pkg{optax} Python library 
+#'   (via \pkg{reticulate}) for gradient-based optimization. If \code{FALSE}, uses 
+#'   a default gradient-based approach from \pkg{jax}.
+#' @param K An integer specifying the number of mixture components or clusters if 
+#'   \code{X} is used (e.g., for multi-class analysis). Defaults to 1 (no mixture).
+#' @param nSGD An integer number of iterations for gradient-based training. Defaults 
+#'   to 100 but can be increased if convergence has not been reached.
+#' @param diff Logical indicating whether a difference-based model (e.g., for 
+#'   forced-choice or difference-in-outcomes) is used. Defaults to \code{FALSE}, but 
+#'   set \code{TRUE} in certain difference-of-utility designs.
+#' @param MaxMin Logical indicating whether to use a two-party or multi-agent 
+#'   \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
+#'   (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
+#'   or average-case optimization).
+#' @param UseRegularization Logical; if \code{TRUE}, penalty-based regularization 
+#'   is used for the outcome model. Usually set to \code{TRUE} for large designs. 
+#'   Defaults to \code{FALSE}.
+#' @param OpenBrowser Logical used in debugging (e.g., opening a browser for 
+#'   interactive inspection within \pkg{jax} or \pkg{reticulate}). Defaults to 
+#'   \code{FALSE}.
+#' @param ForceGaussianFamily Logical indicating whether a Gaussian family 
+#'   (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary. 
+#'   Defaults to \code{FALSE}.
+#' @param A_INIT_SD A numeric controlling the random initialization scale for 
+#'   unconstrained parameters in gradient-based optimization. Defaults to 0.001. 
+#'   Larger values can help avoid local minima in complex outcome landscapes.
+#' @param TypePen A character string specifying the type of penalty for the 
+#'   \emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"}, 
+#'   or \code{"LogMaxProb"}. The default is \code{"KL"}.
+#' @param ComputeSEs Logical; if \code{TRUE}, attempts to compute standard errors 
+#'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
+#' @param conda_env A character specifying the name of a Conda environment for 
+#'   \pkg{reticulate}. If \code{NULL}, the default environment is used.
+#' @param conda_env_required Logical. If \code{TRUE}, errors if the specified 
+#'   Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
+#'   back gracefully.
+#' @param confLevel The confidence level (between 0 and 1) for interval estimation, 
+#'   default 0.90.
+#' @param nFolds_glm An integer specifying the number of folds in internal 
+#'   regression-based cross-validation (if used) for outcome model selection. 
+#'   Defaults to 3.
+#' @param nMonte_MaxMin A positive integer specifying the number of Monte Carlo 
+#'   draws for the min-max (adversarial) stage, if \code{MaxMin = TRUE}. Defaults 
+#'   to 5.
+#' @param nMonte_Qglm An integer specifying the number of Monte Carlo draws 
+#'   for evaluating certain integrals in \code{glm}-based approximations, default 100.
+#' @param jax_seed An integer seed for the JAX random number generator. Defaults to 
+#'   \code{as.integer(Sys.time())}.
+#' @param OptimType A character describing the optimization routine. Typically 
+#'   \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
+#'   or \code{"SecondOrder"} for testing or advanced routines.
 #'
-#' @param x Description
+#' @details
+#' \code{cv.OptiConjoint} implements a cross-validation routine for 
+#' \code{\link{OptiConjoint}}. First, the data is split into \code{folds} parts. 
+#' For each fold, we train candidate outcome models and compute out-of-sample 
+#' performance. The best-performing \eqn{\lambda} is selected. Finally, a 
+#' refit on the full data is done using the chosen hyperparameters, returning 
+#' the results of the final \code{\link{OptiConjoint}} call with \eqn{\lambda} set 
+#' to the best value.
 #'
-#' @return `z` Description
-#' @export
+#' The function supports a wide range of conjoints, including forced-choice 
+#' (where \code{diff = TRUE}), multi-cluster outcome modeling (where \code{K > 1}), 
+#' and adversarial designs (where \code{MaxMin = TRUE}). Regularization for the 
+#' outcome model or for the candidate distribution can be enabled via 
+#' \code{UseRegularization} and \code{TypePen}. Cross-validation is particularly 
+#' helpful when the data is limited or highly dimensional.
 #'
-#' @details `cv.OptiConjoint` implements...
+#' @return
+#' A named list with components:
+#' \item{PiStar_point}{The estimated optimal probability distribution(s) over 
+#'   candidate profiles (\eqn{\hat{\bpi}^*}).}
+#' \item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
+#'   under the selected optimal distribution.}
+#' \item{lambda}{The chosen \eqn{\lambda} value from cross-validation (and 
+#'   any other relevant hyperparameters).}
+#' \item{CVInfo}{A data frame or matrix summarizing cross-validation results, 
+#'   e.g., in-sample and out-of-sample estimates for each candidate \eqn{\lambda}.}
+#' \item{Other components}{Various additional objects useful for inference and 
+#'   debugging (e.g., final model fits, standard error estimates, weighting 
+#'   details).}
+#'
+#' @seealso 
+#' \code{\link{OptiConjoint}} for direct optimization of stochastic interventions 
+#' in conjoint analysis, including average and adversarial settings. 
 #'
 #' @examples
+#' \donttest{
+#' # A minimal example using hypothetical data
+#' set.seed(123)
+#' # Suppose Y is a binary forced choice outcome, W has several attributes (factors)
+#' Y <- rbinom(200, size = 1, prob = 0.5)
+#' W <- data.frame(
+#'   Gender = sample(c("Male","Female"), 200, TRUE),
+#'   Age    = sample(c("35","50","65"),  200, TRUE),
+#'   Party  = sample(c("Dem","Rep"),     200, TRUE)
+#' )
 #'
-#' # Perform analysis
-#' cv.OptiConjoint <- OptiConjoint()
+#' # Cross-validate over a range of lambda
+#' lam_seq <- c(0, 0.001, 0.01, 0.1)
+#' cv_fit <- cv.OptiConjoint(
+#'   Y = Y, 
+#'   W = W, 
+#'   lambda_seq = lam_seq, 
+#'   folds = 2
+#' )
 #'
-#' print( cv.OptiConjoint )
+#' # Extract optimal lambda and final fit
+#' print(cv_fit$lambda)
+#' print(cv_fit$CVInfo)
+#' print(names(cv_fit$PiStar_point))
+#' }
 #'
 #' @export
-#'
-#' @md
 
 cv.OptiConjoint       <-          function(
                                             Y,

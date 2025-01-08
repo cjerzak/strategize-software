@@ -2,27 +2,300 @@
 % Please edit documentation in R/CS_2Step_Master.R
 \name{OptiConjoint}
 \alias{OptiConjoint}
-\title{Implements...}
+\title{Estimate Optimal (or Adversarial) Stochastic Interventions for Conjoint Experiments}
 \usage{
-OptiConjoint(...)
+OptiConjoint(
+  Y,
+  W,
+  X = NULL,
+  lambda,
+  varcov_cluster_variable = NULL,
+  competing_group_variable_respondent = NULL,
+  competing_group_variable_candidate = NULL,
+  competing_group_competition_variable_candidate = NULL,
+  pair_id = NULL,
+  respondent_id = NULL,
+  respondent_task_id = NULL,
+  profile_order = NULL,
+  p_list = NULL,
+  slate_list = NULL,
+  K = 1,
+  nSGD = 100,
+  diff = FALSE,
+  MaxMin = FALSE,
+  UseRegularization = FALSE,
+  OpenBrowser = FALSE,
+  ForceGaussianFamily = FALSE,
+  A_INIT_SD = 0,
+  TypePen = "KL",
+  ComputeSEs = TRUE,
+  conda_env = NULL,
+  conda_env_required = FALSE,
+  confLevel = 0.90,
+  nFolds_glm = 3L,
+  folds = NULL,
+  nMonte_MaxMin = 5L,
+  nMonte_Qglm = 100L,
+  UseOptax = FALSE,
+  jax_seed = as.integer(Sys.time()),
+  OptimType = "tryboth"
+)
 }
 \arguments{
-\item{x}{Description}
+\item{Y}{A numeric or binary vector of observed outcomes, typically in \code{\{0,1\}} for forced-choice
+conjoint tasks, indicating whether the profile was selected. For instance, \code{Y = 1} if
+candidate A was chosen over candidate B, and \code{Y = 0} otherwise. The length must match
+the number of rows in \code{W}.}
+
+\item{W}{A matrix or data frame representing the assigned levels of each factor in a conjoint
+design (one column per factor). Each row corresponds to a single profile. For forced-choice
+tasks, a given respondent may have contributed multiple rows if you reshape pairwise choices
+into long format. If the experiment used multiple factors \eqn{D}, with each factor having
+\eqn{L_d} levels, \code{W} should capture all factor assignments accordingly.}
+
+\item{X}{An optional matrix or data frame of additional covariates, often respondent-level
+features (e.g., respondent demographics). If \code{K > 1}, \code{X} may be used internally to
+fit multi-cluster or multi-component outcome models, or to allow cluster-specific effect
+estimation for more granular insights. Defaults to \code{NULL}.}
+
+\item{lambda}{A numeric scalar or vector giving the regularization penalty (e.g., in Kullback-Leibler
+or L2 sense) used to shrink the learned probability distribution(s) of factor levels toward a
+baseline distribution \code{p_list}. Typically set via either domain knowledge or cross-validation.}
+
+\item{varcov_cluster_variable}{An optional vector of cluster identifiers (e.g., respondent IDs)
+used to form a robust variance-covariance estimate of the outcome model. If \code{NULL},
+the usual IID assumption is made. Defaults to \code{NULL}.}
+
+\item{competing_group_variable_respondent, competing_group_variable_candidate, }{competing_group_competition_variable_candidate Optional variables that mark competition group
+membership of respondents or candidate profiles. Particularly relevant in adversarial settings
+(\code{MaxMin = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
+respondent or candidate. Defaults to \code{NULL}.}
+
+\item{pair_id}{A factor or numeric vector identifying the forced-choice pair. If each row of
+\code{W} is a single profile, \code{pair_id} groups the rows belonging to the same choice set.
+Defaults to \code{NULL}.}
+
+\item{respondent_id, respondent_task_id}{Another set of optional identifiers. \code{respondent_id}
+marks each respondent across tasks, while \code{respondent_task_id} can define unique IDs for
+repeated measurements from the same respondent across multiple tasks. Useful for advanced
+clustering or robust SEs. Defaults to \code{NULL}.}
+
+\item{profile_order}{If each forced-choice is shown with different ordering (e.g., \verb{Candidate A}
+vs. \verb{Candidate B}), \code{profile_order} can label each row accordingly. Helpful for ensuring
+consistent labeling of reference vs. opposing profiles. Defaults to \code{NULL}.}
+
+\item{p_list}{An optional list describing the baseline probability distribution over factor levels
+in \code{W}. Typically derived from the initial design distribution or uniform assignment
+distribution. If \code{NULL}, the function may assume uniform or attempt to estimate the
+distribution from \code{W}.}
+
+\item{slate_list}{An optional list (or lists) providing custom “slates” of candidate features
+(and their associated probabilities). Used in more advanced or adversarial setups where
+certain combinations must be included or excluded. If \code{NULL}, no special constraints
+beyond the usual factor-level distributions are applied.}
+
+\item{K}{Integer specifying the number of latent clusters for multi-component outcome models. If
+\code{K = 1}, no latent clustering is done. Defaults to \code{1}.}
+
+\item{nSGD}{Integer specifying the number of stochastic gradient descent (or gradient-based)
+iterations to use when learning the optimal distributions. Defaults to \code{100}.}
+
+\item{diff}{Logical indicating whether the outcome \code{Y} represents a first-difference or
+difference-based metric. In forced-choice contexts, typically \code{diff = FALSE}. Defaults
+to \code{FALSE}.}
+
+\item{MaxMin}{Logical controlling whether to enable the max-min adversarial scenario. When
+\code{TRUE}, the function searches for a pair of distributions (one for each competing party
+or group) such that each party’s distribution is optimal given the other party’s distribution.
+Defaults to \code{FALSE}.}
+
+\item{UseRegularization}{Logical indicating whether to regularize the outcome model (in addition
+to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
+high-dimensional designs. Defaults to \code{FALSE}.}
+
+\item{OpenBrowser}{Logical for debugging; if \code{TRUE}, the function may open an interactive
+browser window upon encountering certain conditions. Typically \code{FALSE}.}
+
+\item{ForceGaussianFamily}{Logical indicating whether to force a Gaussian-based outcome modeling
+approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
+to choose a more appropriate link (e.g., \code{"binomial"}). Defaults to \code{FALSE}.}
+
+\item{A_INIT_SD}{Numeric scalar specifying the standard deviation for random initialization
+of unconstrained parameters used in the gradient-based search over factor-level probabilities.
+Defaults to \code{0}.}
+
+\item{TypePen}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
+or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
+away from the baseline \code{p_list}. Defaults to \code{"KL"}.}
+
+\item{ComputeSEs}{Logical indicating whether standard errors should be computed for the final
+estimates (via the delta method or related expansions). Defaults to \code{TRUE}.}
+
+\item{conda_env}{A character string naming a Python conda environment that includes \pkg{jax},
+\pkg{optax}, and other dependencies. If not \code{NULL}, the function attempts to activate
+that environment. Defaults to \code{NULL}.}
+
+\item{conda_env_required}{Logical; if \code{TRUE}, raises an error if the environment given by
+\code{conda_env} cannot be activated. Otherwise, the function attempts to proceed with any
+available installation. Defaults to \code{FALSE}.}
+
+\item{confLevel}{Numeric in \eqn{(0,1)}, specifying the confidence level for intervals or
+credible bounds. Defaults to \code{0.90}.}
+
+\item{nFolds_glm}{Integer specifying the number of folds (default \code{3L}) for internal
+cross-validation used in certain outcome model or regularization steps. Defaults to \code{3L}.}
+
+\item{folds}{An optional user-supplied partitioning or CV scheme, overriding \code{nFolds_glm}.
+Defaults to \code{NULL}.}
+
+\item{nMonte_MaxMin}{Integer specifying the number of Monte Carlo samples used in adversarial
+or max-min steps, e.g., sampling from the opposing candidate’s distribution to approximate
+expected payoffs. Defaults to \code{5L}.}
+
+\item{nMonte_Qglm}{Integer specifying the number of Monte Carlo samples for evaluating or
+approximating the quantity of interest under certain outcomes or distributions. Defaults to
+\code{100L}.}
+
+\item{UseOptax}{Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
+library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
+Defaults to \code{FALSE}.}
+
+\item{jax_seed}{Integer seed for reproducible JAX-based computations. Defaults to
+\code{as.integer(Sys.time())}.}
+
+\item{OptimType}{A character string for choosing which optimizer or approach is used internally
+(e.g., \code{"default"}, \code{"SecondOrder"}, or \code{"tryboth"}). Defaults to \code{"tryboth"}.}
 }
 \value{
-\code{z} Description
+A named \code{list} containing:
+\describe{
+\item{\code{PiStar_point}}{An estimate of the (possibly multi-cluster or adversarial)
+optimal distribution(s) over the factor levels. If \code{MaxMin = TRUE} and \code{K = 1},
+returns a pair of distributions. If \code{K > 1}, returns a list, with each element
+corresponding to a separate cluster.}
+
+\if{html}{\out{<div class="sourceCode">}}\preformatted{\\item\{\code{PiStar_se}\}\{A list of standard errors for the entries of \code{PiStar_point},
+computed if \code{ComputeSEs = TRUE}.\}
+
+\\item\{\code{Q_point_mEst}\}\{Point estimates of the corresponding average or adversarially
+optimized outcome, e.g., estimated expected utility or vote share.\}
+
+\\item\{\code{Q_se_mEst}\}\{Standard error (if computed) for \code{Q_point_mEst}.\}
+
+\\item\{\code{PiStar_lb}, \code{PiStar_ub}\}\{Lower and upper bounds for the factor-level
+probabilities in \code{PiStar_point}, if \code{ComputeSEs = TRUE} and a confidence
+level is provided.\}
+
+\\item\{\code{CVInfo}\}\{A data frame or list summarizing cross-validation performance for
+different values of \code{lambda}, if relevant.\}
+
+\\item\{\code{estimationType}\}\{A string describing whether the solution was found via a
+single-step or multi-step approach (e.g., \code{"TwoStep"}, \code{"OneStep"}).\}
+
+\\item\{\code{...}\}\{Additional elements storing internal details (e.g., the fitted
+outcome model, jacobian matrix, or optimization logs).\}
+}\if{html}{\out{</div>}}
+
+}
 }
 \description{
-Implements...
+\code{OptiConjoint} implements the core methods described in the accompanying paper
+for learning an optimal or adversarial probability distribution over conjoint factor levels.
+It is specifically designed for forced-choice conjoint settings (e.g., candidate-choice experiments)
+and can accommodate scenarios in which a single agent optimizes its strategy in isolation,
+or in which two (potentially adversarial) agents simultaneously optimize against each other.
+
+This function can be used to find the \emph{optimal stochastic intervention} for maximizing
+an outcome of interest (e.g., vote choice, rating, or utility), possibly subject to a penalty
+that keeps the learned distribution close to the original design distribution. It can also
+incorporate institutional rules (e.g., primaries, multiple stages of choice) by specifying
+additional arguments. Estimation can be done under standard generalized linear modeling assumptions
+or more advanced approaches. The function returns estimates of the learned distribution and
+the associated performance quantity (\eqn{Q(\bpi^\ast)}) along with optional inference based on
+the (asymptotic) delta method.
 }
 \details{
-\code{OptiConjoint} implements...
+\strong{Modeling the outcome:} Internally, \code{OptiConjoint} may fit a generalized linear model
+or a more flexible approach (such as multi-cluster factorization) to learn the mapping from
+factor-level assignments \code{W} (and optional covariates \code{X}) onto outcomes \code{Y}.
+Once these outcome coefficients are estimated, the function uses gradient-based or closed-form
+solutions to find the \emph{optimal stochastic intervention(s)}, i.e., new factor-level probability
+distributions that maximize an expected outcome (or solve the max-min adversarial problem).
+
+\strong{Adversarial or strategic design:} When \code{MaxMin = TRUE}, the function attempts to
+solve a zero-sum game in which one agent (say, \dQuote{A}) chooses its distribution to maximize
+vote share, while the other (\dQuote{B}) simultaneously chooses its distribution to minimize
+\dQuote{A}’s vote share. In many settings, \code{competing_group_variable_respondent} and related
+arguments help define which respondents belong to the \dQuote{A} or \dQuote{B} sub-electorate
+(e.g., a primary). The final solution is a mixed-strategy Nash equilibrium, if it exists, for
+the forced-choice environment. This can be used to compare or interpret real-world candidate
+positioning in multi-stage elections.
+
+\strong{Regularization:} The argument \code{lambda} penalizes how far the learned distribution
+strays from the baseline distribution \code{p_list}. This helps avoid overfitting in high-dimensional
+designs. Different penalty types can be selected via \code{TypePen}.
+
+\strong{Implementation details:} Under the hood, this function may rely on \pkg{jax} for automatic
+differentiation. By default, it uses an internal gradient-based approach. If \code{UseOptax = TRUE},
+the \code{optax} library is used for optimization. The function can automatically detect or
+load a \pkg{conda} environment if specified, though advanced users can pass \code{conda_env_required = TRUE}
+to enforce that environment activation is mandatory.
 }
 \examples{
+\dontrun{
+  # Suppose we have a forced-choice conjoint dataset with
+  # factor matrix W, outcome Y, and baseline probabilities p_list
 
-# Perform analysis
-OptiConjoint_analysis <- OptiConjoint()
+  # Basic usage: single agent optimizing expected outcome
+  opt_result <- OptiConjoint(
+      Y = Y,
+      W = W,
+      lambda = 0.1,
+      p_list = p_list,
+      MaxMin = FALSE,         # No adversarial component
+      TypePen = "KL",         # Kullback-Leibler penalty
+      nSGD = 200              # # of gradient descent iterations
+  )
 
-print( OptiConjoint_analysis )
+  # Inspect the learned distribution and performance
+  print(opt_result$PiStar_point)
+  print(opt_result$Q_point_mEst)
+  print(opt_result$CVInfo)            # If cross-validation was used
 
+  # Adversarial scenario with multi-stage structure
+  # E.g., define 'competing_group_variable_respondent' for two parties' supporters
+  adv_result <- OptiConjoint(
+      Y = Y,
+      W = W,
+      lambda = 0.2,
+      p_list = p_list,
+      MaxMin = TRUE,         # Solve zero-sum game across two sets of respondents
+      competing_group_variable_respondent = partyID,
+      nSGD = 300
+  )
+
+  # 'adv_result' now contains distributions for each party's candidate
+  # that approximate a mixed-strategy Nash equilibrium
+  print(adv_result$PiStar_point$k1)   # Party A distribution
+  print(adv_result$PiStar_point$k2)   # Party B distribution
+}
+
+}
+\references{
+\itemize{
+\item Hainmueller, J., Hopkins, D. J., & Yamamoto, T. (2014). Causal Inference in Conjoint Analysis:
+Understanding Multidimensional Choices via Stated Preference Experiments. \emph{Political
+Analysis}, 22(1), 1–30.
+\item Egami, N., & Imai, K. (2019). Causal Interaction in Factorial Experiments:
+Application to Conjoint Analysis. \emph{Journal of the American Statistical Association}, 114(526), 529–540.
+\item Goplerud, M., & Titiunik, R. (2022). Analysis of High-Dimensional Factorial Experiments:
+Estimation of Interactive and Non-Interactive Effects. \emph{arXiv preprint arXiv:2207.XXXX}.
+\item (Paper Reference) A forthcoming or accompanying manuscript describing in detail the methods
+for \emph{optimal} or \emph{adversarial} stochastic interventions in conjoint settings.
+}
+}
+\seealso{
+\code{\link{cv.OptiConjoint}} for cross-validation across candidate values of \code{lambda}.
+See also \code{\link{OneStep.OptiConjoint}} for a function that implements a \dQuote{one-step}
+approach to M-estimation of the same target quantity.
 }
