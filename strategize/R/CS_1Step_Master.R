@@ -168,13 +168,13 @@
 #' to be integrated into the \emph{same} optimization objective, potentially improving finite-sample
 #' performance. Support for adversarial or multiple clusters is also available.
 #'
-#' By default, \code{OneStep.OptiConjoint} attempts to find the distribution(s) \eqn{\bpi^\ast} that
+#' By default, \code{OneStep.OptiConjoint} attempts to find the distribution(s) \eqn{\boldsymbol{\pi}^\ast} that
 #' maximizes the average outcome if \code{findMax = TRUE} (e.g., maximizing candidate choice share).
 #' In adversarial contexts, each cluster or \dQuote{player} can simultaneously learn a best response.
 #' The function is flexible enough to incorporate sub-populations or multiple stages (e.g., primaries
 #' plus general elections).
 #'
-#' If a user-supplied \code{hypotheticalProbList} is given, the function directly computes \eqn{Q(\bpi)}
+#' If a user-supplied \code{hypotheticalProbList} is given, the function directly computes \eqn{Q(\boldsymbol{\pi})}
 #' for that distribution instead of estimating. This is useful for evaluating the performance of a
 #' known or hypothesized distribution (e.g., \dQuote{status quo}).
 #'

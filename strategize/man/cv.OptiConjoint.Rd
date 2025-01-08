@@ -43,7 +43,7 @@ cv.OptiConjoint(
 )
 }
 \arguments{
-\item{Y}{A numeric or binary response vector. If binary (e.g., 0--1), it should 
+\item{Y}{A numeric or binary response vector. If binary (e.g., 0–1), it should 
 correspond to forced-choice outcomes (1 if candidate \code{A} is chosen; 0 if 
 candidate \code{B} is chosen). If numeric, please see details in 
 \code{\link{OptiConjoint}} for how outcomes are handled.}
@@ -183,17 +183,23 @@ or \code{"SecondOrder"} for testing or advanced routines.}
 }
 \value{
 A named list with components:
-\item{PiStar_point}{The estimated optimal probability distribution(s) over 
-  candidate profiles (\eqn{\hat{\bpi}^*}).}
-\item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
+\describe{
+  \item{PiStar_point}{The estimated optimal probability distribution(s) over 
+  candidate profiles (\eqn{\hat{\boldsymbol{\pi}}^*}).}
+
+  \item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
   under the selected optimal distribution.}
-\item{lambda}{The chosen \eqn{\lambda} value from cross-validation (and 
+
+  \item{lambda}{The chosen \eqn{\lambda} value from cross-validation (and 
   any other relevant hyperparameters).}
-\item{CVInfo}{A data frame or matrix summarizing cross-validation results, 
+
+  \item{CVInfo}{A data frame or matrix summarizing cross-validation results, 
   e.g., in-sample and out-of-sample estimates for each candidate \eqn{\lambda}.}
-\item{Other components}{Various additional objects useful for inference and 
+
+  \item{Other components}{Various additional objects useful for inference and 
   debugging (e.g., final model fits, standard error estimates, weighting 
   details).}
+}
 }
 \description{
 Performs cross-validation to select the regularization parameter \eqn{\lambda} 
@@ -213,7 +219,7 @@ the results of the final \code{\link{OptiConjoint}} call with \eqn{\lambda} set
 to the best value.
 
 The function supports a wide range of conjoints, including forced-choice 
-(where \code{diff = TRUE}), multi-cluster outcome modeling (where \code{K > 1}), 
+(where \code{diff = TRUE}), multi-cluster outcome modeling (where \eqn{K > 1}), 
 and adversarial designs (where \code{MaxMin = TRUE}). Regularization for the 
 outcome model or for the candidate distribution can be enabled via 
 \code{UseRegularization} and \code{TypePen}. Cross-validation is particularly 
