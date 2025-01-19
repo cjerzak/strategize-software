@@ -19,10 +19,21 @@ This vignette illustrates core functionality:
 - **Section \@ref(sec:advanced)** highlights features like adversarial (max-min) scenarios, cross-validation, and multi-cluster expansions.
 - **Section \@ref(sec:onestep)** briefly shows an alternative one-step M-estimation procedure.
 
-
 Throughout, we will use raw `R` code chunks to illustrate typical usage in `R`, including how to specify factor-level probability constraints, run the optimization, and interpret the results.
 
-## Constructing Example Data {#sec:dataconstruction}
+## Installation
+
+This tutorial assumes you have installed the fastrerandomize package, either from source or via GitHub:
+
+```
+# If you haven't installed or set up the package:
+# devtools::install_github("cjerzak/strategize-software/strategize")
+
+# (Done once) Optionally build the JAX backend if needed
+# strategize::build_backend(conda_env = "strategize")
+``` 
+
+## Constructing Example Data
 
 Most methods in `strategize` require: 
 
@@ -134,7 +145,7 @@ res_avg <- OptiConjoint(
   ForceGaussianFamily = FALSE, 
   # other arguments, e.g. your model fit's details:
   UseRegularization = FALSE, 
-  conda_env = conda_env,
+  conda_env = "strategizer",
   conda_env_required = T
 )
 
@@ -195,7 +206,7 @@ res_adversarial <- OptiConjoint(
   MaxMin = TRUE,    # <--- key difference
   TypePen = "L2",
   nSGD = 300, 
-  conda_env = conda_env,
+  conda_env = "strategizer",
   conda_env_required = T
 )
 
@@ -224,7 +235,7 @@ res_onestep <- OneStep.OptiConjoint(
   penaltyType = "L2",  # penalizes the difference in factor-level probs
   lambda_seq = c(0.01, 0.1),  # might do internal CV
   nSGD = 300,
-  conda_env = conda_env,
+  conda_env = "strategizer",
   conda_env_required = T
 )
 
@@ -244,7 +255,9 @@ res_cv <- cv.OptiConjoint(
   Y = Y,
   W = W,
   lambda_seq = c(0, 0.01, 0.02, 0.1),
-  folds = 2
+  folds = 2,  
+  conda_env = "strategizer",
+  conda_env_required = TRUE
 )
 
 res_cv$lambda            # best lambda chosen

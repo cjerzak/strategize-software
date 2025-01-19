@@ -28,15 +28,16 @@ build_backend <- function(conda_env = "strategizer", conda = "auto"){
                            python_version = "3.11")
   
   # Install Python packages within the environment
-  Packages2Install <- c("numpy==1.26.4",
+  Packages2Install <- c("numpy",
                         "tensorflow",
                         "tensorflow_probability",
-                        "jax==0.4.38",
-                        "jaxlib==0.4.38")
+                        "jax",
+                        "jaxlib",
+                        "optax")
   
   # Install METAL where available 
   if( Sys.info()["machine"] == "arm64" & Sys.info()["sysname"] == "Darwin" ){
-    Packages2Install <- c(Packages2Install,"jax-metal==0.1.1")
+    Packages2Install <- c(Packages2Install,"jax-metal")
   }
   for(pack_ in Packages2Install){
       try_ <- try(reticulate::py_install(pack_, conda = conda, pip = TRUE, envname = conda_env), TRUE)
