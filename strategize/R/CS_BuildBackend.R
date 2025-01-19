@@ -43,3 +43,4 @@ build_backend <- function(conda_env = "strategize", conda = "auto"){
       try_ <- try(reticulate::py_install(pack_, conda = conda, pip = TRUE, envname = conda_env), TRUE)
   }
 }
+# build_backend("strategize")

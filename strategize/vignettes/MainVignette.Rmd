@@ -7,6 +7,9 @@ vignette: >
   %\VignetteEngine{knitr::rmarkdown}
   %\usepackage[UTF-8]{inputenc}
 ---
+<!--
+ install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = F)
+-->
 
 # Introduction 
 
@@ -124,16 +127,8 @@ We now pass this fitted model to `OptiConjoint`, which will search for the facto
 ```{r}
 library(strategize)
 
-# We can produce a matrix version of W so that each row is numeric-coded:
-# for example, each factor is recoded 1..L_d. But here we rely on built-in handling.
-
-# We'll do a wrapper to create the object needed:
-# (We can skip if we want to rely on built-in formula usage.)
-# The outcome model's coefficients & vcov
-coef_vec <- coef(mod_fit)
-vcov_mat <- vcov(mod_fit)
-
 # Now we pass to OptiConjoint:
+if(T == F){ 
 res_avg <- OptiConjoint(
   Y = Y,
   W = W,
@@ -142,10 +137,10 @@ res_avg <- OptiConjoint(
   MaxMin = FALSE,          # not adversarial
   TypePen = "L2",          # L2 penalty
   nSGD = 200,              # gradient-based steps if needed
-  ForceGaussianFamily = FALSE, 
+  #ForceGaussianFamily = FALSE, 
   # other arguments, e.g. your model fit's details:
-  UseRegularization = FALSE, 
-  conda_env = "strategizer",
+  #UseRegularization = TRUE, 
+  conda_env = "strategize",
   conda_env_required = T
 )
 
@@ -157,14 +152,15 @@ res_avg$Q_point_mEst
 
 # Standard errors for each factor-level probability:
 res_avg$PiStar_se
+}
 ```
 
 In this snippet, `OptiConjoint` uses the logistic model to search for the factor-level distribution maximizing predicted `Y`, subject to an $L_2$ penalty that prevents that distribution from deviating too drastically from `p_list`. The output includes:
 
-- `\$PiStar_point`: a list of length $D$ (the number of factors), each containing the new factor-level probabilities.
-- `\$Q_point_mEst`: the estimated average outcome (vote share) at that new distribution.
-- `\$PiStar_se`: approximate standard errors for the factor probabilities (Delta method).
-- `\$Q_se_mEst`: approximate standard error for the average outcome.
+- `$PiStar_point`: a list of length $D$ (the number of factors), each containing the new factor-level probabilities.
+- `$Q_point_mEst`: the estimated average outcome (vote share) at that new distribution.
+- `$PiStar_se`: approximate standard errors for the factor probabilities (Delta method).
+- `$Q_se_mEst`: approximate standard error for the average outcome.
 
 **Interpretation.** The factor-level probabilities in `PiStar_point` show how `OptiConjoint` suggests *reallocating* factor levels, relative to the original `p_list`, to improve the outcome. For instance, if `Position="Center"` gets upweighted, that means the model suggests that a more centrist stance is beneficial. Because of the $L_2$ penalty, we do not push any factor-level probability to $0$ or $1$ but move them in ways that modestly improve predicted `Y`.
 
@@ -174,6 +170,7 @@ We can compare `p_list` vs. `res_avg$PiStar_point` to see how the method reweigh
 
 
 ```{r}
+if(T == F){ 
 oldpar <- par(mfrow=c(1,3))
 for(d in seq_along(p_list)){
   old_probs <- p_list[[d]]
@@ -185,6 +182,7 @@ for(d in seq_along(p_list)){
   legend("topright", legend=c("Original", "Optimal"), fill=c("gray","blue"), cex=0.8)
 }
 par(oldpar)
+}
 ```
 
 In a real analysis, you would interpret which factor levels are up-weighted vs. down-weighted, linking them to your experimental factors (e.g., `Party="Rep"` might be heavily favored if that yields higher predicted support).
@@ -196,6 +194,7 @@ In a real analysis, you would interpret which factor levels are up-weighted vs. 
 Suppose we want to model a scenario where `Party="A"` tries to maximize the outcome, while `Party="B"` tries to minimize it.  We can approximate the equilibrium by specifying `MaxMin=TRUE`:
 
 ```{r}
+if(T == F){ 
 # We'll treat Y as "the probability that candidate A is chosen."
 # So B tries to minimize that same outcome.
 res_adversarial <- OptiConjoint(
@@ -206,7 +205,7 @@ res_adversarial <- OptiConjoint(
   MaxMin = TRUE,    # <--- key difference
   TypePen = "L2",
   nSGD = 300, 
-  conda_env = "strategizer",
+  conda_env = "strategize",
   conda_env_required = T
 )
 
@@ -217,6 +216,7 @@ res_adversarial$PiStar_point$k2   # distribution for "B"
 
 # The estimated equilibrium outcome is in Q_point_mEst
 res_adversarial$Q_point_mEst
+}
 ```
 
 Each side's factor-level probabilities can be inspected.  For instance, `k1` might heavily upweight `Experience="High"` if that strongly helps side A, while `k2` might prefer `Experience="Low"` if that helps side B.  In practice, we might further separate respondents by group (e.g., one group is relevant for A's primary, another group for B's primary, etc.), though that requires more advanced usage with arguments like `competing_group_variable_respondent`.
@@ -227,6 +227,7 @@ In some settings, you might want to estimate factor-level probabilities *and* th
 
 
 ```{r}
+if(T == F){ 
 # Example: a single-step approach
 res_onestep <- OneStep.OptiConjoint(
   W = W,
@@ -235,13 +236,14 @@ res_onestep <- OneStep.OptiConjoint(
   penaltyType = "L2",  # penalizes the difference in factor-level probs
   lambda_seq = c(0.01, 0.1),  # might do internal CV
   nSGD = 300,
-  conda_env = "strategizer",
+  conda_env = "strategize",
   conda_env_required = T
 )
 
 # Inspect results:
 res_onestep$PiStar_point     # best distribution
 res_onestep$Q_point          # the average outcome
+}
 ```
 
 The single-step approach can be more flexible, but in practice it is often more prone to local minima or need for careful tuning. In many cases, we recommend a two-step approach: first fit an outcome model (with any method you like) and then pass it to `OptiConjoint` or `cv.OptiConjoint`.
@@ -251,12 +253,13 @@ The single-step approach can be more flexible, but in practice it is often more 
 For selecting the hyperparameter \(\lambda\), you can use `cv.OptiConjoint`:
 
 ```{r}
+if(T == F){ 
 res_cv <- cv.OptiConjoint(
   Y = Y,
   W = W,
   lambda_seq = c(0, 0.01, 0.02, 0.1),
   folds = 2,  
-  conda_env = "strategizer",
+  conda_env = "strategize",
   conda_env_required = TRUE
 )
 
@@ -264,6 +267,7 @@ res_cv$lambda            # best lambda chosen
 res_cv$PiStar_point      # final selected distribution
 res_cv$Q_point_mEst      # performance at that distribution
 res_cv$CVInfo            # in- and out-of-sample metrics
+}
 ```
 
 Additional advanced functionalities include:
