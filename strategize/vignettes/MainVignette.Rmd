@@ -1,148 +1,272 @@
 ---
-title: "FastRerandomize Package Tutorial"
+title: "Strategizer Package Tutorial"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{FastRerandomize Package Tutorial}
+  %\VignetteIndexEntry{Strategizer Package Tutorial}
   %\VignetteEngine{knitr::rmarkdown}
   %\usepackage[UTF-8]{inputenc}
 ---
 
-## Introduction
+# Introduction 
 
-This vignette demonstrates how to use the fastrerandomize package for generating and testing experimental designs in an agricultural study setting based on: 
+The `strategize` package implements methods for finding optimal stochastic interventions in high-dimensional factorial (including conjoint) experiments. Unlike standard AMCE-based analyses, which marginalize outcomes over the existing experimental distribution (often uniform), these methods identify a counterfactual distribution over factors that best achieves a target (e.g., maximizing a vote-choice outcome). In adversarial contexts, multiple distributions can be learned simultaneously (e.g., two political parties each optimizing candidate features in competition). 
 
-* Burchardi, K.B., Gulesci, S., Lerva, B. and Sulaiman, M., 2019. Moral hazard: Experimental Evidence from Tenancy Contracts. The Quarterly Journal of Economics, 134(1), pp.281-347.
+This vignette illustrates core functionality:
 
-We will walk through:
+- **Section \@ref(sec:dataconstruction)** constructs a toy dataset (since we do not assume you have your own data in this example).
+- **Section \@ref(sec:basicusage)** demonstrates a two-step approach to (1) fit an outcome model (like a logistic regression) and (2) optimize a *stochastic intervention* to maximize that model's predicted outcome.
+- **Section \@ref(sec:advanced)** highlights features like adversarial (max-min) scenarios, cross-validation, and multi-cluster expansions.
+- **Section \@ref(sec:onestep)** briefly shows an alternative one-step M-estimation procedure.
 
-* Generating synthetic covariate data
-* Creating candidate randomizations
-* Exploring the S3 methods for printing, summarizing, and plotting randomization objects
-* Conducting a randomization-based inference test
 
-Note: This tutorial assumes you have installed the fastrerandomize package, either from source or via GitHub:
+Throughout, we will use raw `R` code chunks to illustrate typical usage in `R`, including how to specify factor-level probability constraints, run the optimization, and interpret the results.
 
-```{r setup, eval=FALSE}
-# If you haven't installed or set up the package:
-# devtools::install_github("cjerzak/fastrerandomize-software/fastrerandomize")
+## Constructing Example Data {#sec:dataconstruction}
 
-# (Done once) Optionally build the JAX backend if needed
-# fastrerandomize::build_backend()
+Most methods in `strategize` require: 
 
-# note that this vignette can be found like so: 
-# vignette(package = "fastrerandomize")
-```
+- A matrix (or data frame) `W` of factor levels in a factorial/conjoint design. Each column is a factor; each row is a profile or a respondent-task-profile observation. 
+- An outcome `Y`. In forced-choice setups, `Y` could be 1 if a given profile is chosen, 0 otherwise. 
+- (Optionally) `X`, which are respondent covariates or other features if you want cluster-specific or multi-group analysis.
+- A list `p_list` that captures the original assignment probabilities for each factor (the randomization distribution).
 
-## 1. Obtain Pre-treatment Covariate Data
 
-For illustration, we use several pre-treatment covariates from the original experiment. 
+Below, we construct a toy dataset:
 
-```{r generate_covariates}
-library(fastrerandomize)
+```{r}
+# A small example: Suppose we have a forced-choice design with 1000
+# respondent-profile observations, each profile has 3 factors.
 
-# Obtain pre-treatment covariates 
-data(QJEData, package = "fastrerandomize")
-myCovariates <- c("children","married","hh_size","hh_sexrat")
-QJEData <- QJEData[!is.na(rowSums(QJEData[,myCovariates])),]
-X <- QJEData[,myCovariates]
-  
-# Analysis parameters
-n_units   <- nrow(X)
-n_treated <- round(nrow(X)/2)
-```
+set.seed(123)
 
-## 2. Generate Randomizations
+n <- 1000
+# We'll say each factor has 3 levels:
+# Factor 1 might be "Party" with levels c("Dem","Rep","Ind")
+# Factor 2 might be "Experience" with levels c("Low","Medium","High")
+# Factor 3 might be "Position" with levels c("Left","Center","Right")
 
-We now create our candidate randomizations using the function `generate_randomizations()` from fastrerandomize. Depending on the scale and complexity of your experiment, you may choose either exact enumeration ("exact") or Monte Carlo ("monte_carlo") randomization.
+# Randomly assign factor levels under uniform distribution:
+factor1 <- sample(c("Dem","Rep","Ind"), n, replace=TRUE)
+factor2 <- sample(c("Low","Medium","High"), n, replace=TRUE)
+factor3 <- sample(c("Left","Center","Right"), n, replace=TRUE)
 
-In this example, we'll use the exact approach, but note that `randomization_accept_prob` is set very low (0.0001) for demonstration, so that we can see some filtering in action.
+W <- data.frame(Party = factor1,
+                Experience = factor2,
+                Position = factor3)
 
-```{r generate_randomizations}
-RunMainAnalysis <- (!is.null(check_jax_availability()) )
-# if FALSE, consider calling build_backend()
+# A simple outcome model:
+# Suppose Probability(Y=1) = logistic(
+#    0.2 * 1{Party=Dem} + 0.1 * 1{Party=Ind}
+#  + 0.5 * 1{Experience=High}
+#  + 0.3 * 1{Position=Left}
+#  - 0.4 * 1{Position=Right}
+# ), for example.
 
-if(RunMainAnalysis){
-CandRandomizations <- generate_randomizations(
-  n_units = n_units,
-  n_treated = n_treated,
-  X = X,
-  randomization_type = "monte_carlo", 
-  max_draws = 100000L,
-  batch_size = 1000L,
-  randomization_accept_prob = 0.0001
-)
-}
-```
+linpred <- 0.2 * (W$Party == "Dem") +
+           0.1 * (W$Party == "Ind") +
+           0.5 * (W$Experience == "High") +
+           0.3 * (W$Position == "Left")  +
+          -0.4 * (W$Position == "Right")
 
-## 4. S3 Methods: Print, Summary, and Plot
+# We'll use a logistic link to get probabilities:
+probY <- 1 / (1 + exp(-linpred))
 
-`generate_randomizations()` returns an S3 object of class `fastrerandomize_randomizations`. We can use its associated print, summary, and plot methods to inspect the candidate randomizations.
+# Generate a binary outcome:
+Y <- rbinom(n, size = 1, prob = probY)
 
-```{r s3_methods}
-if(RunMainAnalysis){
-# 4a. Print the object
-print(CandRandomizations)
-
-# 4b. Summary
-summary(CandRandomizations)
-
-# 4c. Plot the balance distribution
-plot(CandRandomizations)
-}
-```
-
-## 3. Randomization Test
-
-Next, we showcase a randomization-based inference procedure using fastrerandomize.
-
-### 3a. Setup Simulated Outcomes
-
-We simulate an outcome Y that depends on our covariates X, the chosen randomization, and some true treatment effect τ. Here, we pick the first acceptable randomization from our set as our "observed" assignment, Wobs.
-
-```{r setup_outcomes}
-if(RunMainAnalysis){
-CoefY <- rnorm(ncol(X))          # Coefficients for outcome model
-Wobs  <- CandRandomizations$randomizations[1, ]  # use the 1st acceptable randomization
-tau_true <- 1                     # true treatment effect
-# Generate Y = X * Coef + W*tau + noise
-Yobs <- as.numeric( as.matrix(X) %*% as.matrix(CoefY) + Wobs * tau_true + rnorm(n_units, sd = 0.1))
-}
-```
-
-### 3b. Run the Randomization Test
-
-We pass our observed treatment assignment (`obsW`), observed outcomes (`obsY`), and the full matrix of candidate randomizations (`candidate_randomizations`) to `randomization_test()`. This test:
-
-* Computes the observed difference in means
-* Permutes the treatment assignment across our candidate randomizations
-* Estimates the p-value by comparing the observed statistic to its permutation distribution
-
-```{r randomization_test}
-if(RunMainAnalysis){
-randomization_test_results <- randomization_test(
-  obsW = Wobs,
-  obsY = Yobs,
-  candidate_randomizations = CandRandomizations$randomizations,
-  findFI = TRUE
+# The original assignment probabilities p_list:
+# (Uniform for each factor in our toy example)
+p_list <- list(
+  Party = c(Dem = 1/3, Rep = 1/3, Ind = 1/3),
+  Experience = c(Low = 1/3, Medium = 1/3, High = 1/3),
+  Position = c(Left = 1/3, Center = 1/3, Right = 1/3)
 )
 
-# Inspect results
-print(randomization_test_results)
-summary(randomization_test_results)
-plot(randomization_test_results)
-}
+# Now we have W, Y, and p_list:
+head(W)
+mean(Y)
+p_list
 ```
 
-The `findFI = TRUE` flag further attempts to locate a fiducial interval (FI) for the treatment effect.
+This toy dataset has 3 factors, each with 3 levels, and `Y` is a binary outcome that depends on factor levels as above. The distribution is uniform, so `p_list` has 1/3 for each factor-level. Next, we show how to run a two-step approach that (1) fits an outcome model and (2) searches for the factor-level distribution that maximizes the fitted outcome predictions.
+
+# Basic Two-Step Usage for Average-Case Optimization 
+
+## Fitting an Outcome Model
+First, we fit an outcome model. Because this is a forced-choice design (in principle), or simply a Bernoulli outcome, we can do a logistic regression with main effects or interactions. In `strategize`, you can either use your own fitted model or rely on built-in helper functions that do a penalized fit. Here, for illustration, we'll do a simple logistic regression in base `R`:
+
+```{r}
+# Suppose we want to fit a logistic regression with main effects only:
+W$Party <- factor(W$Party)
+W$Experience <- factor(W$Experience)
+W$Position <- factor(W$Position)
+
+mod_fit <- glm(Y ~ Party + Experience + Position, data=data.frame(W,Y),
+               family=binomial())
+summary(mod_fit)
+```
+
+## Using `OptiConjoint`
+We now pass this fitted model to `OptiConjoint`, which will search for the factor-level distribution that maximizes the average predicted outcome. Because we are in a simpler context, we might specify `MaxMin=FALSE` to do the \emph{average case} scenario.  We'll set `lambda` for a mild $L_2$ regularization penalty so that our new distribution does not stray too far from `p_list`:
+
+```{r}
+library(strategize)
+
+# We can produce a matrix version of W so that each row is numeric-coded:
+# for example, each factor is recoded 1..L_d. But here we rely on built-in handling.
+
+# We'll do a wrapper to create the object needed:
+# (We can skip if we want to rely on built-in formula usage.)
+# The outcome model's coefficients & vcov
+coef_vec <- coef(mod_fit)
+vcov_mat <- vcov(mod_fit)
+
+# Now we pass to OptiConjoint:
+res_avg <- OptiConjoint(
+  Y = Y,
+  W = W,
+  p_list = p_list,
+  lambda = 0.02,           # mild regularization
+  MaxMin = FALSE,          # not adversarial
+  TypePen = "L2",          # L2 penalty
+  nSGD = 200,              # gradient-based steps if needed
+  ForceGaussianFamily = FALSE, 
+  # other arguments, e.g. your model fit's details:
+  UseRegularization = FALSE, 
+  conda_env = conda_env,
+  conda_env_required = T
+)
+
+# The result is a list with PiStar_point, which is the "optimal" factor-level distribution
+res_avg$PiStar_point
+
+# The estimated average outcome under that distribution:
+res_avg$Q_point_mEst
+
+# Standard errors for each factor-level probability:
+res_avg$PiStar_se
+```
+
+In this snippet, `OptiConjoint` uses the logistic model to search for the factor-level distribution maximizing predicted `Y`, subject to an $L_2$ penalty that prevents that distribution from deviating too drastically from `p_list`. The output includes:
+
+- `\$PiStar_point`: a list of length $D$ (the number of factors), each containing the new factor-level probabilities.
+- `\$Q_point_mEst`: the estimated average outcome (vote share) at that new distribution.
+- `\$PiStar_se`: approximate standard errors for the factor probabilities (Delta method).
+- `\$Q_se_mEst`: approximate standard error for the average outcome.
+
+**Interpretation.** The factor-level probabilities in `PiStar_point` show how `OptiConjoint` suggests *reallocating* factor levels, relative to the original `p_list`, to improve the outcome. For instance, if `Position="Center"` gets upweighted, that means the model suggests that a more centrist stance is beneficial. Because of the $L_2$ penalty, we do not push any factor-level probability to $0$ or $1$ but move them in ways that modestly improve predicted `Y`.
+
+### Plotting the Estimated Factor-Level Probabilities
+
+We can compare `p_list` vs. `res_avg$PiStar_point` to see how the method reweights each factor. A simple barplot can suffice:
+
+
+```{r}
+oldpar <- par(mfrow=c(1,3))
+for(d in seq_along(p_list)){
+  old_probs <- p_list[[d]]
+  new_probs <- res_avg$PiStar_point[[1]][[d]]  # if single cluster
+
+  barplot( rbind(old_probs, new_probs), beside=TRUE,
+           col=c("gray","blue"), ylim=c(0,1),
+           main=names(p_list)[d], ylab="Prob.")
+  legend("topright", legend=c("Original", "Optimal"), fill=c("gray","blue"), cex=0.8)
+}
+par(oldpar)
+```
+
+In a real analysis, you would interpret which factor levels are up-weighted vs. down-weighted, linking them to your experimental factors (e.g., `Party="Rep"` might be heavily favored if that yields higher predicted support).
+
+# Adversarial (Max-Min) Setup
+`strategize` also supports an adversarial scenario in which two (or more) distributions are simultaneously optimized. This is relevant in two-party electoral contexts or any zero-sum environment.  In this case, each side tries to maximize or minimize the other's outcome. 
+
+## Max-Min Example
+Suppose we want to model a scenario where `Party="A"` tries to maximize the outcome, while `Party="B"` tries to minimize it.  We can approximate the equilibrium by specifying `MaxMin=TRUE`:
+
+```{r}
+# We'll treat Y as "the probability that candidate A is chosen."
+# So B tries to minimize that same outcome.
+res_adversarial <- OptiConjoint(
+  Y = Y,
+  W = W,
+  p_list = p_list,  # baseline dist if needed
+  lambda = 0.02,
+  MaxMin = TRUE,    # <--- key difference
+  TypePen = "L2",
+  nSGD = 300, 
+  conda_env = conda_env,
+  conda_env_required = T
+)
+
+# This returns a pair of distributions in PiStar_point:
+names(res_adversarial$PiStar_point)  # e.g. k1 and k2
+res_adversarial$PiStar_point$k1   # e.g. distribution for "A"
+res_adversarial$PiStar_point$k2   # distribution for "B"
+
+# The estimated equilibrium outcome is in Q_point_mEst
+res_adversarial$Q_point_mEst
+```
+
+Each side's factor-level probabilities can be inspected.  For instance, `k1` might heavily upweight `Experience="High"` if that strongly helps side A, while `k2` might prefer `Experience="Low"` if that helps side B.  In practice, we might further separate respondents by group (e.g., one group is relevant for A's primary, another group for B's primary, etc.), though that requires more advanced usage with arguments like `competing_group_variable_respondent`.
+
+## One-Step M-Estimation
+
+In some settings, you might want to estimate factor-level probabilities *and* the underlying outcome model jointly, rather than the two-step approach used above. The function `OneStep.OptiConjoint` in `strategize` performs a single-step M-estimator. It uses gradient-based methods to update the outcome model parameters and factor-level probability parameters in the same objective.
+
+
+```{r}
+# Example: a single-step approach
+res_onestep <- OneStep.OptiConjoint(
+  W = W,
+  Y = Y,
+  p_list = p_list,
+  penaltyType = "L2",  # penalizes the difference in factor-level probs
+  lambda_seq = c(0.01, 0.1),  # might do internal CV
+  nSGD = 300,
+  conda_env = conda_env,
+  conda_env_required = T
+)
+
+# Inspect results:
+res_onestep$PiStar_point     # best distribution
+res_onestep$Q_point          # the average outcome
+```
+
+The single-step approach can be more flexible, but in practice it is often more prone to local minima or need for careful tuning. In many cases, we recommend a two-step approach: first fit an outcome model (with any method you like) and then pass it to `OptiConjoint` or `cv.OptiConjoint`.
+
+# Cross-Validation and Advanced Topics
+
+For selecting the hyperparameter \(\lambda\), you can use `cv.OptiConjoint`:
+
+```{r}
+res_cv <- cv.OptiConjoint(
+  Y = Y,
+  W = W,
+  lambda_seq = c(0, 0.01, 0.02, 0.1),
+  folds = 2
+)
+
+res_cv$lambda            # best lambda chosen
+res_cv$PiStar_point      # final selected distribution
+res_cv$Q_point_mEst      # performance at that distribution
+res_cv$CVInfo            # in- and out-of-sample metrics
+```
+
+Additional advanced functionalities include:
+
+- `UseRegularization = TRUE` if you want *both* the distribution itself *and* the outcome model to be regularized (especially for many factors).
+- `slate_list` to restrict certain factors (like if you have a known set of feasible factor-level combos in a candidate primary).
+- Cluster-based expansions for multi-cluster designs, specifying `K > 1` for a mixture approach.
 
 ## Conclusion
 
-This tutorial demonstrated a basic workflow with fastrerandomize:
+This vignette has illustrated the core usage of the `strategize` package for:
 
-* Generating synthetic or real covariate data
-* Producing a set of acceptable treatment assignments via randomization
-* Visualizing and summarizing these assignments
-* Testing for treatment effects with a randomization-based approach
+1. Defining factor-level assignment probabilities (the original design).
+2. Fitting an outcome model or passing your own model estimates.
+3. Optimizing to find an *average-case* or *adversarial* (max-min) solution for a new factor-level distribution.
+4. Interpreting the estimated solution, e.g., the new distribution that up- or down-weights certain levels.
 
-We encourage you to consult the package documentation for more advanced functionalities, including GPU-accelerated computations via JAX and flexible definitions of balance criteria in addition to what was shown here.
+We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `OptiConjoint`, `cv.OptiConjoint`, and `OneStep.OptiConjoint` for additional arguments and more advanced use-cases.
+
