@@ -2,5 +2,6 @@
 
 export(OneStep.OptiConjoint)
 export(OptiConjoint)
+export(build_backend)
 export(cv.OptiConjoint)
 export(strategize.plot)

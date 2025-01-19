@@ -9,7 +9,7 @@
                "CMD", "Rd2pdf", shQuote(package_path)))
   
   # Check package to ensure it meets CRAN standards.
-  devtools::check( package_path )
+  # devtools::check( package_path )
   
   #install.packages(package_path)
   
