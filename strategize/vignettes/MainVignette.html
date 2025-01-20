@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+<meta name="date" content="2025-01-20" />
+
+<title>Strategizer Package Tutorial</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Strategizer Package Tutorial</h1>
+<h4 class="date">2025-01-20</h4>
+
+
+
+<!--
+ install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = F)
+-->
+<div id="introduction" class="section level1">
+<h1>Introduction</h1>
+<p>The <code>strategize</code> package implements methods for finding
+optimal stochastic interventions in high-dimensional factorial
+(including conjoint) experiments. Unlike standard AMCE-based analyses,
+which marginalize outcomes over the existing experimental distribution
+(often uniform), these methods identify a counterfactual distribution
+over factors that best achieves a target (e.g., maximizing a vote-choice
+outcome). In adversarial contexts, multiple distributions can be learned
+simultaneously (e.g., two political parties each optimizing candidate
+features in competition).</p>
+<p>This vignette illustrates core functionality:</p>
+<ul>
+<li><strong>Section 1</strong> constructs a toy dataset (since we do not
+assume you have your own data in this example).</li>
+<li><strong>Section 2</strong> demonstrates a two-step approach to (1)
+fit an outcome model (like a logistic regression) and (2) optimize a
+<em>stochastic intervention</em> to maximize that model’s predicted
+outcome.</li>
+<li><strong>Section 3</strong> highlights features like adversarial
+(max-min) scenarios, cross-validation, and multi-cluster
+expansions.</li>
+<li><strong>Section 4</strong> briefly shows an alternative one-step
+M-estimation procedure.</li>
+</ul>
+<p>Throughout, we will use raw <code>R</code> code chunks to illustrate
+typical usage in <code>R</code>, including how to specify factor-level
+probability constraints, run the optimization, and interpret the
+results.</p>
+<div id="installation" class="section level2">
+<h2>Installation</h2>
+<p>This tutorial assumes you have installed the fastrerandomize package,
+either from source or via GitHub:</p>
+<pre><code># If you haven&#39;t installed or set up the package:
+# devtools::install_github(&quot;cjerzak/strategize-software/strategize&quot;)
+
+# (Done once) Optionally build the JAX backend if needed
+# strategize::build_backend(conda_env = &quot;strategize&quot;)</code></pre>
+</div>
+<div id="constructing-example-data" class="section level2">
+<h2>Constructing Example Data</h2>
+<p>Most methods in <code>strategize</code> require:</p>
+<ul>
+<li>A matrix (or data frame) <code>W</code> of factor levels in a
+factorial/conjoint design. Each column is a factor; each row is a
+profile or a respondent-task-profile observation.</li>
+<li>An outcome <code>Y</code>. In forced-choice setups, <code>Y</code>
+could be 1 if a given profile is chosen, 0 otherwise.</li>
+<li>(Optionally) <code>X</code>, which are respondent covariates or
+other features if you want cluster-specific or multi-group
+analysis.</li>
+<li>A list <code>p_list</code> that captures the original assignment
+probabilities for each factor (the randomization distribution).</li>
+</ul>
+<p>Below, we construct a toy dataset:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="co"># A small example: Suppose we have a forced-choice design with 1000</span></span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="co"># respondent-profile observations, each profile has 3 factors.</span></span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">123</span>)</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>n <span class="ot">&lt;-</span> <span class="dv">1000</span></span>
+<span id="cb2-7"><a href="#cb2-7" tabindex="-1"></a><span class="co"># We&#39;ll say each factor has 3 levels:</span></span>
+<span id="cb2-8"><a href="#cb2-8" tabindex="-1"></a><span class="co"># Factor 1 might be &quot;Party&quot; with levels c(&quot;Dem&quot;,&quot;Rep&quot;,&quot;Ind&quot;)</span></span>
+<span id="cb2-9"><a href="#cb2-9" tabindex="-1"></a><span class="co"># Factor 2 might be &quot;Experience&quot; with levels c(&quot;Low&quot;,&quot;Medium&quot;,&quot;High&quot;)</span></span>
+<span id="cb2-10"><a href="#cb2-10" tabindex="-1"></a><span class="co"># Factor 3 might be &quot;Position&quot; with levels c(&quot;Left&quot;,&quot;Center&quot;,&quot;Right&quot;)</span></span>
+<span id="cb2-11"><a href="#cb2-11" tabindex="-1"></a></span>
+<span id="cb2-12"><a href="#cb2-12" tabindex="-1"></a><span class="co"># Randomly assign factor levels under uniform distribution:</span></span>
+<span id="cb2-13"><a href="#cb2-13" tabindex="-1"></a>factor1 <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">&quot;Dem&quot;</span>,<span class="st">&quot;Rep&quot;</span>,<span class="st">&quot;Ind&quot;</span>), n, <span class="at">replace=</span><span class="cn">TRUE</span>)</span>
+<span id="cb2-14"><a href="#cb2-14" tabindex="-1"></a>factor2 <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">&quot;Low&quot;</span>,<span class="st">&quot;Medium&quot;</span>,<span class="st">&quot;High&quot;</span>), n, <span class="at">replace=</span><span class="cn">TRUE</span>)</span>
+<span id="cb2-15"><a href="#cb2-15" tabindex="-1"></a>factor3 <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">c</span>(<span class="st">&quot;Left&quot;</span>,<span class="st">&quot;Center&quot;</span>,<span class="st">&quot;Right&quot;</span>), n, <span class="at">replace=</span><span class="cn">TRUE</span>)</span>
+<span id="cb2-16"><a href="#cb2-16" tabindex="-1"></a></span>
+<span id="cb2-17"><a href="#cb2-17" tabindex="-1"></a>W <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(<span class="at">Party =</span> factor1,</span>
+<span id="cb2-18"><a href="#cb2-18" tabindex="-1"></a>                <span class="at">Experience =</span> factor2,</span>
+<span id="cb2-19"><a href="#cb2-19" tabindex="-1"></a>                <span class="at">Position =</span> factor3)</span>
+<span id="cb2-20"><a href="#cb2-20" tabindex="-1"></a></span>
+<span id="cb2-21"><a href="#cb2-21" tabindex="-1"></a><span class="co"># A simple outcome model:</span></span>
+<span id="cb2-22"><a href="#cb2-22" tabindex="-1"></a><span class="co"># Suppose Probability(Y=1) = logistic(</span></span>
+<span id="cb2-23"><a href="#cb2-23" tabindex="-1"></a><span class="co">#    0.2 * 1{Party=Dem} + 0.1 * 1{Party=Ind}</span></span>
+<span id="cb2-24"><a href="#cb2-24" tabindex="-1"></a><span class="co">#  + 0.5 * 1{Experience=High}</span></span>
+<span id="cb2-25"><a href="#cb2-25" tabindex="-1"></a><span class="co">#  + 0.3 * 1{Position=Left}</span></span>
+<span id="cb2-26"><a href="#cb2-26" tabindex="-1"></a><span class="co">#  - 0.4 * 1{Position=Right}</span></span>
+<span id="cb2-27"><a href="#cb2-27" tabindex="-1"></a><span class="co"># ), for example.</span></span>
+<span id="cb2-28"><a href="#cb2-28" tabindex="-1"></a></span>
+<span id="cb2-29"><a href="#cb2-29" tabindex="-1"></a>linpred <span class="ot">&lt;-</span> <span class="fl">0.2</span> <span class="sc">*</span> (W<span class="sc">$</span>Party <span class="sc">==</span> <span class="st">&quot;Dem&quot;</span>) <span class="sc">+</span></span>
+<span id="cb2-30"><a href="#cb2-30" tabindex="-1"></a>           <span class="fl">0.1</span> <span class="sc">*</span> (W<span class="sc">$</span>Party <span class="sc">==</span> <span class="st">&quot;Ind&quot;</span>) <span class="sc">+</span></span>
+<span id="cb2-31"><a href="#cb2-31" tabindex="-1"></a>           <span class="fl">0.5</span> <span class="sc">*</span> (W<span class="sc">$</span>Experience <span class="sc">==</span> <span class="st">&quot;High&quot;</span>) <span class="sc">+</span></span>
+<span id="cb2-32"><a href="#cb2-32" tabindex="-1"></a>           <span class="fl">0.3</span> <span class="sc">*</span> (W<span class="sc">$</span>Position <span class="sc">==</span> <span class="st">&quot;Left&quot;</span>)  <span class="sc">+</span></span>
+<span id="cb2-33"><a href="#cb2-33" tabindex="-1"></a>          <span class="sc">-</span><span class="fl">0.4</span> <span class="sc">*</span> (W<span class="sc">$</span>Position <span class="sc">==</span> <span class="st">&quot;Right&quot;</span>)</span>
+<span id="cb2-34"><a href="#cb2-34" tabindex="-1"></a></span>
+<span id="cb2-35"><a href="#cb2-35" tabindex="-1"></a><span class="co"># We&#39;ll use a logistic link to get probabilities:</span></span>
+<span id="cb2-36"><a href="#cb2-36" tabindex="-1"></a>probY <span class="ot">&lt;-</span> <span class="dv">1</span> <span class="sc">/</span> (<span class="dv">1</span> <span class="sc">+</span> <span class="fu">exp</span>(<span class="sc">-</span>linpred))</span>
+<span id="cb2-37"><a href="#cb2-37" tabindex="-1"></a></span>
+<span id="cb2-38"><a href="#cb2-38" tabindex="-1"></a><span class="co"># Generate a binary outcome:</span></span>
+<span id="cb2-39"><a href="#cb2-39" tabindex="-1"></a>Y <span class="ot">&lt;-</span> <span class="fu">rbinom</span>(n, <span class="at">size =</span> <span class="dv">1</span>, <span class="at">prob =</span> probY)</span>
+<span id="cb2-40"><a href="#cb2-40" tabindex="-1"></a></span>
+<span id="cb2-41"><a href="#cb2-41" tabindex="-1"></a><span class="co"># The original assignment probabilities p_list:</span></span>
+<span id="cb2-42"><a href="#cb2-42" tabindex="-1"></a><span class="co"># (Uniform for each factor in our toy example)</span></span>
+<span id="cb2-43"><a href="#cb2-43" tabindex="-1"></a>p_list <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb2-44"><a href="#cb2-44" tabindex="-1"></a>  <span class="at">Party =</span> <span class="fu">c</span>(<span class="at">Dem =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="at">Rep =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="at">Ind =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>),</span>
+<span id="cb2-45"><a href="#cb2-45" tabindex="-1"></a>  <span class="at">Experience =</span> <span class="fu">c</span>(<span class="at">Low =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="at">Medium =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="at">High =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>),</span>
+<span id="cb2-46"><a href="#cb2-46" tabindex="-1"></a>  <span class="at">Position =</span> <span class="fu">c</span>(<span class="at">Left =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="at">Center =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>, <span class="at">Right =</span> <span class="dv">1</span><span class="sc">/</span><span class="dv">3</span>)</span>
+<span id="cb2-47"><a href="#cb2-47" tabindex="-1"></a>)</span>
+<span id="cb2-48"><a href="#cb2-48" tabindex="-1"></a></span>
+<span id="cb2-49"><a href="#cb2-49" tabindex="-1"></a><span class="co"># Now we have W, Y, and p_list:</span></span>
+<span id="cb2-50"><a href="#cb2-50" tabindex="-1"></a><span class="fu">head</span>(W)</span></code></pre></div>
+<pre><code>##   Party Experience Position
+## 1   Ind     Medium    Right
+## 2   Ind       High   Center
+## 3   Ind     Medium     Left
+## 4   Rep        Low     Left
+## 5   Ind       High     Left
+## 6   Rep        Low     Left</code></pre>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="fu">mean</span>(Y)</span></code></pre></div>
+<pre><code>## [1] 0.557</code></pre>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>p_list</span></code></pre></div>
+<pre><code>## $Party
+##       Dem       Rep       Ind 
+## 0.3333333 0.3333333 0.3333333 
+## 
+## $Experience
+##       Low    Medium      High 
+## 0.3333333 0.3333333 0.3333333 
+## 
+## $Position
+##      Left    Center     Right 
+## 0.3333333 0.3333333 0.3333333</code></pre>
+<p>This toy dataset has 3 factors, each with 3 levels, and
+<code>Y</code> is a binary outcome that depends on factor levels as
+above. The distribution is uniform, so <code>p_list</code> has 1/3 for
+each factor-level. Next, we show how to run a two-step approach that (1)
+fits an outcome model and (2) searches for the factor-level distribution
+that maximizes the fitted outcome predictions.</p>
+</div>
+</div>
+<div id="basic-two-step-usage-for-average-case-optimization" class="section level1">
+<h1>Basic Two-Step Usage for Average-Case Optimization</h1>
+<div id="fitting-an-outcome-model" class="section level2">
+<h2>Fitting an Outcome Model</h2>
+<p>First, we fit an outcome model. Because this is a forced-choice
+design (in principle), or simply a Bernoulli outcome, we can do a
+logistic regression with main effects or interactions. In
+<code>strategize</code>, you can either use your own fitted model or
+rely on built-in helper functions that do a penalized fit. Here, for
+illustration, we’ll do a simple logistic regression in base
+<code>R</code>:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="co"># Suppose we want to fit a logistic regression with main effects only:</span></span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a>W<span class="sc">$</span>Party <span class="ot">&lt;-</span> <span class="fu">factor</span>(W<span class="sc">$</span>Party)</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a>W<span class="sc">$</span>Experience <span class="ot">&lt;-</span> <span class="fu">factor</span>(W<span class="sc">$</span>Experience)</span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a>W<span class="sc">$</span>Position <span class="ot">&lt;-</span> <span class="fu">factor</span>(W<span class="sc">$</span>Position)</span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a></span>
+<span id="cb8-6"><a href="#cb8-6" tabindex="-1"></a>mod_fit <span class="ot">&lt;-</span> <span class="fu">glm</span>(Y <span class="sc">~</span> Party <span class="sc">+</span> Experience <span class="sc">+</span> Position, <span class="at">data=</span><span class="fu">data.frame</span>(W,Y),</span>
+<span id="cb8-7"><a href="#cb8-7" tabindex="-1"></a>               <span class="at">family=</span><span class="fu">binomial</span>())</span>
+<span id="cb8-8"><a href="#cb8-8" tabindex="-1"></a><span class="fu">summary</span>(mod_fit)</span></code></pre></div>
+<pre><code>## 
+## Call:
+## glm(formula = Y ~ Party + Experience + Position, family = binomial(), 
+##     data = data.frame(W, Y))
+## 
+## Coefficients:
+##                  Estimate Std. Error z value Pr(&gt;|z|)    
+## (Intercept)       0.89086    0.17960   4.960 7.04e-07 ***
+## PartyInd         -0.17368    0.16030  -1.084  0.27858    
+## PartyRep         -0.04364    0.16169  -0.270  0.78722    
+## ExperienceLow    -0.62747    0.16060  -3.907 9.34e-05 ***
+## ExperienceMedium -0.53650    0.16082  -3.336  0.00085 ***
+## PositionLeft      0.12477    0.16426   0.760  0.44751    
+## PositionRight    -0.67250    0.15892  -4.232 2.32e-05 ***
+## ---
+## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
+## 
+## (Dispersion parameter for binomial family taken to be 1)
+## 
+##     Null deviance: 1373.3  on 999  degrees of freedom
+## Residual deviance: 1321.1  on 993  degrees of freedom
+## AIC: 1335.1
+## 
+## Number of Fisher Scoring iterations: 4</code></pre>
+</div>
+<div id="using-opticonjoint" class="section level2">
+<h2>Using <code>OptiConjoint</code></h2>
+<p>We now pass this fitted model to <code>OptiConjoint</code>, which
+will search for the factor-level distribution that maximizes the average
+predicted outcome. Because we are in a simpler context, we might specify
+<code>MaxMin=FALSE</code> to do the scenario. We’ll set
+<code>lambda</code> for a mild <span class="math inline">\(L_2\)</span>
+regularization penalty so that our new distribution does not stray too
+far from <code>p_list</code>:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">library</span>(strategize)</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a></span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="co"># Now we pass to OptiConjoint:</span></span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="cf">if</span>(T <span class="sc">==</span> F){ </span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a>res_avg <span class="ot">&lt;-</span> <span class="fu">OptiConjoint</span>(</span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a>  <span class="at">Y =</span> Y,</span>
+<span id="cb10-7"><a href="#cb10-7" tabindex="-1"></a>  <span class="at">W =</span> W,</span>
+<span id="cb10-8"><a href="#cb10-8" tabindex="-1"></a>  <span class="at">p_list =</span> p_list,</span>
+<span id="cb10-9"><a href="#cb10-9" tabindex="-1"></a>  <span class="at">lambda =</span> <span class="fl">0.02</span>,           <span class="co"># mild regularization</span></span>
+<span id="cb10-10"><a href="#cb10-10" tabindex="-1"></a>  <span class="at">MaxMin =</span> <span class="cn">FALSE</span>,          <span class="co"># not adversarial</span></span>
+<span id="cb10-11"><a href="#cb10-11" tabindex="-1"></a>  <span class="at">TypePen =</span> <span class="st">&quot;L2&quot;</span>,          <span class="co"># L2 penalty</span></span>
+<span id="cb10-12"><a href="#cb10-12" tabindex="-1"></a>  <span class="at">nSGD =</span> <span class="dv">200</span>,              <span class="co"># gradient-based steps if needed</span></span>
+<span id="cb10-13"><a href="#cb10-13" tabindex="-1"></a>  <span class="co">#ForceGaussianFamily = FALSE, </span></span>
+<span id="cb10-14"><a href="#cb10-14" tabindex="-1"></a>  <span class="co"># other arguments, e.g. your model fit&#39;s details:</span></span>
+<span id="cb10-15"><a href="#cb10-15" tabindex="-1"></a>  <span class="co">#UseRegularization = TRUE, </span></span>
+<span id="cb10-16"><a href="#cb10-16" tabindex="-1"></a>  <span class="at">conda_env =</span> <span class="st">&quot;strategize&quot;</span>,</span>
+<span id="cb10-17"><a href="#cb10-17" tabindex="-1"></a>  <span class="at">conda_env_required =</span> T</span>
+<span id="cb10-18"><a href="#cb10-18" tabindex="-1"></a>)</span>
+<span id="cb10-19"><a href="#cb10-19" tabindex="-1"></a></span>
+<span id="cb10-20"><a href="#cb10-20" tabindex="-1"></a><span class="co"># The result is a list with PiStar_point, which is the &quot;optimal&quot; factor-level distribution</span></span>
+<span id="cb10-21"><a href="#cb10-21" tabindex="-1"></a>res_avg<span class="sc">$</span>PiStar_point</span>
+<span id="cb10-22"><a href="#cb10-22" tabindex="-1"></a></span>
+<span id="cb10-23"><a href="#cb10-23" tabindex="-1"></a><span class="co"># The estimated average outcome under that distribution:</span></span>
+<span id="cb10-24"><a href="#cb10-24" tabindex="-1"></a>res_avg<span class="sc">$</span>Q_point_mEst</span>
+<span id="cb10-25"><a href="#cb10-25" tabindex="-1"></a></span>
+<span id="cb10-26"><a href="#cb10-26" tabindex="-1"></a><span class="co"># Standard errors for each factor-level probability:</span></span>
+<span id="cb10-27"><a href="#cb10-27" tabindex="-1"></a>res_avg<span class="sc">$</span>PiStar_se</span>
+<span id="cb10-28"><a href="#cb10-28" tabindex="-1"></a>}</span></code></pre></div>
+<p>In this snippet, <code>OptiConjoint</code> uses the logistic model to
+search for the factor-level distribution maximizing predicted
+<code>Y</code>, subject to an <span class="math inline">\(L_2\)</span>
+penalty that prevents that distribution from deviating too drastically
+from <code>p_list</code>. The output includes:</p>
+<ul>
+<li><code>$PiStar_point</code>: a list of length <span class="math inline">\(D\)</span> (the number of factors), each
+containing the new factor-level probabilities.</li>
+<li><code>$Q_point_mEst</code>: the estimated average outcome (vote
+share) at that new distribution.</li>
+<li><code>$PiStar_se</code>: approximate standard errors for the factor
+probabilities (Delta method).</li>
+<li><code>$Q_se_mEst</code>: approximate standard error for the average
+outcome.</li>
+</ul>
+<p><strong>Interpretation.</strong> The factor-level probabilities in
+<code>PiStar_point</code> show how <code>OptiConjoint</code> suggests
+<em>reallocating</em> factor levels, relative to the original
+<code>p_list</code>, to improve the outcome. For instance, if
+<code>Position=&quot;Center&quot;</code> gets upweighted, that means the model
+suggests that a more centrist stance is beneficial. Because of the <span class="math inline">\(L_2\)</span> penalty, we do not push any
+factor-level probability to <span class="math inline">\(0\)</span> or
+<span class="math inline">\(1\)</span> but move them in ways that
+modestly improve predicted <code>Y</code>.</p>
+<div id="plotting-the-estimated-factor-level-probabilities" class="section level3">
+<h3>Plotting the Estimated Factor-Level Probabilities</h3>
+<p>We can compare <code>p_list</code>
+vs. <code>res_avg$PiStar_point</code> to see how the method reweights
+each factor. A simple barplot can suffice:</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="cf">if</span>(T <span class="sc">==</span> F){ </span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>oldpar <span class="ot">&lt;-</span> <span class="fu">par</span>(<span class="at">mfrow=</span><span class="fu">c</span>(<span class="dv">1</span>,<span class="dv">3</span>))</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a><span class="cf">for</span>(d <span class="cf">in</span> <span class="fu">seq_along</span>(p_list)){</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>  old_probs <span class="ot">&lt;-</span> p_list[[d]]</span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>  new_probs <span class="ot">&lt;-</span> res_avg<span class="sc">$</span>PiStar_point[[<span class="dv">1</span>]][[d]]  <span class="co"># if single cluster</span></span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a></span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a>  <span class="fu">barplot</span>( <span class="fu">rbind</span>(old_probs, new_probs), <span class="at">beside=</span><span class="cn">TRUE</span>,</span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>           <span class="at">col=</span><span class="fu">c</span>(<span class="st">&quot;gray&quot;</span>,<span class="st">&quot;blue&quot;</span>), <span class="at">ylim=</span><span class="fu">c</span>(<span class="dv">0</span>,<span class="dv">1</span>),</span>
+<span id="cb11-9"><a href="#cb11-9" tabindex="-1"></a>           <span class="at">main=</span><span class="fu">names</span>(p_list)[d], <span class="at">ylab=</span><span class="st">&quot;Prob.&quot;</span>)</span>
+<span id="cb11-10"><a href="#cb11-10" tabindex="-1"></a>  <span class="fu">legend</span>(<span class="st">&quot;topright&quot;</span>, <span class="at">legend=</span><span class="fu">c</span>(<span class="st">&quot;Original&quot;</span>, <span class="st">&quot;Optimal&quot;</span>), <span class="at">fill=</span><span class="fu">c</span>(<span class="st">&quot;gray&quot;</span>,<span class="st">&quot;blue&quot;</span>), <span class="at">cex=</span><span class="fl">0.8</span>)</span>
+<span id="cb11-11"><a href="#cb11-11" tabindex="-1"></a>}</span>
+<span id="cb11-12"><a href="#cb11-12" tabindex="-1"></a><span class="fu">par</span>(oldpar)</span>
+<span id="cb11-13"><a href="#cb11-13" tabindex="-1"></a>}</span></code></pre></div>
+<p>In a real analysis, you would interpret which factor levels are
+up-weighted vs. down-weighted, linking them to your experimental factors
+(e.g., <code>Party=&quot;Rep&quot;</code> might be heavily favored if that yields
+higher predicted support).</p>
+</div>
+</div>
+</div>
+<div id="adversarial-max-min-setup" class="section level1">
+<h1>Adversarial (Max-Min) Setup</h1>
+<p><code>strategize</code> also supports an adversarial scenario in
+which two (or more) distributions are simultaneously optimized. This is
+relevant in two-party electoral contexts or any zero-sum environment. In
+this case, each side tries to maximize or minimize the other’s
+outcome.</p>
+<div id="max-min-example" class="section level2">
+<h2>Max-Min Example</h2>
+<p>Suppose we want to model a scenario where <code>Party=&quot;A&quot;</code>
+tries to maximize the outcome, while <code>Party=&quot;B&quot;</code> tries to
+minimize it. We can approximate the equilibrium by specifying
+<code>MaxMin=TRUE</code>:</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="cf">if</span>(T <span class="sc">==</span> F){ </span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a><span class="co"># We&#39;ll treat Y as &quot;the probability that candidate A is chosen.&quot;</span></span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a><span class="co"># So B tries to minimize that same outcome.</span></span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a>res_adversarial <span class="ot">&lt;-</span> <span class="fu">OptiConjoint</span>(</span>
+<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a>  <span class="at">Y =</span> Y,</span>
+<span id="cb12-6"><a href="#cb12-6" tabindex="-1"></a>  <span class="at">W =</span> W,</span>
+<span id="cb12-7"><a href="#cb12-7" tabindex="-1"></a>  <span class="at">p_list =</span> p_list,  <span class="co"># baseline dist if needed</span></span>
+<span id="cb12-8"><a href="#cb12-8" tabindex="-1"></a>  <span class="at">lambda =</span> <span class="fl">0.02</span>,</span>
+<span id="cb12-9"><a href="#cb12-9" tabindex="-1"></a>  <span class="at">MaxMin =</span> <span class="cn">TRUE</span>,    <span class="co"># &lt;--- key difference</span></span>
+<span id="cb12-10"><a href="#cb12-10" tabindex="-1"></a>  <span class="at">TypePen =</span> <span class="st">&quot;L2&quot;</span>,</span>
+<span id="cb12-11"><a href="#cb12-11" tabindex="-1"></a>  <span class="at">nSGD =</span> <span class="dv">300</span>, </span>
+<span id="cb12-12"><a href="#cb12-12" tabindex="-1"></a>  <span class="at">conda_env =</span> <span class="st">&quot;strategize&quot;</span>,</span>
+<span id="cb12-13"><a href="#cb12-13" tabindex="-1"></a>  <span class="at">conda_env_required =</span> T</span>
+<span id="cb12-14"><a href="#cb12-14" tabindex="-1"></a>)</span>
+<span id="cb12-15"><a href="#cb12-15" tabindex="-1"></a></span>
+<span id="cb12-16"><a href="#cb12-16" tabindex="-1"></a><span class="co"># This returns a pair of distributions in PiStar_point:</span></span>
+<span id="cb12-17"><a href="#cb12-17" tabindex="-1"></a><span class="fu">names</span>(res_adversarial<span class="sc">$</span>PiStar_point)  <span class="co"># e.g. k1 and k2</span></span>
+<span id="cb12-18"><a href="#cb12-18" tabindex="-1"></a>res_adversarial<span class="sc">$</span>PiStar_point<span class="sc">$</span>k1   <span class="co"># e.g. distribution for &quot;A&quot;</span></span>
+<span id="cb12-19"><a href="#cb12-19" tabindex="-1"></a>res_adversarial<span class="sc">$</span>PiStar_point<span class="sc">$</span>k2   <span class="co"># distribution for &quot;B&quot;</span></span>
+<span id="cb12-20"><a href="#cb12-20" tabindex="-1"></a></span>
+<span id="cb12-21"><a href="#cb12-21" tabindex="-1"></a><span class="co"># The estimated equilibrium outcome is in Q_point_mEst</span></span>
+<span id="cb12-22"><a href="#cb12-22" tabindex="-1"></a>res_adversarial<span class="sc">$</span>Q_point_mEst</span>
+<span id="cb12-23"><a href="#cb12-23" tabindex="-1"></a>}</span></code></pre></div>
+<p>Each side’s factor-level probabilities can be inspected. For
+instance, <code>k1</code> might heavily upweight
+<code>Experience=&quot;High&quot;</code> if that strongly helps side A, while
+<code>k2</code> might prefer <code>Experience=&quot;Low&quot;</code> if that helps
+side B. In practice, we might further separate respondents by group
+(e.g., one group is relevant for A’s primary, another group for B’s
+primary, etc.), though that requires more advanced usage with arguments
+like <code>competing_group_variable_respondent</code>.</p>
+</div>
+<div id="one-step-m-estimation" class="section level2">
+<h2>One-Step M-Estimation</h2>
+<p>In some settings, you might want to estimate factor-level
+probabilities <em>and</em> the underlying outcome model jointly, rather
+than the two-step approach used above. The function
+<code>OneStep.OptiConjoint</code> in <code>strategize</code> performs a
+single-step M-estimator. It uses gradient-based methods to update the
+outcome model parameters and factor-level probability parameters in the
+same objective.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a><span class="cf">if</span>(T <span class="sc">==</span> F){ </span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="co"># Example: a single-step approach</span></span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>res_onestep <span class="ot">&lt;-</span> <span class="fu">OneStep.OptiConjoint</span>(</span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>  <span class="at">W =</span> W,</span>
+<span id="cb13-5"><a href="#cb13-5" tabindex="-1"></a>  <span class="at">Y =</span> Y,</span>
+<span id="cb13-6"><a href="#cb13-6" tabindex="-1"></a>  <span class="at">p_list =</span> p_list,</span>
+<span id="cb13-7"><a href="#cb13-7" tabindex="-1"></a>  <span class="at">penaltyType =</span> <span class="st">&quot;L2&quot;</span>,  <span class="co"># penalizes the difference in factor-level probs</span></span>
+<span id="cb13-8"><a href="#cb13-8" tabindex="-1"></a>  <span class="at">lambda_seq =</span> <span class="fu">c</span>(<span class="fl">0.01</span>, <span class="fl">0.1</span>),  <span class="co"># might do internal CV</span></span>
+<span id="cb13-9"><a href="#cb13-9" tabindex="-1"></a>  <span class="at">nSGD =</span> <span class="dv">300</span>,</span>
+<span id="cb13-10"><a href="#cb13-10" tabindex="-1"></a>  <span class="at">conda_env =</span> <span class="st">&quot;strategize&quot;</span>,</span>
+<span id="cb13-11"><a href="#cb13-11" tabindex="-1"></a>  <span class="at">conda_env_required =</span> T</span>
+<span id="cb13-12"><a href="#cb13-12" tabindex="-1"></a>)</span>
+<span id="cb13-13"><a href="#cb13-13" tabindex="-1"></a></span>
+<span id="cb13-14"><a href="#cb13-14" tabindex="-1"></a><span class="co"># Inspect results:</span></span>
+<span id="cb13-15"><a href="#cb13-15" tabindex="-1"></a>res_onestep<span class="sc">$</span>PiStar_point     <span class="co"># best distribution</span></span>
+<span id="cb13-16"><a href="#cb13-16" tabindex="-1"></a>res_onestep<span class="sc">$</span>Q_point          <span class="co"># the average outcome</span></span>
+<span id="cb13-17"><a href="#cb13-17" tabindex="-1"></a>}</span></code></pre></div>
+<p>The single-step approach can be more flexible, but in practice it is
+often more prone to local minima or need for careful tuning. In many
+cases, we recommend a two-step approach: first fit an outcome model
+(with any method you like) and then pass it to <code>OptiConjoint</code>
+or <code>cv.OptiConjoint</code>.</p>
+</div>
+</div>
+<div id="cross-validation-and-advanced-topics" class="section level1">
+<h1>Cross-Validation and Advanced Topics</h1>
+<p>For selecting the hyperparameter <span class="math inline">\(\lambda\)</span>, you can use
+<code>cv.OptiConjoint</code>:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="cf">if</span>(T <span class="sc">==</span> F){ </span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a>res_cv <span class="ot">&lt;-</span> <span class="fu">cv.OptiConjoint</span>(</span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a>  <span class="at">Y =</span> Y,</span>
+<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a>  <span class="at">W =</span> W,</span>
+<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a>  <span class="at">lambda_seq =</span> <span class="fu">c</span>(<span class="dv">0</span>, <span class="fl">0.01</span>, <span class="fl">0.02</span>, <span class="fl">0.1</span>),</span>
+<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a>  <span class="at">folds =</span> <span class="dv">2</span>,  </span>
+<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a>  <span class="at">conda_env =</span> <span class="st">&quot;strategize&quot;</span>,</span>
+<span id="cb14-8"><a href="#cb14-8" tabindex="-1"></a>  <span class="at">conda_env_required =</span> <span class="cn">TRUE</span></span>
+<span id="cb14-9"><a href="#cb14-9" tabindex="-1"></a>)</span>
+<span id="cb14-10"><a href="#cb14-10" tabindex="-1"></a></span>
+<span id="cb14-11"><a href="#cb14-11" tabindex="-1"></a>res_cv<span class="sc">$</span>lambda            <span class="co"># best lambda chosen</span></span>
+<span id="cb14-12"><a href="#cb14-12" tabindex="-1"></a>res_cv<span class="sc">$</span>PiStar_point      <span class="co"># final selected distribution</span></span>
+<span id="cb14-13"><a href="#cb14-13" tabindex="-1"></a>res_cv<span class="sc">$</span>Q_point_mEst      <span class="co"># performance at that distribution</span></span>
+<span id="cb14-14"><a href="#cb14-14" tabindex="-1"></a>res_cv<span class="sc">$</span>CVInfo            <span class="co"># in- and out-of-sample metrics</span></span>
+<span id="cb14-15"><a href="#cb14-15" tabindex="-1"></a>}</span></code></pre></div>
+<p>Additional advanced functionalities include:</p>
+<ul>
+<li><code>UseRegularization = TRUE</code> if you want <em>both</em> the
+distribution itself <em>and</em> the outcome model to be regularized
+(especially for many factors).</li>
+<li><code>slate_list</code> to restrict certain factors (like if you
+have a known set of feasible factor-level combos in a candidate
+primary).</li>
+<li>Cluster-based expansions for multi-cluster designs, specifying
+<code>K &gt; 1</code> for a mixture approach.</li>
+</ul>
+<div id="conclusion" class="section level2">
+<h2>Conclusion</h2>
+<p>This vignette has illustrated the core usage of the
+<code>strategize</code> package for:</p>
+<ol style="list-style-type: decimal">
+<li>Defining factor-level assignment probabilities (the original
+design).</li>
+<li>Fitting an outcome model or passing your own model estimates.</li>
+<li>Optimizing to find an <em>average-case</em> or <em>adversarial</em>
+(max-min) solution for a new factor-level distribution.</li>
+<li>Interpreting the estimated solution, e.g., the new distribution that
+up- or down-weights certain levels.</li>
+</ol>
+<p>We hope this helps you investigate questions of <em>optimal</em> or
+<em>adversarial</em> design in conjoint experiments, bridging policy
+learning and typical factorial designs. Please see the documentation of
+<code>OptiConjoint</code>, <code>cv.OptiConjoint</code>, and
+<code>OneStep.OptiConjoint</code> for additional arguments and more
+advanced use-cases.</p>
+</div>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>
