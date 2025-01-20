@@ -17,10 +17,10 @@ The `strategize` package implements methods for finding optimal stochastic inter
 
 This vignette illustrates core functionality:
 
-- **Section \@ref(sec:dataconstruction)** constructs a toy dataset (since we do not assume you have your own data in this example).
-- **Section \@ref(sec:basicusage)** demonstrates a two-step approach to (1) fit an outcome model (like a logistic regression) and (2) optimize a *stochastic intervention* to maximize that model's predicted outcome.
-- **Section \@ref(sec:advanced)** highlights features like adversarial (max-min) scenarios, cross-validation, and multi-cluster expansions.
-- **Section \@ref(sec:onestep)** briefly shows an alternative one-step M-estimation procedure.
+- **Section 1** constructs a toy dataset (since we do not assume you have your own data in this example).
+- **Section 2** demonstrates a two-step approach to (1) fit an outcome model (like a logistic regression) and (2) optimize a *stochastic intervention* to maximize that model's predicted outcome.
+- **Section 3** highlights features like adversarial (max-min) scenarios, cross-validation, and multi-cluster expansions.
+- **Section 4** briefly shows an alternative one-step M-estimation procedure.
 
 Throughout, we will use raw `R` code chunks to illustrate typical usage in `R`, including how to specify factor-level probability constraints, run the optimization, and interpret the results.
 

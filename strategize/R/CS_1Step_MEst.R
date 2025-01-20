@@ -5,14 +5,14 @@ get_se <- function(){
   VarCov_ProbClust <- ClassProbsXobs <- ClassProbProjCoefs <- ClassProbProjCoefs_se <- NULL
   if((piSEtype  == "automatic" | piSEtype == "both") ){
     {
-      tf_LAMBDA_selected <- jnp$array(LAMBDA_selected,jnp$float32)
-      tf_FALSE <- jnp$array( returnWeightsFxn(F),jnp$bool_); tf_TRUE <- jnp$array(  returnWeightsFxn(T),jnp$bool_)
-      tf_LAMBDA_selected <- jnp$array( returnWeightsFxn(LAMBDA_selected), jnp$float32)
+      tf_LAMBDA_selected <- strenv$jnp$array(LAMBDA_selected,strenv$jnp$float32)
+      tf_FALSE <- strenv$jnp$array( returnWeightsFxn(F),strenv$jnp$bool_); tf_TRUE <- strenv$jnp$array(  returnWeightsFxn(T),strenv$jnp$bool_)
+      tf_LAMBDA_selected <- strenv$jnp$array( returnWeightsFxn(LAMBDA_selected), strenv$jnp$float32)
 
       {
-        tf_true <- jnp$array(T,jnp$bool_); tf_false <- jnp$array(F,jnp$bool_)
+        tf_true <- strenv$jnp$array(T,strenv$jnp$bool_); tf_false <- strenv$jnp$array(F,strenv$jnp$bool_)
         nParam_tf <- sum(unlist( lapply(lapply(unlist(ModelList_object),dim),prod)) )
-        nParam_total <- jnp$array( nParam_tf + 1, jnp$int32)
+        nParam_total <- strenv$jnp$array( nParam_tf + 1, strenv$jnp$int32)
 
         # unvectorized
         getJacobianComponents <- function(){
@@ -27,17 +27,17 @@ get_se <- function(){
               i_ <- ji
               if(counter_ji == 1){
                 for(fn_ in c("getProbRatio_tf", "getLoss_tf_unnormalized")){
-                  grad_jax_fxn <- jax$grad(jax_fxn <- eval(parse(text = fn_)), argnums = 0L)
+                  grad_jax_fxn <- strenv$jax$grad(jax_fxn <- eval(parse(text = fn_)), argnums = 0L)
 
                   # test the function
                   # i_ <- 1
                   jax_eval <- jax_fxn(
                     ModelList_ = ModelList_object,
-                    Y_  = jnp$array(as.matrix(Y[i_])),
-                    X_  = jnp$array(t(X[i_,])),
-                    factorMat_  = jnp$array(t(FactorsMat_numeric_0Indexed[i_,])),
-                    logProb_ = jnp$array(as.matrix(log_PrW[i_])),
-                    REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(LAMBDA_selected))
+                    Y_  = strenv$jnp$array(as.matrix(Y[i_])),
+                    X_  = strenv$jnp$array(t(X[i_,])),
+                    factorMat_  = strenv$jnp$array(t(FactorsMat_numeric_0Indexed[i_,])),
+                    logProb_ = strenv$jnp$array(as.matrix(log_PrW[i_])),
+                    REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(LAMBDA_selected))
                   )
 
                   # do some renaming
@@ -49,7 +49,7 @@ get_se <- function(){
                 } #end loop setting up dx/dp
 
                 # get psi fxn
-                psi_fxn_jax <- jax$jit( function(
+                psi_fxn_jax <- strenv$jax$jit( function(
                   # differentiate with respect to these
                   Qhat_tf, ModelList_,
 
@@ -62,8 +62,8 @@ get_se <- function(){
                     Y_  = Y_, X_  = X_,
                     factorMat_  = factorMat_, logProb_ = logProb_,
                     REGULARIZATION_LAMBDA = REGULARIZATION_LAMBDA)
-                  probRatio_contrib_i <- jnp$subtract(jnp$multiply(jnp$array(Y_), probRatio_i_jax),
-                                                      jnp$multiply(jnp$array(Qhat_tf), probRatio_i_jax))$flatten()
+                  probRatio_contrib_i <- strenv$jnp$subtract(strenv$jnp$multiply(strenv$jnp$array(Y_), probRatio_i_jax),
+                                                      strenv$jnp$multiply(strenv$jnp$array(Qhat_tf), probRatio_i_jax))$flatten()
                   my_grad_i_jax <- grad_getLoss_jax_unnormalized(
                     ModelList_,
                     Y_  = Y_,
@@ -74,22 +74,22 @@ get_se <- function(){
                   my_grad_i_jax <- lapply(unlist(my_grad_i_jax), function(zap){zap$flatten()})
 
                   # set up hessian
-                  my_psi_i_jax <- jnp$concatenate( c(probRatio_contrib_i,
+                  my_psi_i_jax <- strenv$jnp$concatenate( c(probRatio_contrib_i,
                                                      my_grad_i_jax), 0L)
 
                   return( my_psi_i_jax )
                 } )
-                jacobian_psi_fxn_jax <- jax$jit( jax$jacobian(psi_fxn_jax, argnums = 0L:1L) )
-                #system.time( jax$jacobian(psi_fxn_jax, argnums = 0L:1L) )
-                #system.time( jax$jacfwd(psi_fxn_jax, argnums = 0L:1L) )
-                #system.time( jax$jacrev(psi_fxn_jax, argnums = 0L:1L) )
+                jacobian_psi_fxn_jax <- strenv$jax$jit( strenv$jax$jacobian(psi_fxn_jax, argnums = 0L:1L) )
+                #system.time( strenv$jax$jacobian(psi_fxn_jax, argnums = 0L:1L) )
+                #system.time( strenv$jax$jacfwd(psi_fxn_jax, argnums = 0L:1L) )
+                #system.time( strenv$jax$jacrev(psi_fxn_jax, argnums = 0L:1L) )
               }
 
-              Y__i <- jnp$array(as.matrix(Y[i_]))
-              X__i <- jnp$array(t(X[i_,]))
-              factorMat__i <- jnp$array(t(FactorsMat_numeric_0Indexed[i_,]))
-              logProb__i <- jnp$array(as.matrix(log_PrW[i_]))
-              REGULARIZATION_LAMBDA__ <- jnp$array(returnWeightsFxn(LAMBDA_selected))
+              Y__i <- strenv$jnp$array(as.matrix(Y[i_]))
+              X__i <- strenv$jnp$array(t(X[i_,]))
+              factorMat__i <- strenv$jnp$array(t(FactorsMat_numeric_0Indexed[i_,]))
+              logProb__i <- strenv$jnp$array(as.matrix(log_PrW[i_]))
+              REGULARIZATION_LAMBDA__ <- strenv$jnp$array(returnWeightsFxn(LAMBDA_selected))
               Qhat__ <-  Qhat_tf
 
               # get psi components
@@ -202,7 +202,7 @@ get_se <- function(){
 
       # check this, make sure flattening is done correctly
       Mean_n_automatic <- c("Qhat" = Qhat, unlist(  rrapply::rrapply(ModelList_object, f = function(zer){
-        values_ <- np$array( jnp$reshape(zer,-1L) )
+        values_ <- np$array( strenv$jnp$reshape(zer,-1L) )
         #if(prod(dim(zer))>0){names(values_) <- paste(zer$name,1:length(values_),sep="_")}
         return( values_ )
       }) ) )
@@ -248,7 +248,7 @@ get_se <- function(){
           which_factor <- unlist( lapply(strsplit(colnames( X_factorized_complete ),split="factor\\("),function(xer){xer[2]}) )
           which_factor_names <- which_factor <- unlist(lapply(strsplit(which_factor,split="\\)"),function(zer){zer[1]}))
           which_factor <- cumsum(!duplicated(which_factor))
-          which_factor_mat <- jnp$array( model.matrix(~0+factor(which_factor)),jnp$float32)
+          which_factor_mat <- strenv$jnp$array( model.matrix(~0+factor(which_factor)),strenv$jnp$float32)
           # some tests
           {
             #\sum X * Pr(Clust|X) 1/n
@@ -265,30 +265,30 @@ get_se <- function(){
             #E[X|K=k]
           }
           with(tf$GradientTape(persistent = T) %as% tape, {
-            PrClustGivenX <- getClassProb(jnp$array(X, jnp$float32))
+            PrClustGivenX <- getClassProb(strenv$jnp$array(X, strenv$jnp$float32))
 
             # for checking:
-            #PrClustGivenX <- jnp$array(matrix(rep(c(1/2), times = length( PrClustGivenX )), ncol=2),jnp$float32)
-            #PrClustGivenX <- jnp$array(matrix(rep(c(0.9,0.1), times = length( PrClustGivenX )/2), ncol=2,byrow=T),jnp$float32)
+            #PrClustGivenX <- strenv$jnp$array(matrix(rep(c(1/2), times = length( PrClustGivenX )), ncol=2),strenv$jnp$float32)
+            #PrClustGivenX <- strenv$jnp$array(matrix(rep(c(0.9,0.1), times = length( PrClustGivenX )/2), ncol=2,byrow=T),strenv$jnp$float32)
             if(T == F){
               # testing
-              PrClustGivenX_orig <- PrClustGivenX <- jnp$array(
+              PrClustGivenX_orig <- PrClustGivenX <- strenv$jnp$array(
                 cbind(1*X_factorized_complete[,3] == max(X_factorized_complete[,3]),
-                      1*X_factorized_complete[,3] == min(X_factorized_complete[,3])),jnp$float32)
+                      1*X_factorized_complete[,3] == min(X_factorized_complete[,3])),strenv$jnp$float32)
             }
-            PrClust <- jnp$mean(PrClustGivenX,0L,keepdims=T)
-            PrClustGivenX <- jnp$expand_dims(PrClustGivenX,2L)
-            X_factorized_expand <- jnp$expand_dims(jnp$array(X_factorized_complete,jnp$float32),1L)
+            PrClust <- strenv$jnp$mean(PrClustGivenX,0L,keepdims=T)
+            PrClustGivenX <- strenv$jnp$expand_dims(PrClustGivenX,2L)
+            X_factorized_expand <- strenv$jnp$expand_dims(strenv$jnp$array(X_factorized_complete,strenv$jnp$float32),1L)
 
             #Pr(X=1 | Clust = k) = Pr(Clust = k | X = 1) Pr(X = 1) / Pr(Clust = k)
-            TotalNumberWithXd <- jnp$sum(jnp$multiply(X_factorized_expand,jnp$expand_dims(jnp$transpose(which_factor_mat),0L)),0L:1L)
+            TotalNumberWithXd <- strenv$jnp$sum(strenv$jnp$multiply(X_factorized_expand,strenv$jnp$expand_dims(strenv$jnp$transpose(which_factor_mat),0L)),0L:1L)
             # think of PrClustGivenXd as mean(as.matrix(PrClustGivenX_orig)[,2][X_factorized_complete[,3] == 1])
-            PrClustGivenXd <- jnp$divide(jnp$sum(jnp$multiply(PrClustGivenX,X_factorized_expand),0L),TotalNumberWithXd)
-            PrXd <- jnp$expand_dims(TotalNumberWithXd / nrow(X_factorized_complete),0L)
-            PrXdGivenClust <- jnp$divide(jnp$multiply(PrClustGivenXd,PrXd),jnp$transpose(PrClust))
+            PrClustGivenXd <- strenv$jnp$divide(strenv$jnp$sum(strenv$jnp$multiply(PrClustGivenX,X_factorized_expand),0L),TotalNumberWithXd)
+            PrXd <- strenv$jnp$expand_dims(TotalNumberWithXd / nrow(X_factorized_complete),0L)
+            PrXdGivenClust <- strenv$jnp$divide(strenv$jnp$multiply(PrClustGivenXd,PrXd),strenv$jnp$transpose(PrClust))
 
-            #PrXdGivenClust <- jnp$sum(jnp$multiply(PrClustGivenX,X_factorized_expand),0L)
-            #PrXd <- jnp$matmul(jnp$matmul(PrXdGivenClust,which_factor_mat),jnp$transpose(which_factor_mat))
+            #PrXdGivenClust <- strenv$jnp$sum(strenv$jnp$multiply(PrClustGivenX,X_factorized_expand),0L)
+            #PrXd <- strenv$jnp$matmul(strenv$jnp$matmul(PrXdGivenClust,which_factor_mat),strenv$jnp$transpose(which_factor_mat))
             #PrXdGivenClust <- PrXdGivenClust / PrXd
             #orig_ <- as.matrix(PrXdGivenClust)
             # plot(c(as.matrix(PrXdGivenClust)),c(as.matrix(orig_)));abline(a=0,b=1)
@@ -300,11 +300,11 @@ get_se <- function(){
           dPrXdGivenClust_dParam_orig <- dPrXdGivenClust_dParam <- tape$jacobian( PrXdGivenClust,
                                                                                   ClassProbProj$trainable_variables )
           dPrXdGivenClust_dParam <- lapply(dPrXdGivenClust_dParam,function(zer){
-            if(length(dim(zer))==3){ zer <- jnp$expand_dims(zer,3L) }
+            if(length(dim(zer))==3){ zer <- strenv$jnp$expand_dims(zer,3L) }
             return( zer)  })
           dPrXdGivenClust_dParam <- lapply(dPrXdGivenClust_dParam,function(zer){
-            jnp$reshape(zer,c(dim(zer)[1:2],-1L))})
-          dPrXdGivenClust_dParam <- jnp$concatenate(dPrXdGivenClust_dParam,2L)
+            strenv$jnp$reshape(zer,c(dim(zer)[1:2],-1L))})
+          dPrXdGivenClust_dParam <- strenv$jnp$concatenate(dPrXdGivenClust_dParam,2L)
           PrXdGivenClust_mat <- np$array(PrXdGivenClust)
           row.names(PrXdGivenClust_mat) <- paste("k",1:K,sep="")
           colnames(PrXdGivenClust_mat) <- colnames(X_factorized_complete)
@@ -314,12 +314,12 @@ get_se <- function(){
           bias_indices <- grep(row.names(VarCov_n_automatic), pattern="ClassProbProj/bias")
           VarCov_n_ProbClustParam <- VarCov_n_automatic[c(kernel_indices,bias_indices),
                                                         c(kernel_indices,bias_indices)]
-          VarCov_n_ProbClustParam <- jnp$array(VarCov_n_ProbClustParam,jnp$float32)
-          VarCov_n_ProbClustParam <- jnp$expand_dims(VarCov_n_ProbClustParam,0L)
-          PrXdGivenClust_se_tf <- jnp$matmul(
-            jnp$matmul(dPrXdGivenClust_dParam, VarCov_n_ProbClustParam),
-            jnp$transpose(dPrXdGivenClust_dParam,c(0L,2L,1L)))
-          PrXdGivenClust_se_tf <- jnp$diag(PrXdGivenClust_se_tf)
+          VarCov_n_ProbClustParam <- strenv$jnp$array(VarCov_n_ProbClustParam,strenv$jnp$float32)
+          VarCov_n_ProbClustParam <- strenv$jnp$expand_dims(VarCov_n_ProbClustParam,0L)
+          PrXdGivenClust_se_tf <- strenv$jnp$matmul(
+            strenv$jnp$matmul(dPrXdGivenClust_dParam, VarCov_n_ProbClustParam),
+            strenv$jnp$transpose(dPrXdGivenClust_dParam,c(0L,2L,1L)))
+          PrXdGivenClust_se_tf <- strenv$jnp$diag(PrXdGivenClust_se_tf)
           PrXdGivenClust_se <- np$array(PrXdGivenClust_se_tf)
           row.names(PrXdGivenClust_se) <- row.names(PrXdGivenClust_mat)
           colnames(PrXdGivenClust_se) <- colnames(PrXdGivenClust_mat)

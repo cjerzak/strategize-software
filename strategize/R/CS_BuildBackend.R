@@ -33,12 +33,9 @@ build_backend <- function(conda_env = "strategize", conda = "auto"){
                         "tensorflow_probability",
                         "jax",
                         "jaxlib",
+                        "equinox", 
                         "optax")
-  
-  # Install METAL where available 
-  #if( Sys.info()["machine"] == "arm64" & Sys.info()["sysname"] == "Darwin" ){
-  #  Packages2Install <- c(Packages2Install,"jax-metal")
-  #}
+
   for(pack_ in Packages2Install){
       try_ <- try(reticulate::py_install(pack_, conda = conda, pip = TRUE, envname = conda_env), TRUE)
   }

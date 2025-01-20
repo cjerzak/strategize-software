@@ -57,7 +57,7 @@ InitializeQMonteFxns <- function(){
   in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,",
                       paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
 
-  Vectorized_QMonteIter <- compile_fxn( jax$vmap( (QMonteIter <- compile_fxn( function(pi_star_ast_f, pi_star_dag_f,
+  Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (QMonteIter <- compile_fxn( function(pi_star_ast_f, pi_star_dag_f,
                                   INTERCEPT_ast_,
                                   COEFFICIENTS_ast_,
                                   INTERCEPT_dag_,

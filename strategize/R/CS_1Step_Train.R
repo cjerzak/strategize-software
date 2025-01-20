@@ -79,9 +79,9 @@ for(trainIndicator in trainIndicator_pool){
                                         )
 
               # compile
-              jax_fxn <- jax$jit(  getLoss_tf  )
-              v_and_grad_jax_fxn_raw <- jax$value_and_grad(getLoss_tf,argnums = 0L)
-              v_and_grad_jax_fxn <- jax$jit(   v_and_grad_jax_fxn_raw  )
+              jax_fxn <- strenv$jax$jit(  getLoss_tf  )
+              v_and_grad_jax_fxn_raw <- strenv$jax$value_and_grad(getLoss_tf,argnums = 0L)
+              v_and_grad_jax_fxn <- strenv$jax$jit(   v_and_grad_jax_fxn_raw  )
 
               # test the function
               jax_eval <- jax_fxn(
@@ -105,7 +105,7 @@ for(trainIndicator in trainIndicator_pool){
               # setup optimizer
               OptimType <- "Other"
               if(OptimType == "SecondOrder"){
-                hessian_fxn <- jax$jit( jax$hessian(jax_fxn,argnums = 0L) )
+                hessian_fxn <- strenv$jax$jit( strenv$jax$hessian(jax_fxn,argnums = 0L) )
                 optax_optimizer <-  optax$chain(
                   optax$adaptive_grad_clip(1, eps=0.0001),
                   optax$zero_nans(),
@@ -150,7 +150,7 @@ for(trainIndicator in trainIndicator_pool){
 
             # subset
             currentLossGlobal <- v_and_grad_eval[[1]]$tolist()
-            grad_set <- v_and_grad_eval[[2]] #jax$grad screws up name orders
+            grad_set <- v_and_grad_eval[[2]] #strenv$jax$grad screws up name orders
             L2_norm <- optax$global_norm(grad_set)$tolist()
             L2_norm_squared_vec[i] <- L2_norm_squared <- L2_norm^2
 
@@ -180,7 +180,7 @@ for(trainIndicator in trainIndicator_pool){
               }
 
               # get flat grad
-              grad_vec <- jax$flatten_util$ravel_pytree( grad_set )
+              grad_vec <- strenv$jax$flatten_util$ravel_pytree( grad_set )
 
               # get inv hessian times grad
               #image( (jnp$linalg$inv(HessianMat_AVE)$to_py() ))

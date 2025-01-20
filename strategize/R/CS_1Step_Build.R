@@ -12,8 +12,7 @@ ml_build <- function(){
   Zero1by1 <- jnp$array(as.matrix(0.),jnp$float32)
 
   # test
-  #compositions::ilr(t(c(0.49,0.51))) - t(log(c(0.49,0.51))) %*% compositions::ilrBase(D=2)
- # setup main functions
+  # setup main functions
   useHajekInOptimization_orig <- useHajekInOptimization
   if(penaltyType == "LogMaxProb"){
     RegularizationPiAction <- 'jnp$add(jnp$max(( (  (log_pidk) ) )),

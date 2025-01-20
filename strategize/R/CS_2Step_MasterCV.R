@@ -1,7 +1,7 @@
 #' Cross-validation for Optimal Stochastic Interventions in Conjoint Analysis
 #'
 #' Performs cross-validation to select the regularization parameter \eqn{\lambda} 
-#' (and, if desired, other hyperparameters) for the \code{\link{OptiConjoint}} function. 
+#' (and, if desired, other hyperparameters) for the \code{\link{strategize}} function. 
 #' This function splits the data by respondent (or user-specified units), trains
 #' candidate models under a grid of \eqn{\lambda} values, and evaluates out-of-sample
 #' performance, returning the model that maximizes a chosen criterion (e.g., out-of-sample 
@@ -10,7 +10,7 @@
 #' @param Y A numeric or binary response vector. If binary (e.g., 0–1), it should 
 #'   correspond to forced-choice outcomes (1 if candidate \code{A} is chosen; 0 if 
 #'   candidate \code{B} is chosen). If numeric, please see details in 
-#'   \code{\link{OptiConjoint}} for how outcomes are handled.
+#'   \code{\link{strategize}} for how outcomes are handled.
 #' @param W A data frame or matrix representing the randomized conjoint attributes. 
 #'   Each column is a factor or character vector indicating attribute levels for a 
 #'   particular dimension. Multiple columns can be used if the conjoint has multiple
@@ -112,12 +112,12 @@
 #'   or \code{"SecondOrder"} for testing or advanced routines.
 #'
 #' @details
-#' \code{cv.OptiConjoint} implements a cross-validation routine for 
-#' \code{\link{OptiConjoint}}. First, the data is split into \code{folds} parts. 
+#' \code{strategize_cv} implements a cross-validation routine for 
+#' \code{\link{strategize}}. First, the data is split into \code{folds} parts. 
 #' For each fold, we train candidate outcome models and compute out-of-sample 
 #' performance. The best-performing \eqn{\lambda} is selected. Finally, a 
 #' refit on the full data is done using the chosen hyperparameters, returning 
-#' the results of the final \code{\link{OptiConjoint}} call with \eqn{\lambda} set 
+#' the results of the final \code{\link{strategize}} call with \eqn{\lambda} set 
 #' to the best value.
 #'
 #' The function supports a wide range of conjoints, including forced-choice 
@@ -147,7 +147,7 @@
 #' }
 #'
 #' @seealso 
-#' \code{\link{OptiConjoint}} for direct optimization of stochastic interventions 
+#' \code{\link{strategize}} for direct optimization of stochastic interventions 
 #' in conjoint analysis, including average and adversarial settings. 
 #'
 #' @examples
@@ -164,7 +164,7 @@
 #'
 #' # Cross-validate over a range of lambda
 #' lam_seq <- c(0, 0.001, 0.01, 0.1)
-#' cv_fit <- cv.OptiConjoint(
+#' cv_fit <- cv_strategize(
 #'   Y = Y, 
 #'   W = W, 
 #'   lambda_seq = lam_seq, 
@@ -179,7 +179,7 @@
 #'
 #' @export
 
-cv.OptiConjoint       <-          function(
+cv_strategize       <-          function(
                                             Y,
                                             W,
                                             X = NULL,
@@ -281,7 +281,7 @@ cv.OptiConjoint       <-          function(
           # in sample optimization of pi*, evaluation on OOS coefficients 
           use_indices <- indi_list[type_,split_][[1]]
           nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
-          Qoptimized__[[split_]][[type_]] <- OptiConjoint(
+          Qoptimized__[[split_]][[type_]] <- strategize(
   
             # input data
             Y = Y[use_indices],
@@ -337,7 +337,7 @@ cv.OptiConjoint       <-          function(
   }
 
   # final output
-  gc(); py_gc$collect(); Qoptimized_ <- OptiConjoint(
+  gc(); py_gc$collect(); Qoptimized_ <- strategize(
                               # input data
                               Y = Y,
                               W = W,

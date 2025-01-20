@@ -1,7 +1,7 @@
 #' Estimate an Optimal (or Adversarial) Stochastic Intervention for Conjoint Analysis Using a One-Step M-estimation Approach
 #'
 #' @description
-#' \code{OneStep.OptiConjoint} implements a single-step (\dQuote{one-step}) approach to estimating a
+#' \code{strategize_onestep} implements a single-step (\dQuote{one-step}) approach to estimating a
 #' target quantity of interest in high-dimensional conjoint (or factorial) experiments, such as
 #' finding an \emph{optimal stochastic intervention} over factor levels. This method can incorporate
 #' adversarial or non-adversarial settings, regularization, multi-stage structures (e.g., primaries
@@ -11,7 +11,7 @@
 #' or the delta method.
 #'
 #' @usage
-#' OneStep.OptiConjoint(
+#' strategize_onestep(
 #'   W,
 #'   Y,
 #'   X = NULL,
@@ -75,7 +75,7 @@
 #'   (e.g., the original random assignment distribution). If \code{NULL}, the function may assume
 #'   uniform or empirical distributions.
 #' @param hypotheticalProbList An optional list specifying a counterfactual distribution over factor
-#'   levels. If provided, \code{OneStep.OptiConjoint} directly computes and returns the performance
+#'   levels. If provided, \code{strategize_onestep} directly computes and returns the performance
 #'   or value under that distribution instead of estimating a new optimal distribution.
 #' @param pi_init_vec A numeric vector for initializing the simplex-based representation of factor-level
 #'   probabilities to be optimized. If \code{NULL}, a random initialization is used internally.
@@ -168,7 +168,7 @@
 #' to be integrated into the \emph{same} optimization objective, potentially improving finite-sample
 #' performance. Support for adversarial or multiple clusters is also available.
 #'
-#' By default, \code{OneStep.OptiConjoint} attempts to find the distribution(s) \eqn{\boldsymbol{\pi}^\ast} that
+#' By default, \code{strategize_onestep} attempts to find the distribution(s) \eqn{\boldsymbol{\pi}^\ast} that
 #' maximizes the average outcome if \code{findMax = TRUE} (e.g., maximizing candidate choice share).
 #' In adversarial contexts, each cluster or \dQuote{player} can simultaneously learn a best response.
 #' The function is flexible enough to incorporate sub-populations or multiple stages (e.g., primaries
@@ -178,8 +178,8 @@
 #' for that distribution instead of estimating. This is useful for evaluating the performance of a
 #' known or hypothesized distribution (e.g., \dQuote{status quo}).
 #'
-#' Most users do not need to call \code{OneStep.OptiConjoint} directly, as this is a lower-level
-#' routine. The \code{\link{OptiConjoint}} or \code{\link{cv.OptiConjoint}} functions may suffice
+#' Most users do not need to call \code{strategize_onestep} directly, as this is a lower-level
+#' routine. The \code{\link{OptiConjoint}} or \code{\link{cv_strategize}} functions may suffice
 #' in many typical workflows.
 #'
 #' @note
@@ -200,7 +200,7 @@
 #' @seealso
 #' \code{\link{OptiConjoint}} for an approach that first fits an outcome model and then re-optimizes
 #' factor-level probabilities. \\
-#' \code{\link{cv.OptiConjoint}} for cross-validation across candidate values of \code{lambda}.
+#' \code{\link{cv_strategize}} for cross-validation across candidate values of \code{lambda}.
 #'
 #' @examples
 #' \dontrun{
@@ -211,7 +211,7 @@
 #' # X could be respondent covariates, if any
 #' X <- matrix(rnorm(nrow(W)*2), nrow(W), 2)
 #'
-#' result_one_step <- OneStep.OptiConjoint(
+#' result_one_step <- strategize_onestep(
 #'   W = W,
 #'   Y = Y,
 #'   X = X,
@@ -233,7 +233,7 @@
 #'
 #' @export
 
-OneStep.OptiConjoint <- function(
+strategize_onestep <- function(
                               W,
                               Y,
                               X = NULL,
