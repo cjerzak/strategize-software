@@ -29,6 +29,7 @@ Imports:
     graphics,
     utils,
     methods,
+    matrixStats,
     reticulate
 Suggests:
     testthat (>= 3.0.0),

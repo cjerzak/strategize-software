@@ -2,30 +2,121 @@
 % Please edit documentation in R/CS_PlotConjoint.R
 \name{strategize.plot}
 \alias{strategize.plot}
-\title{Implements...}
+\title{Plot Estimated Probabilities for Hypothetical Scenarios}
 \usage{
-OneStep.OptiConjoint(...)
+strategize.plot(
+  hypotheticalProbList = NULL,
+  SEsList = NULL,
+  assignmentProbList = NULL,
+  col.main = "black",
+  zStar = 1,
+  xlim = NULL,
+  ticksType = "assignmentProbs",
+  col_vec = NULL,
+  plotNames = T,
+  plotCIs = T,
+  widths_vec,
+  heights_vec,
+  mainTitle = "",
+  margins_vec = NULL,
+  add = F,
+  pch = 20
+)
 }
 \arguments{
-\item{x}{Description}
+\item{hypotheticalProbList}{A list of numeric vectors, each corresponding to a set of
+hypothetical probabilities to be plotted. These are typically model-based or
+derived values.}
+
+\item{SEsList}{A list of numeric vectors of the same structure as
+\code{hypotheticalProbList}, containing standard errors for each probability.
+Used to plot confidence intervals.}
+
+\item{assignmentProbList}{A list of numeric vectors of "assignment" or
+baseline probabilities to be overlaid as vertical ticks on each plot
+(depending on \code{ticksType}).}
+
+\item{col.main}{Character. Color for the main title in each subplot.
+Default is \code{"black"}.}
+
+\item{zStar}{Numeric. Multiplier for the standard error bars (e.g., 1.96
+for approximately 95\\% confidence intervals). Default is \code{1}.}
+
+\item{xlim}{Numeric vector of length 2. The x-axis limits for all subplots.
+Defaults to \code{c(0, 1)} if not specified.}
+
+\item{ticksType}{Character. Controls the type of reference ticks added:
+\describe{
+\item{"assignmentProbs"}{Vertical ticks drawn at the positions from
+\code{assignmentProbList} (default).}
+\item{"zero"}{Vertical ticks drawn at 0.}
+\item{"none"}{No vertical reference ticks.}
+}}
+
+\item{col_vec}{Optional character vector of colors (one per set of probabilities
+in \code{hypotheticalProbList}). If \code{NULL}, uses sequential indexing
+for color.}
+
+\item{plotNames}{Logical. If \code{TRUE} (default), factor/condition labels
+will be placed along the y-axis.}
+
+\item{plotCIs}{Logical. If \code{TRUE} (default), error bars will be drawn
+using \code{SEsList}.}
+
+\item{widths_vec, heights_vec}{Currently unused. Reserved for future layout
+expansions.}
+
+\item{mainTitle}{Character. An overall title for the plot. Default is
+an empty string.}
+
+\item{margins_vec}{Currently unused. Reserved for future layout expansions.}
+
+\item{add}{Logical. If \code{FALSE} (default), a new plot is created. If
+\code{TRUE}, points/error bars are added to an existing plot space.}
+
+\item{pch}{Numeric or character. The plotting symbol. Default is \code{20}.}
 }
 \value{
-\code{z} Description
+Invisibly returns \code{NULL}. This function is primarily called for its
+side effect: producing a multi-panel base R plot.
 }
 \description{
-Implements...
+This function creates a grid of base R plots to visualize and compare
+probabilities (and optionally their confidence intervals) across multiple
+hypothetical or assignment scenarios. By default, it arranges the plots
+in a 3xN grid, labeling each row according to the factor or condition
+being displayed.
 }
 \details{
-\code{OneStep.OptiConjoint} Description
-\itemize{
-\item Description
-}
+\code{strategize.plot} arranges multiple subplots (3 columns by default) in a grid
+that depends on the number of elements in \code{assignmentProbList}. Each subplot
+will show a factor level or condition on the y-axis, with probabilities along
+the x-axis. If confidence intervals are provided (\code{SEsList}), horizontal
+error bars around each probability point will be displayed. Additionally, vertical
+reference ticks can be added, showing values from \code{assignmentProbList} or zero
+depending on \code{ticksType}.
 }
 \examples{
+# Example (pseudo-code):
+# hypotheticalProbList <- list(
+#   scenarioA = c(factor1 = 0.3, factor2 = 0.6),
+#   scenarioB = c(factor1 = 0.4, factor2 = 0.7)
+# )
+# SEsList <- list(
+#   scenarioA = c(factor1 = 0.05, factor2 = 0.07),
+#   scenarioB = c(factor1 = 0.06, factor2 = 0.08)
+# )
+# assignmentProbList <- list(
+#   factor1 = c(conditionX = 0.35),
+#   factor2 = c(conditionX = 0.65)
+# )
 
-# Analysis
-OptiConjoint_analysis <- OneStep.OptiConjoint()
-
-print( OptiConjoint_analysis )
+# strategize.plot(
+#   hypotheticalProbList = hypotheticalProbList,
+#   SEsList = SEsList,
+#   assignmentProbList = assignmentProbList,
+#   xlim = c(0, 1),
+#   mainTitle = "Example Plot"
+# )
 
 }

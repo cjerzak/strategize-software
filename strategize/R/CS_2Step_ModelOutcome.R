@@ -224,8 +224,8 @@ generate_ModelOutcome <- function(){
 
             # define for forward compatability
             # k = 1 for now..
-            EST_INTERCEPT_tf <- jnp$array(t( my_mean_full[1,1] ) )
-            EST_COEFFICIENTS_tf <- jnp$array(as.matrix( my_mean_full[-1,1] ) )
+            EST_INTERCEPT_tf <- strenv$jnp$array(t( my_mean_full[1,1] ) )
+            EST_COEFFICIENTS_tf <- strenv$jnp$array(as.matrix( my_mean_full[-1,1] ) )
             my_mean <- as.vector( my_mean_full[-1,1] )
 
             # more definitions
@@ -296,7 +296,7 @@ generate_ModelOutcome <- function(){
       vcov_OutcomeModel <- vcov(  my_model, complete = T)
     }
     model_coef_vec <- coef(my_model)[-1]
-    EST_INTERCEPT_tf <- jnp$array(as.matrix(coef(my_model)[1]), dtype = dtj)
+    EST_INTERCEPT_tf <- strenv$jnp$array(as.matrix(coef(my_model)[1]), dtype = dtj)
 
     # main part
     my_mean_main_part <- matrix(0,nrow = nrow(main_info_PreRegularization), ncol = 1)
@@ -313,7 +313,7 @@ generate_ModelOutcome <- function(){
     my_mean_inter_part[interaction_info$IntoPreRegIndex] <- model_coef_vec[-c(1:nrow(main_info))]
     my_mean <- c(my_mean_main_part, my_mean_inter_part)
 
-    EST_COEFFICIENTS_tf <- jnp$array(as.matrix(my_mean), dtype = dtj)
+    EST_COEFFICIENTS_tf <- strenv$jnp$array(as.matrix(my_mean), dtype = dtj)
   }
 
   # vcov adjust - check this in regularization case!

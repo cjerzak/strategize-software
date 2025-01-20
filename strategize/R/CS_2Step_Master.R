@@ -1,7 +1,7 @@
 #' Estimate Optimal (or Adversarial) Stochastic Interventions for Conjoint Experiments
 #'
 #' @description
-#' \code{OptiConjoint} implements the core methods described in the accompanying paper
+#' \code{strategize} implements the core methods described in the accompanying paper
 #' for learning an optimal or adversarial probability distribution over conjoint factor levels.
 #' It is specifically designed for forced-choice conjoint settings (e.g., candidate-choice experiments)
 #' and can accommodate scenarios in which a single agent optimizes its strategy in isolation,
@@ -17,7 +17,7 @@
 #' the (asymptotic) delta method.
 #'
 #' @usage
-#' OptiConjoint(
+#' strategize(
 #'   Y,
 #'   W,
 #'   X = NULL,
@@ -209,7 +209,7 @@
 #'   }
 #'
 #' @details
-#' \strong{Modeling the outcome:} Internally, \code{OptiConjoint} may fit a generalized linear model
+#' \strong{Modeling the outcome:} Internally, \code{strategize} may fit a generalized linear model
 #' or a more flexible approach (such as multi-cluster factorization) to learn the mapping from
 #' factor-level assignments \code{W} (and optional covariates \code{X}) onto outcomes \code{Y}.
 #' Once these outcome coefficients are estimated, the function uses gradient-based or closed-form
@@ -247,8 +247,8 @@
 #'   for \emph{optimal} or \emph{adversarial} stochastic interventions in conjoint settings.
 #'
 #' @seealso
-#' \code{\link{cv.OptiConjoint}} for cross-validation across candidate values of \code{lambda}.
-#' See also \code{\link{OneStep.OptiConjoint}} for a function that implements a \dQuote{one-step}
+#' \code{\link{cv_strategize}} for cross-validation across candidate values of \code{lambda}.
+#' See also \code{\link{strategize_onestep}} for a function that implements a \dQuote{one-step}
 #' approach to M-estimation of the same target quantity. 
 #'
 #' @examples
@@ -257,7 +257,7 @@
 #'   # factor matrix W, outcome Y, and baseline probabilities p_list
 #'
 #'   # Basic usage: single agent optimizing expected outcome
-#'   opt_result <- OptiConjoint(
+#'   opt_result <- strategize(
 #'       Y = Y,
 #'       W = W,
 #'       lambda = 0.1,
@@ -274,7 +274,7 @@
 #'
 #'   # Adversarial scenario with multi-stage structure
 #'   # E.g., define 'competing_group_variable_respondent' for two parties' supporters
-#'   adv_result <- OptiConjoint(
+#'   adv_result <- strategize(
 #'       Y = Y,
 #'       W = W,
 #'       lambda = 0.2,
@@ -294,7 +294,7 @@
 #' @export
 
 
-OptiConjoint       <-          function(
+strategize       <-          function(
                                             Y,
                                             W,
                                             X = NULL,
@@ -339,17 +339,9 @@ OptiConjoint       <-          function(
   # load in packages
   print2("Initializing computational environment...")
   {
-    if(!is.null(conda_env)){
-      try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
+    if (!"VectorizedFastHotel2T2" %in% ls(envir = fastrr_env)) {
+      initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
     }
-    # import computational modules
-    jax <<- reticulate::import("jax")
-    oryx <<- reticulate::import("tensorflow_probability.substrates.jax") #
-    jnp <<- reticulate::import("jax.numpy")
-    np <<- reticulate::import("numpy")
-    py_gc <<- reticulate::import("gc")
-    optax <<- reticulate::import("optax")
-    JaxKey <<- function(int_){ jax$random$PRNGKey(int_)}
 
     # setup numerical precision for delta method
     #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # use float64
@@ -370,7 +362,6 @@ OptiConjoint       <-          function(
         names( pi_[[k_]]) <- names( names_list )
       }
     return( pi_  ) }
-
     RejiggerPi <- function(pi_,isSE = F){
       update_these <- f2n(unique(names(regularization_adjust_hash)))
       for(k_ in 1:length(pi_)){
