@@ -22,12 +22,10 @@
 #' @param xlim Numeric vector of length 2. The x-axis limits for all subplots.
 #'   Defaults to \code{c(0, 1)} if not specified.
 #' @param ticksType Character. Controls the type of reference ticks added:
-#'   \describe{
-#'     \item{"assignmentProbs"}{Vertical ticks drawn at the positions from
-#'       \code{assignmentProbList} (default).}
-#'     \item{"zero"}{Vertical ticks drawn at 0.}
-#'     \item{"none"}{No vertical reference ticks.}
-#'   }
+#'     \code{"assignmentProbs"} Vertical ticks drawn at the positions from
+#'       \code{assignmentProbList} (default).
+#'       \code{"zero"} Vertical ticks drawn at 0.
+#'       \code{"none"} No vertical reference ticks.
 #' @param col_vec Optional character vector of colors (one per set of probabilities
 #'   in \code{hypotheticalProbList}). If \code{NULL}, uses sequential indexing
 #'   for color.
