@@ -274,20 +274,9 @@ strategize_onestep <- function(
                               conda_env = NULL,
                               conda_env_required = F,
                               hypotheticalNInVarObj=NULL){
-  # load in packages
-  {
-    # conda_env <- "tensorflow_m1" ; conda_env_required <- T
-    if(!is.null(conda_env)){
-      try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
-    }
-    jax <- reticulate::import("jax")
-    oryx <- reticulate::import("tensorflow_probability.substrates.jax") #
-    optax <- reticulate::import("optax")
-    jnp <- reticulate::import("jax.numpy")
-    eq <- reticulate::import("equinox")
-    np <- reticulate::import("numpy")
-    py_gc <- reticulate::import("gc")
-    piSEtype  = "automatic"
+  # initialize environment
+  if(!"jnp" %in% ls(envir = strenv)) {
+    initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
   }
 
   # define evaluation environment
@@ -397,13 +386,13 @@ strategize_onestep <- function(
     }
 
     # INITIALIZE M ESTIMATION
-    print2("Initialize M-Estimation...")
+    message("Initialize M-Estimation...")
     initialMtext <- paste(deparse(initialize_m),collapse="\n")
     initialMtext <- gsub(initialMtext,pattern="function \\(\\)",replace="")
     eval(parse( text = initialMtext ),envir = evaluation_environment)
 
     # get initial pi values
-    print2("Initialize pi values...")
+    message("Initialize pi values...")
     {
       if(is.null(pi_init_vec)){
         TARGET_EPSILON_PI <- 0.01  #/ exp( length( p_list ) )
@@ -475,13 +464,13 @@ strategize_onestep <- function(
         if(length(lambda_seq) == 1){warning(sprintf("NO CV SELCTION OF LAMBDA, FORCING LAMBDA = %.5f|",lambda_seq)); trainIndicator_pool <- 0}
 
         # Build Model
-        print2("Building...")
+        message("Building...")
         buildText <- paste(deparse(ml_build),collapse="\n")
         buildText <- gsub(buildText,pattern="function \\(\\)",replace="")
         eval(parse( text = buildText ),envir = evaluation_environment)
 
         # Train Model + Perform CV
-        print2("Training...")
+        message("Training...")
         trainText <- paste(deparse(ml_train),collapse="\n")
         trainText <- gsub(trainText,pattern="function \\(\\)",replace="")
         eval(parse( text = trainText ),envir = evaluation_environment)
@@ -533,10 +522,10 @@ strategize_onestep <- function(
       hypotheticalProbList_full <- hypotheticalProbList_split1 <- hypotheticalProbList
 
       # Get values from tf
-      Qhat_tf <- jnp$array( getQ_fxn( ModelList_object,  split2_indices  ), jnp$float32)
-      Qhat <- np$array( Qhat_tf )
+      Qhat_tf <- strenv$jnp$array( getQ_fxn( ModelList_object,  split2_indices  ), strenv$jnp$float32)
+      Qhat <- strenv$np$array( Qhat_tf )
       Qhat_split1 <- Qhat_all <- Q_interval_split2 <- Q_interval_split1 <- Q_se_exact <- NULL
-      Qhat_split2<-list();Qhat_split2$Qest <- np$array(Qhat_tf)
+      Qhat_split2<-list();Qhat_split2$Qest <- strenv$np$array(Qhat_tf)
     }
 
     # get SEs

@@ -19,7 +19,7 @@ get_se <- function(){
           psi_list <- neg_jacobian_list <- list()
           counter_ji <- 0; for(ji in split2_indices){
             counter_ji <- counter_ji + 1
-            if(counter_ji %% 100 == 0){print2(sprintf("M Estimation Iteration %i of %i",counter_ji,length(split2_indices)))}
+            if(counter_ji %% 100 == 0){message(sprintf("M Estimation Iteration %i of %i",counter_ji,length(split2_indices)))}
 
             # jax calc
             {
@@ -117,20 +117,20 @@ get_se <- function(){
               #psi_i_jacobian <- psi_i_jacobian[c("Qhat",param_set_names)] # check
 
               psi_i_jacobian <- sapply(1:length(psi_i_jacobian), function(zer){
-                np$array(psi_i_jacobian[[zer]]$reshape(nParam_total, -1L)) })
+                strenv$np$array(psi_i_jacobian[[zer]]$reshape(nParam_total, -1L)) })
               if("list" %in% class(psi_i_jacobian)){
                 psi_i_jacobian <- do.call(cbind, psi_i_jacobian)
               }
               psi_i_jacobian <- apply( psi_i_jacobian,2,f2n )
 
-              psi_ji <- np$array(  psi_i )
+              psi_ji <- strenv$np$array(  psi_i )
               jacobian_ji <- psi_i_jacobian;
             }
 
             # checks
             if(T == F){
-              cbind(np$array(psi_i)[1:10],psi_ji[1:10])
-              plot(np$array(psi_i),psi_ji); abline(a=0,b=1)
+              cbind(strenv$np$array(psi_i)[1:10],psi_ji[1:10])
+              plot(strenv$np$array(psi_i),psi_ji); abline(a=0,b=1)
               plot(c(jacobian_ji),c(psi_i_jacobian)); abline(a=0,b=1)
               plot(c(jacobian_ji),c(t(psi_i_jacobian))); abline(a=0,b=1)
               plot(abs(c(jacobian_ji)-c(psi_i_jacobian)))
@@ -155,7 +155,7 @@ get_se <- function(){
         jacob_NAs <- unlist( lapply(neg_jacobian_list,function(l_){is.na(sum(l_))}) )
         # X[which( jacob_NAs ),]
         # FactorsMat_numeric_0Indexed[which( jacob_NAs ),]
-        if(sum(jacob_NAs) > 0){ print2("Warning: Jacobian contains NAs! Dropping...") }
+        if(sum(jacob_NAs) > 0){ message("Warning: Jacobian contains NAs! Dropping...") }
         psi_list <- psi_list[!jacob_NAs]
         neg_jacobian_list <- neg_jacobian_list[!jacob_NAs]
         rm( JacobianComponents )
@@ -202,7 +202,7 @@ get_se <- function(){
 
       # check this, make sure flattening is done correctly
       Mean_n_automatic <- c("Qhat" = Qhat, unlist(  rrapply::rrapply(ModelList_object, f = function(zer){
-        values_ <- np$array( strenv$jnp$reshape(zer,-1L) )
+        values_ <- strenv$np$array( strenv$jnp$reshape(zer,-1L) )
         #if(prod(dim(zer))>0){names(values_) <- paste(zer$name,1:length(values_),sep="_")}
         return( values_ )
       }) ) )
@@ -264,7 +264,7 @@ get_se <- function(){
             #  sum_x Pr(Clust|X) Pr(Clust)
             #E[X|K=k]
           }
-          with(tf$GradientTape(persistent = T) %as% tape, {
+          with(strenv$tf$GradientTape(persistent = T) %as% tape, {
             PrClustGivenX <- getClassProb(strenv$jnp$array(X, strenv$jnp$float32))
 
             # for checking:
@@ -305,7 +305,7 @@ get_se <- function(){
           dPrXdGivenClust_dParam <- lapply(dPrXdGivenClust_dParam,function(zer){
             strenv$jnp$reshape(zer,c(dim(zer)[1:2],-1L))})
           dPrXdGivenClust_dParam <- strenv$jnp$concatenate(dPrXdGivenClust_dParam,2L)
-          PrXdGivenClust_mat <- np$array(PrXdGivenClust)
+          PrXdGivenClust_mat <- strenv$np$array(PrXdGivenClust)
           row.names(PrXdGivenClust_mat) <- paste("k",1:K,sep="")
           colnames(PrXdGivenClust_mat) <- colnames(X_factorized_complete)
           PrXd_vec <- colMeans(X_factorized_complete)
@@ -320,7 +320,7 @@ get_se <- function(){
             strenv$jnp$matmul(dPrXdGivenClust_dParam, VarCov_n_ProbClustParam),
             strenv$jnp$transpose(dPrXdGivenClust_dParam,c(0L,2L,1L)))
           PrXdGivenClust_se_tf <- strenv$jnp$diag(PrXdGivenClust_se_tf)
-          PrXdGivenClust_se <- np$array(PrXdGivenClust_se_tf)
+          PrXdGivenClust_se <- strenv$np$array(PrXdGivenClust_se_tf)
           row.names(PrXdGivenClust_se) <- row.names(PrXdGivenClust_mat)
           colnames(PrXdGivenClust_se) <- colnames(PrXdGivenClust_mat)
         }

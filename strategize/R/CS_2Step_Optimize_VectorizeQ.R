@@ -1,5 +1,5 @@
 InitializeQMonteFxns <- function(){
-  Vectorized_QMonteIter_MaxMin <- compile_fxn( jax$vmap(
+  Vectorized_QMonteIter_MaxMin <- compile_fxn( strenv$jax$vmap(
     (QMonteIter_MaxMin <- compile_fxn(function(TSAMP_ast, TSAMP_dag,
                          TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
                          a_i_ast,
@@ -19,12 +19,12 @@ InitializeQMonteFxns <- function(){
                                                   COEFFICIENTS_ast_, # EST_COEFFICIENTS_tf_ast
                                                   INTERCEPT_dag_, # EST_INTERCEPT_tf_dag
                                                   COEFFICIENTS_dag_) #EST_COEFFICIENTS_tf_dag
-    GeneralVoteShareAstAmongAst <- jnp$take(GeneralVoteShareResults_AstReferenced,1L)
-    GeneralVoteShareAstAmongDag <- jnp$take(GeneralVoteShareResults_AstReferenced,2L)
+    GeneralVoteShareAstAmongAst <- strenv$jnp$take(GeneralVoteShareResults_AstReferenced,1L)
+    GeneralVoteShareAstAmongDag <- strenv$jnp$take(GeneralVoteShareResults_AstReferenced,2L)
   
     # primary stage analysis
     {
-      PrimaryVoteShareAstAmongAst <- jnp$take(getQStar_diff_SingleGroup(
+      PrimaryVoteShareAstAmongAst <- strenv$jnp$take(getQStar_diff_SingleGroup(
         pi_star_ast =  TSAMP_ast,
         pi_star_dag = TSAMP_ast_PrimaryComp,
         EST_INTERCEPT_tf_ast = INTERCEPT_ast0_,
@@ -32,7 +32,7 @@ InitializeQMonteFxns <- function(){
         EST_INTERCEPT_tf_dag = INTERCEPT_ast0_,
         EST_COEFFICIENTS_tf_dag = COEFFICIENTS_ast0_),0L)
       
-      PrimaryVoteShareDagAmongDag <- jnp$take(getQStar_diff_SingleGroup(
+      PrimaryVoteShareDagAmongDag <- strenv$jnp$take(getQStar_diff_SingleGroup(
         pi_star_ast = TSAMP_dag,
         pi_star_dag = TSAMP_dag_PrimaryComp,
         EST_INTERCEPT_tf_ast = INTERCEPT_dag0_,
@@ -40,14 +40,14 @@ InitializeQMonteFxns <- function(){
         EST_INTERCEPT_tf_dag = INTERCEPT_dag0_,
         EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag0_),0L)
   
-      lax_cond_indicator_AstWinsPrimary <- jax$lax$cond(
-        pred = jnp$greater(PrimaryVoteShareAstAmongAst,jnp$array(0.5)),
-        true_fun = function(){ jnp$array(1.) },
-        false_fun = function(){ jnp$array(0.)} )
-      lax_cond_indicator_DagWinsPrimary <- jax$lax$cond(
-        pred = jnp$greater(PrimaryVoteShareDagAmongDag,jnp$array(0.5)),
-        true_fun = function(){ jnp$array(1.) },
-        false_fun = function(){ jnp$array(0.)} )
+      lax_cond_indicator_AstWinsPrimary <- strenv$jax$lax$cond(
+        pred = strenv$jnp$greater(PrimaryVoteShareAstAmongAst,strenv$jnp$array(0.5)),
+        true_fun = function(){ strenv$jnp$array(1.) },
+        false_fun = function(){ strenv$jnp$array(0.)} )
+      lax_cond_indicator_DagWinsPrimary <- strenv$jax$lax$cond(
+        pred = strenv$jnp$greater(PrimaryVoteShareDagAmongDag,strenv$jnp$array(0.5)),
+        true_fun = function(){ strenv$jnp$array(1.) },
+        false_fun = function(){ strenv$jnp$array(0.)} )
     }
   
     # combine all information together

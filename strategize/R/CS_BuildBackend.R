@@ -35,9 +35,6 @@ build_backend <- function(conda_env = "strategize", conda = "auto"){
                         "jaxlib",
                         "equinox", 
                         "optax")
-
-  for(pack_ in Packages2Install){
-      try_ <- try(reticulate::py_install(pack_, conda = conda, pip = TRUE, envname = conda_env), TRUE)
-  }
+  reticulate::py_install(Packages2Install, conda = conda, pip = TRUE, envname = conda_env)
 }
 # build_backend("strategize")

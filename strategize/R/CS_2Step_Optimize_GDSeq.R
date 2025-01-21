@@ -45,9 +45,9 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   grad_mag_ast_vec <<- grad_mag_dag_vec <<- rep(NA, times = nSGD)
   inv_learning_rate_ast_vec <<- inv_learning_rate_dag_vec <<- rep(NA, times = nSGD)
   goOn <- F; i<-0
-  INIT_MIN_GRAD_ACCUM <- jnp$array(0.01)
+  INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.01)
   while(goOn == F){
-    if((i<-i+1) %% 100 == 0 | i < 10){ print2(sprintf("SGD Iteration: %i of %s", i, nSGD) ) }
+    if((i<-i+1) %% 100 == 0 | i < 10){ message(sprintf("SGD Iteration: %i of %s", i, nSGD) ) }
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & MaxMin ){
@@ -60,16 +60,16 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 P_VEC_FULL_ast, P_VEC_FULL_dag,
                                 SLATE_VEC_ast, SLATE_VEC_dag,
                                 LAMBDA,
-                                jnp$array(-1.),
-                                jnp$add(BASE_SEED,jnp$array(ai(i)))  )
+                                strenv$jnp$array(-1.),
+                                strenv$jnp$add(BASE_SEED,strenv$jnp$array(ai(i)))  )
       if(i == 1){
-        inv_learning_rate_da_dag <- jnp$maximum(INIT_MIN_GRAD_ACCUM, jnp$multiply(10,  jnp$square(jnp$linalg$norm( grad_i_dag ))))
+        inv_learning_rate_da_dag <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, strenv$jnp$multiply(10,  strenv$jnp$square(strenv$jnp$linalg$norm( grad_i_dag ))))
       }
 
       if(!UseOptax){
-        inv_learning_rate_da_dag <-  jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
+        inv_learning_rate_da_dag <-  strenv$jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, grad_i = grad_i_dag,
-                                        inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_dag))
+                                        inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_dag))
       }
       if(UseOptax){
         updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, 
@@ -80,7 +80,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                          updates = updates_and_opt_state_dag[[1]])
       }
 
-      grad_mag_dag_vec[i] <<- list(jnp$linalg$norm( grad_i_dag ))
+      grad_mag_dag_vec[i] <<- list(strenv$jnp$linalg$norm( grad_i_dag ))
       if(!UseOptax){ inv_learning_rate_dag_vec[i] <<- list( inv_learning_rate_da_dag ) }
     }
 
@@ -94,14 +94,14 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, 
-                               jnp$array(1.),
-                               jnp$add(jnp$array(2L),jnp$add(BASE_SEED,jnp$array(ai(nSGD+i +2) ) ) ) )
-      if(i==1){ inv_learning_rate_da_ast <- jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*jnp$square(jnp$linalg$norm(grad_i_ast)))  }
+                               strenv$jnp$array(1.),
+                               strenv$jnp$add(strenv$jnp$array(2L),strenv$jnp$add(BASE_SEED,strenv$jnp$array(ai(nSGD+i +2) ) ) ) )
+      if(i==1){ inv_learning_rate_da_ast <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm(grad_i_ast)))  }
       if(!UseOptax){
-        inv_learning_rate_da_ast <-  jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
+        inv_learning_rate_da_ast <-  strenv$jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
         a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
                                         grad_i = grad_i_ast,
-                                        inv_learning_rate_i = jnp$sqrt(inv_learning_rate_da_ast))
+                                        inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_ast))
       }
 
       if(UseOptax){
@@ -113,7 +113,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                          updates = updates_and_opt_state_ast[[1]])
       }
 
-      grad_mag_ast_vec[i] <<- list( jnp$linalg$norm( grad_i_ast ) )
+      grad_mag_ast_vec[i] <<- list( strenv$jnp$linalg$norm( grad_i_ast ) )
       if(!UseOptax){ inv_learning_rate_ast_vec[i] <<- list( inv_learning_rate_da_ast ) }
     }
     if(i >= nSGD){goOn <- T}
@@ -125,15 +125,14 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     pi_star_dag_full_simplex_ <- getPrettyPi( pi_star_dag_ <- a2Simplex_diff_use( a_i_dag ) )
 
     if(glm_family=="gaussian"){ 
-      pi_star_ast_f_all <- jnp$expand_dims(pi_star_ast_,0L)
-      pi_star_dag_f_all <- jnp$expand_dims(pi_star_dag_,0L)
+      pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
+      pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
     }
     if(glm_family!="gaussian"){ 
-      pi_star_ast_f_all <- jax$vmap(function(s_){ getMultinomialSamp(pi_star_ast_, MNtemp, s_)},
-                                in_axes = list(0L))(jax$random$split( jax$random$PRNGKey( 3L + jax_seed ), nMonte_Qglm) )
-      pi_star_dag_f_all <- jax$vmap(function(s_){ getMultinomialSamp(pi_star_dag_, MNtemp, s_)}, 
-                               in_axes = list(0L))( jax$random$split( jax$random$PRNGKey( 4L + jax_seed ), nMonte_Qglm) )
-      # plot(np$array(pi_star_ast_), np$array(pi_star_ast_f_all$mean(0L))); abline(a=0,b=1) # sanity check 
+      pi_star_ast_f_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_ast_, MNtemp, s_)},
+                                in_axes = list(0L))(strenv$jax$random$split( strenv$jax$random$PRNGKey( 3L + jax_seed ), nMonte_Qglm) )
+      pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_dag_, MNtemp, s_)}, 
+                               in_axes = list(0L))( strenv$jax$random$split( strenv$jax$random$PRNGKey( 4L + jax_seed ), nMonte_Qglm) )
     }
 
     q_star_f <- Vectorized_QMonteIter(pi_star_ast_f_all,  pi_star_dag_f_all,
@@ -141,7 +140,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                        INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
 
     # setup results for returning
-    ret_array <- jnp$concatenate(ifelse(gd_full_simplex, yes = list(list( q_star_f, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ )), 
+    ret_array <- strenv$jnp$concatenate(ifelse(gd_full_simplex, yes = list(list( q_star_f, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ )), 
                                                          no  = list(list( q_star_f, pi_star_ast_, pi_star_dag_ )))[[1]])
     if(functionReturn == T){ ret_array <- list(ret_array,
                                                list(dQ_da_ast, dQ_da_dag,

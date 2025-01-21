@@ -53,9 +53,9 @@ for(trainIndicator in trainIndicator_pool){
       {
         marginalProb_m <- c()
         i_eff <- 1;
-        gc(); py_gc$collect()
+        gc(); strenv$py_gc$collect()
         for(i in 1:nSGD){
-          if(i %% 50){ gc(); py_gc$collect() }
+          if(i %% 50){ gc(); strenv$py_gc$collect() }
           # generate batch indices
           my_batch <- availableTrainIndices_train_seq[[i]]
 
@@ -71,11 +71,11 @@ for(trainIndicator in trainIndicator_pool){
               # convert
               jax_fxn_raw <- getLoss_tf(
                                         ModelList_ = ModelList_object,
-                                        Y_  = jnp$array(as.matrix(Y[my_batch_jax]),jnp$float32),
-                                        X_  = jnp$array(X[my_batch_jax,],jnp$float32),
-                                        factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,],jnp$int32),
-                                        logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax]),jnp$float32),
-                                        REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA),jnp$float32)
+                                        Y_  = strenv$jnp$array(as.matrix(Y[my_batch_jax]),strenv$jnp$float32),
+                                        X_  = strenv$jnp$array(X[my_batch_jax,],strenv$jnp$float32),
+                                        factorMat_  = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,],strenv$jnp$int32),
+                                        logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax]),strenv$jnp$float32),
+                                        REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA),strenv$jnp$float32)
                                         )
 
               # compile
@@ -86,11 +86,11 @@ for(trainIndicator in trainIndicator_pool){
               # test the function
               jax_eval <- jax_fxn(
                 ModelList_object,
-                Y_  = jnp$array(as.matrix(Y[my_batch_jax])),
-                X_  = jnp$array(X[my_batch_jax,]),
-                factorMat_  = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
-                REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA))
+                Y_  = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
+                X_  = strenv$jnp$array(X[my_batch_jax,]),
+                factorMat_  = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
+                REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA))
               )
             }
 
@@ -106,32 +106,32 @@ for(trainIndicator in trainIndicator_pool){
               OptimType <- "Other"
               if(OptimType == "SecondOrder"){
                 hessian_fxn <- strenv$jax$jit( strenv$jax$hessian(jax_fxn,argnums = 0L) )
-                optax_optimizer <-  optax$chain(
-                  optax$adaptive_grad_clip(1, eps=0.0001),
-                  optax$zero_nans(),
-                  optax$scale(1) )
+                optax_optimizer <-  strenv$optax$chain(
+                  strenv$optax$adaptive_grad_clip(1, eps=0.0001),
+                  strenv$optax$zero_nans(),
+                  strenv$optax$scale(1) )
               }
               if(OptimType == "Other"){
-                LR_schedule <- optax$warmup_cosine_decay_schedule(
+                LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
                   init_value = (LEARNING_RATE_BASE<- .1)/2,
                   peak_value = LEARNING_RATE_BASE,
                   warmup_steps = nWarm <- 50L, decay_steps = max(nSGD - nWarm, 5L))
-                optax_optimizer <-  optax$chain(
-                  #optax$sgd(momentum = 0.90, nesterov = T,
-                  #optax$scale_by_schedule(LR_schedule),
-                  optax$adaptive_grad_clip(0.1, eps=0.0001),
-                  #optax$fromage(learning_rate = 0.1)
-                  #optax$clip(1.),
-                  optax$adabelief(learning_rate=0.01),
-                  #optax$scale_by_rss(), optax$scale(-1)
-                  #optax$scale_by_rss(), optax$noisy_sgd(learning_rate = 1)
+                optax_optimizer <-  strenv$optax$chain(
+                  #strenv$optax$sgd(momentum = 0.90, nesterov = T,
+                  #strenv$optax$scale_by_schedule(LR_schedule),
+                  strenv$optax$adaptive_grad_clip(0.1, eps=0.0001),
+                  #strenv$optax$fromage(learning_rate = 0.1)
+                  #strenv$optax$clip(1.),
+                  strenv$optax$adabelief(learning_rate=0.01),
+                  #strenv$optax$scale_by_rss(), strenv$optax$scale(-1)
+                  #strenv$optax$scale_by_rss(), strenv$optax$noisy_sgd(learning_rate = 1)
                   )
               }
 
               # model partition + setup state
               opt_state <- optax_optimizer$init( ModelList_object )
-              jit_apply_updates <- eq$filter_jit(optax$apply_updates)
-              jit_update <- eq$filter_jit(optax_optimizer$update)
+              jit_apply_updates <- strenv$eq$filter_jit(strenv$optax$apply_updates)
+              jit_update <- strenv$eq$filter_jit(optax_optimizer$update)
             }
 
             # fix jax training size due to compiled functionality
@@ -142,74 +142,74 @@ for(trainIndicator in trainIndicator_pool){
             {
             # updates + derivatives using jax
             v_and_grad_eval <- v_and_grad_jax_fxn( ModelList_object,
-                              Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
-                              X_ = jnp$array(X[my_batch_jax,]),
-                              factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                              logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
-                              REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
+                              Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
+                              X_ = strenv$jnp$array(X[my_batch_jax,]),
+                              factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                              logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
+                              REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
 
             # subset
             currentLossGlobal <- v_and_grad_eval[[1]]$tolist()
             grad_set <- v_and_grad_eval[[2]] #strenv$jax$grad screws up name orders
-            L2_norm <- optax$global_norm(grad_set)$tolist()
+            L2_norm <- strenv$optax$global_norm(grad_set)$tolist()
             L2_norm_squared_vec[i] <- L2_norm_squared <- L2_norm^2
 
             if(OptimType == "SecondOrder"){
               hessian_value <- hessian_fxn(ModelList_object,
-                                           Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
-                                           X_ = jnp$array(X[my_batch_jax,]),
-                                           factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                                           logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
-                                           REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
+                                           Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
+                                           X_ = strenv$jnp$array(X[my_batch_jax,]),
+                                           factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                                           logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
+                                           REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
               HessianMat <- matrix(list(),nrow = length(ModelList_object),ncol=length(ModelList_object))
               row.names(HessianMat) <- colnames(HessianMat) <- names(hessian_value)
               for(jaa in names(hessian_value)){ for(ja in names(hessian_value)){
-                HessianMat[jaa,ja] <- list(eval(parse(text = sprintf("jnp$squeeze(jnp$squeeze(hessian_value$`%s`$`%s`,1L),2L)",jaa,ja))))
+                HessianMat[jaa,ja] <- list(eval(parse(text = sprintf("strenv$jnp$squeeze(strenv$jnp$squeeze(hessian_value$`%s`$`%s`,1L),2L)",jaa,ja))))
               }}
               HessianMat <- apply(HessianMat,1,function(zer){ names(zer) <- NULL;
-                              jnp$concatenate(zer,1L) })
-              names(HessianMat) <- NULL; HessianMat <- jnp$concatenate(HessianMat,0L)
+                              strenv$jnp$concatenate(zer,1L) })
+              names(HessianMat) <- NULL; HessianMat <- strenv$jnp$concatenate(HessianMat,0L)
 
-              if(i == 1){ HessianMat_AVE <- jnp$zeros(HessianMat$shape) }
+              if(i == 1){ HessianMat_AVE <- strenv$jnp$zeros(HessianMat$shape) }
               {
                   w_i_minus_1 <- (((i-1) + 1)^log((i-1)+1))
                   w_i <- (i + 1)^log(i+1)
                   HessianMomentum <- w_i_minus_1 / w_i
-                  HessianMat_AVE <- jnp$add(jnp$multiply(HessianMomentum,HessianMat_AVE),
-                                                jnp$multiply(1-HessianMomentum,HessianMat))
+                  HessianMat_AVE <- strenv$jnp$add(strenv$jnp$multiply(HessianMomentum,HessianMat_AVE),
+                                                strenv$jnp$multiply(1-HessianMomentum,HessianMat))
               }
 
               # get flat grad
               grad_vec <- strenv$jax$flatten_util$ravel_pytree( grad_set )
 
               # get inv hessian times grad
-              #image( (jnp$linalg$inv(HessianMat_AVE)$to_py() ))
+              #image( (strenv$jnp$linalg$inv(HessianMat_AVE)$to_py() ))
               #https://arxiv.org/pdf/2204.09266.pdf
               # armijo condition test
               rho <- 0.98
-              NetwornDir <- jnp$negative( jnp$matmul(jnp$linalg$inv(
-                jnp$add(HessianMat_AVE,jnp$multiply(0.5,jnp$identity(HessianMat$shape[[1]])))
+              NetwornDir <- strenv$jnp$negative( strenv$jnp$matmul(strenv$jnp$linalg$inv(
+                strenv$jnp$add(HessianMat_AVE,strenv$jnp$multiply(0.5,strenv$jnp$identity(HessianMat$shape[[1]])))
                 ), grad_vec[[1]]) )
-              InnerProd_GradNewtonDir <- jnp$sum(jnp$multiply(NetwornDir, grad_vec[[1]]))$tolist()
-              if(InnerProd_GradNewtonDir > 0){ grad_set <- grad_vec[[2]](jnp$zeros(NetwornDir$shape))}
+              InnerProd_GradNewtonDir <- strenv$jnp$sum(strenv$jnp$multiply(NetwornDir, grad_vec[[1]]))$tolist()
+              if(InnerProd_GradNewtonDir > 0){ grad_set <- grad_vec[[2]](strenv$jnp$zeros(NetwornDir$shape))}
               if(InnerProd_GradNewtonDir <= 0){
               armijo_count <- 0; go_on <- F; while(go_on == F){
                 armijo_count <- armijo_count + 1
-                SecondOrderUpdates <- jnp$multiply(mu_t <- rho^armijo_count,
+                SecondOrderUpdates <- strenv$jnp$multiply(mu_t <- rho^armijo_count,
                                                    NetwornDir)
                 SecondOrderUpdates <-  grad_vec[[2]](SecondOrderUpdates)
 
                 ModelList_object_test <- jit_apply_updates(params = ModelList_object,
                                     updates = SecondOrderUpdates)
                 f_x_updated <- jax_fxn( ModelList_object_test,
-                                            Y_ = jnp$array(as.matrix(Y[my_batch_jax])),
-                                            X_ = jnp$array(X[my_batch_jax,]),
-                                            factorMat_ = jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
-                                            logProb_ = jnp$array(as.matrix(log_PrW[my_batch_jax])),
-                                            REGULARIZATION_LAMBDA = jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
+                                            Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
+                                            X_ = strenv$jnp$array(X[my_batch_jax,]),
+                                            factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                                            logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
+                                            REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
                 armijo_cond <- f_x_updated$tolist() <= (currentLossGlobal + mu_t*0.25*InnerProd_GradNewtonDir )
                 #if(is.na(armijo_cond)){browser()}
-                if(armijo_count > 100){go_on <- T; SecondOrderUpdates <- grad_vec[[2]](jnp$zeros(NetwornDir$shape))}
+                if(armijo_count > 100){go_on <- T; SecondOrderUpdates <- grad_vec[[2]](strenv$jnp$zeros(NetwornDir$shape))}
                 if(armijo_cond == T){ go_on <- T }
               }
               grad_set <- SecondOrderUpdates
@@ -257,7 +257,7 @@ for(trainIndicator in trainIndicator_pool){
 
         # figs to figure out dynamics
         {
-          gc(); py_gc$collect()
+          gc(); strenv$py_gc$collect()
           #try(plot(MomenetumNextIter_seq), T)
           try(plot(LR_effective), T)
           try(plot(L2_norm_squared_vec),T)
@@ -278,11 +278,11 @@ for(trainIndicator in trainIndicator_pool){
           # all together indices
           batch_indices_Q <- list( indices_ )
           Qhat_value <- mean( unlist( lapply(batch_indices_Q, function(use_i){
-            finalWts_ <- prop.table( np$array(  getProbRatio_tf(
+            finalWts_ <- prop.table( strenv$np$array(  getProbRatio_tf(
                                                                  ModelList_ = ModelList_,
                                                                  Y_ = tfConst(as.matrix(Y[use_i])),
                                                                  X_ = tfConst(X[use_i,]),
-                                                                 factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],jnp$int32),
+                                                                 factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],strenv$jnp$int32),
                                                                  logProb_ = tfConst(as.matrix(log_PrW[use_i])),
                                                                  REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(REGULARIZATION_LAMBDA)))  ) )
             Qhat_ <- sum(as.matrix(Y[use_i])*finalWts_)
