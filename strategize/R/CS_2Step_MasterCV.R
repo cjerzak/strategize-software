@@ -261,7 +261,7 @@ cv_strategize       <-          function(
       # CV sequence
       q_vec_in <- q_vec_out <- c()
       for(split_ in c(1:folds)){
-        out_indices <- indi_list[2,split_][[1]]; gc(); py_gc$collect()
+        out_indices <- indi_list[2,split_][[1]]; gc(); strenv$py_gc$collect()
         for(type_ in c(1,2)){ 
           # in sample optimization of pi*, evaluation on OOS coefficients 
           use_indices <- indi_list[type_,split_][[1]]
