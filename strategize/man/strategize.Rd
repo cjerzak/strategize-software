@@ -170,32 +170,28 @@ Defaults to \code{FALSE}.}
 A named \code{list} containing:
 \describe{
 \item{\code{PiStar_point}}{An estimate of the (possibly multi-cluster or adversarial)
-optimal distribution(s) over the factor levels. If \code{MaxMin = TRUE} and \code{K = 1},
-returns a pair of distributions. If \code{K > 1}, returns a list, with each element
-corresponding to a separate cluster.}
+optimal distribution(s) over the factor levels.
 
-\if{html}{\out{<div class="sourceCode">}}\preformatted{\\item\{\code{PiStar_se}\}\{A list of standard errors for the entries of \code{PiStar_point},
-computed if \code{ComputeSEs = TRUE}.\}
+Structure depends on parameters:
+\itemize{
+\item If \code{MaxMin = TRUE} and \code{K = 1}, returns a pair of distributions (e.g., maximin solutions).
+\item If \code{K > 1}, returns a list where each element corresponds to a cluster-optimal distribution.
+\item Otherwise, returns a single distribution.}
+}
 
-\\item\{\code{Q_point_mEst}\}\{Point estimates of the corresponding average or adversarially
-optimized outcome, e.g., estimated expected utility or vote share.\}
+\item{\code{PiStar_se}}{Standard errors for entries in \code{PiStar_point}. Mirrors the structure of \code{PiStar_point} (e.g., a pair of SEs if \code{MaxMin = TRUE} and \code{K = 1}). Only present if \code{ComputeSEs = TRUE}.}
 
-\\item\{\code{Q_se_mEst}\}\{Standard error (if computed) for \code{Q_point_mEst}.\}
+\item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{PiStar_point}.}
 
-\\item\{\code{PiStar_lb}, \code{PiStar_ub}\}\{Lower and upper bounds for the factor-level
-probabilities in \code{PiStar_point}, if \code{ComputeSEs = TRUE} and a confidence
-level is provided.\}
+\item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{ComputeSEs = TRUE}.}
 
-\\item\{\code{CVInfo}\}\{A data frame or list summarizing cross-validation performance for
-different values of \code{lambda}, if relevant.\}
+\item{\code{PiStar_lb}, \code{PiStar_ub}}{Confidence bounds for \code{PiStar_point} (if \code{ComputeSEs = TRUE} and a confidence level is provided).}
 
-\\item\{\code{estimationType}\}\{A string describing whether the solution was found via a
-single-step or multi-step approach (e.g., \code{"TwoStep"}, \code{"OneStep"}).\}
+\item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
 
-\\item\{\code{...}\}\{Additional elements storing internal details (e.g., the fitted
-outcome model, jacobian matrix, or optimization logs).\}
-}\if{html}{\out{</div>}}
+\item{\code{estimationType}}{String indicating the approach used (e.g., \code{"TwoStep"} or \code{"OneStep"}).}
 
+\item{\code{...}}{Additional internal details (e.g., fitted models, optimization logs).}
 }
 }
 \description{
