@@ -4,24 +4,20 @@ initialize_jax <- function(conda_env = "strategize",
   reticulate::use_condaenv(condaenv = conda_env, required = conda_env_required)
   
   # Import Python packages once, storing them in strenv
-  if (!exists("jax", envir = strenv, inherits = FALSE)) {
-    strenv$jax <- reticulate::import("jax")
-    strenv$jnp <- reticulate::import("jax.numpy")
-    strenv$np  <- reticulate::import("numpy")
-    strenv$oryx  <- reticulate::import("tensorflow_probability.substrates.jax")
-    strenv$py_gc  <- reticulate::import("py_gc")
-    strenv$optax  <- reticulate::import("optax")
-  }
+  strenv$jax <- reticulate::import("jax")
+  strenv$jnp <- reticulate::import("jax.numpy")
+  strenv$np  <- reticulate::import("numpy")
+  strenv$oryx  <- reticulate::import("tensorflow_probability.substrates.jax")
+  strenv$py_gc  <- reticulate::import("gc")
+  strenv$optax  <- reticulate::import("optax")
   
   # Disable 64-bit computations
   strenv$jax$config$update("jax_enable_x64", FALSE)
   strenv$jaxFloatType <- strenv$jnp$float32
   
-  # Setup core JAX functions and store them in strenv
-  {
-    strenv$InsertOnes <- strenv$jax$jit( function(treat_indices_, zeros_){
-      zeros_ <- zeros_$at[treat_indices_]$add(1L)
-      return(  zeros_ )
-    } )
-  }
+  # setup numerical precision for delta method
+  #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # use float64
+  strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", F) # use float32
 }
+strenv <- new.env( parent = emptyenv() )
+

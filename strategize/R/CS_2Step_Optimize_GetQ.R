@@ -88,16 +88,16 @@ FullGetQStar_ <- function(a_i_ast,
     cond_UseAst <- strenv$jnp$multiply(strenv$jnp$array(0.5),strenv$jnp$add(strenv$jnp$array(1.), Q_SIGN))
 
     # sample main competitor features
-    TSAMP_ast_all <- jax$vmap(function(s_){ getMultinomialSamp(pi_star_i_ast, MNtemp, s_)},in_axes = 0L)(
-        jax$random$split(jax$random$PRNGKey(SEED_IN_LOOP + 199L),nMonte_MaxMin) )
-    TSAMP_dag_all <- jax$vmap(function(s_){ getMultinomialSamp(pi_star_i_dag, MNtemp, s_)},in_axes = list(0L))(
-        jax$random$split(jax$random$PRNGKey(SEED_IN_LOOP + 299L),nMonte_MaxMin) )
+    TSAMP_ast_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_i_ast, MNtemp, s_)},in_axes = 0L)(
+        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L),nMonte_MaxMin) )
+    TSAMP_dag_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_i_dag, MNtemp, s_)},in_axes = list(0L))(
+        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 299L),nMonte_MaxMin) )
 
     # sample primary competitor features uniformly or using slates 
-    TSAMP_ast_PrimaryComp_all <- jax$vmap(function(s_){ getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_)},in_axes = list(0L))(
-      jax$random$split(jax$random$PRNGKey(SEED_IN_LOOP + 399L),nMonte_MaxMin) )
-    TSAMP_dag_PrimaryComp_all <- jax$vmap(function(s_){ getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_)},in_axes = list(0L))(
-      jax$random$split(jax$random$PRNGKey(SEED_IN_LOOP + 499L),nMonte_MaxMin) )
+    TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_)},in_axes = list(0L))(
+      strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 399L),nMonte_MaxMin) )
+    TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_)},in_axes = list(0L))(
+      strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 499L),nMonte_MaxMin) )
     
     # compute electoral analysis 
     VectorizedQMonteLoop_res <- Vectorized_QMonteIter_MaxMin(

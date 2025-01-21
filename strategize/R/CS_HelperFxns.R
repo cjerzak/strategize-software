@@ -30,48 +30,48 @@ getMultinomialSamp <- function(pi_value, temperature, jax_seed){
 
   # get t samp
   T_star_samp <- tapply(1:length(d_locator_use),d_locator_use,function(zer){
-    pi_selection <- jnp$take(pi_value, jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
+    pi_selection <- strenv$jnp$take(pi_value, strenv$jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
 
     # add additional entry if implicit t ype
     if(ParameterizationType == "Implicit"){
-      if(length(zer) == 1){ pi_selection <- jnp$expand_dims(pi_selection,0L) }
-      pi_implied <- jnp$expand_dims(jnp$expand_dims(jnp$subtract(jnp$array(1.), jnp$sum(pi_selection)),0L),0L)
+      if(length(zer) == 1){ pi_selection <- strenv$jnp$expand_dims(pi_selection,0L) }
+      pi_implied <- strenv$jnp$expand_dims(strenv$jnp$expand_dims(strenv$jnp$subtract(strenv$jnp$array(1.), strenv$jnp$sum(pi_selection)),0L),0L)
       
       # add holdout 
-      # pi_selection <- jnp$concatenate(list(pi_implied, pi_selection)) # add FIRST entry 
-      pi_selection <- jnp$concatenate(list(pi_selection, pi_implied)) # add LAST entry 
+      # pi_selection <- strenv$jnp$concatenate(list(pi_implied, pi_selection)) # add FIRST entry 
+      pi_selection <- strenv$jnp$concatenate(list(pi_selection, pi_implied)) # add LAST entry 
     }
 
-    TSamp <- oryx$distributions$RelaxedOneHotCategorical(
+    TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
       probs = pi_selection$transpose(),
       temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
 
     # if implicit, drop a term to keep correct shapes
-    #if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(1L:length(zer))),axis=0L) } #drop FIRST entry
-    if(ParameterizationType == "Implicit"){ TSamp <- jnp$take(TSamp,jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop LAST entry
+    #if(ParameterizationType == "Implicit"){ TSamp <- strenv$jnp$take(TSamp,strenv$jnp$array(ai(1L:length(zer))),axis=0L) } #drop FIRST entry
+    if(ParameterizationType == "Implicit"){ TSamp <- strenv$jnp$take(TSamp,strenv$jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop LAST entry
     
-    if(length(zer) == 1){TSamp <- jnp$expand_dims(TSamp, 1L)}
+    if(length(zer) == 1){TSamp <- strenv$jnp$expand_dims(TSamp, 1L)}
     return (  TSamp   )
   })
   names(T_star_samp) <- NULL # drop name to allow concatenation
-  return( T_star_samp <-  jnp$concatenate(unlist(T_star_samp),0L) ) 
+  return( T_star_samp <-  strenv$jnp$concatenate(unlist(T_star_samp),0L) ) 
 }
 
 getPrettyPi <- function( pi_star_value ){
   if(ParameterizationType == "Full"){
-    #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){jnp$take(pi_star_value,n2int(ai(zer-1L))) })
+    #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){strenv$jnp$take(pi_star_value,n2int(ai(zer-1L))) })
     pi_star_full <- pi_star_value
   }
   if(ParameterizationType == "Implicit"){
     pi_star_impliedTerms <- tapply(1:length(d_locator),d_locator,function(zer){
-            pi_implied <- jnp$subtract(OneTf, jnp$sum(jnp$take(pi_star_value,
+            pi_implied <- strenv$jnp$subtract(OneTf, strenv$jnp$sum(strenv$jnp$take(pi_star_value,
                                              n2int(ai(zer-1L)),0L))) })
 
     names(pi_star_impliedTerms) <- NULL
-    pi_star_impliedTerms <- jnp$concatenate(pi_star_impliedTerms,0L)
+    pi_star_impliedTerms <- strenv$jnp$concatenate(pi_star_impliedTerms,0L)
 
-    pi_star_full <- jnp$expand_dims(jnp$add(jnp$matmul(main_comp_mat, pi_star_value)$flatten(),
-                            jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten()),1L)
+    pi_star_full <- strenv$jnp$expand_dims(strenv$jnp$add(strenv$jnp$matmul(main_comp_mat, pi_star_value)$flatten(),
+                            strenv$jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten()),1L)
   }
 
   return( pi_star_full )
@@ -194,5 +194,3 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   if(returnLog == F){upperBound_se_ <- exp(upperBound_se_) }
   return( upperBound_se_ )
 }
-
-strenv <- new.env( parent = emptyenv() )

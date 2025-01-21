@@ -52,11 +52,11 @@ generate_ModelOutcome <- function(){
     # regularization entry
     UsedRegularization <- F
     ok_ <- F;ok_counter <- 0; while(ok_ == F){
-      print2(sprintf("ok_counter = %s", ok_counter))
+      message(sprintf("ok_counter = %s", ok_counter))
       ok_counter <- ok_counter + 1
       forceSparsity <- nrow(W) <= (nrow(interaction_info)+nrow(main_info) + 2)
       if(forceSparsity){
-        print2("WARNING! More regression parameters than observations, enforcing sparsity...")
+        message("WARNING! More regression parameters than observations, enforcing sparsity...")
         UseRegularization <- T
       }
       if(diff == T){
@@ -108,7 +108,7 @@ generate_ModelOutcome <- function(){
       }
       interacted_dat <- try(as.matrix(interacted_dat[,indicator_InteractionVariation <- apply(as.matrix(interacted_dat), 2, sd)>0]), T)
       if('try-error' %in% class(interacted_dat)){
-        print2("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
+        message("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
         browser();browser();browser()
       }
       interaction_info <- interaction_info[indicator_InteractionVariation,]
@@ -136,14 +136,14 @@ generate_ModelOutcome <- function(){
             InteractionPairs <- t(combn(1:nrow(main_info), m = 2))
             InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ],]
             
-            print2("Starting a glinternet fit...")
+            message("Starting a glinternet fit...")
             glinternet_results <- glinternet.cv(X = main_dat,
                                                 Y = Y_glm, family = glm_family,
                                                 numLevels = rep(1,times = ncol(main_dat)),
                                                 interactionPairs = InteractionPairs,
                                                 nFolds = nFolds_glm )
             
-            print2("Done with glinternet fit...")
+            message("Done with glinternet fit...")
             keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
             keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
             if(is.null(keep_MainWithInter)){
@@ -200,7 +200,7 @@ generate_ModelOutcome <- function(){
               paste(colnames(W_fh),collapse = "+") ))
 
             ModeratorFormula <- as.formula(paste("~", paste(paste("`",colnames(X),"`",sep = ""), collapse = "+")))
-            gc(); py_gc$collect()
+            gc(); strenv$py_gc$collect()
             log(sort( sapply(ls(),function(zr){object.size(eval(parse(text=zr)))})))
             rm(W_fh); rm(inter_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
 

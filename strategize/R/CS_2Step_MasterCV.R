@@ -214,24 +214,9 @@ cv_strategize       <-          function(
                                             nMonte_Qglm = 100L,
                                             jax_seed = as.integer(Sys.time()),
                                             OptimType = "default"){
-  # define evaluation environment
-  evaluation_environment <- environment()
-
   # initialize environment
-  {
-    print2("Initializing environment...")
-    if(!is.null(conda_env)){
-      try(reticulate::use_condaenv(conda_env, required = conda_env_required), T)
-    }
-
-    # import computational modules
-    jax <- reticulate::import("jax",as="jax")
-    jnp <- reticulate::import("jax.numpy")
-    py_gc <- reticulate::import("gc")
-
-    # setup numerical precision for delta method
-    dtj <- jnp$float64
-    jax$config$update("jax_enable_x64", T)
+  if(!"jnp" %in% ls(envir = strenv)) {
+    initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
   }
 
   # setup lamba 
@@ -244,7 +229,7 @@ cv_strategize       <-          function(
 
   # CV sequence
   {
-    print2("Starting CV sequence...")
+    message("Starting CV sequence...")
     outsamp_results <- insamp_results <- matrix(nrow = 0, ncol = 4, dimnames = list(NULL, c("lambda","Qhat","Qse","selected")))
 
     # build cv splits - same for all lambda 
@@ -333,11 +318,11 @@ cv_strategize       <-          function(
     lambda__ <- lambda_seq[which_selected <- which.max(outsamp_results$Qhat)] # lambda.min rule
     #lambda__ <- lambda_seq[which_selected <- which(max(outsamp_results$Qhat <= outsamp_results$u_bound)[1]] # lambda.se rule
     outsamp_results$selected[which_selected] <- 1 
-    print2("Done with CV sequence & starting final run with log(lambda) of %.2f...", log(lambda__))
+    message("Done with CV sequence & starting final run with log(lambda) of %.2f...", log(lambda__))
   }
 
   # final output
-  gc(); py_gc$collect(); Qoptimized_ <- strategize(
+  gc(); strenv$py_gc$collect(); Qoptimized_ <- strategize(
                               # input data
                               Y = Y,
                               W = W,
@@ -370,7 +355,7 @@ cv_strategize       <-          function(
                               MaxMin = MaxMin,
                               conda_env = conda_env,
                               conda_env_required = conda_env_required)
-  print2("Done with strategic analysis!")
+  message("Done with strategic analysis!")
   return(  c( Qoptimized_,
             "lambda" = lambda__,
             "qStar_lambda" = qStar_lambda,

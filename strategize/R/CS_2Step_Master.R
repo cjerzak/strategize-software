@@ -337,21 +337,15 @@ strategize       <-          function(
   evaluation_environment <- environment()
 
   # load in packages
-  print2("Initializing computational environment...")
-  {
-    if (!"VectorizedFastHotel2T2" %in% ls(envir = fastrr_env)) {
-      initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
-    }
-
-    # setup numerical precision for delta method
-    #dtj <- jnp$float64; jax$config$update("jax_enable_x64", T) # use float64
-    dtj <<- jnp$float32; jax$config$update("jax_enable_x64", F) # use float32
+  
+  if(!"jnp" %in% ls(envir = strenv)) {
+    message("Initializing computational environment...")  
+    initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
   }
-  print2("Done initializing computational environment!")
   
   # define compile fxn
-  compile_fxn <- function(x){jax$jit(x)}
-  #compile_fxn <- function(x){x} ; print2("TURNING COMPILE OFF FOR DEBUGGIN!"); Sys.sleep(5L)
+  compile_fxn <- function(x){strenv$jax$jit(x)}
+  #compile_fxn <- function(x){x} ; message("TURNING COMPILE OFF FOR DEBUGGIN!"); Sys.sleep(5L)
 
   # setup pretty pi functions
   {
@@ -384,9 +378,9 @@ strategize       <-          function(
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
   if(!ForceGaussianFamily){ 
     if(mean(unique(Y) %in% c(0,1)) == 1){ 
-      glm_family = "binomial"; glm_outcome_transform <- jax$nn$sigmoid
+      glm_family = "binomial"; glm_outcome_transform <- strenv$jax$nn$sigmoid
     } }
-  MNtemp <- jnp$array( .5 ) 
+  MNtemp <- strenv$jnp$array( .5 ) 
 
   # ensure naming conventions are correct (i.e. in alignment with p_list if available)
   if(is.null(p_list) | is.null(names(p_list[[1]]))){
@@ -401,7 +395,7 @@ strategize       <-          function(
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
   # obtain outcome models
-  print2("Initializing outcome models...")
+  message("Initializing outcome models...")
   if(T == T){
     if(K > 1 & !UseRegularization){ warning("K > 1; Forcing regularization...");UseRegularization <- T }
     UseRegularization_ORIG <- UseRegularization
@@ -445,10 +439,10 @@ strategize       <-          function(
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
       
       # define combined parameter vector & fxn for reextracting intercept & coefficient 
-      REGRESSION_PARAMS_jax <- jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf), 0L)
+      REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf), 0L)
       gather_fxn <- compile_fxn(function(x){
-        return( list(jnp$expand_dims(jnp$take(x,0L),0L),  # INTERCEPT_ 
-                     jnp$take(x, jnp$array( 1L:(jnp$shape(x)[[1]]-1L) ) ))) } ) # COEFFICIENTS 
+        return( list(strenv$jnp$expand_dims(strenv$jnp$take(x,0L),0L),  # INTERCEPT_ 
+                     strenv$jnp$take(x, strenv$jnp$array( 1L:(strenv$jnp$shape(x)[[1]]-1L) ) ))) } ) # COEFFICIENTS 
 
       # rename as appropriate
       ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
@@ -473,7 +467,7 @@ strategize       <-          function(
       assign(paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp"), REGRESSION_PARAMS_jax_ast_jnp)
       assign(paste0("vcov_OutcomeModel_", suffix, "_jnp"), vcov_OutcomeModel_ast_jnp)
   } }
-  print2("Done initializing outcome models & starting optimization sequence...")
+  message("Done initializing outcome models & starting optimization sequence...")
 
   n_main_params <- nrow( main_info )
   if(is.null(p_list) & any(apply(W,2,function(zer){
@@ -494,7 +488,7 @@ strategize       <-          function(
   }
 
   ParameterizationType <- ifelse( holdout_indicator == 0, yes = "Full", no = "Implicit")
-  n2int <- function(x){  jnp$array(x,jnp$int32)  }
+  n2int <- function(x){  strenv$jnp$array(x,strenv$jnp$int32)  }
   d_locator <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d]-1)}))
   
   # p logic 
@@ -503,13 +497,13 @@ strategize       <-          function(
   d_locator_full <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d])}))
   p_vec_sum_prime_full <- unlist(tapply(1:length(p_vec_full),d_locator_full,function(er){
     sapply(er,function(re){sum(p_vec_full[er[!er %in% re]])}) }))
-  main_indices_i0 <- jnp$array((ai(1:n_main_params-1L)),jnp$int32)
-  inter_indices_i0 <- jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$size)-1L)),jnp$int32)
+  main_indices_i0 <- strenv$jnp$array((ai(1:n_main_params-1L)),strenv$jnp$int32)
+  inter_indices_i0 <- strenv$jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$size)-1L)),strenv$jnp$int32)
   if(ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
   if(ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
 
   if(OptimType != "gd"){
-    print2("Initializing manual exact solution code...")
+    message("Initializing manual exact solution code...")
     initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
     eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
@@ -518,55 +512,55 @@ strategize       <-          function(
   }
 
   # pi in constrained space using gradient ascent
-  p_vec_tf <- jnp$array(as.matrix(p_vec_use),dtype = dtj)
-  inv_learning_rate <- jnp$array(1., dtype = dtj)
+  p_vec_tf <- strenv$jnp$array(as.matrix(p_vec_use),dtype = strenv$dtj)
+  inv_learning_rate <- strenv$jnp$array(1., dtype = strenv$dtj)
 
   # LR updates, etc.
   GetInvLR <- compile_fxn(function(inv_learning_rate,grad_i){
     # WN grad
-    #return( (jnp$add(inv_learning_rate,jnp$divide(jnp$sum(jnp$square(grad_i)), inv_learning_rate))) )
+    #return( (strenv$jnp$add(inv_learning_rate,strenv$jnp$divide(strenv$jnp$sum(strenv$jnp$square(grad_i)), inv_learning_rate))) )
 
     # Adagrad-norm
-    return( (jnp$add(inv_learning_rate,jnp$sum(jnp$square(grad_i)))))
+    return( (strenv$jnp$add(inv_learning_rate,strenv$jnp$sum(strenv$jnp$square(grad_i)))))
   })
   GetUpdatedParameters <- compile_fxn(function(a_vec, grad_i, inv_learning_rate_i){
-    return( jnp$add(a_vec, jnp$multiply(jnp$reciprocal(inv_learning_rate_i), grad_i)))
+    return( strenv$jnp$add(a_vec, strenv$jnp$multiply(strenv$jnp$reciprocal(inv_learning_rate_i), grad_i)))
   })
 
   a_vec_init_mat <- as.matrix(unlist( lapply(p_list, function(zer){ c(compositions::alr( t((zer)))) }) ) )
-  a_vec_init_ast <- jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD), dtj)
-  a_vec_init_dag <- jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin), dtj)
+  a_vec_init_ast <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD), strenv$dtj)
+  a_vec_init_dag <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin), strenv$dtj)
   
   #LabelSmoothingFxn <- function(x){x}
   LabelSmoothingFxn <- (function(x, epsilon = 0.01){
-      return( (1 - epsilon) * x + epsilon / jnp$array( x$shape[[1]] )$astype(x$dtype) ) })
+      return( (1 - epsilon) * x + epsilon / strenv$jnp$array( x$shape[[1]] )$astype(x$dtype) ) })
   a2Simplex <- compile_fxn(function(a_){
-    exp_a_ <- jnp$exp(a_)
+    exp_a_ <- strenv$jnp$exp(a_)
     aOnSimplex <- tapply(1:nrow(a_structure),a_structure$d,function(zer){
-      OnSimplex_ <- jnp$divide(  jnp$take(exp_a_, n2int(as.matrix(zer-1L) )),
-                        jnp$add(OneTf_flat,jnp$sum(jnp$take(exp_a_, n2int(zer-1L) ) )))
+      OnSimplex_ <- strenv$jnp$divide(  strenv$jnp$take(exp_a_, n2int(as.matrix(zer-1L) )),
+                        strenv$jnp$add(OneTf_flat,strenv$jnp$sum(strenv$jnp$take(exp_a_, n2int(zer-1L) ) )))
       OnSimplex_ <- LabelSmoothingFxn( OnSimplex_ )
       return( list( OnSimplex_ ) ) })
     names(aOnSimplex) <- NULL
-    return(  jnp$concatenate(aOnSimplex,0L) )
+    return(  strenv$jnp$concatenate(aOnSimplex,0L) )
   })
   a2FullSimplex <- compile_fxn(function(a_){
     # assumes holdout category is LAST 
-    exp_a_ <- jnp$exp( a_ )
+    exp_a_ <- strenv$jnp$exp( a_ )
     aOnSimplex <- tapply(1:nrow(a_structure_leftoutLdminus1),a_structure_leftoutLdminus1$d,function(zer){
-      exp_a_zer <- jnp$concatenate(list(jnp$take(exp_a_, n2int(as.matrix(as.array(zer - 1L) ))),
-                                  jnp$array(as.matrix(1.))), # last category is exp(0) = 1
+      exp_a_zer <- strenv$jnp$concatenate(list(strenv$jnp$take(exp_a_, n2int(as.matrix(as.array(zer - 1L) ))),
+                                  strenv$jnp$array(as.matrix(1.))), # last category is exp(0) = 1
                                   axis = 0L)
-      OnSimplex_ <- jnp$divide(  exp_a_zer, jnp$sum(exp_a_zer))
+      OnSimplex_ <- strenv$jnp$divide(  exp_a_zer, strenv$jnp$sum(exp_a_zer))
       OnSimplex_ <- LabelSmoothingFxn( OnSimplex_ )
       return( list( OnSimplex_ ) ) })
     names( aOnSimplex ) <- NULL
-    return( jnp$concatenate(aOnSimplex,0L)  )
+    return( strenv$jnp$concatenate(aOnSimplex,0L)  )
   })
-  OneTf_flat <- jnp$squeeze(OneTf <- jnp$array(matrix(1L), dtj)$flatten(), 0L)
-  Neg2_tf <- jnp$array(-2., dtj)
+  OneTf_flat <- strenv$jnp$squeeze(OneTf <- strenv$jnp$array(matrix(1L), strenv$dtj)$flatten(), 0L)
+  Neg2_tf <- strenv$jnp$array(-2., strenv$dtj)
 
-  print2("Defining Q functions..")
+  message("Defining Q functions..")
   a2Simplex_optim <- ifelse( holdout_indicator == 1 ,
                              yes = list(a2Simplex),
                              no = list(a2FullSimplex) )[[1]]
@@ -624,14 +618,14 @@ strategize       <-          function(
         split_vec <- cumsum(!duplicated(split_vec))
       }
       main_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
-      main_comp_mat <- jnp$array(sapply(1:length(pi_star_value_loc),function(zer){
+      main_comp_mat <- strenv$jnp$array(sapply(1:length(pi_star_value_loc),function(zer){
         main_comp_mat[pi_star_value_loc[zer],zer] <- 1
-        return( main_comp_mat[,zer] ) }),dtj)
+        return( main_comp_mat[,zer] ) }),strenv$dtj)
 
       shadow_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
-      shadow_comp_mat <- jnp$array( sapply(1:length(pi_star_value_loc_shadow),function(zer){
+      shadow_comp_mat <- strenv$jnp$array( sapply(1:length(pi_star_value_loc_shadow),function(zer){
         shadow_comp_mat[pi_star_value_loc_shadow[zer],zer] <- 1
-        return( shadow_comp_mat[,zer] ) }),dtj)
+        return( shadow_comp_mat[,zer] ) }),strenv$dtj)
     }
 
     split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
@@ -652,7 +646,7 @@ strategize       <-          function(
 
   ## get exact result
   pi_star_exact <- -10; if(OptimType %in% c("tryboth") & diff == F){
-    pi_star_exact <- np$array(getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  )) # pi_star_value =
+    pi_star_exact <- strenv$np$array(getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  )) # pi_star_value =
   }
 
   use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
@@ -660,13 +654,13 @@ strategize       <-          function(
   if( use_gd ){
 
   # define GD function
-  p_vec_full_jnp <- jnp$array( as.matrix( p_vec_full ) )
-  SLATE_VEC_ast_jnp <- SLATE_VEC_dag_jnp <- p_vec_jnp <- jnp$array(   as.matrix(p_vec)   )
+  p_vec_full_jnp <- strenv$jnp$array( as.matrix( p_vec_full ) )
+  SLATE_VEC_ast_jnp <- SLATE_VEC_dag_jnp <- p_vec_jnp <- strenv$jnp$array(   as.matrix(p_vec)   )
   if(!is.null(slate_list)){ 
-    SLATE_VEC_ast_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[1]],function(zer){
+    SLATE_VEC_ast_jnp <- strenv$jnp$array( as.matrix( unlist(lapply(slate_list[[1]],function(zer){
       return( zer[-length(zer)] )# last position holdout 
       })) ) )
-    SLATE_VEC_dag_jnp <- jnp$array( as.matrix( unlist(lapply(slate_list[[2]],function(zer){
+    SLATE_VEC_dag_jnp <- strenv$jnp$array( as.matrix( unlist(lapply(slate_list[[2]],function(zer){
       return( zer[-length(zer)] )# last position holdout 
       })) ) )
     # mean( names(unlist(slate_list[[1]])) == names(unlist(slate_list[[2]])) ) # target of 1 
@@ -674,43 +668,43 @@ strategize       <-          function(
   
   if(UseOptax == T){
       LEARNING_RATE_MAX <- 0.01
-      LR_schedule <- optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),decay_steps = max(c(21L,nSGD-100L)),
+      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),decay_steps = max(c(21L,nSGD-100L)),
                                                         init_value = LEARNING_RATE_MAX/100, peak_value = LEARNING_RATE_MAX, end_value =  LEARNING_RATE_MAX/100)
     
       # model partition + setup state
-      optax_optimizer <-  optax$chain(
-         optax$scale(1),optax$scale_by_rss(initial_accumulator_value = 0.001)  
-        #optax$scale(-1), optax$adabelief(LR_schedule)
+      optax_optimizer <-  strenv$optax$chain(
+         strenv$optax$scale(1),strenv$optax$scale_by_rss(initial_accumulator_value = 0.001)  
+        #strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
         )
       
       for(sfx in c("ast", "dag")){
-        assign(paste0("opt_state_", sfx), optax_optimizer$init(jnp$array(get(paste0("a_vec_init_", sfx)))))
-        assign(paste0("jit_apply_updates_", sfx), compile_fxn(optax$apply_updates))
+        assign(paste0("opt_state_", sfx), optax_optimizer$init(strenv$jnp$array(get(paste0("a_vec_init_", sfx)))))
+        assign(paste0("jit_apply_updates_", sfx), compile_fxn(strenv$optax$apply_updates))
         assign(paste0("jit_update_", sfx), compile_fxn(optax_optimizer$update))
       }
   }
 
-  print2("Defining gd function...")
+  message("Defining gd function...")
   # bring functions into env and compile as needed
   environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- compile_fxn( getMultinomialSamp )
   environment(getPiStar_gd) <- evaluation_environment
   }
 
   # get jax seed into correct type
-  jax_seed <- jnp$array( ai(c(jax_seed)) )
+  jax_seed <- strenv$jnp$array( ai(c(jax_seed)) )
 
   # Obtain solution via exact calculation
-  print2("Starting optimization...")
+  message("Starting optimization...")
   pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
   q_star_OUTER <- q_star_se_OUTER <- replicate(n = K, list())
   for(k_clust in 1:K){
   if(K > 1){
-    print2(sprintf("Optimizing cluster %s of %s...",k_clust, K))
+    message(sprintf("Optimizing cluster %s of %s...",k_clust, K))
     ################################################
     # WARNING: Operational only in average case mode
-    EST_INTERCEPT_tf <- jnp$array(t( my_mean_full[1,k_clust] ) )
-    EST_COEFFICIENTS_tf <- jnp$array(as.matrix( my_mean_full[-1,k_clust] ) )
-    REGRESSION_PARAMS_jax <- jnp$array(jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
+    EST_INTERCEPT_tf <- strenv$jnp$array(t( my_mean_full[1,k_clust] ) )
+    EST_COEFFICIENTS_tf <- strenv$jnp$array(as.matrix( my_mean_full[-1,k_clust] ) )
+    REGRESSION_PARAMS_jax <- strenv$jnp$array(strenv$jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
     REGRESSION_PARAMS_jax_ast_jnp <- REGRESSION_PARAMS_jax
     REGRESSION_PARAMS_jax_dag_jnp <- REGRESSION_PARAMS_jax_ast0_jnp <- REGRESSION_PARAMS_jax_ast_jnp
 
@@ -719,7 +713,7 @@ strategize       <-          function(
   }
 
   if(use_exact){
-    print2("Optimization type: Exact")
+    message("Optimization type: Exact")
     FxnForJacobian <- function(  INPUT_  ){
       EST_INTERCEPT_tf_ <- INPUT_[[1]]
       EST_COEFFICIENTS_tf_  <- INPUT_[[2]]
@@ -730,19 +724,19 @@ strategize       <-          function(
                                                 EST_COEFFICIENTS_tf_ast = EST_COEFFICIENTS_tf_,
                                                 EST_INTERCEPT_tf_dag = EST_INTERCEPT_tf_,
                                                 EST_COEFFICIENTS_tf_dag = EST_COEFFICIENTS_tf_)
-      results_vec <- jnp$concatenate(list(q_star, pi_star_full),0L)
+      results_vec <- strenv$jnp$concatenate(list(q_star, pi_star_full),0L)
       return( results_vec )
     }
     results_vec <- FxnForJacobian( list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) )
-    jacobian_mat <- jax$jacobian(FxnForJacobian, 0L)(  list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) ) 
+    jacobian_mat <- strenv$jax$jacobian(FxnForJacobian, 0L)(  list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) ) 
 
     # reshape jacobian and process results
     jacobian_mat_exact <- jacobian_mat <- cbind(
-                          np$array(jnp$squeeze(jnp$squeeze(jnp$squeeze(jacobian_mat[[1]],1L),1L))),
-                          np$array(jnp$squeeze(jnp$squeeze(jnp$squeeze(jacobian_mat[[2]],1L),2L))) )
+                          strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[1]],1L),1L))),
+                          strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[2]],1L),2L))) )
     vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast_jnp
-    q_star_exact <- q_star <- np$array( jnp$take(results_vec, 0L) )
-    pi_star_full <- np$array( jnp$take(results_vec, jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
+    q_star_exact <- q_star <- strenv$np$array( strenv$jnp$take(results_vec, 0L) )
+    pi_star_full <- strenv$np$array( strenv$jnp$take(results_vec, strenv$jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
   }
 
   # define main Q function in different cases
@@ -751,7 +745,7 @@ strategize       <-          function(
   if(MaxMin & diff){ QFXN <- getQStar_diff_MultiGroup }
 
   if(use_gd){
-    print2("Optimization type: Gradient ascent")
+    message("Optimization type: Gradient ascent")
 
     # perform main gd runs + inference
     # first do ave case analysis
@@ -764,11 +758,11 @@ strategize       <-          function(
 
     # setup gd functions dparams
     environment(FullGetQStar_) <- evaluation_environment; FullGetQStar_ <- compile_fxn(FullGetQStar_)
-    dQ_da_ast <- compile_fxn(jax$grad(FullGetQStar_, argnums = 0L))
-    dQ_da_dag <- compile_fxn(jax$grad(FullGetQStar_, argnums = 1L))
+    dQ_da_ast <- compile_fxn(strenv$jax$grad(FullGetQStar_, argnums = 0L))
+    dQ_da_dag <- compile_fxn(strenv$jax$grad(FullGetQStar_, argnums = 1L))
     
     # perform GD 
-    # plot(np$array(REGRESSION_PARAMS_jax_ast_jnp), np$array(REGRESSION_PARAMS_jax_dag_jnp))
+    # plot(strenv$np$array(REGRESSION_PARAMS_jax_ast_jnp), strenv$np$array(REGRESSION_PARAMS_jax_dag_jnp))
     q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
                              REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag_jnp,
@@ -778,7 +772,7 @@ strategize       <-          function(
                              P_VEC_FULL_dag = p_vec_full_dag_jnp,
                              SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
                              SLATE_VEC_dag = SLATE_VEC_dag_jnp,
-                             LAMBDA = jnp$array(  lambda  ),
+                             LAMBDA = strenv$jnp$array(  lambda  ),
                              BASE_SEED = jax_seed,
                              functionList = list(dQ_da_ast, dQ_da_dag,
                                                  QFXN, getMultinomialSamp),
@@ -791,20 +785,20 @@ strategize       <-          function(
     dQ_da_dag <- q_with_pi_star_full[[2]][[2]]
     QFXN <- q_with_pi_star_full[[2]][[3]]
     getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
-    q_with_pi_star_full <- jnp$array(q_with_pi_star_full[[1]], dtj)
+    q_with_pi_star_full <- strenv$jnp$array(q_with_pi_star_full[[1]], strenv$dtj)
     
     if(!UseOptax){
-      inv_learning_rate_ast_vec <- unlist(  lapply(inv_learning_rate_ast_vec,function(zer){ np$array(zer) }))
+      inv_learning_rate_ast_vec <- unlist(  lapply(inv_learning_rate_ast_vec,function(zer){ strenv$np$array(zer) }))
       try(plot( 1/inv_learning_rate_ast_vec , main = "Inv LR (ast)",log="y"),T)
     }
 
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
-      np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) )) }) ),T)
+      strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) )) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     
     grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
-      np$array(jnp$sqrt( jnp$sum(jnp$square(jnp$array(zer,dtj))) ))  }) )
+      strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) ))  }) )
     try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y"),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     
@@ -817,7 +811,7 @@ strategize       <-          function(
                         P_VEC_FULL_dag = p_vec_full_dag_jnp,
                         SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
                         SLATE_VEC_dag = SLATE_VEC_dag_jnp,
-                        LAMBDA = jnp$array(  lambda  ),
+                        LAMBDA = strenv$jnp$array(  lambda  ),
                         BASE_SEED = jax_seed,
                         functionList = list(dQ_da_ast, dQ_da_dag,
                                             QFXN, getMultinomialSamp),
@@ -826,14 +820,14 @@ strategize       <-          function(
                         functionReturn = F,
                         gd_full_simplex = F, 
                         quiet = F)
-    pi_star_red <- np$array(pi_star_red)[-c(1:3),]
-    pi_star_red_dag <- jnp$array(as.matrix(  pi_star_red[-c(1:(length(pi_star_red)/2))]))
-    pi_star_red_ast <- jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
+    pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
+    pi_star_red_dag <- strenv$jnp$array(as.matrix(  pi_star_red[-c(1:(length(pi_star_red)/2))]))
+    pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
 
-    q_star_gd <- q_star <- np$array(  q_with_pi_star_full )[1]
+    q_star_gd <- q_star <- strenv$np$array(  q_with_pi_star_full )[1]
     # sanity check: 
-    # np$array(  q_with_pi_star_full )[1]  - sum(np$array(  q_with_pi_star_full )[2:3]*c(AstProp, DagProp)) 
-    pi_star_full_gd <- pi_star_full <- np$array( q_with_pi_star_full )[-c(1:3)]
+    # strenv$np$array(  q_with_pi_star_full )[1]  - sum(strenv$np$array(  q_with_pi_star_full )[2:3]*c(AstProp, DagProp)) 
+    pi_star_full_gd <- pi_star_full <- strenv$np$array( q_with_pi_star_full )[-c(1:3)]
 
     #  https://github.com/google/jax/issues/1696 
     jacobian_mat_gd <- jacobian_mat <- matrix(0, ncol = 4*REGRESSION_PARAMS_jax_ast_jnp$shape[[1]],
@@ -842,7 +836,7 @@ strategize       <-          function(
     vcov_OutcomeModel_concat <- matrix(0, nrow = nrow(vcov_OutcomeModel_ast_jnp)*4,
                                           ncol = nrow(vcov_OutcomeModel_ast_jnp)*4)
     if(ComputeSEs){
-      print2("Computing SEs...")
+      message("Computing SEs...")
       # first, compute vcov
       vcov_OutcomeModel_concat <- as.matrix( Matrix::bdiag( list(
                                           vcov_OutcomeModel_ast_jnp,
@@ -854,7 +848,7 @@ strategize       <-          function(
       # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
       # For near-square matrices, jacfwd probably has an edge over jacrev.
       # note: do not jit compile as computation only used once (compilation induces overhead)
-      jacobian_mat <- jax$jacrev(getPiStar_gd, 0L:3L)(
+      jacobian_mat <- strenv$jax$jacrev(getPiStar_gd, 0L:3L)(
                                   REGRESSION_PARAMS_jax_ast_jnp,
                                   REGRESSION_PARAMS_jax_dag_jnp,
                                   REGRESSION_PARAMS_jax_ast0_jnp,
@@ -863,7 +857,7 @@ strategize       <-          function(
                                   p_vec_full_dag_jnp,
                                   SLATE_VEC_ast_jnp, 
                                   SLATE_VEC_dag_jnp,
-                                  jnp$array(  lambda  ),
+                                  strenv$jnp$array(  lambda  ),
                                   jax_seed,
                                   functionList = list(dQ_da_ast, dQ_da_dag,
                                                       QFXN, getMultinomialSamp),
@@ -873,7 +867,7 @@ strategize       <-          function(
                                   gd_full_simplex = T, 
                                   quiet = F )
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
-        np$array( jnp$squeeze(jnp$squeeze(jnp$array(l_,dtj),1L),2L) ) })
+        strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
       # plot(colMeans(abs(jacobian_mat_gd)))
     }
@@ -884,7 +878,7 @@ strategize       <-          function(
   vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
-  pi_star_numeric <- np$array( pi_star_full ) # - c(1:3) already extracted 
+  pi_star_numeric <- strenv$np$array( pi_star_full ) # - c(1:3) already extracted 
 
   # drop the q part
   if(diff == T){ pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] ) }
@@ -907,8 +901,8 @@ strategize       <-          function(
     pi_star_se_list$k1 <- split(pi_star_se[1:length(p_vec_full)], split_vec_use)
 
     # save jnp for later
-    pi_star_vec_jnp <- jnp$array(as.matrix(pi_star_numeric[1:length(p_vec_full)]))
-    pi_star_dag_vec_jnp <- jnp$array(as.matrix(pi_star_numeric[-c(1:length(p_vec_full))]))
+    pi_star_vec_jnp <- strenv$jnp$array(as.matrix(pi_star_numeric[1:length(p_vec_full)]))
+    pi_star_dag_vec_jnp <- strenv$jnp$array(as.matrix(pi_star_numeric[-c(1:length(p_vec_full))]))
     pi_star_list$k2 <- split(pi_star_numeric[-c(1:length(p_vec_full))], split_vec_use)
     pi_star_se_list$k2 <- split(pi_star_se[-c(1:length(p_vec_full))], split_vec_use)
   }
@@ -982,8 +976,8 @@ strategize       <-          function(
                   'p_vec_full_dag_jnp' = p_vec_full_dag_jnp,
                   'pi_star_ast_vec_jnp' = pi_star_vec_jnp,
                   'pi_star_dag_vec_jnp' = pi_star_dag_vec_jnp,
-                  "EST_INTERCEPT_jnp" = jnp$array(EST_INTERCEPT_tf),
-                  "EST_COEFFICIENTS_jnp" = jnp$array(EST_COEFFICIENTS_tf),
+                  "EST_INTERCEPT_jnp" = strenv$jnp$array(EST_INTERCEPT_tf),
+                  "EST_COEFFICIENTS_jnp" = strenv$jnp$array(EST_COEFFICIENTS_tf),
 
                   "vcov_OutcomeModel" = vcov_OutcomeModel,
                   "vcov_OutcomeModel_concat" = vcov_OutcomeModel_concat, 
