@@ -47,7 +47,9 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.01)
   while(goOn == F){
-    if((i<-i+1) %% 100 == 0 | i < 10){ message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) }
+    if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
+      message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
+    }
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & MaxMin ){
