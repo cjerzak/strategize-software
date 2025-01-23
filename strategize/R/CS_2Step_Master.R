@@ -697,7 +697,8 @@ strategize       <-          function(
     # WARNING: Operational only in average case mode
     EST_INTERCEPT_tf <- strenv$jnp$array(t( my_mean_full[1,k_clust] ) )
     EST_COEFFICIENTS_tf <- strenv$jnp$array(as.matrix( my_mean_full[-1,k_clust] ) )
-    REGRESSION_PARAMS_jax <- strenv$jnp$array(strenv$jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf),0L))
+    REGRESSION_PARAMS_jax <- strenv$jnp$array(strenv$jnp$concatenate(list(EST_INTERCEPT_tf,
+                                                                          EST_COEFFICIENTS_tf),0L))
     REGRESSION_PARAMS_jax_ast_jnp <- REGRESSION_PARAMS_jax
     REGRESSION_PARAMS_jax_dag_jnp <- REGRESSION_PARAMS_jax_ast0_jnp <- REGRESSION_PARAMS_jax_ast_jnp
 
