@@ -47,7 +47,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.01)
   while(goOn == F){
-    if((i<-i+1) %% 100 == 0 | i < 10){ message(sprintf("SGD Iteration: %i of %s", i, nSGD) ) }
+    if((i<-i+1) %% 100 == 0 | i < 10){ message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) }
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & MaxMin ){
@@ -63,15 +63,17 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 strenv$jnp$array(-1.),
                                 strenv$jnp$add(BASE_SEED,strenv$jnp$array(ai(i)))  )
       if(i == 1){
-        inv_learning_rate_da_dag <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, strenv$jnp$multiply(10,  strenv$jnp$square(strenv$jnp$linalg$norm( grad_i_dag ))))
+        inv_learning_rate_da_dag <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 
+                                                       strenv$jnp$multiply(10,  
+                                                                           strenv$jnp$square(strenv$jnp$linalg$norm( grad_i_dag ))))
       }
 
-      if(!UseOptax){
+      if(!use_optax){
         inv_learning_rate_da_dag <-  strenv$jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, grad_i = grad_i_dag,
                                         inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_dag))
       }
-      if(UseOptax){
+      if(use_optax){
         updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, 
                                                      state = opt_state_dag, 
                                                      params = a_i_dag)
@@ -81,7 +83,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
 
       grad_mag_dag_vec[i] <<- list(strenv$jnp$linalg$norm( grad_i_dag ))
-      if(!UseOptax){ inv_learning_rate_dag_vec[i] <<- list( inv_learning_rate_da_dag ) }
+      if(!use_optax){ inv_learning_rate_dag_vec[i] <<- list( inv_learning_rate_da_dag ) }
     }
 
     # da updates (max step)
@@ -95,16 +97,18 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, 
                                strenv$jnp$array(1.),
-                               strenv$jnp$add(strenv$jnp$array(2L),strenv$jnp$add(BASE_SEED,strenv$jnp$array(ai(nSGD+i +2) ) ) ) )
+                               strenv$jnp$add(strenv$jnp$array(2L),
+                                              strenv$jnp$add(BASE_SEED,
+                                                             strenv$jnp$array(ai(nSGD+i +2) ) ) ) )
       if(i==1){ inv_learning_rate_da_ast <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm(grad_i_ast)))  }
-      if(!UseOptax){
+      if(!use_optax){
         inv_learning_rate_da_ast <-  strenv$jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
         a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
                                         grad_i = grad_i_ast,
                                         inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_ast))
       }
 
-      if(UseOptax){
+      if(use_optax){
         updates_and_opt_state_ast <- jit_update_ast( updates = grad_i_ast, 
                                                      state = opt_state_ast, 
                                                      params = a_i_ast)
@@ -114,7 +118,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
 
       grad_mag_ast_vec[i] <<- list( strenv$jnp$linalg$norm( grad_i_ast ) )
-      if(!UseOptax){ inv_learning_rate_ast_vec[i] <<- list( inv_learning_rate_da_ast ) }
+      if(!use_optax){ inv_learning_rate_ast_vec[i] <<- list( inv_learning_rate_da_ast ) }
     }
     if(i >= nSGD){goOn <- T}
   }

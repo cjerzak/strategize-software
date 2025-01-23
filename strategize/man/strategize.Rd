@@ -23,22 +23,20 @@ strategize(
   nSGD = 100,
   diff = FALSE,
   MaxMin = FALSE,
-  UseRegularization = FALSE,
-  OpenBrowser = FALSE,
-  ForceGaussianFamily = FALSE,
-  A_INIT_SD = 0,
-  TypePen = "KL",
-  ComputeSEs = TRUE,
+  use_regularization = FALSE,
+  force_gaussian = FALSE,
+  a_init_sd = 0,
+  penalty_type = "KL",
+  compute_se = TRUE,
   conda_env = NULL,
   conda_env_required = FALSE,
-  confLevel = 0.90,
+  conf_level = 0.90,
   nFolds_glm = 3L,
   folds = NULL,
   nMonte_MaxMin = 5L,
   nMonte_Qglm = 100L,
-  UseOptax = FALSE,
-  jax_seed = as.integer(Sys.time()),
-  OptimType = "tryboth"
+  use_optax = FALSE,
+  optim_type = "tryboth"
 )
 }
 \arguments{
@@ -109,26 +107,23 @@ to \code{FALSE}.}
 or group) such that each party’s distribution is optimal given the other party’s distribution.
 Defaults to \code{FALSE}.}
 
-\item{UseRegularization}{Logical indicating whether to regularize the outcome model (in addition
+\item{use_regularization}{Logical indicating whether to regularize the outcome model (in addition
 to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
 high-dimensional designs. Defaults to \code{FALSE}.}
 
-\item{OpenBrowser}{Logical for debugging; if \code{TRUE}, the function may open an interactive
-browser window upon encountering certain conditions. Typically \code{FALSE}.}
-
-\item{ForceGaussianFamily}{Logical indicating whether to force a Gaussian-based outcome modeling
+\item{force_gaussian}{Logical indicating whether to force a Gaussian-based outcome modeling
 approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
 to choose a more appropriate link (e.g., \code{"binomial"}). Defaults to \code{FALSE}.}
 
-\item{A_INIT_SD}{Numeric scalar specifying the standard deviation for random initialization
+\item{a_init_sd}{Numeric scalar specifying the standard deviation for random initialization
 of unconstrained parameters used in the gradient-based search over factor-level probabilities.
 Defaults to \code{0}.}
 
-\item{TypePen}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
+\item{penalty_type}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
 away from the baseline \code{p_list}. Defaults to \code{"KL"}.}
 
-\item{ComputeSEs}{Logical indicating whether standard errors should be computed for the final
+\item{compute_se}{Logical indicating whether standard errors should be computed for the final
 estimates (via the delta method or related expansions). Defaults to \code{TRUE}.}
 
 \item{conda_env}{A character string naming a Python conda environment that includes \pkg{jax},
@@ -139,7 +134,7 @@ that environment. Defaults to \code{NULL}.}
 \code{conda_env} cannot be activated. Otherwise, the function attempts to proceed with any
 available installation. Defaults to \code{FALSE}.}
 
-\item{confLevel}{Numeric in \eqn{(0,1)}, specifying the confidence level for intervals or
+\item{conf_level}{Numeric in \eqn{(0,1)}, specifying the confidence level for intervals or
 credible bounds. Defaults to \code{0.90}.}
 
 \item{nFolds_glm}{Integer specifying the number of folds (default \code{3L}) for internal
@@ -156,20 +151,20 @@ expected payoffs. Defaults to \code{5L}.}
 approximating the quantity of interest under certain outcomes or distributions. Defaults to
 \code{100L}.}
 
-\item{UseOptax}{Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
+\item{use_optax}{Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
 library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 Defaults to \code{FALSE}.}
 
+\item{optim_type}{A character string for choosing which optimizer or approach is used internally
+(e.g., \code{"default"}, \code{"SecondOrder"}, or \code{"tryboth"}). Defaults to \code{"tryboth"}.}
+
 \item{jax_seed}{Integer seed for reproducible JAX-based computations. Defaults to
 \code{as.integer(Sys.time())}.}
-
-\item{OptimType}{A character string for choosing which optimizer or approach is used internally
-(e.g., \code{"default"}, \code{"SecondOrder"}, or \code{"tryboth"}). Defaults to \code{"tryboth"}.}
 }
 \value{
 A named \code{list} containing:
 \describe{
-\item{\code{PiStar_point}}{An estimate of the (possibly multi-cluster or adversarial)
+\item{\code{pi_star_point}}{An estimate of the (possibly multi-cluster or adversarial)
 optimal distribution(s) over the factor levels.
 
 Structure depends on parameters:
@@ -179,13 +174,13 @@ Structure depends on parameters:
 \item Otherwise, returns a single distribution.}
 }
 
-\item{\code{PiStar_se}}{Standard errors for entries in \code{PiStar_point}. Mirrors the structure of \code{PiStar_point} (e.g., a pair of SEs if \code{MaxMin = TRUE} and \code{K = 1}). Only present if \code{ComputeSEs = TRUE}.}
+\item{\code{pi_star_se}}{Standard errors for entries in \code{pi_star_point}. Mirrors the structure of \code{pi_star_point} (e.g., a pair of SEs if \code{MaxMin = TRUE} and \code{K = 1}). Only present if \code{compute_se = TRUE}.}
 
-\item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{PiStar_point}.}
+\item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{pi_star_point}.}
 
-\item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{ComputeSEs = TRUE}.}
+\item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{compute_se = TRUE}.}
 
-\item{\code{PiStar_lb}, \code{PiStar_ub}}{Confidence bounds for \code{PiStar_point} (if \code{ComputeSEs = TRUE} and a confidence level is provided).}
+\item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
 
 \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
 
@@ -229,10 +224,10 @@ positioning in multi-stage elections.
 
 \strong{Regularization:} The argument \code{lambda} penalizes how far the learned distribution
 strays from the baseline distribution \code{p_list}. This helps avoid overfitting in high-dimensional
-designs. Different penalty types can be selected via \code{TypePen}.
+designs. Different penalty types can be selected via \code{penalty_type}.
 
 \strong{Implementation details:} Under the hood, this function may rely on \pkg{jax} for automatic
-differentiation. By default, it uses an internal gradient-based approach. If \code{UseOptax = TRUE},
+differentiation. By default, it uses an internal gradient-based approach. If \code{use_optax = TRUE},
 the \code{optax} library is used for optimization. The function can automatically detect or
 load a \pkg{conda} environment if specified, though advanced users can pass \code{conda_env_required = TRUE}
 to enforce that environment activation is mandatory.
@@ -249,12 +244,12 @@ to enforce that environment activation is mandatory.
       lambda = 0.1,
       p_list = p_list,
       MaxMin = FALSE,         # No adversarial component
-      TypePen = "KL",         # Kullback-Leibler penalty
+      penalty_type = "KL",         # Kullback-Leibler penalty
       nSGD = 200              # # of gradient descent iterations
   )
 
   # Inspect the learned distribution and performance
-  print(opt_result$PiStar_point)
+  print(opt_result$pi_star_point)
   print(opt_result$Q_point_mEst)
   print(opt_result$CVInfo)            # If cross-validation was used
 
@@ -272,8 +267,8 @@ to enforce that environment activation is mandatory.
 
   # 'adv_result' now contains distributions for each party's candidate
   # that approximate a mixed-strategy Nash equilibrium
-  print(adv_result$PiStar_point$k1)   # Party A distribution
-  print(adv_result$PiStar_point$k2)   # Party B distribution
+  print(adv_result$pi_star_point$k1)   # Party A distribution
+  print(adv_result$pi_star_point$k2)   # Party B distribution
 }
 
 }

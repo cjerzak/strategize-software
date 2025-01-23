@@ -5,11 +5,11 @@ ml_build <- function(){
   # test
   # setup main functions
   useHajekInOptimization_orig <- useHajekInOptimization
-  if(penaltyType == "LogMaxProb"){
+  if(penalty_type == "LogMaxProb"){
     RegularizationPiAction <- 'strenv$jnp$add(strenv$jnp$max(( (  (log_pidk) ) )),
     strenv$jnp$log(strenv$jnp$squeeze(strenv$jnp$divide(strenv$jnp$take(ClassProbsMarginal, k_ - 1L, axis = 1L),DFactors)))'
   }
-  if(penaltyType == "L2"){
+  if(penalty_type == "L2"){
     ## if equal weighting of the penalty by cluster
     if(K == 1){ RegularizationPiAction <- 'strenv$jnp$sum(strenv$jnp$square( strenv$jnp$subtract( pd%s, strenv$jnp$exp(log_pidk) ) ))' }
 
@@ -195,8 +195,7 @@ ml_build <- function(){
               VarCov_subset <- grep(row.names(VarCov),
                               pattern = sprintf("k%sav%sd",k_, d_) )
               VarCov_subset <- as.matrix(VarCov[VarCov_subset,VarCov_subset]) # CHECK ORDER IN Ld > 2 case!!
-              # CHECK ORDERING (lexiconographical problem???)
-              #if(ncol(VarCov_subset) >= 10){browser()}
+              # check for lexiconographical order 
               VarCov_transformation <- try((dpidk_davdk) %*% VarCov_subset %*% t(dpidk_davdk), T)
               pidk_se <- sqrt(diag(VarCov_transformation))
            }

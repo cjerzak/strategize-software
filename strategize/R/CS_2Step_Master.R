@@ -36,22 +36,20 @@
 #'   nSGD = 100,
 #'   diff = FALSE,
 #'   MaxMin = FALSE,
-#'   UseRegularization = FALSE,
-#'   OpenBrowser = FALSE,
-#'   ForceGaussianFamily = FALSE,
-#'   A_INIT_SD = 0,
-#'   TypePen = "KL",
-#'   ComputeSEs = TRUE,
+#'   use_regularization = FALSE,
+#'   force_gaussian = FALSE,
+#'   a_init_sd = 0,
+#'   penalty_type = "KL",
+#'   compute_se = TRUE,
 #'   conda_env = NULL,
 #'   conda_env_required = FALSE,
-#'   confLevel = 0.90,
+#'   conf_level = 0.90,
 #'   nFolds_glm = 3L,
 #'   folds = NULL,
 #'   nMonte_MaxMin = 5L,
 #'   nMonte_Qglm = 100L,
-#'   UseOptax = FALSE,
-#'   jax_seed = as.integer(Sys.time()),
-#'   OptimType = "tryboth"
+#'   use_optax = FALSE,
+#'   optim_type = "gd"
 #' )
 #'
 #' @param Y A numeric or binary vector of observed outcomes, typically in \code{\{0,1\}} for forced-choice
@@ -122,26 +120,23 @@
 #'   or group) such that each party’s distribution is optimal given the other party’s distribution.
 #'   Defaults to \code{FALSE}.
 #'
-#' @param UseRegularization Logical indicating whether to regularize the outcome model (in addition
+#' @param use_regularization Logical indicating whether to regularize the outcome model (in addition
 #'   to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
 #'   high-dimensional designs. Defaults to \code{FALSE}.
 #'
-#' @param OpenBrowser Logical for debugging; if \code{TRUE}, the function may open an interactive
-#'   browser window upon encountering certain conditions. Typically \code{FALSE}.
-#'
-#' @param ForceGaussianFamily Logical indicating whether to force a Gaussian-based outcome modeling
+#' @param force_gaussian Logical indicating whether to force a Gaussian-based outcome modeling
 #'   approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
 #'   to choose a more appropriate link (e.g., \code{"binomial"}). Defaults to \code{FALSE}.
 #'
-#' @param A_INIT_SD Numeric scalar specifying the standard deviation for random initialization
+#' @param a_init_sd Numeric scalar specifying the standard deviation for random initialization
 #'   of unconstrained parameters used in the gradient-based search over factor-level probabilities.
 #'   Defaults to \code{0}.
 #'
-#' @param TypePen A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
+#' @param penalty_type A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 #'   or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
 #'   away from the baseline \code{p_list}. Defaults to \code{"KL"}.
 #'
-#' @param ComputeSEs Logical indicating whether standard errors should be computed for the final
+#' @param compute_se Logical indicating whether standard errors should be computed for the final
 #'   estimates (via the delta method or related expansions). Defaults to \code{TRUE}.
 #'
 #' @param conda_env A character string naming a Python conda environment that includes \pkg{jax},
@@ -152,7 +147,7 @@
 #'   \code{conda_env} cannot be activated. Otherwise, the function attempts to proceed with any
 #'   available installation. Defaults to \code{FALSE}.
 #'
-#' @param confLevel Numeric in \eqn{(0,1)}, specifying the confidence level for intervals or
+#' @param conf_level Numeric in \eqn{(0,1)}, specifying the confidence level for intervals or
 #'   credible bounds. Defaults to \code{0.90}.
 #'
 #' @param nFolds_glm Integer specifying the number of folds (default \code{3L}) for internal
@@ -169,19 +164,19 @@
 #'   approximating the quantity of interest under certain outcomes or distributions. Defaults to
 #'   \code{100L}.
 #'
-#' @param UseOptax Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
+#' @param use_optax Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
 #'   library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 #'   Defaults to \code{FALSE}.
 #'
 #' @param jax_seed Integer seed for reproducible JAX-based computations. Defaults to
 #'   \code{as.integer(Sys.time())}.
 #'
-#' @param OptimType A character string for choosing which optimizer or approach is used internally
+#' @param optim_type A character string for choosing which optimizer or approach is used internally
 #'   (e.g., \code{"default"}, \code{"SecondOrder"}, or \code{"tryboth"}). Defaults to \code{"tryboth"}.
 #'
 #' @return A named \code{list} containing:
 #' \describe{
-#' \item{\code{PiStar_point}}{An estimate of the (possibly multi-cluster or adversarial)
+#' \item{\code{pi_star_point}}{An estimate of the (possibly multi-cluster or adversarial)
 #' optimal distribution(s) over the factor levels.
 #'
 #' Structure depends on parameters:
@@ -189,13 +184,13 @@
 #' - If \code{K > 1}, returns a list where each element corresponds to a cluster-optimal distribution.
 #' - Otherwise, returns a single distribution.}
 #'
-#' \item{\code{PiStar_se}}{Standard errors for entries in \code{PiStar_point}. Mirrors the structure of \code{PiStar_point} (e.g., a pair of SEs if \code{MaxMin = TRUE} and \code{K = 1}). Only present if \code{ComputeSEs = TRUE}.}
+#' \item{\code{pi_star_se}}{Standard errors for entries in \code{pi_star_point}. Mirrors the structure of \code{pi_star_point} (e.g., a pair of SEs if \code{MaxMin = TRUE} and \code{K = 1}). Only present if \code{compute_se = TRUE}.}
 #'
-#' \item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{PiStar_point}.}
+#' \item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{pi_star_point}.}
 #'
-#' \item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{ComputeSEs = TRUE}.}
+#' \item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{compute_se = TRUE}.}
 #'
-#' \item{\code{PiStar_lb}, \code{PiStar_ub}}{Confidence bounds for \code{PiStar_point} (if \code{ComputeSEs = TRUE} and a confidence level is provided).}
+#' \item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
 #'
 #' \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
 #'
@@ -223,10 +218,10 @@
 #'
 #' \strong{Regularization:} The argument \code{lambda} penalizes how far the learned distribution
 #' strays from the baseline distribution \code{p_list}. This helps avoid overfitting in high-dimensional
-#' designs. Different penalty types can be selected via \code{TypePen}.
+#' designs. Different penalty types can be selected via \code{penalty_type}.
 #'
 #' \strong{Implementation details:} Under the hood, this function may rely on \pkg{jax} for automatic
-#' differentiation. By default, it uses an internal gradient-based approach. If \code{UseOptax = TRUE},
+#' differentiation. By default, it uses an internal gradient-based approach. If \code{use_optax = TRUE},
 #' the \code{optax} library is used for optimization. The function can automatically detect or
 #' load a \pkg{conda} environment if specified, though advanced users can pass \code{conda_env_required = TRUE}
 #' to enforce that environment activation is mandatory.
@@ -259,12 +254,12 @@
 #'       lambda = 0.1,
 #'       p_list = p_list,
 #'       MaxMin = FALSE,         # No adversarial component
-#'       TypePen = "KL",         # Kullback-Leibler penalty
+#'       penalty_type = "KL",         # Kullback-Leibler penalty
 #'       nSGD = 200              # # of gradient descent iterations
 #'   )
 #'
 #'   # Inspect the learned distribution and performance
-#'   print(opt_result$PiStar_point)
+#'   print(opt_result$pi_star_point)
 #'   print(opt_result$Q_point_mEst)
 #'   print(opt_result$CVInfo)            # If cross-validation was used
 #'
@@ -282,8 +277,8 @@
 #'
 #'   # 'adv_result' now contains distributions for each party's candidate
 #'   # that approximate a mixed-strategy Nash equilibrium
-#'   print(adv_result$PiStar_point$k1)   # Party A distribution
-#'   print(adv_result$PiStar_point$k2)   # Party B distribution
+#'   print(adv_result$pi_star_point$k1)   # Party A distribution
+#'   print(adv_result$pi_star_point$k2)   # Party B distribution
 #' }
 #'
 #' @md
@@ -308,26 +303,27 @@ strategize       <-          function(
                                             K = 1,
                                             nSGD = 100,
                                             diff = F, MaxMin = F,
-                                            UseRegularization = F,
-                                            OpenBrowser = F,
-                                            ForceGaussianFamily = F,
-                                            A_INIT_SD = 0,
-                                            TypePen = "KL",
-                                            ComputeSEs = T,
+                                            use_regularization = F,
+                                            force_gaussian = F,
+                                            a_init_sd = 0.001,
+                                            penalty_type = "KL",
+                                            compute_se = T,
                                             conda_env = NULL,
                                             conda_env_required = F,
-                                            confLevel = 0.90,
+                                            conf_level = 0.90,
                                             nFolds_glm = 3L,
                                             folds = NULL, 
                                             nMonte_MaxMin = 5L,
                                             nMonte_Qglm = 100L,
-                                            UseOptax = F, 
-                                            jax_seed = as.integer(Sys.time()),
-                                            OptimType = "tryboth"){
+                                            use_optax = F, 
+                                            optim_type = "gd"){
   # [1.] ast then dag 
   #   ast is 1, based on sort(unique(competing_group_variable_candidate))[1]
   #   dag is 2, based on sort(unique(competing_group_variable_candidate))[2]
   # [2.] when simplex constrained with holdout, LAST entry is held out 
+  
+  message("-------------")
+  message("strategize() call has begun...")
   
   # define evaluation environment 
   evaluation_environment <- environment()
@@ -372,7 +368,7 @@ strategize       <-          function(
   MaxMinType <- "TwoRoundSingle"
 
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
-  if(!ForceGaussianFamily){ 
+  if(!force_gaussian){ 
     if(mean(unique(Y) %in% c(0,1)) == 1){ 
       glm_family = "binomial"; glm_outcome_transform <- strenv$jax$nn$sigmoid
     } }
@@ -393,8 +389,8 @@ strategize       <-          function(
   # obtain outcome models
   message("Initializing outcome models...")
   if(T == T){
-    if(K > 1 & !UseRegularization){ warning("K > 1; Forcing regularization...");UseRegularization <- T }
-    UseRegularization_ORIG <- UseRegularization
+    if(K > 1 & !use_regularization){ warning("K > 1; Forcing regularization...");use_regularization <- T }
+    use_regularization_ORIG <- use_regularization
 
     RoundsPool <- nRounds <- GroupsPool <- 1
     if(MaxMin){
@@ -405,7 +401,7 @@ strategize       <-          function(
     for(Round_ in RoundsPool){
     for(GroupCounter in 1:length(GroupsPool)){
       print(c(Round_, GroupCounter))
-      UseRegularization <- UseRegularization_ORIG
+      use_regularization <- use_regularization_ORIG
       if(MaxMin == F){ indi_ <- 1:length( Y )  }
       if(MaxMin == T){
         if(Round_ == 0){
@@ -498,7 +494,7 @@ strategize       <-          function(
   if(ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
   if(ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
 
-  if(OptimType != "gd"){
+  if(optim_type != "gd"){
     message("Initializing manual exact solution code...")
     initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
@@ -524,10 +520,9 @@ strategize       <-          function(
   })
 
   a_vec_init_mat <- as.matrix(unlist( lapply(p_list, function(zer){ c(compositions::alr( t((zer)))) }) ) )
-  a_vec_init_ast <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD), strenv$dtj)
-  a_vec_init_dag <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = A_INIT_SD*MaxMin), strenv$dtj)
+  a_vec_init_ast <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = a_init_sd), strenv$dtj)
+  a_vec_init_dag <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = a_init_sd*MaxMin), strenv$dtj)
   
-  #LabelSmoothingFxn <- function(x){x}
   LabelSmoothingFxn <- (function(x, epsilon = 0.01){
       return( (1 - epsilon) * x + epsilon / strenv$jnp$array( x$shape[[1]] )$astype(x$dtype) ) })
   a2Simplex <- compile_fxn(function(a_){
@@ -641,7 +636,7 @@ strategize       <-          function(
                                no = list(a2FullSimplex))[[1]]
 
   ## get exact result
-  pi_star_exact <- -10; if(OptimType %in% c("tryboth") & diff == F){
+  pi_star_exact <- -10; if(optim_type %in% c("tryboth") & diff == F){
     pi_star_exact <- strenv$np$array(getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  )) # pi_star_value =
   }
 
@@ -662,7 +657,7 @@ strategize       <-          function(
     # mean( names(unlist(slate_list[[1]])) == names(unlist(slate_list[[2]])) ) # target of 1 
   }
   
-  if(UseOptax == T){
+  if(use_optax == T){
       LEARNING_RATE_MAX <- 0.01
       LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),decay_steps = max(c(21L,nSGD-100L)),
                                                         init_value = LEARNING_RATE_MAX/100, peak_value = LEARNING_RATE_MAX, end_value =  LEARNING_RATE_MAX/100)
@@ -687,7 +682,7 @@ strategize       <-          function(
   }
 
   # get jax seed into correct type
-  jax_seed <- strenv$jnp$array( ai(c(jax_seed)) )
+  jax_seed <- strenv$jnp$array( ai(runif(1,1,1000)) )
 
   # Obtain solution via exact calculation
   message("Starting optimization...")
@@ -782,10 +777,11 @@ strategize       <-          function(
     QFXN <- q_with_pi_star_full[[2]][[3]]
     getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
     q_with_pi_star_full <- strenv$jnp$array(q_with_pi_star_full[[1]], strenv$dtj)
-    
-    if(!UseOptax){
-      inv_learning_rate_ast_vec <- unlist(  lapply(inv_learning_rate_ast_vec,function(zer){ strenv$np$array(zer) }))
-      try(plot( 1/inv_learning_rate_ast_vec , main = "Inv LR (ast)",log="y"),T)
+
+    if(!use_optax){
+      inv_learning_rate_ast_vec <- unlist(  lapply(inv_learning_rate_ast_vec,
+                                                   function(zer){ strenv$np$array(zer) }))
+      #try(plot( 1/inv_learning_rate_ast_vec , main = "Inv LR (ast)",log="y"),T)
     }
 
     grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
@@ -831,7 +827,7 @@ strategize       <-          function(
     diag(jacobian_mat_gd) <- diag(jacobian_mat) <- 1
     vcov_OutcomeModel_concat <- matrix(0, nrow = nrow(vcov_OutcomeModel_ast_jnp)*4,
                                           ncol = nrow(vcov_OutcomeModel_ast_jnp)*4)
-    if(ComputeSEs){
+    if(compute_se){
       message("Computing SEs...")
       # first, compute vcov
       vcov_OutcomeModel_concat <- as.matrix( Matrix::bdiag( list(
@@ -890,8 +886,7 @@ strategize       <-          function(
     pi_star_list$k1 <- (  split(pi_star_numeric, split_vec_use) ) # previously split_vec
     pi_star_se_list$k1 <- (  split(pi_star_se, split_vec_use) )
   }
-
-  if( diff == T ){
+  if(diff == T){
     pi_star_se_list <- pi_star_list <- list()
     pi_star_list$k1 <- split(pi_star_numeric[1:length(p_vec_full)], split_vec_use)
     pi_star_se_list$k1 <- split(pi_star_se[1:length(p_vec_full)], split_vec_use)
@@ -930,7 +925,7 @@ strategize       <-          function(
   for(sign_ in c(-1,1)){
     bound_ <- lapply(1:K,function(k_){
        l_ <- sapply(1:length(pi_star_list[[k_]]),function(zer){
-          ret_ <- list( pi_star_list[[k_]][[zer]] + sign_*abs(qnorm((1-confLevel)/2))*pi_star_se_list[[k_]][[zer]] )
+          ret_ <- list( pi_star_list[[k_]][[zer]] + sign_*abs(qnorm((1-conf_level)/2))*pi_star_se_list[[k_]][[zer]] )
           names(ret_) <- names(pi_star_list[[k_]])[zer]
           return(    ret_   )   })
        return(l_) })
@@ -944,20 +939,22 @@ strategize       <-          function(
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full
   }
 
-  return( list(   "PiStar_point" = pi_star_list,
-                  "PiStar_se" = pi_star_se_list,
+  message("strategize() call has finished...")
+  message("-------------")
+  return( list(   "pi_star_point" = pi_star_list,
+                  "pi_star_se" = pi_star_se_list,
                   "Q_point_mEst" = q_star,
                   "Q_se_mEst"= q_star_se,
                   "PiStar_vec" = pi_star_numeric,
                   "pi_star_red_ast" = pi_star_red_ast,
                   "pi_star_red_dag" = pi_star_red_dag,
                   "factor_levels" = factor_levels,
-                  "PiSEStar_vec" = pi_star_se,
+                  "pi_star_se_vec" = pi_star_se,
                   "pi_star_ave" = pi_star_ave,
                   "q_ave" = q_ave,
                   "q_dag_ave" = q_dag_ave,
-                  "PiStar_lb" = lowerList,
-                  "PiStar_ub" = upperList,
+                  "pi_star_lb" = lowerList,
+                  "pi_star_ub" = upperList,
                   "Q_point" = c(q_star),
                   "lambda" = lambda,
                   "p_vec_full" = p_vec_full,
@@ -972,15 +969,15 @@ strategize       <-          function(
                   'p_vec_full_dag_jnp' = p_vec_full_dag_jnp,
                   'pi_star_ast_vec_jnp' = pi_star_vec_jnp,
                   'pi_star_dag_vec_jnp' = pi_star_dag_vec_jnp,
-                  "EST_INTERCEPT_jnp" = strenv$jnp$array(EST_INTERCEPT_tf),
-                  "EST_COEFFICIENTS_jnp" = strenv$jnp$array(EST_COEFFICIENTS_tf),
+                  "est_intercept_jnp" = strenv$jnp$array(EST_INTERCEPT_tf),
+                  "est_coefficients_jnp" = strenv$jnp$array(EST_COEFFICIENTS_tf),
 
-                  "vcov_OutcomeModel" = vcov_OutcomeModel,
-                  "vcov_OutcomeModel_concat" = vcov_OutcomeModel_concat, 
+                  "vcov_outcome_model" = vcov_OutcomeModel,
+                  "vcov_outcome_model_concat" = vcov_OutcomeModel_concat, 
                   "jacobian_mat" = jacobian_mat, 
-                  "OptimType" = OptimType,
-                  "ForceGaussianFamily" = ForceGaussianFamily,
-                  "UsedRegularization" = UsedRegularization,
-                  "estimationType" = "TwoStep",
+                  "optim_type" = optim_type,
+                  "force_gaussian" = force_gaussian,
+                  "used_regularization" = UsedRegularization,
+                  "estimation_type" = "TwoStep",
                   "Y_model" = my_model ) )
 }

@@ -2,6 +2,8 @@ print2 <- function(text, quiet = F){
   if(!quiet){ print( sprintf("[%s] %s" ,format(Sys.time(), "%Y-%m-%d %H:%M:%S"),text) ) }
 }
 
+f2n <- function(x){as.numeric(as.character(x))}
+
 ess_fxn <- function(wz){ sum(wz)^2 / sum(wz^2)}
 
 toSimplex = function(x){
@@ -132,7 +134,7 @@ vec2list_noTransform <- function(vec_){ return( split(vec_,f = splitIndices)) }
 
 
 computeQse_conjoint <- function(FactorsMat, Yobs,
-                                hypotheticalProbList,
+                                pi_list,
                                 assignmentProbList,
                                 FactorsMat_internal_mapped = NULL,
                                 log_pr_w = NULL,
@@ -161,8 +163,8 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
 
   # Perform weighting to obtain bound for E_pi[c_t]
   {
-    if(!is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped[] <- log(unlist(hypotheticalProbList)[FactorsMat_internal_mapped])}
-    if(is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped <- log( sapply(1:ncol(FactorsMat),function(ze){hypotheticalProbList[[ze]][ FactorsMat[,ze] ]  })  )}
+    if(!is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped[] <- log(unlist(pi_list)[FactorsMat_internal_mapped])}
+    if(is.null(FactorsMat_internal_mapped)){FactorsMat_internal_mapped <- log( sapply(1:ncol(FactorsMat),function(ze){pi_list[[ze]][ FactorsMat[,ze] ]  })  )}
     if(any(class(FactorsMat_internal_mapped) != "numeric")){ log_pr_w_new <- rowSums(FactorsMat_internal_mapped)}
     if(all(class(FactorsMat_internal_mapped) == "numeric")){ log_pr_w_new <- sum(FactorsMat_internal_mapped)}
 
@@ -178,7 +180,7 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   # Compute max prob (take maximum prob. of each Multinomial)
   log_maxProb <- sum(log(
     sapply(1:ncol(FactorsMat),function(ze){
-      max(hypotheticalProbList[[ze]]) })
+      max(pi_list[[ze]]) })
   ))
 
   if(!is.null(knownSigma2)){ sigma2_hat <- knownSigma2 }
