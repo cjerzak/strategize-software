@@ -287,10 +287,6 @@ Each side's factor-level probabilities can be inspected.  For instance, `k1` mig
 
 TBA 
 ```{r}
-MaxMinValue <- FALSE 
-#if MaxMinValue = FALSE, use 'cv_strategize' for standard cross-validation and single-agent optimization.
-
-if( T == F ){ 
 res_clust <- {cv_strategize(
   # Core inputs:
   Y = Yobs,
@@ -330,7 +326,7 @@ res_clust <- {cv_strategize(
   nFolds_glm = nFolds_glm,
 
   # Toggling between single-agent vs. adversarial:
-  MaxMin = MaxMinValue,
+  MaxMin = FALSE,
 
   # Python environment management:
   conda_env = conda_env,
@@ -343,7 +339,6 @@ res_clust$Q_point_mEst     # The estimated performance or outcome
 
 res_clust$PiStar_se        # Standard errors (if compute_se=TRUE)
 res_clust$Q_se_mEst  
-}
 ```
 
 
@@ -367,5 +362,5 @@ This vignette has illustrated the core usage of the `strategize` package for:
 We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `strategize`, `cv_strategize`, and `strategize_onestep` for additional arguments and more advanced use-cases.
 
 <!--
- install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = F)
+ install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = FALSE)
 -->
