@@ -21,6 +21,7 @@ generate_ModelOutcome <- function(){
       a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
     }
 
+
     # interaction info
     main_info_inter <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
       list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_] - holdout_indicator )))}))
@@ -108,8 +109,7 @@ generate_ModelOutcome <- function(){
       }
       interacted_dat <- try(as.matrix(interacted_dat[,indicator_InteractionVariation <- apply(as.matrix(interacted_dat), 2, sd)>0]), T)
       if('try-error' %in% class(interacted_dat)){
-        message("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
-        browser();browser();browser()
+        stop("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
       }
       interaction_info <- interaction_info[indicator_InteractionVariation,]
       interaction_info$inter_index <- 1:nrow(interaction_info)
@@ -181,7 +181,8 @@ generate_ModelOutcome <- function(){
             W_fh <- W
             colnames(W_fh) <- colnames(w_orig)
             design_fh <- as.data.frame(
-              cbind("Yobs" = Y, "respondent_id" = respondent_id,
+              cbind("Yobs" = Y, 
+                    "respondent_id" = respondent_id,
                     "respondent_task_id" = respondent_task_id,
                     "profile_order" = profile_order, W_fh, X))
             inter_fh <- t(combn(1:ncol(W_fh),m=2))
@@ -199,9 +200,9 @@ generate_ModelOutcome <- function(){
               # main terms
               paste(colnames(W_fh),collapse = "+") ))
 
-            ModeratorFormula <- as.formula(paste("~", paste(paste("`",colnames(X),"`",sep = ""), collapse = "+")))
-            gc(); strenv$py_gc$collect()
-            log(sort( sapply(ls(),function(zr){object.size(eval(parse(text=zr)))})))
+            ModeratorFormula <- as.formula(paste("~", 
+                                                 paste(paste("`",colnames(X),"`",sep = ""), 
+                                                       collapse = "+")))
             rm(W_fh); rm(inter_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
 
             # check to ensure correct data setup (values should read 2)
@@ -275,8 +276,7 @@ generate_ModelOutcome <- function(){
     my_model <- glm(Y_glm ~ cbind(main_dat, interacted_dat ), family = glm_family)
     # summary(  my_model  )
     if(any(is.na(coef(my_model)))){
-      browser()
-      stop("WARNING: Some coefficients NA... This case hasn't been sufficiently tested!")
+      stop("Some coefficients NA... This case hasn't been sufficiently tested!")
       which_na <- which( is.na(coef(my_model)[-1]) ) # minus 1 for intercept
       my_model <- try(glm(Y_glm ~ cbind( main_dat, interacted_dat)[,-which_na], family = glm_family),T)
       Main_na <- which_na[which_na <= ncol(main_dat)]

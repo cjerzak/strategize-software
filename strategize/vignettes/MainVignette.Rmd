@@ -102,7 +102,7 @@ SlateList <- list(
 )
 
 # Illustrative hyperparameter settings 
-X <- matrix(rnorm(n * 2), n, 2)   # optional respondent covariates
+X <- rbind(X <- matrix(rnorm(n/2 * 2), n/2, 2), X)  # optional respondent covariates
 nSGD_TwoStep <- 200
 nMonte_MaxMin <- 5
 regularizationType <- "KL"    # penalty type ("KL","L2","LogMaxProb", etc.)
@@ -295,7 +295,7 @@ res_clust <- {cv_strategize(
   # Core inputs:
   Y = Yobs,
   W = FACTOR_MAT_,
-  X = NULL,
+  X = X,
 
   # Regularization or penalty inputs:
   lambda = LAMBDA_SEQ,

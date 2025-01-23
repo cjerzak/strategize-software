@@ -327,9 +327,11 @@ strategize       <-          function(
   
   # define evaluation environment 
   evaluation_environment <- environment()
+  
+  # add colnames if not available 
+  if(!is.null(X)){ if(is.null(colnames(X))){ colnames(X) <- paste0("V",1:ncol(X)) } }
 
   # load in packages
-  
   if(!"jnp" %in% ls(envir = strenv)) {
     message("Initializing computational environment...")  
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 

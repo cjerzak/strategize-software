@@ -262,7 +262,7 @@ cv_strategize       <-          function(
           nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
           
           # strategize call
-          Qoptimized__[[split_]][[type_]] <- strategize(
+          Qoptimized__[[split_]][[type_]] <- { strategize(
   
             # input data
             Y = Y[use_indices],
@@ -291,7 +291,7 @@ cv_strategize       <-          function(
             diff = diff,
             MaxMin = MaxMin,
             conda_env = conda_env,
-            conda_env_required = conda_env_required)
+            conda_env_required = conda_env_required) }
         }
         
         # out of sample test of pi* on new estimates 

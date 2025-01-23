@@ -11,12 +11,13 @@ getQStar_single <- function(pi_star_ast, pi_star_dag,
   pi_dp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
   pi_dpp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
 
-  Qhat <- strenv$jnp$squeeze(
-                glm_outcome_transform( EST_INTERCEPT_tf_ast + 
+  Qhat <-  glm_outcome_transform( EST_INTERCEPT_tf_ast + 
                                    strenv$jnp$matmul( main_coef$transpose(), pi_star_ast) +
-                                   strenv$jnp$matmul( inter_coef$transpose(), pi_dp*pi_dpp ) ) , 1L)
-
-  return( strenv$jnp$concatenate( list(Qhat, Qhat, Qhat), 0L)  ) # to keep sizes consistent with diff case 
+                                   strenv$jnp$matmul( inter_coef$transpose(), pi_dp*pi_dpp ) )
+ 
+  return( strenv$jnp$concatenate( list(Qhat, 
+                                       Qhat, 
+                                       Qhat), 0L)  ) # to keep sizes consistent with diff case 
 }
 
 getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
@@ -56,7 +57,9 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
     # Pr( Ast | Ast Voter) * Pr(Ast Voters) +  Pr( Ast | Dag Voter) * Pr(Dag Voters)
     Qhat_population <- Qhat_ast_among_ast * strenv$jnp$array(AstProp) +  Qhat_ast_among_dag * strenv$jnp$array(DagProp)
   }
-  return( strenv$jnp$concatenate( list(Qhat_population, Qhat_ast_among_ast, Qhat_ast_among_dag), 0L)  )
+  return( strenv$jnp$concatenate( list(Qhat_population, 
+                                       Qhat_ast_among_ast, 
+                                       Qhat_ast_among_dag), 0L)  )
 }
 
 FullGetQStar_ <- function(a_i_ast,

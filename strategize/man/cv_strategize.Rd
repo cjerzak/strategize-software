@@ -37,7 +37,7 @@ cv_strategize(
   nFolds_glm = 3L,
   nMonte_MaxMin = 5L,
   nMonte_Qglm = 100L,
-  optim_type = "default"
+  optim_type = "gd"
 )
 }
 \arguments{
