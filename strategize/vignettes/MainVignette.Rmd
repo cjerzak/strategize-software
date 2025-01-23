@@ -53,7 +53,7 @@ Below, we construct a toy dataset:
 #  - respondent/candidate group variables for adversarial scenarios
 #  - factors that will populate FACTOR_MAT_
 #  - an outcome Yobs
-n <- 3000
+n <- 4000
 my_data_red <- data.frame(
   # For adversarial grouping:
   R_Partisanship = sample(c("Democrat", "Republican"), n, replace = TRUE),
