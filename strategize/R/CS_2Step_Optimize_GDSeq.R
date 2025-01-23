@@ -146,8 +146,13 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                        INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
 
     # setup results for returning
-    ret_array <- strenv$jnp$concatenate(ifelse(gd_full_simplex, yes = list(list( q_star_f, pi_star_ast_full_simplex_, pi_star_dag_full_simplex_ )), 
-                                                         no  = list(list( q_star_f, pi_star_ast_, pi_star_dag_ )))[[1]])
+    ret_array <- strenv$jnp$concatenate(ifelse(gd_full_simplex, 
+                                               yes = list(list( q_star_f, 
+                                                                pi_star_ast_full_simplex_, 
+                                                                pi_star_dag_full_simplex_ )), 
+                                               no  = list(list( q_star_f, 
+                                                                pi_star_ast_, 
+                                                                pi_star_dag_ )))[[1]])
     if(functionReturn == T){ ret_array <- list(ret_array,
                                                list(dQ_da_ast, dQ_da_dag,
                                                     QFXN, getMultinomialSamp) ) }

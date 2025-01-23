@@ -36,7 +36,7 @@ strategize(
   nMonte_MaxMin = 5L,
   nMonte_Qglm = 100L,
   use_optax = FALSE,
-  optim_type = "tryboth"
+  optim_type = "gd"
 )
 }
 \arguments{
