@@ -267,7 +267,7 @@ cv_strategize       <-          function(
             # input data
             Y = Y[use_indices],
             W = W[use_indices,],
-            X = ifelse(analysisType=="cluster", yes = list(X[use_indices,]), no = list(NULL))[[1]],
+            X = ifelse(K>1, yes = list(X[use_indices,]), no = list(NULL))[[1]],
             varcov_cluster_variable = varcov_cluster_variable[use_indices],
             pair_id = pair_id[use_indices],
             respondent_id = respondent_id[ use_indices ],
