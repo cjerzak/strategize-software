@@ -37,7 +37,7 @@ initialize_m <- function(){
 
           # max prob
           Q2_contrib <- Q2_contrib_grad <- maxProb <- maxProb_grad <- Var_contrib_grad1 <- Var_contrib_grad2 <- lagrangian_contrib_varBound <- NA
-          if(PenaltyType != "L2"){
+          if(penalty_type != "L2"){
             #v variance gradients
             Q2_contrib_grad <- Yobs_DATA^2 * pr_ratio_grad
             Q2_contrib <- Yobs_DATA^2 * pr_ratio
@@ -64,7 +64,7 @@ initialize_m <- function(){
 
           lagrangian_contrib <- lagrangian_contrib_varBound
           L2_grad <- L2_value <- NULL
-          if(PenaltyType == "L2"){
+          if(penalty_type == "L2"){
             pi_k <- pi_forGrad_k
             p_k  <- p_list[[k__]]
             L2_value <- ( (pi_k - p_k)^2 )[-1]
@@ -112,7 +112,7 @@ initialize_m <- function(){
         dpi_dakl_TIMES_dpi_daktlt[] <- unlist( GradContribInfo["softMax_grad",] )[comb1] *  unlist( GradContribInfo["softMax_grad",] )[comb2]
         dpi_daktlt_TIMES_dpi_dakl <- dpi_dakl_TIMES_dpi_daktlt
 
-        if(PenaltyType != "L2"){
+        if(penalty_type != "L2"){
           softMax_grad_e <- unlist( GradContribInfo["softMax_grad",] )
           maxProb_grad_e <- unlist( GradContribInfo["maxProb_grad",] )
           dmaxProb_dakl_TIMES_dmaxProb_daktlt[] <- maxProb_grad_e[comb1] * maxProb_grad_e[comb2]
@@ -121,7 +121,7 @@ initialize_m <- function(){
           dmaxProb_daktlt_TIMES_dwt2_dakl <- t( dmaxProb_dakl_TIMES_dwt2_daktlt ) # CHECK THIS
         }
 
-        type_pool <- ifelse(PenaltyType == "L2", yes = "ddwt_raw", no = c("ddmax","ddwt_raw"))
+        type_pool <- ifelse(penalty_type == "L2", yes = "ddwt_raw", no = c("ddmax","ddwt_raw"))
         for(type_ in type_pool){
           if(type_ %in% c("ddmax","ddwt_raw")){
             seq_k <- 1:(length(pi_forGrad_simplexListed_outer) - 1)
@@ -188,7 +188,7 @@ initialize_m <- function(){
         }
 
         ddwt <- ddwt_raw * Yobs_DATA
-        if(PenaltyType != "L2"){
+        if(penalty_type != "L2"){
           ddwt2 <- ddwt_raw * Yobs_DATA^2
           TERM1 <-  LAMBDA_ / n_target * pi_forYVar_outer * treatment_combs * ddmax
           TERM2 <- LAMBDA_ / n_target * treatment_combs * (ddmax * GradContribInfo["Q2_contrib",1][[1]] +
@@ -197,7 +197,7 @@ initialize_m <- function(){
                                                               GradContribInfo["maxProb",1][[1]]*ddwt2)
           HESSIAN <- 1*(ddwt - TERM1 - TERM2 - TERM3)
         }
-        if(PenaltyType == "L2"){
+        if(penalty_type == "L2"){
           HESSIAN <- 1*(ddwt -  LAMBDA_ * DD_L2Pen * EXPERIMENTAL_SCALING_FACTOR)
         }
         return( list(HESSIAN = HESSIAN,

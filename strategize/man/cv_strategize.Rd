@@ -21,25 +21,23 @@ cv_strategize(
   profile_order = NULL,
   p_list = NULL,
   slate_list = NULL,
-  UseOptax = F,
+  use_optax = F,
   K = 1,
   nSGD = 100,
   diff = F,
   MaxMin = F,
-  UseRegularization = F,
-  OpenBrowser = F,
-  ForceGaussianFamily = F,
-  A_INIT_SD = 0.001,
-  TypePen = "KL",
-  ComputeSEs = T,
+  use_regularization = F,
+  force_gaussian = F,
+  a_init_sd = 0.001,
+  penalty_type = "KL",
+  compute_se = T,
   conda_env = NULL,
   conda_env_required = F,
   confLevel = 0.9,
   nFolds_glm = 3L,
   nMonte_MaxMin = 5L,
   nMonte_Qglm = 100L,
-  jax_seed = as.integer(Sys.time()),
-  OptimType = "default"
+  optim_type = "default"
 )
 }
 \arguments{
@@ -111,7 +109,7 @@ uniform probability or derived from empirical frequencies in \code{W}.}
 attribute levels. Used when a subset of attributes is feasible or when bounding 
 certain strategies in an adversarial design.}
 
-\item{UseOptax}{Logical. If \code{TRUE}, uses the \pkg{optax} Python library 
+\item{use_optax}{Logical. If \code{TRUE}, uses the \pkg{optax} Python library 
 (via \pkg{reticulate}) for gradient-based optimization. If \code{FALSE}, uses 
 a default gradient-based approach from \pkg{jax}.}
 
@@ -130,27 +128,23 @@ set \code{TRUE} in certain difference-of-utility designs.}
 (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 or average-case optimization).}
 
-\item{UseRegularization}{Logical; if \code{TRUE}, penalty-based regularization 
+\item{use_regularization}{Logical; if \code{TRUE}, penalty-based regularization 
 is used for the outcome model. Usually set to \code{TRUE} for large designs. 
 Defaults to \code{FALSE}.}
 
-\item{OpenBrowser}{Logical used in debugging (e.g., opening a browser for 
-interactive inspection within \pkg{jax} or \pkg{reticulate}). Defaults to 
-\code{FALSE}.}
-
-\item{ForceGaussianFamily}{Logical indicating whether a Gaussian family 
+\item{force_gaussian}{Logical indicating whether a Gaussian family 
 (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary. 
 Defaults to \code{FALSE}.}
 
-\item{A_INIT_SD}{A numeric controlling the random initialization scale for 
+\item{a_init_sd}{A numeric controlling the random initialization scale for 
 unconstrained parameters in gradient-based optimization. Defaults to 0.001. 
 Larger values can help avoid local minima in complex outcome landscapes.}
 
-\item{TypePen}{A character string specifying the type of penalty for the 
+\item{penalty_type}{A character string specifying the type of penalty for the 
 \emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"}, 
 or \code{"LogMaxProb"}. The default is \code{"KL"}.}
 
-\item{ComputeSEs}{Logical; if \code{TRUE}, attempts to compute standard errors 
+\item{compute_se}{Logical; if \code{TRUE}, attempts to compute standard errors 
 using M-estimation or the Delta method. Defaults to \code{TRUE}.}
 
 \item{conda_env}{A character specifying the name of a Conda environment for 
@@ -174,17 +168,14 @@ to 5.}
 \item{nMonte_Qglm}{An integer specifying the number of Monte Carlo draws 
 for evaluating certain integrals in \code{glm}-based approximations, default 100.}
 
-\item{jax_seed}{An integer seed for the JAX random number generator. Defaults to 
-\code{as.integer(Sys.time())}.}
-
-\item{OptimType}{A character describing the optimization routine. Typically 
+\item{optim_type}{A character describing the optimization routine. Typically 
 \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
 or \code{"SecondOrder"} for testing or advanced routines.}
 }
 \value{
 A named list with components:
 \describe{
-  \item{PiStar_point}{The estimated optimal probability distribution(s) over 
+  \item{pi_star_point}{The estimated optimal probability distribution(s) over 
   candidate profiles (\eqn{\hat{\boldsymbol{\pi}}^*}).}
 
   \item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
@@ -222,7 +213,7 @@ The function supports a wide range of conjoints, including forced-choice
 (where \code{diff = TRUE}), multi-cluster outcome modeling (where \eqn{K > 1}), 
 and adversarial designs (where \code{MaxMin = TRUE}). Regularization for the 
 outcome model or for the candidate distribution can be enabled via 
-\code{UseRegularization} and \code{TypePen}. Cross-validation is particularly 
+\code{use_regularization} and \code{penalty_type}. Cross-validation is particularly 
 helpful when the data is limited or highly dimensional.
 }
 \examples{
@@ -249,7 +240,7 @@ cv_fit <- cv_strategize(
 # Extract optimal lambda and final fit
 print(cv_fit$lambda)
 print(cv_fit$CVInfo)
-print(names(cv_fit$PiStar_point))
+print(names(cv_fit$pi_star_point))
 }
 
 }

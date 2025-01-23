@@ -328,10 +328,10 @@ get_se <- function(){
       if(any(is.na(unlist(seList_automatic)))){browser()}
 
       for(k__ in 1:K){
-        try(seList_automatic[[k__]] <- sapply(1:length(hypotheticalProbList[[k__]]),function(d_){
-          names(seList_automatic[[k__]][[d_]]) <- names(  hypotheticalProbList[[k__]][[d_]] )
+        try(seList_automatic[[k__]] <- sapply(1:length(pi_list[[k__]]),function(d_){
+          names(seList_automatic[[k__]][[d_]]) <- names(  pi_list[[k__]][[d_]] )
           list(seList_automatic[[k__]][[d_]]) }), T)
-        try(  names(seList_automatic[[k__]]) <- names( hypotheticalProbList[[k__]]) , T)
+        try(  names(seList_automatic[[k__]]) <- names( pi_list[[k__]]) , T)
       }
 
       names(hypotheticalProbList_full) <- paste("k",1:length(hypotheticalProbList_full),sep = "")

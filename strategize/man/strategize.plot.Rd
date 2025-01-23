@@ -5,19 +5,19 @@
 \title{Plot Estimated Probabilities for Hypothetical Scenarios}
 \usage{
 strategize.plot(
-  hypotheticalProbList = NULL,
-  SEsList = NULL,
-  assignmentProbList = NULL,
+  pi_star_list = NULL,
+  pi_star_se_list = NULL,
+  p_list = NULL,
   col.main = "black",
   zStar = 1,
   xlim = NULL,
-  ticksType = "assignmentProbs",
+  ticks_type = "assignmentProbs",
   col_vec = NULL,
-  plotNames = TRUE,
-  plotCIs = TRUE,
+  plot_names = TRUE,
+  plot_ci = TRUE,
   widths_vec,
   heights_vec,
-  mainTitle = "",
+  main_title = "",
   margins_vec = NULL,
   add = FALSE,
   pch = 20,
@@ -26,17 +26,17 @@ strategize.plot(
 )
 }
 \arguments{
-\item{hypotheticalProbList}{A list of numeric vectors, each corresponding to a set of
+\item{pi_star_list}{A list of numeric vectors, each corresponding to a set of
 hypothetical probabilities to be plotted. These are typically model-based or
 derived values.}
 
-\item{SEsList}{A list of numeric vectors of the same structure as
-\code{hypotheticalProbList}, containing standard errors for each probability.
+\item{pi_star_se_list}{A list of numeric vectors of the same structure as
+\code{pi_star_list}, containing standard errors for each probability.
 Used to plot confidence intervals.}
 
-\item{assignmentProbList}{A list of numeric vectors of "assignment" or
+\item{p_list}{A list of numeric vectors of "assignment" or
 baseline probabilities to be overlaid as vertical ticks on each plot
-(depending on \code{ticksType}).}
+(depending on \code{ticks_type}).}
 
 \item{col.main}{Character. Color for the main title in each subplot.
 Default is \code{"black"}.}
@@ -47,25 +47,25 @@ for approximately 95\\% confidence intervals). Default is \code{1}.}
 \item{xlim}{Numeric vector of length 2. The x-axis limits for all subplots.
 Defaults to \code{c(0, 1)} if not specified.}
 
-\item{ticksType}{Character. Controls the type of reference ticks added.
-\code{"assignmentProbs"}: Vertical ticks drawn at the positions from \code{assignmentProbList} (default).
+\item{ticks_type}{Character. Controls the type of reference ticks added.
+\code{"assignmentProbs"}: Vertical ticks drawn at the positions from \code{p_list} (default).
 \code{"zero"}: Vertical ticks drawn at 0.
 \code{"none"}: No vertical reference ticks.}
 
 \item{col_vec}{Optional character vector of colors (one per set of probabilities
-in \code{hypotheticalProbList}). If \code{NULL}, uses sequential indexing
+in \code{pi_star_list}). If \code{NULL}, uses sequential indexing
 for color.}
 
-\item{plotNames}{Logical. If \code{TRUE} (default), factor/condition labels
+\item{plot_names}{Logical. If \code{TRUE} (default), factor/condition labels
 will be placed along the y-axis.}
 
-\item{plotCIs}{Logical. If \code{TRUE} (default), error bars will be drawn
-using \code{SEsList}.}
+\item{plot_ci}{Logical. If \code{TRUE} (default), error bars will be drawn
+using \code{pi_star_se_list}.}
 
 \item{widths_vec, heights_vec}{Currently unused. Reserved for future layout
 expansions.}
 
-\item{mainTitle}{Character. An overall title for the plot. Default is
+\item{main_title}{Character. An overall title for the plot. Default is
 an empty string.}
 
 \item{margins_vec}{Currently unused. Reserved for future layout expansions.}
@@ -94,12 +94,12 @@ being displayed.
 }
 \details{
 \code{strategize.plot} arranges multiple subplots (3 columns by default) in a grid
-that depends on the number of elements in \code{assignmentProbList}. Each subplot
+that depends on the number of elements in \code{p_list}. Each subplot
 will show a factor level or condition on the y-axis, with probabilities along
-the x-axis. If confidence intervals are provided (\code{SEsList}), horizontal
+the x-axis. If confidence intervals are provided (\code{pi_star_se_list}), horizontal
 error bars around each probability point will be displayed. Additionally, vertical
-reference ticks can be added, showing values from \code{assignmentProbList} or zero
-depending on \code{ticksType}.
+reference ticks can be added, showing values from \code{p_list} or zero
+depending on \code{ticks_type}.
 }
 \examples{
 \donttest{
@@ -108,11 +108,11 @@ hypotheticalProbs <- list(est1 = c(0.2, 0.5), est2 = c(0.3, 0.6))
 SEs <- list(est1 = c(0.05, 0.07), est2 = c(0.06, 0.08))
 assignmentProbs <- list(factor1 = c(0.25, 0.55))
 strategize.plot(
-  hypotheticalProbList = hypotheticalProbs,
-  SEsList = SEs,
-  assignmentProbList = assignmentProbs,
+  pi_star_list = hypotheticalProbs,
+  pi_star_se_list = SEs,
+  p_list = assignmentProbs,
   col_vec = c("red", "blue"),
-  mainTitle = "Example Plot"
+  main_title = "Example Plot"
 )
 }
 

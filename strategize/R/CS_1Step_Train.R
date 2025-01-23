@@ -16,7 +16,7 @@ for(trainIndicator in trainIndicator_pool){
         holdIndices <- split1_indices[holdBasis_traintv == fold_]
       }
       if(trainIndicator == 0){
-        if(warmStart){ nSGD <- nSGD * 3 }
+        if(warm_start){ nSGD <- nSGD * 3 }
         availableTrainIndices <- holdIndices <- split2_indices
       }
 
@@ -45,7 +45,7 @@ for(trainIndicator in trainIndicator_pool){
 
       # Re-initialize trainable variables right before new training begins
       # IF warmstarts OFF or FOLD == 1 or TESTING
-      if(REINIT_BOOL <- (!warmStart | lambda_counter == 1 | trainIndicator == F)){ print("Reinitializing...") }
+      if(REINIT_BOOL <- (!warm_start | lambda_counter == 1 | trainIndicator == F)){ print("Reinitializing...") }
       if(!REINIT_BOOL){  print("NOT reinitializing variables...")   }
 
       # start training process
@@ -103,15 +103,15 @@ for(trainIndicator in trainIndicator_pool){
               ModelList_object <- ModelList_object_new_init;
 
               # setup optimizer
-              OptimType <- "Other"
-              if(OptimType == "SecondOrder"){
+              optim_type <- "Other"
+              if(optim_type == "SecondOrder"){
                 hessian_fxn <- strenv$jax$jit( strenv$jax$hessian(jax_fxn,argnums = 0L) )
                 optax_optimizer <-  strenv$optax$chain(
                   strenv$optax$adaptive_grad_clip(1, eps=0.0001),
                   strenv$optax$zero_nans(),
                   strenv$optax$scale(1) )
               }
-              if(OptimType == "Other"){
+              if(optim_type == "Other"){
                 LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
                   init_value = (LEARNING_RATE_BASE<- .1)/2,
                   peak_value = LEARNING_RATE_BASE,
@@ -154,7 +154,7 @@ for(trainIndicator in trainIndicator_pool){
             L2_norm <- strenv$optax$global_norm(grad_set)$tolist()
             L2_norm_squared_vec[i] <- L2_norm_squared <- L2_norm^2
 
-            if(OptimType == "SecondOrder"){
+            if(optim_type == "SecondOrder"){
               hessian_value <- hessian_fxn(ModelList_object,
                                            Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
                                            X_ = strenv$jnp$array(X[my_batch_jax,]),

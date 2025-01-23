@@ -1,5 +1,5 @@
 {
-  setwd("~/Documents/strategize-software")
+  setwd("~/Documents/strategize-software"); options(error = NULL)
   
   package_path <- "~/Documents/strategize-software/strategize"
   
@@ -10,6 +10,5 @@
   
   # Check package to ensure it meets CRAN standards.
   # devtools::check( package_path )
-  
-  #install.packages(package_path)
+
 }

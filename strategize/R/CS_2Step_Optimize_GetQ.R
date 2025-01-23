@@ -161,12 +161,12 @@ FullGetQStar_ <- function(a_i_ast,
 
   # regularization
   {
-    if(TypePen %in% c("L1","L2")){
-      PenFxn <- ifelse(TypePen == "L1", yes = list(strenv$jnp$abs), no = list(strenv$jnp$square))[[1]]
+    if(penalty_type %in% c("L1","L2")){
+      PenFxn <- ifelse(penalty_type == "L1", yes = list(strenv$jnp$abs), no = list(strenv$jnp$square))[[1]]
       var_pen_ast__ <- strenv$jnp$multiply(LAMBDA_, strenv$jnp$negative(strenv$jnp$sum(PenFxn( pi_star_full_i_ast - P_VEC_FULL_ast_ )  )))
       var_pen_dag__ <- strenv$jnp$multiply(LAMBDA_, strenv$jnp$negative(strenv$jnp$sum(PenFxn( pi_star_full_i_dag - P_VEC_FULL_dag_ )  )))
     }
-    if(TypePen == "LInfinity"){
+    if(penalty_type == "LInfinity"){
       var_pen_ast__ <- tapply(1:length(split_vec_full), split_vec_full, function(zer){
         list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_ast, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)))})
       names(var_pen_ast__)<-NULL ; var_pen_ast__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum( strenv$jnp$stack(var_pen_ast__)))
@@ -175,7 +175,7 @@ FullGetQStar_ <- function(a_i_ast,
         list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_dag, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)))})
       names(var_pen_dag__)<-NULL ; var_pen_dag__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum( strenv$jnp$stack(var_pen_dag__)))
     }
-    if(TypePen == "KL"){
+    if(penalty_type == "KL"){
       var_pen_ast__ <- strenv$jnp$multiply(LAMBDA_,strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_ast_ * (strenv$jnp$log(P_VEC_FULL_ast_) - strenv$jnp$log(pi_star_full_i_ast)))))
       var_pen_dag__ <- strenv$jnp$multiply(LAMBDA_,strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_dag_ * (strenv$jnp$log(P_VEC_FULL_dag_) - strenv$jnp$log(pi_star_full_i_dag)))))
     }

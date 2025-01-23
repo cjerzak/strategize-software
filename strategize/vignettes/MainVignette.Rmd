@@ -7,9 +7,6 @@ vignette: >
   %\VignetteEngine{knitr::rmarkdown}
   %\usepackage[UTF-8]{inputenc}
 ---
-<!--
- install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = F)
--->
 
 # Introduction 
 
@@ -32,7 +29,7 @@ This tutorial assumes you have installed the fastrerandomize package, either fro
 # If you haven't installed or set up the package:
 # devtools::install_github("cjerzak/strategize-software/strategize")
 
-# (Done once) Optionally build the JAX backend if needed
+# (Done once) Optionally build the JAX backend if needed - done once 
 # strategize::build_backend(conda_env = "strategize")
 ``` 
 
@@ -52,129 +49,158 @@ Below, we construct a toy dataset:
 # A small example: Suppose we have a forced-choice design with 1000
 # respondent-profile observations, each profile has 3 factors.
 
-set.seed(123)
-
-n <- 1000
-# We'll say each factor has 3 levels:
-# Factor 1 might be "Party" with levels c("Dem","Rep","Ind")
-# Factor 2 might be "Experience" with levels c("Low","Medium","High")
-# Factor 3 might be "Position" with levels c("Left","Center","Right")
-
-# Randomly assign factor levels under uniform distribution:
-factor1 <- sample(c("Dem","Rep","Ind"), n, replace=TRUE)
-factor2 <- sample(c("Low","Medium","High"), n, replace=TRUE)
-factor3 <- sample(c("Left","Center","Right"), n, replace=TRUE)
-
-W <- data.frame(Party = factor1,
-                Experience = factor2,
-                Position = factor3)
-
-# A simple outcome model:
-# Suppose Probability(Y=1) = logistic(
-#    0.2 * 1{Party=Dem} + 0.1 * 1{Party=Ind}
-#  + 0.5 * 1{Experience=High}
-#  + 0.3 * 1{Position=Left}
-#  - 0.4 * 1{Position=Right}
-# ), for example.
-
-linpred <- 0.2 * (W$Party == "Dem") +
-           0.1 * (W$Party == "Ind") +
-           0.5 * (W$Experience == "High") +
-           0.3 * (W$Position == "Left")  +
-          -0.4 * (W$Position == "Right")
-
-# We'll use a logistic link to get probabilities:
-probY <- 1 / (1 + exp(-linpred))
-
-# Generate a binary outcome:
-Y <- rbinom(n, size = 1, prob = probY)
-
-# The original assignment probabilities p_list:
-# (Uniform for each factor in our toy example)
-p_list <- list(
-  Party = c(Dem = 1/3, Rep = 1/3, Ind = 1/3),
-  Experience = c(Low = 1/3, Medium = 1/3, High = 1/3),
-  Position = c(Left = 1/3, Center = 1/3, Right = 1/3)
+# Create a simple data frame 'my_data_red' that includes:
+#  - respondent/candidate group variables for adversarial scenarios
+#  - factors that will populate FACTOR_MAT_
+#  - an outcome Yobs
+n <- 3000
+my_data_red <- data.frame(
+  # For adversarial grouping:
+  R_Partisanship = sample(c("Democrat", "Republican"), n, replace = TRUE),
+  Party.affiliation_clean = sample(c("Democrat", "Republican"), n, replace = TRUE),
+  Party.competition = sample(c("Same", "Different"), n, replace = TRUE),
+  
+  # For indexing each respondent and task:
+  respondentIndex = c(replicate(2,1:(n/2))),
+  task = c(replicate(n,1)),
+  profile_order = c(replicate((n/2),1),replicate((n/2),2)), # for every respondent and task, there is a profile order 
+  
+  # Some factors for the conjoint:
+  Sex = sample(c("Male", "Female"), n, replace = TRUE),
+  Age = sample(c("36-51","52-67","68-76"), n, replace = TRUE),
+  Family = sample(c("Single (divorced)", "Single (never married)",
+                    "Married (no child)", "Married (two children)"),
+                  n, replace = TRUE)
 )
 
-# Now we have W, Y, and p_list:
-head(W)
-mean(Y)
-p_list
+# Suppose Yobs is our outcome (e.g., was this profile chosen?)
+Yobs <- c(y_ <- rbinom(n/2, 1, prob = 0.5), 1 - y_)  # purely random for illustration
+
+# Construct 'FACTOR_MAT_' from the factor columns we want to optimize over:
+FACTOR_MAT_ <- my_data_red[, c("Sex","Age","Family")]
+
+# (Optional) A cluster variable for variance computations:
+cluster_var <- my_data_red$respondentIndex   # or something more meaningful
+
+# Pair or choice-set IDs (if forced-choice):
+pair_id <- paste0(my_data_red$respondentIndex, "_", my_data_red$task)
+
+# Original assignment probability list (assume uniform or known):
+p_list <- list(
+  Sex = c("Female" = 0.5, "Male" = 0.5),
+  Age = c("36-51" = 1/3, "52-67" = 1/3, "68-76" = 1/3),
+  Family = c("Single (divorced)" = 0.25,
+             "Single (never married)" = 0.25,
+             "Married (no child)" = 0.25,
+             "Married (two children)" = 0.25)
+)
+
+# If you want 'slates' of candidate features by party (for multi-stage or adversarial):
+SlateList <- list(
+  "Democratic" = p_list,
+  "Republican" = p_list
+)
+
+# Illustrative hyperparameter settings 
+X <- matrix(rnorm(n * 2), n, 2)   # optional respondent covariates
+nSGD_TwoStep <- 200
+nMonte_MaxMin <- 5
+regularizationType <- "KL"    # penalty type ("KL","L2","LogMaxProb", etc.)
+conda_env <- "strategize"
+GLOBAL_NFOLDS <- 3
+nFolds_glm <- 3
+lambda_MaxMin <- 0.1
+LAMBDA_SEQ <- c(0.01, lambda_MaxMin)
 ```
 
 This toy dataset has 3 factors, each with 3 levels, and `Y` is a binary outcome that depends on factor levels as above. The distribution is uniform, so `p_list` has 1/3 for each factor-level. Next, we show how to run a two-step approach that (1) fits an outcome model and (2) searches for the factor-level distribution that maximizes the fitted outcome predictions.
 
 # Basic Two-Step Usage for Average-Case Optimization 
 
-## Fitting an Outcome Model
-First, we fit an outcome model. Because this is a forced-choice design (in principle), or simply a Bernoulli outcome, we can do a logistic regression with main effects or interactions. In `strategize`, you can either use your own fitted model or rely on built-in helper functions that do a penalized fit. Here, for illustration, we'll do a simple logistic regression in base `R`:
-
-```{r}
-# Suppose we want to fit a logistic regression with main effects only:
-W$Party <- factor(W$Party)
-W$Experience <- factor(W$Experience)
-W$Position <- factor(W$Position)
-
-mod_fit <- glm(Y ~ Party + Experience + Position, data=data.frame(W,Y),
-               family=binomial())
-summary(mod_fit)
-```
-
-## Using `OptiConjoint`
-We now pass this fitted model to `OptiConjoint`, which will search for the factor-level distribution that maximizes the average predicted outcome. Because we are in a simpler context, we might specify `MaxMin=FALSE` to do the \emph{average case} scenario.  We'll set `lambda` for a mild $L_2$ regularization penalty so that our new distribution does not stray too far from `p_list`:
+## Using `strategize`
+We now pass this fitted model to `strategize`, which will search for the factor-level distribution that maximizes the average predicted outcome. Because we are in a simpler context, we might specify `MaxMin=FALSE` to do the \emph{average case} scenario.  We'll set `lambda` for a mild $L_2$ regularization penalty so that our new distribution does not stray too far from `p_list`:
 
 ```{r}
 library(strategize)
 
-# Now we pass to OptiConjoint:
-if(T == F){ 
-res_avg <- OptiConjoint(
-  Y = Y,
-  W = W,
+MaxMinValue <- FALSE 
+#if MaxMinValue = FALSE, use 'cv_strategize' for standard cross-validation and single-agent optimization.
+
+res_avecase <- {cv_strategize(
+  # Core inputs:
+  Y = Yobs,
+  W = FACTOR_MAT_,
+  X = NULL,
+  
+  # Regularization or penalty inputs:
+  lambda = LAMBDA_SEQ,
+  penalty_type = regularizationType,
+  use_regularization = TRUE,
+  
+  # Clustering / grouping:
+  varcov_cluster_variable = cluster_var, # in applications, this could be respondent
+  competing_group_variable_respondent = NULL,
+  competing_group_variable_candidate = NULL,
+  competing_group_competition_variable_candidate = NULL,
+  
+  # IDs and factor specification:
+  pair_id = pair_id,
+  respondent_id = my_data_red$respondentIndex,
+  respondent_task_id = my_data_red$task,
+  profile_order = my_data_red$profile_order,
+  
+  # Probability lists:
   p_list = p_list,
-  lambda = 0.02,           # mild regularization
-  MaxMin = FALSE,          # not adversarial
-  TypePen = "L2",          # L2 penalty
-  nSGD = 200,              # gradient-based steps if needed
-  #ForceGaussianFamily = FALSE, 
-  # other arguments, e.g. your model fit's details:
-  #UseRegularization = TRUE, 
-  conda_env = "strategize",
-  conda_env_required = T
-)
+  slate_list = SlateList,
+  
+  # Optimization controls:
+  K = 1L,
+  force_gaussian = FALSE,
+  nSGD = nSGD_TwoStep,
+  nMonte_MaxMin = nMonte_MaxMin,
+  compute_se = TRUE,
+  
+  # If we only want a 'difference' structure on the first iteration, for example:
+  diff = TRUE,
+  
+  # Cross-validation folds (only used if calling cv_strategize):
+  folds = GLOBAL_NFOLDS,
+  nFolds_glm = nFolds_glm,
+  
+  # Toggling between single-agent vs. adversarial:
+  MaxMin = MaxMinValue,
+  
+  # Python environment management:
+  conda_env = conda_env,
+  conda_env_required = TRUE
+)}
 
-# The result is a list with PiStar_point, which is the "optimal" factor-level distribution
-res_avg$PiStar_point
+# Inspect results:
+res_avecase$pi_star_point     # The learned factor-level distribution(s)
+res_avecase$Q_point_mEst     # The estimated performance or outcome
 
-# The estimated average outcome under that distribution:
-res_avg$Q_point_mEst
-
-# Standard errors for each factor-level probability:
-res_avg$PiStar_se
-}
+res_avecase$PiStar_se        # Standard errors (if compute_se=TRUE)
+res_avecase$Q_se_mEst        # Standard errors 
 ```
 
-In this snippet, `OptiConjoint` uses the logistic model to search for the factor-level distribution maximizing predicted `Y`, subject to an $L_2$ penalty that prevents that distribution from deviating too drastically from `p_list`. The output includes:
+In this snippet, `strategize` searches for the factor-level distribution maximizing predicted `Y`, subject to an $L_2$ penalty that prevents that distribution from deviating too drastically from `p_list`. The output includes:
 
 - `$PiStar_point`: a list of length $D$ (the number of factors), each containing the new factor-level probabilities.
 - `$Q_point_mEst`: the estimated average outcome (vote share) at that new distribution.
 - `$PiStar_se`: approximate standard errors for the factor probabilities (Delta method).
 - `$Q_se_mEst`: approximate standard error for the average outcome.
 
-**Interpretation.** The factor-level probabilities in `PiStar_point` show how `OptiConjoint` suggests *reallocating* factor levels, relative to the original `p_list`, to improve the outcome. For instance, if `Position="Center"` gets upweighted, that means the model suggests that a more centrist stance is beneficial. Because of the $L_2$ penalty, we do not push any factor-level probability to $0$ or $1$ but move them in ways that modestly improve predicted `Y`.
+**Interpretation.** The factor-level probabilities in `PiStar_point` show how `strategize` suggests *reallocating* factor levels, relative to the original `p_list`, to improve the outcome. For instance, if `Position="Center"` gets upweighted, that means the model suggests that a more centrist stance is beneficial. Because of the $L_2$ penalty, we do not push any factor-level probability to $0$ or $1$ but move them in ways that modestly improve predicted `Y`.
 
 ### Plotting the Estimated Factor-Level Probabilities
 
 We can compare `p_list` vs. `res_avg$PiStar_point` to see how the method reweights each factor. A simple barplot can suffice:
 
-
 ```{r}
-if(T == F){ 
 oldpar <- par(mfrow=c(1,3))
 for(d in seq_along(p_list)){
   old_probs <- p_list[[d]]
-  new_probs <- res_avg$PiStar_point[[1]][[d]]  # if single cluster
+  new_probs <- res_avecase$PiStar_point[[1]][[d]]  # if single cluster
 
   barplot( rbind(old_probs, new_probs), beside=TRUE,
            col=c("gray","blue"), ylim=c(0,1),
@@ -182,7 +208,6 @@ for(d in seq_along(p_list)){
   legend("topright", legend=c("Original", "Optimal"), fill=c("gray","blue"), cex=0.8)
 }
 par(oldpar)
-}
 ```
 
 In a real analysis, you would interpret which factor levels are up-weighted vs. down-weighted, linking them to your experimental factors (e.g., `Party="Rep"` might be heavily favored if that yields higher predicted support).
@@ -194,85 +219,139 @@ In a real analysis, you would interpret which factor levels are up-weighted vs. 
 Suppose we want to model a scenario where `Party="A"` tries to maximize the outcome, while `Party="B"` tries to minimize it.  We can approximate the equilibrium by specifying `MaxMin=TRUE`:
 
 ```{r}
-if(T == F){ 
-# We'll treat Y as "the probability that candidate A is chosen."
-# So B tries to minimize that same outcome.
-res_adversarial <- OptiConjoint(
-  Y = Y,
-  W = W,
-  p_list = p_list,  # baseline dist if needed
-  lambda = 0.02,
-  MaxMin = TRUE,    # <--- key difference
-  TypePen = "L2",
-  nSGD = 300, 
-  conda_env = "strategize",
-  conda_env_required = T
-)
+MaxMinValue <- TRUE
+# if MaxMinValue = TRUE, use 'strategize' for a max-min problem; 
 
-# This returns a pair of distributions in PiStar_point:
-names(res_adversarial$PiStar_point)  # e.g. k1 and k2
-res_adversarial$PiStar_point$k1   # e.g. distribution for "A"
-res_adversarial$PiStar_point$k2   # distribution for "B"
+res_adversarial <- {strategize(
+  # Core inputs:
+  Y = Yobs,
+  W = FACTOR_MAT_,
+  X = NULL,
+  
+  # Regularization or penalty inputs:
+  lambda = lambda_MaxMin,
+  penalty_type = regularizationType,
+  use_regularization = TRUE,
+  
+  # Clustering / grouping:
+  varcov_cluster_variable = cluster_var,
+  competing_group_variable_respondent = my_data_red$R_Partisanship,
+  competing_group_variable_candidate = my_data_red$Party.affiliation_clean,
+  competing_group_competition_variable_candidate = my_data_red$Party.competition,
+  
+  # IDs and factor specification:
+  pair_id = pair_id,
+  respondent_id = my_data_red$respondentIndex,
+  respondent_task_id = my_data_red$task,
+  profile_order = my_data_red$profile,
+  
+  # Probability lists:
+  p_list = p_list,
+  slate_list = SlateList,
+  
+  # Optimization controls:
+  K = 1L,
+  force_gaussian = FALSE,
+  nSGD = nSGD_TwoStep,
+  nMonte_MaxMin = nMonte_MaxMin,
+  compute_se = TRUE,
+  
+  # If we only want a 'difference' structure on the first iteration, for example:
+  diff = TRUE,
+  
+  # Cross-validation folds (only used if calling cv_strategize):
+  folds = GLOBAL_NFOLDS,
+  nFolds_glm = nFolds_glm,
+  
+  # Toggling between single-agent vs. adversarial:
+  MaxMin = MaxMinValue,
+  
+  # Python environment management:
+  conda_env = conda_env,
+  conda_env_required = TRUE
+)}
 
-# The estimated equilibrium outcome is in Q_point_mEst
-res_adversarial$Q_point_mEst
-}
+# Inspect results:
+res_adversarial$PiStar_point$k1     # The learned factor-level distribution(s)
+res_adversarial$PiStar_point$k2     # The learned factor-level distribution(s)
+res_adversarial$Q_point_mEst     # The estimated performance or outcome
+
+res_adversarial$PiStar_se$k1        # Standard errors (if compute_se=TRUE)
+res_adversarial$PiStar_se$k2        # Standard errors (if compute_se=TRUE)
+res_adversarial$Q_se_mEst        # Standard errors (if compute_se=TRUE)
 ```
 
 Each side's factor-level probabilities can be inspected.  For instance, `k1` might heavily upweight `Experience="High"` if that strongly helps side A, while `k2` might prefer `Experience="Low"` if that helps side B.  In practice, we might further separate respondents by group (e.g., one group is relevant for A's primary, another group for B's primary, etc.), though that requires more advanced usage with arguments like `competing_group_variable_respondent`.
 
-## One-Step M-Estimation
+## Cluster-based Optimiation
 
-In some settings, you might want to estimate factor-level probabilities *and* the underlying outcome model jointly, rather than the two-step approach used above. The function `OneStep.OptiConjoint` in `strategize` performs a single-step M-estimator. It uses gradient-based methods to update the outcome model parameters and factor-level probability parameters in the same objective.
-
-
+TBA 
 ```{r}
-if(T == F){ 
-# Example: a single-step approach
-res_onestep <- OneStep.OptiConjoint(
-  W = W,
-  Y = Y,
+MaxMinValue <- FALSE 
+#if MaxMinValue = FALSE, use 'cv_strategize' for standard cross-validation and single-agent optimization.
+
+if( T == F ){ 
+res_clust <- {cv_strategize(
+  # Core inputs:
+  Y = Yobs,
+  W = FACTOR_MAT_,
+  X = NULL,
+
+  # Regularization or penalty inputs:
+  lambda = LAMBDA_SEQ,
+  penalty_type = regularizationType,
+  use_regularization = TRUE,
+
+  # Clustering / grouping:
+  varcov_cluster_variable = cluster_var, # in applications, this could be respondent
+  competing_group_variable_respondent = NULL,
+  competing_group_variable_candidate = NULL,
+  competing_group_competition_variable_candidate = NULL,
+
+  # IDs and factor specification:
+  pair_id = pair_id,
+  respondent_id = my_data_red$respondentIndex,
+  respondent_task_id = my_data_red$task,
+  profile_order = my_data_red$profile_order,
+
+  # Probability lists:
   p_list = p_list,
-  penaltyType = "L2",  # penalizes the difference in factor-level probs
-  lambda_seq = c(0.01, 0.1),  # might do internal CV
-  nSGD = 300,
-  conda_env = "strategize",
-  conda_env_required = T
-)
+  slate_list = SlateList,
+
+  # Optimization controls:
+  K = 3L,
+  force_gaussian = FALSE,
+  nSGD = nSGD_TwoStep,
+  nMonte_MaxMin = nMonte_MaxMin,
+  compute_se = TRUE,
+
+  # Cross-validation folds (only used if calling cv_strategize):
+  folds = GLOBAL_NFOLDS,
+  nFolds_glm = nFolds_glm,
+
+  # Toggling between single-agent vs. adversarial:
+  MaxMin = MaxMinValue,
+
+  # Python environment management:
+  conda_env = conda_env,
+  conda_env_required = TRUE
+)}
 
 # Inspect results:
-res_onestep$PiStar_point     # best distribution
-res_onestep$Q_point          # the average outcome
+res_clust$PiStar_point     # The learned factor-level distribution(s)
+res_clust$Q_point_mEst     # The estimated performance or outcome
+
+res_clust$PiStar_se        # Standard errors (if compute_se=TRUE)
+res_clust$Q_se_mEst  
 }
 ```
 
-The single-step approach can be more flexible, but in practice it is often more prone to local minima or need for careful tuning. In many cases, we recommend a two-step approach: first fit an outcome model (with any method you like) and then pass it to `OptiConjoint` or `cv.OptiConjoint`.
 
-# Cross-Validation and Advanced Topics
-
-For selecting the hyperparameter \(\lambda\), you can use `cv.OptiConjoint`:
-
-```{r}
-if(T == F){ 
-res_cv <- cv.OptiConjoint(
-  Y = Y,
-  W = W,
-  lambda_seq = c(0, 0.01, 0.02, 0.1),
-  folds = 2,  
-  conda_env = "strategize",
-  conda_env_required = TRUE
-)
-
-res_cv$lambda            # best lambda chosen
-res_cv$PiStar_point      # final selected distribution
-res_cv$Q_point_mEst      # performance at that distribution
-res_cv$CVInfo            # in- and out-of-sample metrics
-}
-```
+# Advanced Topics
 
 Additional advanced functionalities include:
 
-- `UseRegularization = TRUE` if you want *both* the distribution itself *and* the outcome model to be regularized (especially for many factors).
+- `use_regularization = TRUE` if you want *both* the distribution itself *and* the outcome model to be regularized (especially for many factors).
 - `slate_list` to restrict certain factors (like if you have a known set of feasible factor-level combos in a candidate primary).
 - Cluster-based expansions for multi-cluster designs, specifying `K > 1` for a mixture approach.
 
@@ -285,5 +364,8 @@ This vignette has illustrated the core usage of the `strategize` package for:
 3. Optimizing to find an *average-case* or *adversarial* (max-min) solution for a new factor-level distribution.
 4. Interpreting the estimated solution, e.g., the new distribution that up- or down-weights certain levels.
 
-We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `OptiConjoint`, `cv.OptiConjoint`, and `OneStep.OptiConjoint` for additional arguments and more advanced use-cases.
+We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `strategize`, `cv_strategize`, and `strategize_onestep` for additional arguments and more advanced use-cases.
 
+<!--
+ install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = F)
+-->

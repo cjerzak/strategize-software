@@ -16,14 +16,14 @@
 #'   Y,
 #'   X = NULL,
 #'   K = 1,
-#'   warmStart = FALSE,
+#'   warm_start = FALSE,
 #'   automatic_scaling = TRUE,
 #'   p_list = NULL,
-#'   hypotheticalProbList = NULL,
+#'   pi_list = NULL,
 #'   pi_init_vec = NULL,
 #'   constrain_ub = NULL,
 #'   nLambda = 10,
-#'   penaltyType = "LogMaxProb",
+#'   penalty_type = "LogMaxProb",
 #'   testFraction = 0.5,
 #'   log_PrW = NULL,
 #'   LEARNING_RATE_BASE = 0.01,
@@ -39,13 +39,11 @@
 #'   forceSEs = FALSE,
 #'   clipAT_factor = 100000,
 #'   adaptiveMomentum = FALSE,
-#'   PenaltyType = "L2",
 #'   knownNormalizationFactor = NULL,
 #'   split1_indices = NULL,
 #'   split2_indices = NULL,
-#'   openBrowser = FALSE,
 #'   useHajekInOptimization = TRUE,
-#'   findMax = TRUE,
+#'   find_max = TRUE,
 #'   quiet = TRUE,
 #'   lambda_seq = NULL,
 #'   lambda_coef = 0.0001,
@@ -61,20 +59,20 @@
 #'   each row generally represents a single profile or a single respondent-task-profile combination.
 #'   Must have integer, factor, or character columns representing factor levels.
 #' @param Y A numeric or binary outcome vector. Typically \code{Y} is \code{1} if a profile is chosen
-#'   over its competitor, and \code{0} otherwise. If \code{findMax = FALSE}, the sign is flipped,
+#'   over its competitor, and \code{0} otherwise. If \code{find_max = FALSE}, the sign is flipped,
 #'   effectively minimizing \code{Y}.
 #' @param X Optional matrix or data frame of covariates (or respondent-level features). Can be used
 #'   for multi-cluster modeling with \code{K>1}.
 #' @param K An integer for the number of mixture components or latent clusters if multi-cluster
 #'   modeling is desired. Defaults to \code{1} (no clusters).
-#' @param warmStart Logical. If \code{TRUE}, attempts to re-initialize from previous solutions each
+#' @param warm_start Logical. If \code{TRUE}, attempts to re-initialize from previous solutions each
 #'   time \code{lambda} or other hyperparameters change. Defaults to \code{FALSE}.
 #' @param automatic_scaling Logical indicating whether to center or scale \code{X} and \code{Y} automatically.
 #'   Defaults to \code{TRUE}.
 #' @param p_list A list of baseline factor-level probabilities in the design or assignment mechanism
 #'   (e.g., the original random assignment distribution). If \code{NULL}, the function may assume
 #'   uniform or empirical distributions.
-#' @param hypotheticalProbList An optional list specifying a counterfactual distribution over factor
+#' @param pi_list An optional list specifying a counterfactual distribution over factor
 #'   levels. If provided, \code{strategize_onestep} directly computes and returns the performance
 #'   or value under that distribution instead of estimating a new optimal distribution.
 #' @param pi_init_vec A numeric vector for initializing the simplex-based representation of factor-level
@@ -83,9 +81,9 @@
 #'   \code{NULL}, can help to enforce constraints in optimization.
 #' @param nLambda Integer specifying the number of penalty values considered if cross-validation
 #'   is performed. Defaults to 10.
-#' @param penaltyType A character specifying the type of penalty for shifting probabilities (e.g.,
+#' @param penalty_type A character specifying the type of penalty for shifting probabilities (e.g.,
 #'   \code{"LogMaxProb"}, \code{"L2"}, or \code{"KL"}). This is an additional penalization on top of
-#'   \code{PenaltyType} for the outcome model. Defaults to \code{"LogMaxProb"}.
+#'   \code{penalty_type} for the outcome model. Defaults to \code{"LogMaxProb"}.
 #' @param testFraction Fraction of samples used for holdout in cross-validation. Defaults to 0.5
 #'   for a basic split. If \code{NULL}, no split is performed.
 #' @param log_PrW Optional numeric vector of log probabilities for each row in \code{W}. If omitted,
@@ -111,18 +109,14 @@
 #' @param clipAT_factor A large numeric to clip gradient norms if they exceed \code{clipAT_factor}.
 #' @param adaptiveMomentum Logical. If \code{TRUE}, momentum is adapted automatically as the optimization
 #'   proceeds. Defaults to \code{FALSE}.
-#' @param PenaltyType A character specifying the type of penalty (e.g., \code{"L2"}) for the outcome
-#'   model. Used only if a penalized approach to outcome model fitting is internally performed.
 #' @param knownNormalizationFactor An optional numeric to normalize reweighting for Hajek-based
 #'   estimators. If \code{NULL}, it is inferred from the sum of weights.
 #' @param split1_indices,split2_indices Optional vectors of indices partitioning the data for
 #'   cross-validation or holdout. If \code{NULL}, a random partition is done internally.
-#' @param openBrowser Logical for debugging. If \code{TRUE}, may open an interactive browser for
-#'   advanced inspection.
 #' @param useHajekInOptimization Logical. If \code{TRUE}, uses a Hajek-based reweighting in objective
 #'   functions for computing the expected outcome under counterfactual probability shifts. Defaults
 #'   to \code{TRUE}.
-#' @param findMax Logical. If \code{TRUE}, maximizes \code{Y}; if \code{FALSE}, treats \code{Y} as
+#' @param find_max Logical. If \code{TRUE}, maximizes \code{Y}; if \code{FALSE}, treats \code{Y} as
 #'   negative of interest (e.g., adversity minimization).
 #' @param quiet Logical controlling the verbosity of printed messages.
 #' @param lambda_seq Optional numeric vector of penalty values for cross-validation. If \code{NULL},
@@ -144,7 +138,7 @@
 #'
 #' @return A named \code{list} with components, often including:
 #' \itemize{
-#'   \item \code{PiStar_point}: The estimated optimal or learned distribution(s) over factor levels.
+#'   \item \code{pi_star_point}: The estimated optimal or learned distribution(s) over factor levels.
 #'         If \code{K>1} or if adversarial competition is considered, may return multiple
 #'         distributions (\code{k1}, \code{k2}, etc.).
 #'   \item \code{Q_point}: The estimated performance measure under the learned distribution(s).
@@ -169,12 +163,12 @@
 #' performance. Support for adversarial or multiple clusters is also available.
 #'
 #' By default, \code{strategize_onestep} attempts to find the distribution(s) \eqn{\boldsymbol{\pi}^\ast} that
-#' maximizes the average outcome if \code{findMax = TRUE} (e.g., maximizing candidate choice share).
+#' maximizes the average outcome if \code{find_max = TRUE} (e.g., maximizing candidate choice share).
 #' In adversarial contexts, each cluster or \dQuote{player} can simultaneously learn a best response.
 #' The function is flexible enough to incorporate sub-populations or multiple stages (e.g., primaries
 #' plus general elections).
 #'
-#' If a user-supplied \code{hypotheticalProbList} is given, the function directly computes \eqn{Q(\boldsymbol{\pi})}
+#' If a user-supplied \code{pi_list} is given, the function directly computes \eqn{Q(\boldsymbol{\pi})}
 #' for that distribution instead of estimating. This is useful for evaluating the performance of a
 #' known or hypothesized distribution (e.g., \dQuote{status quo}).
 #'
@@ -218,14 +212,13 @@
 #'   p_list = p_list,
 #'   nSGD = 400,
 #'   useHajekInOptimization = TRUE,
-#'   penaltyType = "LogMaxProb",
-#'   PenaltyType = "L2",
+#'   penalty_type = "LogMaxProb",
 #'   lambda_seq = c(0.01, 0.1),
 #'   testFraction = 0.3
 #' )
 #'
 #' # Inspect the estimated distribution over factor levels
-#' str(result_one_step$PiStar_point)
+#' str(result_one_step$pi_star_point)
 #'
 #' # Evaluate estimated performance
 #' print( result_one_step$Q_point )
@@ -238,14 +231,14 @@ strategize_onestep <- function(
                               Y,
                               X = NULL,
                               K = 1,
-                              warmStart = F,
+                              warm_start = F,
                               automatic_scaling = T,
                               p_list = NULL,
-                              hypotheticalProbList = NULL,
+                              pi_list = NULL,
                               pi_init_vec = NULL,
                               constrain_ub = NULL,
                               nLambda = 10,
-                              penaltyType = "LogMaxProb",
+                              penalty_type = "LogMaxProb",
                               testFraction = 0.5,
                               log_PrW = NULL,
                               LEARNING_RATE_BASE = 0.01,
@@ -261,12 +254,10 @@ strategize_onestep <- function(
                               forceSEs = F,
                               clipAT_factor = 100000,
                               adaptiveMomentum = F,
-                              PenaltyType = "L2",
                               knownNormalizationFactor = NULL,
                               split1_indices=NULL,
                               split2_indices=NULL,
-                              openBrowser = F,
-                              useHajekInOptimization = T, findMax = T,quiet = T,
+                              useHajekInOptimization = T, find_max = T,quiet = T,
                               lambda_seq = NULL,
                               lambda_coef = 0.0001,
                               nFolds = 3, batch_size = 50,
@@ -295,7 +286,7 @@ strategize_onestep <- function(
       names(p_list[[ij]]) <- n_
     } }
   penaltyProbList_unlisted <- unlist(p_list)
-  if(findMax == F){ Y <- -1 * Y }
+  if(find_max == F){ Y <- -1 * Y }
 
   # SCALE Y
   mean_Y <- 0; sd_Y <- 1
@@ -308,13 +299,13 @@ strategize_onestep <- function(
   }
 
   ### case 1 - the new multinomial probabilities ARE specified
-  if(!is.null(hypotheticalProbList)){
+  if(!is.null(pi_list)){
     Qhat_all <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
                                        Yobs_internal = Y,
                                        log_pr_w_internal = NULL,
                                        knownNormalizationFactor = knownNormalizationFactor,
                                        assignmentProbList_internal = p_list,
-                                       hypotheticalProbList_internal = hypotheticalProbList,
+                                       hypotheticalProbList_internal = pi_list,
                                        hajek = useHajek)
     SE_Q_all <- computeQse_conjoint(FactorsMat = FactorsMat_numeric,
                                 Yobs = Y,
@@ -325,7 +316,7 @@ strategize_onestep <- function(
                                 knownNormalizationFactor = knownNormalizationFactor,
                                 assignmentProbList = p_list,
                                 returnLog = F,
-                                hypotheticalProbList = hypotheticalProbList)
+                                pi_list = pi_list)
     Q_interval_all <- c(Qhat_all$Qest - abs(qnorm((1-confLevel)/2))*SE_Q_all,
                         Qhat_all$Qest_all + abs(qnorm((1-confLevel)/2))*SE_Q_all)
     return(    list("Q_point_all" = RescaleFxn(Qhat_all$Qest, estMean = mean_Y, estSD = sd_Y),
@@ -335,10 +326,10 @@ strategize_onestep <- function(
                     "Q_wts_raw_sum_all" = Qhat_all$Q_wts_raw_sum,
                     "log_pr_w_new_all"=Qhat_all$log_pr_w_new,
                     "log_pr_w_all"=Qhat_all$log_PrW) )
-  }#end !is.null(hypotheticalProbList)
+  }#end !is.null(pi_list)
 
   #### case 2 - the new multinomial probabilities ARE NOT specified
-  if(is.null(hypotheticalProbList)){
+  if(is.null(pi_list)){
 
     # setup for m estimation
     forceHajek <- T
@@ -476,8 +467,8 @@ strategize_onestep <- function(
         eval(parse( text = trainText ),envir = evaluation_environment)
 
         # obtain the pi's
-        hypotheticalProbList <- getPiList( ModelList_object[[1]] );names(hypotheticalProbList) <- paste("k",1:K,sep="")
-        FinalProbList <- hypotheticalProbList
+        pi_list <- getPiList( ModelList_object[[1]] );names(pi_list) <- paste("k",1:K,sep="")
+        FinalProbList <- pi_list
         optim_max_hajek_full <- na.omit(  unlist(getPiList(ModelList_object[[1]], simplex=F)) )
 
         ClassProbs <- NULL; if(K > 1){ ClassProbs <- as.array(  getClassProb(X) ) }
@@ -519,7 +510,7 @@ strategize_onestep <- function(
     # save and store results
     {
       # save results - split 1
-      hypotheticalProbList_full <- hypotheticalProbList_split1 <- hypotheticalProbList
+      hypotheticalProbList_full <- hypotheticalProbList_split1 <- pi_list
 
       # Get values from tf
       Qhat_tf <- strenv$jnp$array( getQ_fxn( ModelList_object,  split2_indices  ), strenv$jnp$float32)
@@ -538,7 +529,7 @@ strategize_onestep <- function(
     #plot(VarCov_n_automatic[,5],VarCov_n_manual[,5]);abline(a=0,b=1)
     #image(cor(VarCov_n_automatic,VarCov_n_manual))
 
-    return( list("PiStar_point"=hypotheticalProbList_full,
+    return( list("pi_star_point"=hypotheticalProbList_full,
                "PiStar_se" = seList,
                "ClassProbProjCoefs" = ClassProbProjCoefs,
                "ClassProbProjCoefs_se" = ClassProbProjCoefs_se,

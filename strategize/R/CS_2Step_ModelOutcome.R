@@ -57,7 +57,7 @@ generate_ModelOutcome <- function(){
       forceSparsity <- nrow(W) <= (nrow(interaction_info)+nrow(main_info) + 2)
       if(forceSparsity){
         message("WARNING! More regression parameters than observations, enforcing sparsity...")
-        UseRegularization <- T
+        use_regularization <- T
       }
       if(diff == T){
         #table(table(pair_id_)); length(unique(pair_id_))
@@ -126,9 +126,9 @@ generate_ModelOutcome <- function(){
         interaction_info_PreRegularization <- interaction_info
       }
 
-      if( UseRegularization == F | ok_counter > 1 ){ ok_ <- T }
+      if( use_regularization == F | ok_counter > 1 ){ ok_ <- T }
 
-      if( UseRegularization == T & ok_counter == 1 | K > 1){
+      if( use_regularization == T & ok_counter == 1 | K > 1 ){
         # original keys
         UsedRegularization <- T
         if(K == 1){
@@ -257,7 +257,7 @@ generate_ModelOutcome <- function(){
         base_dl_vec <- paste(main_info$d,main_info$l,sep ="_")
         interaction_info$dl_index_adj <-  (1:length(base_dl_vec))[match(dl_vec,base_dl_vec)]
         interaction_info$dplp_index_adj <- (1:length(base_dl_vec))[match(dplp_vec,base_dl_vec)]
-        UseRegularization <- F
+        use_regularization <- F
       }
     }
   }
@@ -290,6 +290,7 @@ generate_ModelOutcome <- function(){
       main_info$d_index <- 1:nrow(main_info) # check
     }
     if(!is.null(varcov_cluster_variable)){
+      if(length(unique(varcov_cluster_variable))==1){ stop("Only 1 implied cluster in varcov_cluster_variable -- cannot compute cluster varcov")}
       vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
     }
     if(is.null(varcov_cluster_variable)){

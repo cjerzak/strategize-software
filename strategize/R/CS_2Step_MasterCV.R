@@ -59,7 +59,7 @@
 #' @param slate_list An optional list specifying alternative or restricted sets of 
 #'   attribute levels. Used when a subset of attributes is feasible or when bounding 
 #'   certain strategies in an adversarial design.
-#' @param UseOptax Logical. If \code{TRUE}, uses the \pkg{optax} Python library 
+#' @param use_optax Logical. If \code{TRUE}, uses the \pkg{optax} Python library 
 #'   (via \pkg{reticulate}) for gradient-based optimization. If \code{FALSE}, uses 
 #'   a default gradient-based approach from \pkg{jax}.
 #' @param K An integer specifying the number of mixture components or clusters if 
@@ -73,22 +73,19 @@
 #'   \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
 #'   (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 #'   or average-case optimization).
-#' @param UseRegularization Logical; if \code{TRUE}, penalty-based regularization 
+#' @param use_regularization Logical; if \code{TRUE}, penalty-based regularization 
 #'   is used for the outcome model. Usually set to \code{TRUE} for large designs. 
 #'   Defaults to \code{FALSE}.
-#' @param OpenBrowser Logical used in debugging (e.g., opening a browser for 
-#'   interactive inspection within \pkg{jax} or \pkg{reticulate}). Defaults to 
-#'   \code{FALSE}.
-#' @param ForceGaussianFamily Logical indicating whether a Gaussian family 
+#' @param force_gaussian Logical indicating whether a Gaussian family 
 #'   (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary. 
 #'   Defaults to \code{FALSE}.
-#' @param A_INIT_SD A numeric controlling the random initialization scale for 
+#' @param a_init_sd A numeric controlling the random initialization scale for 
 #'   unconstrained parameters in gradient-based optimization. Defaults to 0.001. 
 #'   Larger values can help avoid local minima in complex outcome landscapes.
-#' @param TypePen A character string specifying the type of penalty for the 
+#' @param penalty_type A character string specifying the type of penalty for the 
 #'   \emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"}, 
 #'   or \code{"LogMaxProb"}. The default is \code{"KL"}.
-#' @param ComputeSEs Logical; if \code{TRUE}, attempts to compute standard errors 
+#' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors 
 #'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
 #' @param conda_env A character specifying the name of a Conda environment for 
 #'   \pkg{reticulate}. If \code{NULL}, the default environment is used.
@@ -105,9 +102,7 @@
 #'   to 5.
 #' @param nMonte_Qglm An integer specifying the number of Monte Carlo draws 
 #'   for evaluating certain integrals in \code{glm}-based approximations, default 100.
-#' @param jax_seed An integer seed for the JAX random number generator. Defaults to 
-#'   \code{as.integer(Sys.time())}.
-#' @param OptimType A character describing the optimization routine. Typically 
+#' @param optim_type A character describing the optimization routine. Typically 
 #'   \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
 #'   or \code{"SecondOrder"} for testing or advanced routines.
 #'
@@ -124,12 +119,12 @@
 #' (where \code{diff = TRUE}), multi-cluster outcome modeling (where \eqn{K > 1}), 
 #' and adversarial designs (where \code{MaxMin = TRUE}). Regularization for the 
 #' outcome model or for the candidate distribution can be enabled via 
-#' \code{UseRegularization} and \code{TypePen}. Cross-validation is particularly 
+#' \code{use_regularization} and \code{penalty_type}. Cross-validation is particularly 
 #' helpful when the data is limited or highly dimensional.
 #'
 #' @return A named list with components:
 #' \describe{
-#'   \item{PiStar_point}{The estimated optimal probability distribution(s) over 
+#'   \item{pi_star_point}{The estimated optimal probability distribution(s) over 
 #'   candidate profiles (\eqn{\hat{\boldsymbol{\pi}}^*}).}
 #'
 #'   \item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
@@ -174,7 +169,7 @@
 #' # Extract optimal lambda and final fit
 #' print(cv_fit$lambda)
 #' print(cv_fit$CVInfo)
-#' print(names(cv_fit$PiStar_point))
+#' print(names(cv_fit$pi_star_point))
 #' }
 #'
 #' @export
@@ -196,24 +191,22 @@ cv_strategize       <-          function(
                                             profile_order = NULL,
                                             p_list = NULL,
                                             slate_list = NULL,
-                                            UseOptax = F,
+                                            use_optax = F,
                                             K = 1,
                                             nSGD = 100,
                                             diff = F, MaxMin = F,
-                                            UseRegularization = F,
-                                            OpenBrowser = F,
-                                            ForceGaussianFamily = F,
-                                            A_INIT_SD = 0.001,
-                                            TypePen = "KL",
-                                            ComputeSEs = T,
+                                            use_regularization = F,
+                                            force_gaussian = F,
+                                            a_init_sd = 0.001,
+                                            penalty_type = "KL",
+                                            compute_se = T,
                                             conda_env = NULL,
                                             conda_env_required = F,
                                             confLevel = 0.90,
                                             nFolds_glm = 3L,
                                             nMonte_MaxMin = 5L,
                                             nMonte_Qglm = 100L,
-                                            jax_seed = as.integer(Sys.time()),
-                                            OptimType = "default"){
+                                            optim_type = "gd"){
   # initialize environment
   if(!"jnp" %in% ls(envir = strenv)) {
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
@@ -257,6 +250,7 @@ cv_strategize       <-          function(
     lambda_counter <- 0; for(lambda__ in lambda_seq){
       lambda_counter <- lambda_counter + 1
       Qoptimized__ <- replicate(n = folds, list())
+      message(sprintf("At lambda %s of %s...", lambda_counter, length(lambda_seq)))
 
       # CV sequence
       q_vec_in <- q_vec_out <- c()
@@ -266,6 +260,8 @@ cv_strategize       <-          function(
           # in sample optimization of pi*, evaluation on OOS coefficients 
           use_indices <- indi_list[type_,split_][[1]]
           nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
+          
+          # strategize call
           Qoptimized__[[split_]][[type_]] <- strategize(
   
             # input data
@@ -279,18 +275,18 @@ cv_strategize       <-          function(
             profile_order = profile_order[ use_indices ],
             p_list = p_list,
             slate_list = slate_list, 
-            UseOptax = UseOptax, 
+            use_optax = use_optax, 
             lambda = lambda__,
   
             # hyperparameters
-            ComputeSEs = F, 
+            compute_se = F, 
             nSGD = nSGD_use,
-            TypePen = TypePen,
+            penalty_type = penalty_type,
             K = K,
-            ForceGaussianFamily = ForceGaussianFamily,
-            UseRegularization = UseRegularization,
-            OptimType = OptimType,
-            A_INIT_SD = A_INIT_SD,
+            force_gaussian = force_gaussian,
+            use_regularization = use_regularization,
+            optim_type = optim_type,
+            a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             diff = diff,
             MaxMin = MaxMin,
@@ -303,10 +299,10 @@ cv_strategize       <-          function(
         q_vec_out <- c(q_vec_out, unlist(Qoptimized__[[split_]][[2]]$Qfxn(
           "pi_star_ast" = Qoptimized__[[split_]][[1]]$pi_star_red_ast,
           "pi_star_dag" = Qoptimized__[[split_]][[1]]$pi_star_red_dag,
-          "EST_INTERCEPT_tf_ast" = Qoptimized__[[split_]][[2]]$EST_INTERCEPT_jnp,
-          "EST_COEFFICIENTS_tf_ast" = Qoptimized__[[split_]][[2]]$EST_COEFFICIENTS_jnp,
-          "EST_INTERCEPT_tf_dag" = Qoptimized__[[split_]][[2]]$EST_INTERCEPT_jnp,
-          "EST_COEFFICIENTS_tf_dag" = Qoptimized__[[split_]][[2]]$EST_COEFFICIENTS_jnp)$tolist()[[1]])
+          "EST_INTERCEPT_tf_ast" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
+          "EST_COEFFICIENTS_tf_ast" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp,
+          "EST_INTERCEPT_tf_dag" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
+          "EST_COEFFICIENTS_tf_dag" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp)$tolist()[[1]])
         )
       }
       outsamp_results <- as.data.frame(rbind(outsamp_results, c(lambda__, mean(q_vec_out), se(q_vec_out), 0)))
@@ -328,7 +324,7 @@ cv_strategize       <-          function(
                               W = W,
                               X = ifelse(K > 1, yes = list(X), no = list(NULL))[[1]],
                               nSGD = nSGD,
-                              TypePen = TypePen,
+                              penalty_type = penalty_type,
                               varcov_cluster_variable = varcov_cluster_variable,
                               competing_group_variable_respondent = competing_group_variable_respondent,
                               competing_group_variable_candidate = competing_group_variable_candidate,
@@ -339,15 +335,15 @@ cv_strategize       <-          function(
                               profile_order = profile_order,
                               p_list = p_list,
                               slate_list = slate_list, 
-                              UseOptax = UseOptax, 
+                              use_optax = use_optax, 
                               lambda = lambda__, # this lambda is the one chosen via CV
 
                               # hyperparameters
-                              OptimType = OptimType,
-                              ForceGaussianFamily = ForceGaussianFamily,
-                              UseRegularization = UseRegularization,
-                              A_INIT_SD = A_INIT_SD,
-                              ComputeSEs = ComputeSEs,
+                              optim_type = optim_type,
+                              force_gaussian = force_gaussian,
+                              use_regularization = use_regularization,
+                              a_init_sd = a_init_sd,
+                              compute_se = compute_se,
                               K = K,
                               nMonte_MaxMin = nMonte_MaxMin,
                               nFolds_glm = nFolds_glm,
