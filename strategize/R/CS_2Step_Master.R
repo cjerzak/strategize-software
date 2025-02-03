@@ -949,7 +949,7 @@ strategize       <-          function(
                   "pi_star_se" = pi_star_se_list,
                   "Q_point_mEst" = q_star,
                   "Q_se_mEst"= q_star_se,
-                  "PiStar_vec" = pi_star_numeric,
+                  "pi_star_vec" = pi_star_numeric,
                   "pi_star_red_ast" = pi_star_red_ast,
                   "pi_star_red_dag" = pi_star_red_dag,
                   "factor_levels" = factor_levels,

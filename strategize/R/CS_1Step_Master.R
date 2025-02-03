@@ -29,8 +29,8 @@
 #'   learning_rate_max = 0.01,
 #'   cycle_width  = 50,
 #'   cycle_number = 4,
-#'   n_sgd = 500,
-#'   n_epoch = NULL,
+#'   nSGD = 500,
+#'   nEpoch = NULL,
 #'   X_factorized = NULL,
 #'   momentum = 0.99,
 #'   n_full_cycles = 1,
@@ -92,9 +92,9 @@
 #' @param learning_rate_max Base learning rate for gradient-based optimizers. Defaults to 0.01.
 #' @param cycle_width Numeric controlling the frequency of restarts or adaptive learning-rate schedules.
 #' @param cycle_number Number of cycles used in the learning-rate schedule.
-#' @param n_sgd Number of gradient-descent updates. If \code{n_epoch} is provided, that takes precedence.
-#' @param n_epoch Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
-#'   mini-batches. If provided, overrides \code{n_sgd}.
+#' @param nSGD Number of gradient-descent updates. If \code{nEpoch} is provided, that takes precedence.
+#' @param nEpoch Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
+#'   mini-batches. If provided, overrides \code{nSGD}.
 #' @param X_factorized An optional matrix or data frame representing factorized (dummy-coded) versions
 #'   of \code{X} for advanced modeling. If \code{NULL}, the function may factorize internally.
 #' @param momentum Numeric specifying momentum for stochastic gradient descent. Defaults to 0.99.
@@ -210,7 +210,7 @@
 #'   Y = Y,
 #'   X = X,
 #'   p_list = p_list,
-#'   n_sgd = 400,
+#'   nSGD = 400,
 #'   use_hajek = TRUE,
 #'   penalty_type = "LogMaxProb",
 #'   lambda_seq = c(0.01, 0.1),
@@ -244,8 +244,8 @@ strategize_onestep <- function(
                               learning_rate_max = 0.01,
                               cycle_width  = 50,
                               cycle_number = 4,
-                              n_sgd = 500,
-                              n_epoch = NULL,
+                              nSGD = 500,
+                              nEpoch = NULL,
                               X_factorized = NULL,
                               momentum = 0.99,
                               n_full_cycles = 1,
