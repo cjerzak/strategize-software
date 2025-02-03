@@ -22,37 +22,37 @@
 #'   pi_list = NULL,
 #'   pi_init_vec = NULL,
 #'   constrain_ub = NULL,
-#'   nLambda = 10,
+#'   n_lambda = 10,
 #'   penalty_type = "LogMaxProb",
-#'   testFraction = 0.5,
+#'   test_fraction = 0.5,
 #'   log_PrW = NULL,
-#'   LEARNING_RATE_BASE = 0.01,
+#'   learning_rate_max = 0.01,
 #'   cycle_width  = 50,
 #'   cycle_number = 4,
-#'   nSGD = 500,
-#'   nEpoch = NULL,
+#'   n_sgd = 500,
+#'   n_epoch = NULL,
 #'   X_factorized = NULL,
 #'   momentum = 0.99,
-#'   nFullCycles_noRestarts = 1,
+#'   n_full_cycles = 1,
 #'   optim_method = "tf",
 #'   sg_method = NULL,
 #'   forceSEs = FALSE,
-#'   clipAT_factor = 100000,
-#'   adaptiveMomentum = FALSE,
-#'   knownNormalizationFactor = NULL,
+#'   clip_at = 100000,
+#'   adaptive_momentum = FALSE,
+#'   known_norm_factor = NULL,
 #'   split1_indices = NULL,
 #'   split2_indices = NULL,
-#'   useHajekInOptimization = TRUE,
+#'   use_hajek = TRUE,
 #'   find_max = TRUE,
 #'   quiet = TRUE,
 #'   lambda_seq = NULL,
 #'   lambda_coef = 0.0001,
-#'   nFolds = 3,
+#'   n_folds = 3,
 #'   batch_size = 50,
 #'   confLevel = 0.90,
 #'   conda_env = NULL,
 #'   conda_env_required = FALSE,
-#'   hypotheticalNInVarObj = NULL
+#'   hypothetical_n = NULL
 #' )
 #'
 #' @param W A matrix or data frame of assigned factor levels in the conjoint. For forced-choice designs,
@@ -79,26 +79,26 @@
 #'   probabilities to be optimized. If \code{NULL}, a random initialization is used internally.
 #' @param constrain_ub Optional numeric or vector of upper bounds on factor probabilities. If not
 #'   \code{NULL}, can help to enforce constraints in optimization.
-#' @param nLambda Integer specifying the number of penalty values considered if cross-validation
+#' @param n_lambda Integer specifying the number of penalty values considered if cross-validation
 #'   is performed. Defaults to 10.
 #' @param penalty_type A character specifying the type of penalty for shifting probabilities (e.g.,
 #'   \code{"LogMaxProb"}, \code{"L2"}, or \code{"KL"}). This is an additional penalization on top of
 #'   \code{penalty_type} for the outcome model. Defaults to \code{"LogMaxProb"}.
-#' @param testFraction Fraction of samples used for holdout in cross-validation. Defaults to 0.5
+#' @param test_fraction Fraction of samples used for holdout in cross-validation. Defaults to 0.5
 #'   for a basic split. If \code{NULL}, no split is performed.
 #' @param log_PrW Optional numeric vector of log probabilities for each row in \code{W}. If omitted,
 #'   the function will compute \code{log_PrW} from \code{p_list} given the assumption of independent
 #'   factor-level assignments.
-#' @param LEARNING_RATE_BASE Base learning rate for gradient-based optimizers. Defaults to 0.01.
+#' @param learning_rate_max Base learning rate for gradient-based optimizers. Defaults to 0.01.
 #' @param cycle_width Numeric controlling the frequency of restarts or adaptive learning-rate schedules.
 #' @param cycle_number Number of cycles used in the learning-rate schedule.
-#' @param nSGD Number of gradient-descent updates. If \code{nEpoch} is provided, that takes precedence.
-#' @param nEpoch Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
-#'   mini-batches. If provided, overrides \code{nSGD}.
+#' @param n_sgd Number of gradient-descent updates. If \code{n_epoch} is provided, that takes precedence.
+#' @param n_epoch Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
+#'   mini-batches. If provided, overrides \code{n_sgd}.
 #' @param X_factorized An optional matrix or data frame representing factorized (dummy-coded) versions
 #'   of \code{X} for advanced modeling. If \code{NULL}, the function may factorize internally.
 #' @param momentum Numeric specifying momentum for stochastic gradient descent. Defaults to 0.99.
-#' @param nFullCycles_noRestarts If \code{>1}, repeats training cycles without restarts for a total
+#' @param n_full_cycles If \code{>1}, repeats training cycles without restarts for a total
 #'   number of gradient steps. Useful for stability checks.
 #' @param optim_method A character specifying the optimization backend (e.g., \code{"tf"} for
 #'   TensorFlow-based, or \code{"jax"} for JAX-based). Defaults to \code{"tf"} if available.
@@ -106,14 +106,14 @@
 #'   If \code{NULL}, a default method is chosen.
 #' @param forceSEs Logical. If \code{TRUE}, attempts to compute standard errors by M-estimation or the
 #'   delta method, even if no cross-validation is done.
-#' @param clipAT_factor A large numeric to clip gradient norms if they exceed \code{clipAT_factor}.
-#' @param adaptiveMomentum Logical. If \code{TRUE}, momentum is adapted automatically as the optimization
+#' @param clip_at A large numeric to clip gradient norms if they exceed \code{clip_at}.
+#' @param adaptive_momentum Logical. If \code{TRUE}, momentum is adapted automatically as the optimization
 #'   proceeds. Defaults to \code{FALSE}.
-#' @param knownNormalizationFactor An optional numeric to normalize reweighting for Hajek-based
+#' @param known_norm_factor An optional numeric to normalize reweighting for Hajek-based
 #'   estimators. If \code{NULL}, it is inferred from the sum of weights.
 #' @param split1_indices,split2_indices Optional vectors of indices partitioning the data for
 #'   cross-validation or holdout. If \code{NULL}, a random partition is done internally.
-#' @param useHajekInOptimization Logical. If \code{TRUE}, uses a Hajek-based reweighting in objective
+#' @param use_hajek Logical. If \code{TRUE}, uses a Hajek-based reweighting in objective
 #'   functions for computing the expected outcome under counterfactual probability shifts. Defaults
 #'   to \code{TRUE}.
 #' @param find_max Logical. If \code{TRUE}, maximizes \code{Y}; if \code{FALSE}, treats \code{Y} as
@@ -123,7 +123,7 @@
 #'   the function attempts a default sequence or single value.
 #' @param lambda_coef Numeric constant controlling the magnitude of the penalty for the outcome
 #'   model. Defaults to 0.0001.
-#' @param nFolds Number of folds for cross-validation. Defaults to 3.
+#' @param n_folds Number of folds for cross-validation. Defaults to 3.
 #' @param batch_size Positive integer specifying the size of mini-batches in each gradient
 #'   iteration. Defaults to 50.
 #' @param confLevel Numeric in \((0,1)\), specifying the confidence level for intervals around
@@ -132,7 +132,7 @@
 #'   \code{NULL}, attempts a default environment.
 #' @param conda_env_required Logical. If \code{TRUE}, errors if the environment \code{conda_env}
 #'   cannot be found. Otherwise attempts to proceed gracefully.
-#' @param hypotheticalNInVarObj Optional numeric specifying an alternative \code{n} for certain
+#' @param hypothetical_n Optional numeric specifying an alternative \code{n} for certain
 #'   variance calculations (e.g., hypothesized population size). If \code{NULL}, uses the observed
 #'   sample size.
 #'
@@ -178,7 +178,7 @@
 #'
 #' @note
 #' Advanced arguments like \code{X_factorized}, \code{conda_env}, \code{optim_method}, or specifying
-#' \code{adaptiveMomentum} are only needed for specialized or larger-scale (GPU-based) computations.
+#' \code{adaptive_momentum} are only needed for specialized or larger-scale (GPU-based) computations.
 #'
 #' @references
 #' - Goplerud, M. & Titiunik, R. (2022). \emph{Analysis of High-Dimensional Factorial Experiments:
@@ -210,11 +210,11 @@
 #'   Y = Y,
 #'   X = X,
 #'   p_list = p_list,
-#'   nSGD = 400,
-#'   useHajekInOptimization = TRUE,
+#'   n_sgd = 400,
+#'   use_hajek = TRUE,
 #'   penalty_type = "LogMaxProb",
 #'   lambda_seq = c(0.01, 0.1),
-#'   testFraction = 0.3
+#'   test_fraction = 0.3
 #' )
 #'
 #' # Inspect the estimated distribution over factor levels
@@ -237,34 +237,36 @@ strategize_onestep <- function(
                               pi_list = NULL,
                               pi_init_vec = NULL,
                               constrain_ub = NULL,
-                              nLambda = 10,
+                              n_lambda = 10,
                               penalty_type = "LogMaxProb",
-                              testFraction = 0.5,
+                              test_fraction = 0.5,
                               log_PrW = NULL,
-                              LEARNING_RATE_BASE = 0.01,
+                              learning_rate_max = 0.01,
                               cycle_width  = 50,
                               cycle_number = 4,
-                              nSGD = 500,
-                              nEpoch = NULL,
+                              n_sgd = 500,
+                              n_epoch = NULL,
                               X_factorized = NULL,
                               momentum = 0.99,
-                              nFullCycles_noRestarts = 1,
+                              n_full_cycles = 1,
                               optim_method = "tf",
                               sg_method = NULL,
                               forceSEs = F,
-                              clipAT_factor = 100000,
-                              adaptiveMomentum = F,
-                              knownNormalizationFactor = NULL,
+                              clip_at = 100000,
+                              adaptive_momentum = F,
+                              known_norm_factor = NULL,
                               split1_indices=NULL,
                               split2_indices=NULL,
-                              useHajekInOptimization = T, find_max = T,quiet = T,
+                              use_hajek = T, 
+                              find_max = T,quiet = T,
                               lambda_seq = NULL,
                               lambda_coef = 0.0001,
-                              nFolds = 3, batch_size = 50,
+                              n_folds = 3, 
+                              batch_size = 50,
                               confLevel = 0.90,
                               conda_env = NULL,
                               conda_env_required = F,
-                              hypotheticalNInVarObj=NULL){
+                              hypothetical_n=NULL){
   # initialize environment
   if(!"jnp" %in% ls(envir = strenv)) {
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
@@ -303,7 +305,7 @@ strategize_onestep <- function(
     Qhat_all <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
                                        Yobs_internal = Y,
                                        log_pr_w_internal = NULL,
-                                       knownNormalizationFactor = knownNormalizationFactor,
+                                       known_norm_factor = known_norm_factor,
                                        assignmentProbList_internal = p_list,
                                        hypotheticalProbList_internal = pi_list,
                                        hajek = useHajek)
@@ -313,7 +315,7 @@ strategize_onestep <- function(
                                 # log_PrW = NULL,
                                 # log_treatment_combs = NULL,
                                 hajek = useHajek,
-                                knownNormalizationFactor = knownNormalizationFactor,
+                                known_norm_factor = known_norm_factor,
                                 assignmentProbList = p_list,
                                 returnLog = F,
                                 pi_list = pi_list)
@@ -335,7 +337,7 @@ strategize_onestep <- function(
     forceHajek <- T
     zStar <- abs(qnorm((1-confLevel)/2))
     varHat <- mean( (Y - (muHat <- mean(Y)) )^2   )
-    n_target <- ifelse(is.null(hypotheticalNInVarObj), yes = length(  split1_indices  ), no = hypotheticalNInVarObj)
+    n_target <- ifelse(is.null(hypothetical_n), yes = length(  split1_indices  ), no = hypothetical_n)
 
     # define number of treatment combinations
     treatment_combs <- exp(log_treatment_combs  <- sum(log(sapply(1:ncol(W),function(ze){ length(p_list[[ze]]) }) )))
@@ -345,8 +347,8 @@ strategize_onestep <- function(
     PrXd_vec <- PrXdGivenClust_se <- PrXdGivenClust_mat <- NULL
     if(is.null(split1_indices)){
       split_ <- rep(1,times=length(Y))
-      if(is.null(testFraction)){ testFraction <- 0.5 }
-      split_[sample(1:length(split_), round(length(Y)*testFraction))] <- 2
+      if(is.null(test_fraction)){ test_fraction <- 0.5 }
+      split_[sample(1:length(split_), round(length(Y)*test_fraction))] <- 2
       split1_indices = which(split_ == 1); split2_indices = which(split_ == 2)
       if(length(lambda_seq) == 1){
         warning("NO SAMPLE SPLITTING, AS LAMBDA IS FIXED")
@@ -390,7 +392,7 @@ strategize_onestep <- function(
         CLUSTER_EPSILON <- 0.1
 
         pi_init_type <- "runif"
-        pi_init_list = replicate(nFolds+1,replicate(K,lapply(p_list,function(ze){
+        pi_init_list = replicate(n_folds+1,replicate(K,lapply(p_list,function(ze){
           systemit_init <- tmp <- ((c(rev(c(compositions::alr(t(rev(ze))))))))
           p_val <- prop.table(exp(ze))
           bounds_seq <- seq(0.001,0.25,length.out=100)
@@ -429,7 +431,7 @@ strategize_onestep <- function(
 
     # main cross-validation routine
     optim_max_hajek_list <- sapply(1:(length(lambda_seq)+1),function(er){
-      list(matrix(NA,nrow = length( pi_init_vec), ncol = nFolds)) })
+      list(matrix(NA,nrow = length( pi_init_vec), ncol = n_folds)) })
     if ( length(lambda_seq) == 1 ){
       LAMBDA_selected <- LAMBDA_ <- lambda_seq;
 
@@ -447,11 +449,11 @@ strategize_onestep <- function(
           match(FactorsMat_numeric[,zer], names(p_list[[zer]])) })
         FactorsMat_numeric_0Indexed <- FactorsMat_numeric - 1L
 
-        performance_matrix_out <- performance_matrix_in <- matrix(NA, ncol = length(lambda_seq), nrow = nFolds)
-        holdBasis_traintv <- sample(1:length(split1_indices) %% nFolds+1)
+        performance_matrix_out <- performance_matrix_in <- matrix(NA, ncol = length(lambda_seq), nrow = n_folds)
+        holdBasis_traintv <- sample(1:length(split1_indices) %% n_folds+1)
         REGULARIZATION_LAMBDA_SEQ_ORIG <- lambda_seq
 
-        if(length(lambda_seq) > 1){trainIndicator_pool <- c(1,0); if(nFolds == 1){stop("ERROR: SET nFolds > 1!")}}
+        if(length(lambda_seq) > 1){trainIndicator_pool <- c(1,0); if(n_folds == 1){stop("ERROR: SET n_folds > 1!")}}
         if(length(lambda_seq) == 1){warning(sprintf("NO CV SELCTION OF LAMBDA, FORCING LAMBDA = %.5f|",lambda_seq)); trainIndicator_pool <- 0}
 
         # Build Model
@@ -485,7 +487,7 @@ strategize_onestep <- function(
     if(length(REGULARIZATION_LAMBDA_SEQ_ORIG)>1){
     qStar <- 1
     par(mar=c(5,5,5,1))
-    plot( log(performance_mat$lambda), main = sprintf("%s Fold CV",nFolds),cex.main = 2,
+    plot( log(performance_mat$lambda), main = sprintf("%s Fold CV",n_folds),cex.main = 2,
           performance_mat$Q_in,xlab = "log(lambda)", ylab="Value", col="gray",type = 'b',
           ylim = summary(c(performance_mat$Q_in - qStar*performance_mat$Qse_in,
                            performance_mat$Q_in + qStar*performance_mat$Qse_in,
