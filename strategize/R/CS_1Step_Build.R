@@ -4,7 +4,7 @@ ml_build <- function(){
 
   # test
   # setup main functions
-  useHajekInOptimization_orig <- useHajekInOptimization
+  useHajekInOptimization_orig <- use_hajek
   if(penalty_type == "LogMaxProb"){
     RegularizationPiAction <- 'strenv$jnp$add(strenv$jnp$max(( (  (log_pidk) ) )),
     strenv$jnp$log(strenv$jnp$squeeze(strenv$jnp$divide(strenv$jnp$take(ClassProbsMarginal, k_ - 1L, axis = 1L),DFactors)))'
@@ -24,11 +24,11 @@ ml_build <- function(){
 
   }
   for(forMEst in c(T,F)){
-    if(forMEst == T){ subtypes <- "probRatio"; useHajekInOptimization <- F; return_text <- 'returnThis_ <- minThis_;' }
+    if(forMEst == T){ subtypes <- "probRatio"; use_hajek <- F; return_text <- 'returnThis_ <- minThis_;' }
     if(forMEst == F){ subtypes <- c("probRatio","objToMin") }
   for(subtype in subtypes){
     if(forMEst == F){
-      useHajekInOptimization <- useHajekInOptimization_orig;
+      use_hajek <- useHajekInOptimization_orig;
       if(subtype == "probRatio"){ return_text <- 'returnThis_ <- probRatio;' }
       if(subtype == "objToMin"){ return_text <- 'returnThis_ <- minThis_;' }
     }
@@ -39,10 +39,10 @@ ml_build <- function(){
     if( K == 1 ){
       regularizationContrib <- 'strenv$jnp$multiply(REGULARIZATION_LAMBDA, RegularizationContribPi)'
     }
-    if(useHajekInOptimization == F){
+    if(use_hajek == F){
       minThis_text <- sprintf('minThis_ <- strenv$jnp$add(strenv$jnp$negative(strenv$jnp$mean( strenv$jnp$multiply(Y_,probRatio) )), %s);',regularizationContrib)
     }
-    if(useHajekInOptimization == T){
+    if(use_hajek == T){
       minThis_text <- sprintf('minThis_ <- strenv$jnp$add(strenv$jnp$negative(strenv$jnp$sum( strenv$jnp$divide(strenv$jnp$multiply(Y_,probRatio),strenv$jnp$sum(probRatio)))), %s );',regularizationContrib)
     }
     # define main function
