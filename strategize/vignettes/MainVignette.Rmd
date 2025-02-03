@@ -104,7 +104,7 @@ SlateList <- list(
 # Illustrative hyperparameter settings 
 X <- rbind(X <- matrix(rnorm(n/2 * 2), n/2, 2), X)  # optional respondent covariates
 nSGD_TwoStep <- 200
-nMonte_MaxMin <- 5
+nMonte_adversarial <- 5
 regularizationType <- "KL"    # penalty type ("KL","L2","LogMaxProb", etc.)
 conda_env <- "strategize"
 GLOBAL_NFOLDS <- 3
@@ -157,7 +157,7 @@ res_avecase <- {cv_strategize(
   K = 1L,
   force_gaussian = FALSE,
   nSGD = nSGD_TwoStep,
-  nMonte_adversarial = nMonte_MaxMin,
+  nMonte_adversarial = nMonte_adversarial,
   compute_se = TRUE,
   
   # If we only want a 'difference' structure on the first iteration, for example:
@@ -253,7 +253,7 @@ res_adversarial <- {strategize(
   K = 1L,
   force_gaussian = FALSE,
   nSGD = nSGD_TwoStep,
-  nMonte_adversarial nMonte_MaxMin,
+  nMonte_adversarial = nMonte_adversarial,
   compute_se = TRUE,
   
   # If we only want a 'difference' structure on the first iteration, for example:
@@ -264,7 +264,7 @@ res_adversarial <- {strategize(
   nFolds_glm = nFolds_glm,
   
   # Toggling between single-agent vs. adversarial:
-  adversarial AdversarialValue,
+  adversarial = AdversarialValue,
   
   # Python environment management:
   conda_env = conda_env,
@@ -318,7 +318,7 @@ res_clust <- {cv_strategize(
   K = 3L,
   force_gaussian = FALSE,
   nSGD = nSGD_TwoStep,
-  nMonte_adversarial = nMonte_MaxMin,
+  nMonte_adversarial = nMonte_adversarial,
   compute_se = TRUE,
 
   # Cross-validation folds (only used if calling cv_strategize):
@@ -326,7 +326,7 @@ res_clust <- {cv_strategize(
   nFolds_glm = nFolds_glm,
 
   # Toggling between single-agent vs. adversarial:
-  adversarial FALSE,
+  adversarial = FALSE,
 
   # Python environment management:
   conda_env = conda_env,

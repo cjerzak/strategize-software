@@ -26,12 +26,12 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
   INTERCEPT_dag0_ <- INTERCEPT_ast0_ <- INTERCEPT_dag_ <- INTERCEPT_ast_
   COEFFICIENTS_dag0_ <- COEFFICIENTS_ast0_ <- COEFFICIENTS_dag_ <- COEFFICIENTS_ast_
-  if( MaxMin ){
+  if( adversarial ){
     REGRESSION_PARAMETERS_dag <- gather_fxn(REGRESSION_PARAMETERS_dag)
     INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag[[1]]
     COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag[[2]]
   }
-  if(nRounds > 1 & MaxMin){
+  if(nRounds > 1 & adversarial){
     REGRESSION_PARAMETERS_ast0 <- gather_fxn(REGRESSION_PARAMETERS_ast0)
     INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0[[1]]
     COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0[[2]]
@@ -52,7 +52,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     }
 
     # da_dag updates (min step)
-    if( i %% 1 == 0 & MaxMin ){
+    if( i %% 1 == 0 & adversarial ){
       # dQ_da_dag built off FullGetQStar_
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,
@@ -89,7 +89,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     }
 
     # da updates (max step)
-    if( i %% 1 == 0 | (!MaxMin) ){
+    if( i %% 1 == 0 | (!adversarial) ){
       grad_i_ast <- dQ_da_ast( a_i_ast, a_i_dag,
                                INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                INTERCEPT_dag_,  COEFFICIENTS_dag_,

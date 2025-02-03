@@ -69,7 +69,7 @@
 #' @param diff Logical indicating whether a difference-based model (e.g., for 
 #'   forced-choice or difference-in-outcomes) is used. Defaults to \code{FALSE}, but 
 #'   set \code{TRUE} in certain difference-of-utility designs.
-#' @param MaxMin Logical indicating whether to use a two-party or multi-agent 
+#' @param adversarial Logical indicating whether to use a two-party or multi-agent 
 #'   \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
 #'   (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 #'   or average-case optimization).
@@ -97,8 +97,8 @@
 #' @param nFolds_glm An integer specifying the number of folds in internal 
 #'   regression-based cross-validation (if used) for outcome model selection. 
 #'   Defaults to 3.
-#' @param nMonte_MaxMin A positive integer specifying the number of Monte Carlo 
-#'   draws for the min-max (adversarial) stage, if \code{MaxMin = TRUE}. Defaults 
+#' @param nMonte_adversarial A positive integer specifying the number of Monte Carlo 
+#'   draws for the min-max (adversarial) stage, if \code{adversarial = TRUE}. Defaults 
 #'   to 5.
 #' @param nMonte_Qglm An integer specifying the number of Monte Carlo draws 
 #'   for evaluating certain integrals in \code{glm}-based approximations, default 100.
@@ -117,7 +117,7 @@
 #'
 #' The function supports a wide range of conjoints, including forced-choice 
 #' (where \code{diff = TRUE}), multi-cluster outcome modeling (where \eqn{K > 1}), 
-#' and adversarial designs (where \code{MaxMin = TRUE}). Regularization for the 
+#' and adversarial designs (where \code{adversarial = TRUE}). Regularization for the 
 #' outcome model or for the candidate distribution can be enabled via 
 #' \code{use_regularization} and \code{penalty_type}. Cross-validation is particularly 
 #' helpful when the data is limited or highly dimensional.
@@ -194,7 +194,7 @@ cv_strategize       <-          function(
                                             use_optax = F,
                                             K = 1,
                                             nSGD = 100,
-                                            diff = F, MaxMin = F,
+                                            diff = F, adversarial = F,
                                             use_regularization = F,
                                             force_gaussian = F,
                                             a_init_sd = 0.001,
@@ -204,7 +204,7 @@ cv_strategize       <-          function(
                                             conda_env_required = F,
                                             confLevel = 0.90,
                                             nFolds_glm = 3L,
-                                            nMonte_MaxMin = 5L,
+                                            nMonte_adversarial = 5L,
                                             nMonte_Qglm = 100L,
                                             optim_type = "gd"){
   # initialize environment
@@ -289,7 +289,7 @@ cv_strategize       <-          function(
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             diff = diff,
-            MaxMin = MaxMin,
+            adversarial = adversarial,
             conda_env = conda_env,
             conda_env_required = conda_env_required) }
         }
@@ -345,10 +345,10 @@ cv_strategize       <-          function(
                               a_init_sd = a_init_sd,
                               compute_se = compute_se,
                               K = K,
-                              nMonte_MaxMin = nMonte_MaxMin,
+                              nMonte_adversarial = nMonte_adversarial,
                               nFolds_glm = nFolds_glm,
                               diff = diff,
-                              MaxMin = MaxMin,
+                              adversarial = adversarial,
                               conda_env = conda_env,
                               conda_env_required = conda_env_required)
   message("Done with strategic analysis!")
