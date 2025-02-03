@@ -1,20 +1,28 @@
 getQStar_single <- function(pi_star_ast, pi_star_dag,
-                             EST_INTERCEPT_tf_ast, EST_COEFFICIENTS_tf_ast,
-                             EST_INTERCEPT_tf_dag, EST_COEFFICIENTS_tf_dag){
+                            EST_INTERCEPT_tf_ast, EST_COEFFICIENTS_tf_ast,
+                            EST_INTERCEPT_tf_dag, EST_COEFFICIENTS_tf_dag){
   # note: here, dag ignored 
-  
   # coef info
-  main_coef <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_ast, indices = main_indices_i0, axis = 0L),1L)
-  inter_coef <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_ast,indices = inter_indices_i0, axis = 0L), 1L)
+  main_coef <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
+                                                       indices = main_indices_i0, 
+                                                       axis = 0L),1L)
+  inter_coef <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_ast,
+                                                        indices = inter_indices_i0, 
+                                                        axis = 0L), 1L)
 
   # get interaction info
-  pi_dp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
-  pi_dpp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
+  pi_dp <- strenv$jnp$take(pi_star_ast, 
+                           n2int( ai(interaction_info$dl_index_adj)-1L),
+                           axis=0L)
+  pi_dpp <- strenv$jnp$take(pi_star_ast, 
+                            n2int( ai(interaction_info$dplp_index_adj)-1L),
+                            axis=0L)
 
   Qhat <-  glm_outcome_transform( EST_INTERCEPT_tf_ast + 
-                                   strenv$jnp$matmul( main_coef$transpose(), pi_star_ast) +
-                                   strenv$jnp$matmul( inter_coef$transpose(), pi_dp*pi_dpp ) )
- 
+                                   strenv$jnp$matmul( main_coef$transpose(), 
+                                                      pi_star_ast) +
+                                   strenv$jnp$matmul( inter_coef$transpose(), 
+                                                      pi_dp*pi_dpp ) )$squeeze(2L)
   return( strenv$jnp$concatenate( list(Qhat, 
                                        Qhat, 
                                        Qhat), 0L)  ) # to keep sizes consistent with diff case 
