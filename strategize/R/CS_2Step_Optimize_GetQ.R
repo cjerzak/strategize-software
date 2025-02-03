@@ -76,7 +76,7 @@ FullGetQStar_ <- function(a_i_ast,
   pi_star_full_i_ast <- getPrettyPi_diff( pi_star_i_ast <- a2Simplex_diff_use( a_i_ast ))
   pi_star_full_i_dag <- getPrettyPi_diff( pi_star_i_dag <- a2Simplex_diff_use( a_i_dag ))
 
-  if(!MaxMin){
+  if(!adversarial){
     # NOTE: When diff == F, dag not used  
     q_max <- q__ <- strenv$jnp$take(QFXN(pi_star_ast =  pi_star_i_ast,
                   pi_star_dag = pi_star_i_dag,
@@ -86,21 +86,21 @@ FullGetQStar_ <- function(a_i_ast,
                   EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_),0L)
   }
 
-  if(MaxMin){
+  if(adversarial){
     # setup conditions 
     cond_UseAst <- strenv$jnp$multiply(strenv$jnp$array(0.5),strenv$jnp$add(strenv$jnp$array(1.), Q_SIGN))
 
     # sample main competitor features
     TSAMP_ast_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_i_ast, MNtemp, s_)},in_axes = 0L)(
-        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L),nMonte_MaxMin) )
+        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L),nMonte_adversarial) )
     TSAMP_dag_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_i_dag, MNtemp, s_)},in_axes = list(0L))(
-        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 299L),nMonte_MaxMin) )
+        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 299L),nMonte_adversarial) )
 
     # sample primary competitor features uniformly or using slates 
     TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_)},in_axes = list(0L))(
-      strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 399L),nMonte_MaxMin) )
+      strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 399L),nMonte_adversarial) )
     TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_)},in_axes = list(0L))(
-      strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 499L),nMonte_MaxMin) )
+      strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 499L),nMonte_adversarial) )
     
     # compute electoral analysis 
     VectorizedQMonteLoop_res <- Vectorized_QMonteIter_MaxMin(
@@ -184,8 +184,8 @@ FullGetQStar_ <- function(a_i_ast,
     }
   }
 
-  if( MaxMin ){ myLoss <- q_max + var_pen_ast__ + var_pen_dag__ } 
-  if( !MaxMin ){ myLoss <- q_max + var_pen_ast__ }
+  if( adversarial ){ myLoss <- q_max + var_pen_ast__ + var_pen_dag__ } 
+  if( !adversarial ){ myLoss <- q_max + var_pen_ast__ }
    
   return( myLoss )
 }

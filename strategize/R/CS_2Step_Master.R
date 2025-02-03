@@ -33,7 +33,7 @@
 #'   p_list = NULL,
 #'   slate_list = NULL,
 #'   K = 1,
-#'   n_sgd = 100,
+#'   nSGD = 100,
 #'   diff = FALSE,
 #'   adversarial = FALSE,
 #'   use_regularization = FALSE,
@@ -108,7 +108,7 @@
 #' @param K Integer specifying the number of latent clusters for multi-component outcome models. If
 #'   \code{K = 1}, no latent clustering is done. Defaults to \code{1}.
 #'
-#' @param n_sgd Integer specifying the number of stochastic gradient descent (or gradient-based)
+#' @param nSGD Integer specifying the number of stochastic gradient descent (or gradient-based)
 #'   iterations to use when learning the optimal distributions. Defaults to \code{100}.
 #'
 #' @param diff Logical indicating whether the outcome \code{Y} represents a first-difference or
@@ -255,7 +255,7 @@
 #'       p_list = p_list,
 #'       adversarial = FALSE,         # No adversarial component
 #'       penalty_type = "KL",         # Kullback-Leibler penalty
-#'       n_sgd = 200              # # of gradient descent iterations
+#'       nSGD = 200              # # of gradient descent iterations
 #'   )
 #'
 #'   # Inspect the learned distribution and performance
@@ -272,7 +272,7 @@
 #'       p_list = p_list,
 #'       adversarial = TRUE,         # Solve zero-sum game across two sets of respondents
 #'       competing_group_variable_respondent = partyID,
-#'       n_sgd = 300
+#'       nSGD = 300
 #'   )
 #'
 #'   # 'adv_result' now contains distributions for each party's candidate
@@ -301,7 +301,7 @@ strategize       <-          function(
                                             p_list = NULL,
                                             slate_list = NULL,
                                             K = 1,
-                                            n_sgd = 100,
+                                            nSGD = 100,
                                             diff = F, 
                                             adversarial = F,
                                             use_regularization = F,
@@ -662,7 +662,7 @@ strategize       <-          function(
   
   if(use_optax == T){
       LEARNING_RATE_MAX <- 0.01
-      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,n_sgd)),decay_steps = max(c(21L,n_sgd-100L)),
+      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),decay_steps = max(c(21L,nSGD-100L)),
                                                         init_value = LEARNING_RATE_MAX/100, peak_value = LEARNING_RATE_MAX, end_value =  LEARNING_RATE_MAX/100)
     
       # model partition + setup state

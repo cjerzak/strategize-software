@@ -20,7 +20,7 @@ strategize(
   p_list = NULL,
   slate_list = NULL,
   K = 1,
-  n_sgd = 100,
+  nSGD = 100,
   diff = FALSE,
   adversarial = FALSE,
   use_regularization = FALSE,
@@ -95,7 +95,7 @@ beyond the usual factor-level distributions are applied.}
 \item{K}{Integer specifying the number of latent clusters for multi-component outcome models. If
 \code{K = 1}, no latent clustering is done. Defaults to \code{1}.}
 
-\item{n_sgd}{Integer specifying the number of stochastic gradient descent (or gradient-based)
+\item{nSGD}{Integer specifying the number of stochastic gradient descent (or gradient-based)
 iterations to use when learning the optimal distributions. Defaults to \code{100}.}
 
 \item{diff}{Logical indicating whether the outcome \code{Y} represents a first-difference or
@@ -245,7 +245,7 @@ to enforce that environment activation is mandatory.
       p_list = p_list,
       adversarial = FALSE,         # No adversarial component
       penalty_type = "KL",         # Kullback-Leibler penalty
-      n_sgd = 200              # # of gradient descent iterations
+      nSGD = 200              # # of gradient descent iterations
   )
 
   # Inspect the learned distribution and performance
@@ -262,7 +262,7 @@ to enforce that environment activation is mandatory.
       p_list = p_list,
       adversarial = TRUE,         # Solve zero-sum game across two sets of respondents
       competing_group_variable_respondent = partyID,
-      n_sgd = 300
+      nSGD = 300
   )
 
   # 'adv_result' now contains distributions for each party's candidate
