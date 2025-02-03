@@ -15,37 +15,37 @@ strategize_onestep(
   pi_list = NULL,
   pi_init_vec = NULL,
   constrain_ub = NULL,
-  nLambda = 10,
+  n_lambda = 10,
   penalty_type = "LogMaxProb",
-  testFraction = 0.5,
+  test_fraction = 0.5,
   log_PrW = NULL,
-  LEARNING_RATE_BASE = 0.01,
+  learning_rate_max = 0.01,
   cycle_width  = 50,
   cycle_number = 4,
-  nSGD = 500,
-  nEpoch = NULL,
+  n_sgd = 500,
+  n_epoch = NULL,
   X_factorized = NULL,
   momentum = 0.99,
-  nFullCycles_noRestarts = 1,
+  n_full_cycles = 1,
   optim_method = "tf",
   sg_method = NULL,
   forceSEs = FALSE,
-  clipAT_factor = 100000,
-  adaptiveMomentum = FALSE,
-  knownNormalizationFactor = NULL,
+  clip_at = 100000,
+  adaptive_momentum = FALSE,
+  known_norm_factor = NULL,
   split1_indices = NULL,
   split2_indices = NULL,
-  useHajekInOptimization = TRUE,
+  use_hajek = TRUE,
   find_max = TRUE,
   quiet = TRUE,
   lambda_seq = NULL,
   lambda_coef = 0.0001,
-  nFolds = 3,
+  n_folds = 3,
   batch_size = 50,
   confLevel = 0.90,
   conda_env = NULL,
   conda_env_required = FALSE,
-  hypotheticalNInVarObj = NULL
+  hypothetical_n = NULL
 )
 }
 \arguments{
@@ -83,37 +83,37 @@ probabilities to be optimized. If \code{NULL}, a random initialization is used i
 \item{constrain_ub}{Optional numeric or vector of upper bounds on factor probabilities. If not
 \code{NULL}, can help to enforce constraints in optimization.}
 
-\item{nLambda}{Integer specifying the number of penalty values considered if cross-validation
+\item{n_lambda}{Integer specifying the number of penalty values considered if cross-validation
 is performed. Defaults to 10.}
 
 \item{penalty_type}{A character specifying the type of penalty for shifting probabilities (e.g.,
 \code{"LogMaxProb"}, \code{"L2"}, or \code{"KL"}). This is an additional penalization on top of
 \code{penalty_type} for the outcome model. Defaults to \code{"LogMaxProb"}.}
 
-\item{testFraction}{Fraction of samples used for holdout in cross-validation. Defaults to 0.5
+\item{test_fraction}{Fraction of samples used for holdout in cross-validation. Defaults to 0.5
 for a basic split. If \code{NULL}, no split is performed.}
 
 \item{log_PrW}{Optional numeric vector of log probabilities for each row in \code{W}. If omitted,
 the function will compute \code{log_PrW} from \code{p_list} given the assumption of independent
 factor-level assignments.}
 
-\item{LEARNING_RATE_BASE}{Base learning rate for gradient-based optimizers. Defaults to 0.01.}
+\item{learning_rate_max}{Base learning rate for gradient-based optimizers. Defaults to 0.01.}
 
 \item{cycle_width}{Numeric controlling the frequency of restarts or adaptive learning-rate schedules.}
 
 \item{cycle_number}{Number of cycles used in the learning-rate schedule.}
 
-\item{nSGD}{Number of gradient-descent updates. If \code{nEpoch} is provided, that takes precedence.}
+\item{n_sgd}{Number of gradient-descent updates. If \code{n_epoch} is provided, that takes precedence.}
 
-\item{nEpoch}{Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
-mini-batches. If provided, overrides \code{nSGD}.}
+\item{n_epoch}{Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
+mini-batches. If provided, overrides \code{n_sgd}.}
 
 \item{X_factorized}{An optional matrix or data frame representing factorized (dummy-coded) versions
 of \code{X} for advanced modeling. If \code{NULL}, the function may factorize internally.}
 
 \item{momentum}{Numeric specifying momentum for stochastic gradient descent. Defaults to 0.99.}
 
-\item{nFullCycles_noRestarts}{If \code{>1}, repeats training cycles without restarts for a total
+\item{n_full_cycles}{If \code{>1}, repeats training cycles without restarts for a total
 number of gradient steps. Useful for stability checks.}
 
 \item{optim_method}{A character specifying the optimization backend (e.g., \code{"tf"} for
@@ -125,18 +125,18 @@ If \code{NULL}, a default method is chosen.}
 \item{forceSEs}{Logical. If \code{TRUE}, attempts to compute standard errors by M-estimation or the
 delta method, even if no cross-validation is done.}
 
-\item{clipAT_factor}{A large numeric to clip gradient norms if they exceed \code{clipAT_factor}.}
+\item{clip_at}{A large numeric to clip gradient norms if they exceed \code{clip_at}.}
 
-\item{adaptiveMomentum}{Logical. If \code{TRUE}, momentum is adapted automatically as the optimization
+\item{adaptive_momentum}{Logical. If \code{TRUE}, momentum is adapted automatically as the optimization
 proceeds. Defaults to \code{FALSE}.}
 
-\item{knownNormalizationFactor}{An optional numeric to normalize reweighting for Hajek-based
+\item{known_norm_factor}{An optional numeric to normalize reweighting for Hajek-based
 estimators. If \code{NULL}, it is inferred from the sum of weights.}
 
 \item{split1_indices, split2_indices}{Optional vectors of indices partitioning the data for
 cross-validation or holdout. If \code{NULL}, a random partition is done internally.}
 
-\item{useHajekInOptimization}{Logical. If \code{TRUE}, uses a Hajek-based reweighting in objective
+\item{use_hajek}{Logical. If \code{TRUE}, uses a Hajek-based reweighting in objective
 functions for computing the expected outcome under counterfactual probability shifts. Defaults
 to \code{TRUE}.}
 
@@ -151,7 +151,7 @@ the function attempts a default sequence or single value.}
 \item{lambda_coef}{Numeric constant controlling the magnitude of the penalty for the outcome
 model. Defaults to 0.0001.}
 
-\item{nFolds}{Number of folds for cross-validation. Defaults to 3.}
+\item{n_folds}{Number of folds for cross-validation. Defaults to 3.}
 
 \item{batch_size}{Positive integer specifying the size of mini-batches in each gradient
 iteration. Defaults to 50.}
@@ -165,7 +165,7 @@ estimated probabilities or performance measures. Defaults to 0.90.}
 \item{conda_env_required}{Logical. If \code{TRUE}, errors if the environment \code{conda_env}
 cannot be found. Otherwise attempts to proceed gracefully.}
 
-\item{hypotheticalNInVarObj}{Optional numeric specifying an alternative \code{n} for certain
+\item{hypothetical_n}{Optional numeric specifying an alternative \code{n} for certain
 variance calculations (e.g., hypothesized population size). If \code{NULL}, uses the observed
 sample size.}
 }
@@ -222,7 +222,7 @@ in many typical workflows.
 }
 \note{
 Advanced arguments like \code{X_factorized}, \code{conda_env}, \code{optim_method}, or specifying
-\code{adaptiveMomentum} are only needed for specialized or larger-scale (GPU-based) computations.
+\code{adaptive_momentum} are only needed for specialized or larger-scale (GPU-based) computations.
 }
 \examples{
 \dontrun{
@@ -238,11 +238,11 @@ result_one_step <- strategize_onestep(
   Y = Y,
   X = X,
   p_list = p_list,
-  nSGD = 400,
-  useHajekInOptimization = TRUE,
+  n_sgd = 400,
+  use_hajek = TRUE,
   penalty_type = "LogMaxProb",
   lambda_seq = c(0.01, 0.1),
-  testFraction = 0.3
+  test_fraction = 0.3
 )
 
 # Inspect the estimated distribution over factor levels
