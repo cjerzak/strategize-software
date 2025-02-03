@@ -22,7 +22,10 @@ getQStar_single <- function(pi_star_ast, pi_star_dag,
                                    strenv$jnp$matmul( main_coef$transpose(), 
                                                       pi_star_ast) +
                                    strenv$jnp$matmul( inter_coef$transpose(), 
-                                                      pi_dp*pi_dpp ) )$squeeze(2L)
+                                                      pi_dp*pi_dpp ) )
+  if( length(Qhat$shape) == 3L ) {
+    Qhat <- Qhat$squeeze(2L)
+  }
   return( strenv$jnp$concatenate( list(Qhat, 
                                        Qhat, 
                                        Qhat), 0L)  ) # to keep sizes consistent with diff case 
