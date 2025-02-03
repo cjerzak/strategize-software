@@ -113,7 +113,7 @@ for(trainIndicator in trainIndicator_pool){
               }
               if(optim_type == "Other"){
                 LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
-                  init_value = (LEARNING_RATE_BASE<- .1)/2,
+                  init_value = (LEARNING_RATE_BASE <- .1)/2,
                   peak_value = LEARNING_RATE_BASE,
                   warmup_steps = nWarm <- 50L, decay_steps = max(nSGD - nWarm, 5L))
                 optax_optimizer <-  strenv$optax$chain(
