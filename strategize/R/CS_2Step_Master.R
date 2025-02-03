@@ -33,9 +33,9 @@
 #'   p_list = NULL,
 #'   slate_list = NULL,
 #'   K = 1,
-#'   nSGD = 100,
+#'   n_sgd = 100,
 #'   diff = FALSE,
-#'   MaxMin = FALSE,
+#'   adversarial = FALSE,
 #'   use_regularization = FALSE,
 #'   force_gaussian = FALSE,
 #'   a_init_sd = 0,
@@ -46,7 +46,7 @@
 #'   conf_level = 0.90,
 #'   nFolds_glm = 3L,
 #'   folds = NULL,
-#'   nMonte_MaxMin = 5L,
+#'   nMonte_adversarial = 5L,
 #'   nMonte_Qglm = 100L,
 #'   use_optax = FALSE,
 #'   optim_type = "gd"
@@ -79,7 +79,7 @@
 #' @param competing_group_variable_respondent,competing_group_variable_candidate,
 #'   competing_group_competition_variable_candidate Optional variables that mark competition group
 #'   membership of respondents or candidate profiles. Particularly relevant in adversarial settings
-#'   (\code{MaxMin = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
+#'   (\code{adversarial = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
 #'   respondent or candidate. Defaults to \code{NULL}.
 #'
 #' @param pair_id A factor or numeric vector identifying the forced-choice pair. If each row of
@@ -108,14 +108,14 @@
 #' @param K Integer specifying the number of latent clusters for multi-component outcome models. If
 #'   \code{K = 1}, no latent clustering is done. Defaults to \code{1}.
 #'
-#' @param nSGD Integer specifying the number of stochastic gradient descent (or gradient-based)
+#' @param n_sgd Integer specifying the number of stochastic gradient descent (or gradient-based)
 #'   iterations to use when learning the optimal distributions. Defaults to \code{100}.
 #'
 #' @param diff Logical indicating whether the outcome \code{Y} represents a first-difference or
 #'   difference-based metric. In forced-choice contexts, typically \code{diff = FALSE}. Defaults
 #'   to \code{FALSE}.
 #'
-#' @param MaxMin Logical controlling whether to enable the max-min adversarial scenario. When
+#' @param adversarial Logical controlling whether to enable the max-min adversarial scenario. When
 #'   \code{TRUE}, the function searches for a pair of distributions (one for each competing party
 #'   or group) such that each party’s distribution is optimal given the other party’s distribution.
 #'   Defaults to \code{FALSE}.
@@ -156,7 +156,7 @@
 #' @param folds An optional user-supplied partitioning or CV scheme, overriding \code{nFolds_glm}.
 #'   Defaults to \code{NULL}.
 #'
-#' @param nMonte_MaxMin Integer specifying the number of Monte Carlo samples used in adversarial
+#' @param nMonte_adversarial Integer specifying the number of Monte Carlo samples used in adversarial
 #'   or max-min steps, e.g., sampling from the opposing candidate’s distribution to approximate
 #'   expected payoffs. Defaults to \code{5L}.
 #'
@@ -180,11 +180,11 @@
 #' optimal distribution(s) over the factor levels.
 #'
 #' Structure depends on parameters:
-#' - If \code{MaxMin = TRUE} and \code{K = 1}, returns a pair of distributions (e.g., maximin solutions).
+#' - If \code{adversarial = TRUE} and \code{K = 1}, returns a pair of distributions (e.g., maximin solutions).
 #' - If \code{K > 1}, returns a list where each element corresponds to a cluster-optimal distribution.
 #' - Otherwise, returns a single distribution.}
 #'
-#' \item{\code{pi_star_se}}{Standard errors for entries in \code{pi_star_point}. Mirrors the structure of \code{pi_star_point} (e.g., a pair of SEs if \code{MaxMin = TRUE} and \code{K = 1}). Only present if \code{compute_se = TRUE}.}
+#' \item{\code{pi_star_se}}{Standard errors for entries in \code{pi_star_point}. Mirrors the structure of \code{pi_star_point} (e.g., a pair of SEs if \code{adversarial = TRUE} and \code{K = 1}). Only present if \code{compute_se = TRUE}.}
 #'
 #' \item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{pi_star_point}.}
 #'
@@ -207,7 +207,7 @@
 #' solutions to find the \emph{optimal stochastic intervention(s)}, i.e., new factor-level probability
 #' distributions that maximize an expected outcome (or solve the max-min adversarial problem).
 #'
-#' \strong{Adversarial or strategic design:} When \code{MaxMin = TRUE}, the function attempts to
+#' \strong{Adversarial or strategic design:} When \code{adversarial = TRUE}, the function attempts to
 #' solve a zero-sum game in which one agent (say, \dQuote{A}) chooses its distribution to maximize
 #' vote share, while the other (\dQuote{B}) simultaneously chooses its distribution to minimize
 #' \dQuote{A}’s vote share. In many settings, \code{competing_group_variable_respondent} and related
@@ -253,9 +253,9 @@
 #'       W = W,
 #'       lambda = 0.1,
 #'       p_list = p_list,
-#'       MaxMin = FALSE,         # No adversarial component
+#'       adversarial = FALSE,         # No adversarial component
 #'       penalty_type = "KL",         # Kullback-Leibler penalty
-#'       nSGD = 200              # # of gradient descent iterations
+#'       n_sgd = 200              # # of gradient descent iterations
 #'   )
 #'
 #'   # Inspect the learned distribution and performance
@@ -270,9 +270,9 @@
 #'       W = W,
 #'       lambda = 0.2,
 #'       p_list = p_list,
-#'       MaxMin = TRUE,         # Solve zero-sum game across two sets of respondents
+#'       adversarial = TRUE,         # Solve zero-sum game across two sets of respondents
 #'       competing_group_variable_respondent = partyID,
-#'       nSGD = 300
+#'       n_sgd = 300
 #'   )
 #'
 #'   # 'adv_result' now contains distributions for each party's candidate
@@ -301,8 +301,9 @@ strategize       <-          function(
                                             p_list = NULL,
                                             slate_list = NULL,
                                             K = 1,
-                                            nSGD = 100,
-                                            diff = F, MaxMin = F,
+                                            n_sgd = 100,
+                                            diff = F, 
+                                            adversarial = F,
                                             use_regularization = F,
                                             force_gaussian = F,
                                             a_init_sd = 0.001,
@@ -313,7 +314,7 @@ strategize       <-          function(
                                             conf_level = 0.90,
                                             nFolds_glm = 3L,
                                             folds = NULL, 
-                                            nMonte_MaxMin = 5L,
+                                            nMonte_adversarial = 5L,
                                             nMonte_Qglm = 100L,
                                             use_optax = F, 
                                             optim_type = "gd"){
@@ -364,7 +365,7 @@ strategize       <-          function(
     return( pi_ ) }
   }
 
-  nMonte_MaxMin <- ai( nMonte_MaxMin )
+  nMonte_adversarial <- ai( nMonte_adversarial )
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
@@ -395,7 +396,7 @@ strategize       <-          function(
     use_regularization_ORIG <- use_regularization
 
     RoundsPool <- nRounds <- GroupsPool <- 1
-    if(MaxMin){
+    if(adversarial){
       nRounds <- length( RoundsPool <- c(0,1) ) 
       GroupsPool <- sort(unique(competing_group_variable_candidate))
     }
@@ -404,8 +405,8 @@ strategize       <-          function(
     for(GroupCounter in 1:length(GroupsPool)){
       print(c(Round_, GroupCounter))
       use_regularization <- use_regularization_ORIG
-      if(MaxMin == F){ indi_ <- 1:length( Y )  }
-      if(MaxMin == T){
+      if(adversarial == F){ indi_ <- 1:length( Y )  }
+      if(adversarial == T){
         if(Round_ == 0){
           indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                       ( competing_group_competition_variable_candidate == "Same" &
@@ -442,7 +443,7 @@ strategize       <-          function(
       ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
             "REGRESSION_PARAMS_jax","regularization_adjust_hash","main_dat", "my_mean","EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
       round_text <- ifelse( Round_==0, yes="0", no="")
-      if( (doAst <- (GroupCounter == 1) | (MaxMin == F)) ){
+      if( (doAst <- (GroupCounter == 1) | (adversarial == F)) ){
           tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
           rm(tmp)
       }
@@ -523,7 +524,7 @@ strategize       <-          function(
 
   a_vec_init_mat <- as.matrix(unlist( lapply(p_list, function(zer){ c(compositions::alr( t((zer)))) }) ) )
   a_vec_init_ast <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = a_init_sd), strenv$dtj)
-  a_vec_init_dag <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = a_init_sd*MaxMin), strenv$dtj)
+  a_vec_init_dag <- strenv$jnp$array(a_vec_init_mat+rnorm(length(a_vec_init_mat),sd = a_init_sd*adversarial), strenv$dtj)
   
   LabelSmoothingFxn <- (function(x, epsilon = 0.01){
       return( (1 - epsilon) * x + epsilon / strenv$jnp$array( x$shape[[1]] )$astype(x$dtype) ) })
@@ -565,7 +566,7 @@ strategize       <-          function(
   getQStar_single <- compile_fxn( getQStar_single )
 
   # multiround material
-  for(DisaggreateQ in ifelse(MaxMin, yes = list(c(F,T)), no = list(F))[[1]]){
+  for(DisaggreateQ in ifelse(adversarial, yes = list(c(F,T)), no = list(F))[[1]]){
     # general specifications
     getQStar_diff_ <- paste(deparse(getQStar_diff_BASE),collapse="\n")
     getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", replace = sprintf("T == %s", DisaggreateQ))
@@ -661,7 +662,7 @@ strategize       <-          function(
   
   if(use_optax == T){
       LEARNING_RATE_MAX <- 0.01
-      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),decay_steps = max(c(21L,nSGD-100L)),
+      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,n_sgd)),decay_steps = max(c(21L,n_sgd-100L)),
                                                         init_value = LEARNING_RATE_MAX/100, peak_value = LEARNING_RATE_MAX, end_value =  LEARNING_RATE_MAX/100)
     
       # model partition + setup state
@@ -734,9 +735,9 @@ strategize       <-          function(
   }
 
   # define main Q function in different cases
-  if(!MaxMin & !diff){ QFXN <- getQStar_single }
-  if(!MaxMin & diff){ QFXN <- getQStar_diff_SingleGroup }
-  if(MaxMin & diff){ QFXN <- getQStar_diff_MultiGroup }
+  if(!adversarial & !diff){ QFXN <- getQStar_single }
+  if(!adversarial & diff){ QFXN <- getQStar_diff_SingleGroup }
+  if(adversarial & diff){ QFXN <- getQStar_diff_MultiGroup }
 
   if(use_gd){
     message("Optimization type: Gradient ascent")

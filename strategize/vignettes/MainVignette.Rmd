@@ -123,8 +123,8 @@ We now pass this fitted model to `strategize`, which will search for the factor-
 ```{r}
 library(strategize)
 
-MaxMinValue <- FALSE 
-#if MaxMinValue = FALSE, use 'cv_strategize' for standard cross-validation and single-agent optimization.
+AdversarialValue <- FALSE 
+#if AdversarialValue = FALSE, use 'cv_strategize' for standard cross-validation and single-agent optimization.
 
 res_avecase <- {cv_strategize(
   # Core inputs:
@@ -157,7 +157,7 @@ res_avecase <- {cv_strategize(
   K = 1L,
   force_gaussian = FALSE,
   nSGD = nSGD_TwoStep,
-  nMonte_MaxMin = nMonte_MaxMin,
+  nMonte_adversarial = nMonte_MaxMin,
   compute_se = TRUE,
   
   # If we only want a 'difference' structure on the first iteration, for example:
@@ -168,7 +168,7 @@ res_avecase <- {cv_strategize(
   nFolds_glm = nFolds_glm,
   
   # Toggling between single-agent vs. adversarial:
-  MaxMin = MaxMinValue,
+  adversarial = AdversarialValue,
   
   # Python environment management:
   conda_env = conda_env,
@@ -216,11 +216,11 @@ In a real analysis, you would interpret which factor levels are up-weighted vs. 
 `strategize` also supports an adversarial scenario in which two (or more) distributions are simultaneously optimized. This is relevant in two-party electoral contexts or any zero-sum environment.  In this case, each side tries to maximize or minimize the other's outcome. 
 
 ## Max-Min Example
-Suppose we want to model a scenario where `Party="A"` tries to maximize the outcome, while `Party="B"` tries to minimize it.  We can approximate the equilibrium by specifying `MaxMin=TRUE`:
+Suppose we want to model a scenario where `Party="A"` tries to maximize the outcome, while `Party="B"` tries to minimize it.  We can approximate the equilibrium by specifying `adversarial=TRUE`:
 
 ```{r}
-MaxMinValue <- TRUE
-# if MaxMinValue = TRUE, use 'strategize' for a max-min problem; 
+AdversarialValue <- TRUE
+# if AdversarialValue = TRUE, use 'strategize' for a max-min problem; 
 
 res_adversarial <- {strategize(
   # Core inputs:
@@ -253,7 +253,7 @@ res_adversarial <- {strategize(
   K = 1L,
   force_gaussian = FALSE,
   nSGD = nSGD_TwoStep,
-  nMonte_MaxMin = nMonte_MaxMin,
+  nMonte_adversarial nMonte_MaxMin,
   compute_se = TRUE,
   
   # If we only want a 'difference' structure on the first iteration, for example:
@@ -264,7 +264,7 @@ res_adversarial <- {strategize(
   nFolds_glm = nFolds_glm,
   
   # Toggling between single-agent vs. adversarial:
-  MaxMin = MaxMinValue,
+  adversarial AdversarialValue,
   
   # Python environment management:
   conda_env = conda_env,
@@ -318,7 +318,7 @@ res_clust <- {cv_strategize(
   K = 3L,
   force_gaussian = FALSE,
   nSGD = nSGD_TwoStep,
-  nMonte_MaxMin = nMonte_MaxMin,
+  nMonte_adversarial = nMonte_MaxMin,
   compute_se = TRUE,
 
   # Cross-validation folds (only used if calling cv_strategize):
@@ -326,7 +326,7 @@ res_clust <- {cv_strategize(
   nFolds_glm = nFolds_glm,
 
   # Toggling between single-agent vs. adversarial:
-  MaxMin = FALSE,
+  adversarial FALSE,
 
   # Python environment management:
   conda_env = conda_env,
