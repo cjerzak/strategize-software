@@ -24,11 +24,7 @@ Package functions can also be assessed like so: `strategize::function_name``.
 
 # License
 
-Creative Commons Attribution-Noncommercial-No Derivative Works 4.0, for academic use only.
-
-## Acknowledgments
-
-Thank you participants of the Statistics and Data Science Seminar at the University of Texas at Austin and the Center for Data and Methods Colloquium at the University of Konstanz for helpful comments on previous versions of this paper.
+GLP-3.
 
 ## References 
 
