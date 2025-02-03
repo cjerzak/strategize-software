@@ -1,6 +1,6 @@
 # `strategize`: An R package for discovering optimal treatment strategies in high-dimensional data
 
-[<img src="https://img.shields.io/badge/Demo-View%20Demo-blue" alt="Demo Button">](https://connorjerzak.com/wp-content/uploads/2025/01/MainVignette.html)
+[<img src="https://img.shields.io/badge/Demo-View%20Demo-blue" alt="Demo Button">](https://connorjerzak.com/wp-content/uploads/2025/02/MainVignette.html)
 
 
 Software for implementing optimal stochastic intervention analysis. Current implementation handles conjoint data from experiments. Future implementation may also include text, network, and/or time series, with observational data also potentially allowed as well. ABC.
