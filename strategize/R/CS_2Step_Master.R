@@ -719,7 +719,8 @@ strategize       <-          function(
                                                 EST_COEFFICIENTS_tf_ast = EST_COEFFICIENTS_tf_,
                                                 EST_INTERCEPT_tf_dag = EST_INTERCEPT_tf_,
                                                 EST_COEFFICIENTS_tf_dag = EST_COEFFICIENTS_tf_)
-      results_vec <- strenv$jnp$concatenate(list(q_star, pi_star_full),0L)
+      results_vec <- strenv$jnp$concatenate(list(q_star, 
+                                                 pi_star_full),0L)
       return( results_vec )
     }
     results_vec <- FxnForJacobian( list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) )
