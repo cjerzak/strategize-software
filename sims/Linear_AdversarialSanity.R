@@ -7,13 +7,13 @@
   
   # global parameters
   ConfirmSanity <- FALSE 
-  nObs <- 20000
+  nObs <- 40000
   lambda <- 0.1  # Regularization parameter for L2 penalty
   tol <- 1e-6
   
   neqr <- c()
   #p_RVoters <- 0.5; { # Proportion of Republican voters
-  for(p_RVoters in seq(0.1, 0.9, length.out = 10)){ 
+  for(p_RVoters in seq(0.1, 0.9, length.out = 7)){ 
     
     # Nash via grid search
     {
@@ -286,7 +286,7 @@
       # We can make a vector X_other, which for row i returns the gender of the *other* row
       # in the same pair, by matching on 'pair_id' and ignoring the same row.
       
-      X_other <- numeric(length = nrow(X))
+      other_competing_group_variable_candidate <- X_other <- numeric(length = nrow(X))
       for (p in unique(pair_id)) {
         rows_in_pair <- which(pair_id == p)
         # exactly two rows per pair, e.g. i and j
@@ -294,6 +294,8 @@
         j <- rows_in_pair[2]
         X_other[i] <- X$female[j]
         X_other[j] <- X$female[i]
+        other_competing_group_variable_candidate[i] <- competing_group_variable_candidate[j]
+        other_competing_group_variable_candidate[j] <- competing_group_variable_candidate[i]
       }
       
       Yobs <- rep(NA, times = length(competing_group_competition_variable_candidate))
@@ -525,11 +527,12 @@
         ############################################################################
         ## 1) Create subset indices for each logistic regression
         ############################################################################
-        
-        X_run_FULL <- cbind("Yobs" = Yobs, 
-                            X_run, 
-                            "other_female" = X_other, 
-                            "female_diff" = X_run - X_other)
+        X_run_FULL <- as.data.frame(cbind("Yobs" = Yobs, 
+                                          "female" = X_run, 
+                                          "other_female" = X_other, 
+                                          "female_diff" = c(unlist(X_run) - X_other), 
+                                          "competing_group_variable_candidate" = competing_group_variable_candidate,
+                                          "other_competing_group_variable_candidate" = other_competing_group_variable_candidate  ) )
         
         # Republican primary (R respondents picking the R candidate)
         rep_primary_idx <- which(
@@ -600,7 +603,8 @@
         ## (c) General election, R voters: Probability(R voter chooses R candidate),
         ##     ~ R candidate's gender (female) + opponent's gender (X_other)
         rep_general_fit <- glm(
-          Yobs ~ female + other_female,
+          Yobs ~ female + other_female + female*other_female,
+          #Yobs ~ female_diff,
           data   = X_run_FULL[rep_general_idx,],
           family = binomial
         )
@@ -608,95 +612,86 @@
         ## (d) General election, D voters: Probability(D voter chooses R candidate),
         ##     ~ R candidate's gender (female) + opponent's gender (X_other)
         dem_general_fit <- glm(
-          Yobs ~ female + other_female,
+          Yobs ~ female + other_female + female*other_female,
+          #Yobs ~ female_diff,
           data   = X_run_FULL[dem_general_idx,],
           family = binomial
         )
+        # View(X_run_FULL[dem_general_idx,])
+        # table(dem_general_fit$fitted.values)
         
         ############################################################################
         ## 3) Extract key predicted probabilities for each scenario
         ############################################################################
         
         # --- Primary: R voters picking R candidate if R=male/female
-        pr_m_RVoters_primary <- predict(rep_primary_fit,
-                                        newdata = data.frame(female = 0),
-                                        type = "response")
-        pr_f_RVoters_primary <- predict(rep_primary_fit,
-                                        newdata = data.frame(female = 1),
-                                        type = "response")
+        pr_m_RVoters_primary_l <- predict(rep_primary_fit,
+                                          newdata = data.frame(female = 0),
+                                          type = "response")
+        pr_f_RVoters_primary_l <- predict(rep_primary_fit,
+                                          newdata = data.frame(female = 1),
+                                          type = "response")
         
         # --- Primary: D voters picking D candidate if D=male/female
-        pd_m_DVoters_primary <- predict(dem_primary_fit,
-                                        newdata = data.frame(female = 0),
-                                        type = "response")
-        pd_f_DVoters_primary <- predict(dem_primary_fit,
-                                        newdata = data.frame(female = 1),
-                                        type = "response")
+        pd_m_DVoters_primary_l <- predict(dem_primary_fit,
+                                          newdata = data.frame(female = 0),
+                                          type = "response")
+        pd_f_DVoters_primary_l <- predict(dem_primary_fit,
+                                          newdata = data.frame(female = 1),
+                                          type = "response")
         
         # --- General: R voters picking R candidate (vs D) for each (R_female=0/1, D_female=0/1)
-        pr_mm_RVoters <- predict(rep_general_fit,
-                                 newdata = data.frame(female = 0, other_female = 0),
-                                 type = "response")
-        pr_mf_RVoters <- predict(rep_general_fit,
-                                 newdata = data.frame(female = 0, other_female = 1),
-                                 type = "response")
-        pr_fm_RVoters <- predict(rep_general_fit,
-                                 newdata = data.frame(female = 1, other_female = 0),
-                                 type = "response")
-        pr_ff_RVoters <- predict(rep_general_fit,
-                                 newdata = data.frame(female = 1, other_female = 1),
-                                 type = "response")
+        pr_mm_RVoters_l <- predict(rep_general_fit,
+                                   newdata = data.frame(female = 0, other_female = 0, female_diff = 0),
+                                   type = "response")
+        pr_mf_RVoters_l <- predict(rep_general_fit,
+                                   newdata = data.frame(female = 0, other_female = 1, female_diff = -1),
+                                   type = "response")
+        pr_fm_RVoters_l <- predict(rep_general_fit,
+                                   newdata = data.frame(female = 1, other_female = 0, female_diff = 1),
+                                   type = "response")
+        pr_ff_RVoters_l <- predict(rep_general_fit,
+                                   newdata = data.frame(female = 1, other_female = 1, female_diff = 0),
+                                   type = "response")
         
         # --- General: D voters picking R candidate (vs D) for each (R_female=0/1, D_female=0/1)
-        pr_mm_DVoters <- predict(dem_general_fit,
-                                 newdata = data.frame(female = 0, other_female = 0),
-                                 type = "response")
-        pr_mf_DVoters <- predict(dem_general_fit,
-                                 newdata = data.frame(female = 0, other_female = 1),
-                                 type = "response")
-        pr_fm_DVoters <- predict(dem_general_fit,
-                                 newdata = data.frame(female = 1, other_female = 0),
-                                 type = "response")
-        pr_ff_DVoters <- predict(dem_general_fit,
-                                 newdata = data.frame(female = 1, other_female = 1),
-                                 type = "response")
+        pr_mm_DVoters_l <- predict(dem_general_fit,
+                                   newdata = data.frame(female = 0, other_female = 0, female_diff = 0),
+                                   type = "response")
+        pr_mf_DVoters_l <- predict(dem_general_fit,
+                                   newdata = data.frame(female = 0, other_female = 1, female_diff = -1),
+                                   type = "response")
+        pr_fm_DVoters_l <- predict(dem_general_fit,
+                                   newdata = data.frame(female = 1, other_female = 0, female_diff = 1),
+                                   type = "response")
+        pr_ff_DVoters_l <- predict(dem_general_fit,
+                                   newdata = data.frame(female = 1, other_female = 1, female_diff = 0),
+                                   type = "response")
         
         
         ############################################################################
         ## 4) Define a new compute_vote_share_R function (logistic-based) and utilities
         ############################################################################
-        
         compute_vote_share_R_logit <- function(pi_R, pi_D) {
           # Weighted by fraction of R vs D voters
           #   and using the logistic predictions we just extracted above:
           
-          term_mm <- pi_R * pi_D * (
-            p_RVoters * pr_mm_RVoters * pr_m_RVoters_primary +
-              p_DVoters * pr_mm_DVoters * pd_m_DVoters_primary
-          )
-          term_mf <- pi_R * (1 - pi_D) * (
-            p_RVoters * pr_mf_RVoters * pr_m_RVoters_primary +
-              p_DVoters * pr_mf_DVoters * pd_f_DVoters_primary
-          )
-          term_fm <- (1 - pi_R) * pi_D * (
-            p_RVoters * pr_fm_RVoters * pr_f_RVoters_primary +
-              p_DVoters * pr_fm_DVoters * pd_m_DVoters_primary
-          )
-          term_ff <- (1 - pi_R) * (1 - pi_D) * (
-            p_RVoters * pr_ff_RVoters * pr_f_RVoters_primary +
-              p_DVoters * pr_ff_DVoters * pd_f_DVoters_primary
-          )
-          
-          term_mm + term_mf + term_fm + term_ff
+          term_mm <- pi_R * pi_D * (  p_RVoters * pr_mm_RVoters_l * pr_m_RVoters_primary_l +
+                                        p_DVoters * pr_mm_DVoters_l * pd_m_DVoters_primary_l )
+          term_mf <- pi_R * (1 - pi_D) * (p_RVoters * pr_mf_RVoters_l * pr_m_RVoters_primary_l +
+                                            p_DVoters * pr_mf_DVoters_l * pd_f_DVoters_primary_l )
+          term_fm <- (1 - pi_R) * pi_D * (p_RVoters * pr_fm_RVoters_l * pr_f_RVoters_primary_l +
+                                            p_DVoters * pr_fm_DVoters_l * pd_m_DVoters_primary_l )
+          term_ff <- (1 - pi_R) * (1 - pi_D) * (p_RVoters * pr_ff_RVoters_l * pr_f_RVoters_primary_l +
+                                                  p_DVoters * pr_ff_DVoters_l * pd_f_DVoters_primary_l )
+          return( term_mm + term_mf + term_fm + term_ff ) 
         }
         
         utility_R_logit <- function(pi_R, pi_D) {
           vote_share <- compute_vote_share_R_logit(pi_R, pi_D)
-          # L2 penalty just as before:
           vote_share - lambda * (
             (pi_R - 0.5)^2 + ((1 - pi_R) - 0.5)^2
-          )
-        }
+          ) }
         
         utility_D_logit <- function(pi_R, pi_D) {
           vote_share_D <- 1 - compute_vote_share_R_logit(pi_R, pi_D)
@@ -705,26 +700,37 @@
           )
         }
         
+        # test utility functions 
+        x_<-runif(1,0,1);y_<-runif(1,0,1)
+        x_ <- y_ <- 0.4
+        utility_D(x_,y_) / utility_D_logit(x_,y_)
+        utility_R(x_,y_) / utility_R_logit(x_,y_)
+        
         
         ############################################################################
         ## 5) Grid search for best responses and approximate Nash equilibrium
         ############################################################################
         
-        pi_R_seq2 <- seq(0, 1, by = 0.001)
-        pi_D_seq2 <- seq(0, 1, by = 0.001)
-        
+        pi_D_seq2 <- pi_R_seq2 <- seq(0, 1, by = 0.001)
         best_response_D_logit <- sapply(pi_R_seq2, function(r) {
           utilities_D <- sapply(pi_D_seq2, function(d) utility_D_logit(r, d))
+          #utilities_D <- sapply(pi_D_seq2, function(d) utility_D(r, d))
           pi_D_seq2[which.max(utilities_D)]
         })
-        
         best_response_R_logit <- sapply(pi_D_seq2, function(d) {
           utilities_R <- sapply(pi_R_seq2, function(r) utility_R_logit(r, d))
+          #utilities_R <- sapply(pi_R_seq2, function(r) utility_R(r, d)) # for sanity check 
           pi_R_seq2[which.max(utilities_R)]
         })
         
-        nash_equilibrium_logit <- matrix(FALSE, nrow = length(pi_R_seq2), ncol = length(pi_D_seq2))
+        # sanity plot 
+        plot(sapply(seq(0, 1, by = 0.01), function(r){sapply(seq(0, 1, by = 0.01), function(d) utility_D_logit(r, d)) }),
+             sapply(seq(0, 1, by = 0.01), function(r){sapply(seq(0, 1, by = 0.01), function(d) utility_D(r, d)) }))# sanity 
+        plot(sapply(seq(0, 1, by = 0.01), function(r){sapply(seq(0, 1, by = 0.01), function(d) utility_R_logit(r, d)) }),
+             sapply(seq(0, 1, by = 0.01), function(r){sapply(seq(0, 1, by = 0.01), function(d) utility_R(r, d)) }))# sanity 
         
+        nash_equilibrium_logit <- matrix(FALSE,  nrow = length(pi_R_seq2), 
+                                         ncol = length(pi_D_seq2))
         for (i in seq_along(pi_R_seq2)) {
           for (j in seq_along(pi_D_seq2)) {
             r_ <- pi_R_seq2[i]
@@ -740,13 +746,13 @@
         }
         
         eqs_logit <- which(nash_equilibrium_logit, arr.ind = TRUE)
-        
         if (nrow(eqs_logit) > 0) {
           cat("Nash Equilibria (logit-based) Found:\n")
           for (k in seq_len(nrow(eqs_logit))) {
             pi_R_grid_est_manual <- pi_R_seq2[eqs_logit[k, 1]]
             pi_D_grid_est_manual <- pi_D_seq2[eqs_logit[k, 2]]
             cat(sprintf("  pi_R: %.3f, pi_D: %.3f\n", pi_R_grid_est_manual, pi_D_grid_est_manual))
+            #cat(sprintf("  pi_R: %.3f, pi_D: %.3f\n", pi_R_grid, pi_D_grid))
           }
         } else {
           cat("No logit-based Nash equilibrium found in the grid.\n")
@@ -760,17 +766,14 @@
         ############################################################################
         
         # Convert best_response_D_logit (etc.) from vectors to "lookup" functions
-        # (closest grid point approach).
-        
+        # (closest grid point approach)
         best_response_D_grid_logit <- function(r) {
           i <- which.min(abs(pi_R_seq2 - r))
-          best_response_D_logit[i]
-        }
+          best_response_D_logit[i] }
         
         best_response_R_grid_logit <- function(d) {
           j <- which.min(abs(pi_D_seq2 - d))
-          best_response_R_logit[j]
-        }
+          best_response_R_logit[j] }
         
         max_iter_logit <- 500
         pi_R_current_logit <- 0.5
@@ -843,7 +846,7 @@
         use_regularization= FALSE,
         use_optax        = TRUE, 
         learning_rate_max = 0.001, 
-        nSGD             = 1000L,
+        nSGD             = 500L,
         nMonte_adversarial = 50L, 
         nMonte_Qglm      = 50L, 
         temperature      = 0.3, 
@@ -935,9 +938,9 @@
                     "pi_D_est_iterative_manual" = pi_D_iterative_logit_manual,
                     "pi_R_est_grid_manual" = pi_R_grid_est_manual,
                     "pi_D_est_grid_manual" = pi_D_grid_est_manual,
+                    
                     "p_RVoters" = p_RVoters
                   ) )
-    neqr
   }
   
   # analyze neqr
@@ -950,10 +953,27 @@
   # confirm grid vs. est + iterative
   plot( neqr$pi_R_grid,
         neqr$pi_R_est_iterative ); abline(a=0,b=1)
+  plot( neqr$pi_D_grid,
+        neqr$pi_D_est_iterative ); abline(a=0,b=1)
+  
+  # confirm grid vs. est grid 
   plot( neqr$pi_R_grid,
         neqr$pi_R_est_grid_manual ); abline(a=0,b=1)
+  plot( neqr$pi_D_grid,
+        neqr$pi_D_est_grid_manual ); abline(a=0,b=1)
+  plot( neqr$pi_R_grid - neqr$pi_R_est_grid_manual, col ="red", ylim = c(-0.1,0.1) ); abline(h=0)
+  points( neqr$pi_D_grid - neqr$pi_D_est_grid_manual, col = "blue" )
+  
   plot( neqr$pi_R_grid,
         neqr$pi_R_est_iterative_manual ); abline(a=0,b=1)
+  plot( neqr$pi_D_grid,
+        neqr$pi_D_est_iterative_manual ); abline(a=0,b=1)
+  plot( neqr$pi_R_grid - neqr$pi_R_est_iterative_manual, col ="red", ylim = c(-0.1,0.1) ); abline(h=0)
+  points( neqr$pi_D_grid - neqr$pi_D_est_iterative_manual, col = "blue" )
+  
+  plot(neqr$pi_R_est_iterative_manual, neqr$pi_R_est_grid_manual);abline(a=0,b=1)
+  plot(neqr$pi_D_est_iterative_manual, neqr$pi_D_est_grid_manual);abline(a=0,b=1)
+  
   
 }
 
