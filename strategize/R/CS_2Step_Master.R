@@ -316,6 +316,8 @@ strategize       <-          function(
                                             folds = NULL, 
                                             nMonte_adversarial = 5L,
                                             nMonte_Qglm = 100L,
+                                            learning_rate_max = 0.001, 
+                                            temperature = 0.5, 
                                             use_optax = F, 
                                             optim_type = "gd"){
   # [1.] ast then dag 
@@ -323,14 +325,14 @@ strategize       <-          function(
   #   dag is 2, based on sort(unique(competing_group_variable_candidate))[2]
   # [2.] when simplex constrained with holdout, LAST entry is held out 
   
-  message("-------------")
-  message("strategize() call has begun...")
+  message("-------------\nstrategize() call has begun...")
   
   # define evaluation environment 
   evaluation_environment <- environment()
   
   # add colnames if not available 
   if(!is.null(X)){ if(is.null(colnames(X))){ colnames(X) <- paste0("V",1:ncol(X)) } }
+  if(ncol(W) < 2){ use_regularization <- FALSE }
 
   # load in packages
   if(!"jnp" %in% ls(envir = strenv)) {
@@ -340,7 +342,7 @@ strategize       <-          function(
   
   # define compile fxn
   compile_fxn <- function(x){strenv$jax$jit(x)}
-  #compile_fxn <- function(x){x} ; message("TURNING COMPILE OFF FOR DEBUGGIN!"); Sys.sleep(5L)
+  #compile_fxn <- function(x){x} ; message("!!!!\nTURNING COMPILE OFF FOR SANITY ESTABLISHMENT!\n!!!!");
 
   # setup pretty pi functions
   {
@@ -370,12 +372,12 @@ strategize       <-          function(
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
+  MNtemp <- strenv$jnp$array( temperature ) 
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
   if(!force_gaussian){ 
     if(mean(unique(Y) %in% c(0,1)) == 1){ 
       glm_family = "binomial"; glm_outcome_transform <- strenv$jax$nn$sigmoid
     } }
-  MNtemp <- strenv$jnp$array( .5 ) 
 
   # ensure naming conventions are correct (i.e. in alignment with p_list if available)
   if(is.null(p_list) | is.null(names(p_list[[1]]))){
@@ -424,7 +426,7 @@ strategize       <-          function(
       }
 
       # subset data
-      W_ <- W[indi_,]; Y_ <- Y[indi_];
+      W_ <- as.matrix(W[indi_,]); Y_ <- Y[indi_];
       varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
       pair_id_ <- pair_id[ indi_ ]
 
@@ -434,20 +436,30 @@ strategize       <-          function(
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
       
       # define combined parameter vector & fxn for reextracting intercept & coefficient 
-      REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf, EST_COEFFICIENTS_tf), 0L)
+      REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf, 
+                                                           EST_COEFFICIENTS_tf), 0L)
       gather_fxn <- compile_fxn(function(x){
-        return( list(strenv$jnp$expand_dims(strenv$jnp$take(x,0L),0L),  # INTERCEPT_ 
-                     strenv$jnp$take(x, strenv$jnp$array( 1L:(strenv$jnp$shape(x)[[1]]-1L) ) ))) } ) # COEFFICIENTS 
+        INTERCEPT_ <- strenv$jnp$expand_dims(strenv$jnp$take(x,0L),0L)
+        COEFFS_ <- strenv$jnp$take(x, strenv$jnp$array( 1L:(strenv$jnp$shape(x)[[1]]-1L) ) )
+        if(length(COEFFS_$shape)==0){
+          COEFFS_ <- strenv$jnp$expand_dims(strenv$jnp$expand_dims(COEFFS_, 0L), 0L) 
+        }
+        return( list(INTERCEPT_, COEFFS_)) } ) 
 
       # rename as appropriate
-      ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info","interaction_info_PreRegularization",
-            "REGRESSION_PARAMS_jax","regularization_adjust_hash","main_dat", "my_mean","EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
+      ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info",
+                      "interaction_info_PreRegularization", "REGRESSION_PARAMS_jax",
+                      "regularization_adjust_hash","main_dat", "my_mean",
+                      "EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
       round_text <- ifelse( Round_==0, yes="0", no="")
-      if( (doAst <- (GroupCounter == 1) | (adversarial == F)) ){
+      #if( (doAst <- (GroupCounter == 1) | (adversarial == F)) ){
+      if( (doAst <- (GroupCounter == 1)  ) ){
+          # do ast
           tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
           rm(tmp)
       }
       if( !doAst ){
+          # do dag
           tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_dag%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
           rm( tmp )
        }
@@ -455,7 +467,8 @@ strategize       <-          function(
     }
   }
 
-  for(suffix in c("ast0", "dag0", "dag")) {
+  #for(suffix in c("ast0", "dag0", "dag")) {
+  for(suffix in c("ast0", "dag0", "ast", "dag")) {
     if(!paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp") %in% ls()){
       assign(paste0("EST_INTERCEPT_tf_", suffix, "_jnp"), EST_INTERCEPT_tf_ast_jnp)
       assign(paste0("EST_COEFFICIENTS_tf_", suffix, "_jnp"), EST_COEFFICIENTS_tf_ast_jnp)
@@ -493,7 +506,9 @@ strategize       <-          function(
   p_vec_sum_prime_full <- unlist(tapply(1:length(p_vec_full),d_locator_full,function(er){
     sapply(er,function(re){sum(p_vec_full[er[!er %in% re]])}) }))
   main_indices_i0 <- strenv$jnp$array((ai(1:n_main_params-1L)),strenv$jnp$int32)
-  inter_indices_i0 <- strenv$jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$size)-1L)),strenv$jnp$int32)
+  inter_indices_i0 <- NULL; if( n_main_params != EST_COEFFICIENTS_tf$size){ 
+    inter_indices_i0 <- strenv$jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$size)-1L)),strenv$jnp$int32)
+  }
   if(ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
   if(ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
 
@@ -661,20 +676,24 @@ strategize       <-          function(
   }
   
   if(use_optax == T){
-      LEARNING_RATE_MAX <- 0.01
-      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(warmup_steps =  min(c(20L,nSGD)),decay_steps = max(c(21L,nSGD-100L)),
-                                                        init_value = LEARNING_RATE_MAX/100, peak_value = LEARNING_RATE_MAX, end_value =  LEARNING_RATE_MAX/100)
+      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
+                                            warmup_steps =  min(c(20L,nSGD)),
+                                            decay_steps = max(c(21L,nSGD-100L)),
+                                            init_value = learning_rate_max/100, 
+                                            peak_value = learning_rate_max, 
+                                            end_value =  learning_rate_max/100)
     
-      # model partition + setup state
-      optax_optimizer <-  strenv$optax$chain(
-         strenv$optax$scale(1),strenv$optax$scale_by_rss(initial_accumulator_value = 0.001)  
-        #strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
-        )
       
       for(sfx in c("ast", "dag")){
-        assign(paste0("opt_state_", sfx), optax_optimizer$init(strenv$jnp$array(get(paste0("a_vec_init_", sfx)))))
+        # model partition + setup state
+        assign(name_optimizer <- paste0("optax_optimizer_", sfx), 
+               strenv$optax$chain(
+                 #strenv$optax$scale(-1),strenv$optax$scale_by_rss(initial_accumulator_value = 0.01)  
+                 strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
+               ))
+        assign(paste0("opt_state_", sfx), eval(parse(text=name_optimizer))$init(strenv$jnp$array(get(paste0("a_vec_init_", sfx)))))
         assign(paste0("jit_apply_updates_", sfx), compile_fxn(strenv$optax$apply_updates))
-        assign(paste0("jit_update_", sfx), compile_fxn(optax_optimizer$update))
+        assign(paste0("jit_update_", sfx), compile_fxn( eval(parse(text=name_optimizer))$update))
       }
   }
 
@@ -712,7 +731,8 @@ strategize       <-          function(
     FxnForJacobian <- function(  INPUT_  ){
       EST_INTERCEPT_tf_ <- INPUT_[[1]]
       EST_COEFFICIENTS_tf_  <- INPUT_[[2]]
-      pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- getPiStar_exact(EST_COEFFICIENTS_tf_))
+      pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- 
+                                                           getPiStar_exact(EST_COEFFICIENTS_tf_))
       q_star_exact <- q_star <- getQStar_single(pi_star_ast = pi_star_reduced,
                                                 pi_star_dag = pi_star_reduced,
                                                 EST_INTERCEPT_tf_ast = EST_INTERCEPT_tf_,
@@ -724,15 +744,18 @@ strategize       <-          function(
       return( results_vec )
     }
     results_vec <- FxnForJacobian( list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) )
-    jacobian_mat <- strenv$jax$jacobian(FxnForJacobian, 0L)(  list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) ) 
+    jacobian_mat <- strenv$jax$jacobian(FxnForJacobian, 0L)(  list(EST_INTERCEPT_tf,
+                                                                   EST_COEFFICIENTS_tf) ) 
 
     # reshape jacobian and process results
     jacobian_mat_exact <- jacobian_mat <- cbind(
-                          strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[1]],1L),1L))),
-                          strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[2]],1L),2L))) )
+        strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[1]],1L),1L))),
+        strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[2]],1L),2L))) )
     vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast_jnp
+    browser()
     q_star_exact <- q_star <- strenv$np$array( strenv$jnp$take(results_vec, 0L) )
-    pi_star_full <- strenv$np$array( strenv$jnp$take(results_vec, strenv$jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
+    pi_star_full <- strenv$np$array( strenv$jnp$take(results_vec,
+                                                     strenv$jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
   }
 
   # define main Q function in different cases
@@ -754,11 +777,10 @@ strategize       <-          function(
 
     # setup gd functions dparams
     environment(FullGetQStar_) <- evaluation_environment; FullGetQStar_ <- compile_fxn(FullGetQStar_)
-    dQ_da_ast <- compile_fxn(strenv$jax$grad(FullGetQStar_, argnums = 0L))
-    dQ_da_dag <- compile_fxn(strenv$jax$grad(FullGetQStar_, argnums = 1L))
+    dQ_da_ast <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 0L))
+    dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L))
     
     # perform GD 
-    # plot(strenv$np$array(REGRESSION_PARAMS_jax_ast_jnp), strenv$np$array(REGRESSION_PARAMS_jax_dag_jnp))
     q_with_pi_star_full <- getPiStar_gd(
                              REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
                              REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag_jnp,
@@ -782,22 +804,26 @@ strategize       <-          function(
     QFXN <- q_with_pi_star_full[[2]][[3]]
     getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
     q_with_pi_star_full <- strenv$jnp$array(q_with_pi_star_full[[1]], strenv$dtj)
-
+    
     if(!use_optax){
-      inv_learning_rate_ast_vec <- unlist(  lapply(inv_learning_rate_ast_vec,
+      inv_learning_rate_ast_vec <- unlist(  lapply(strenv$inv_learning_rate_ast_vec,
                                                    function(zer){ strenv$np$array(zer) }))
-      #try(plot( 1/inv_learning_rate_ast_vec , main = "Inv LR (ast)",log="y"),T)
     }
 
-    grad_mag_dag_vec <- try(unlist(  lapply(grad_mag_dag_vec,function(zer){
+    grad_mag_dag_vec <- try(unlist(  lapply(strenv$grad_mag_dag_vec,function(zer){
       strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) )) }) ),T)
     try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
     try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     
-    grad_mag_ast_vec <- unlist(  lapply(grad_mag_ast_vec,function(zer){
+    grad_mag_ast_vec <- unlist(  lapply(strenv$grad_mag_ast_vec,function(zer){
       strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) ))  }) )
     try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y"),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
+    
+    loss_ast_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_ast_vec,0L))
+    loss_dag_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_dag_vec,0L))
+    try(plot( loss_ast_vec, main = "Value (ast)", log ="y"),T)
+    try(plot( loss_dag_vec, main = "Value (dag)", log ="y"),T)
     
     pi_star_red <- getPiStar_gd(
                         REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
@@ -818,8 +844,8 @@ strategize       <-          function(
                         gd_full_simplex = F, 
                         quiet = F)
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
-    pi_star_red_dag <- strenv$jnp$array(as.matrix(  pi_star_red[-c(1:(length(pi_star_red)/2))]))
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
+    pi_star_red_dag <- strenv$jnp$array(as.matrix(  pi_star_red[-c(1:(length(pi_star_red)/2))]))
 
     q_star_gd <- q_star <- strenv$np$array(  q_with_pi_star_full )[1]
     # sanity check: 
@@ -943,9 +969,11 @@ strategize       <-          function(
     pi_star_dag_vec_jnp <- pi_star_vec_jnp <- pi_star_red_dag <- pi_star_red_ast <- pi_star_numeric
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full
   }
+  
+  names(pi_star_list) <- names(pi_star_list) <- GroupsPool
+  #names(lowerList) <- names(upperList) <- GroupsPool
 
-  message("strategize() call has finished...")
-  message("-------------")
+  message("strategize() call has finished...\n-------------")
   return( list(   "pi_star_point" = pi_star_list,
                   "pi_star_se" = pi_star_se_list,
                   "Q_point_mEst" = q_star,
@@ -986,3 +1014,4 @@ strategize       <-          function(
                   "estimation_type" = "TwoStep",
                   "Y_model" = my_model ) )
 }
+

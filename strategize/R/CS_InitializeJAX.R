@@ -16,8 +16,8 @@ initialize_jax <- function(conda_env = "strategize",
   strenv$jaxFloatType <- strenv$jnp$float32
   
   # setup numerical precision for delta method
-  #strenv$dtj <- jnp$float64; strenv$jax$config$update("jax_enable_x64", T) # use float64
-  strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", F) # use float32
+  strenv$dtj <- strenv$jnp$float64; strenv$jax$config$update("jax_enable_x64", T) # use float64
+  #strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", F) # use float32
 }
 strenv <- new.env( parent = emptyenv() )
 

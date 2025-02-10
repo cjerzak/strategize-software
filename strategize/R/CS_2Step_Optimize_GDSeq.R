@@ -24,6 +24,7 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
   COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
 
+
   INTERCEPT_dag0_ <- INTERCEPT_ast0_ <- INTERCEPT_dag_ <- INTERCEPT_ast_
   COEFFICIENTS_dag0_ <- COEFFICIENTS_ast0_ <- COEFFICIENTS_dag_ <- COEFFICIENTS_ast_
   if( adversarial ){
@@ -42,10 +43,11 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   }
 
   # gradient descent iterations
-  grad_mag_ast_vec <<- grad_mag_dag_vec <<- rep(NA, times = nSGD)
-  inv_learning_rate_ast_vec <<- inv_learning_rate_dag_vec <<- rep(NA, times = nSGD)
+  strenv$grad_mag_ast_vec <- strenv$grad_mag_dag_vec <- rep(NA, times = nSGD)
+  strenv$loss_ast_vec <- strenv$loss_dag_vec <- rep(NA, times = nSGD)
+  strenv$inv_learning_rate_ast_vec <- strenv$inv_learning_rate_dag_vec <- rep(NA, times = nSGD)
   goOn <- F; i<-0
-  INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.01)
+  INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
   while(goOn == F){
     if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
       message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
@@ -53,7 +55,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
     # da_dag updates (min step)
     if( i %% 1 == 0 & adversarial ){
+      
       # dQ_da_dag built off FullGetQStar_
+      seed_in_loop_at_i_dag <- BASE_SEED + strenv$jnp$array(ai(i))
+      #seed_in_loop_at_i_dag <- strenv$jnp$array(1L)
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                 INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -62,8 +67,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 P_VEC_FULL_ast, P_VEC_FULL_dag,
                                 SLATE_VEC_ast, SLATE_VEC_dag,
                                 LAMBDA,
-                                strenv$jnp$array(-1.),
-                                strenv$jnp$add(BASE_SEED,strenv$jnp$array(ai(i)))  )
+                                Q_SIGN_ <- strenv$jnp$array(-1.),
+                                seed_in_loop_at_i_dag)
+      strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
+      
       if(i == 1){
         inv_learning_rate_da_dag <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 
                                                        strenv$jnp$multiply(10,  
@@ -72,7 +79,8 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
       if(!use_optax){
         inv_learning_rate_da_dag <-  strenv$jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
-        a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, grad_i = grad_i_dag,
+        a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, 
+                                        grad_i = grad_i_dag,
                                         inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_dag))
       }
       if(use_optax){
@@ -80,16 +88,17 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                      state = opt_state_dag, 
                                                      params = a_i_dag)
         opt_state_dag <- updates_and_opt_state_dag[[2]]
-        a_i_dag <- jit_apply_updates_dag(params = grad_i_dag, 
+        a_i_dag <- jit_apply_updates_dag(params = a_i_dag,  
                                          updates = updates_and_opt_state_dag[[1]])
       }
 
-      grad_mag_dag_vec[i] <<- list(strenv$jnp$linalg$norm( grad_i_dag ))
-      if(!use_optax){ inv_learning_rate_dag_vec[i] <<- list( inv_learning_rate_da_dag ) }
+      strenv$grad_mag_dag_vec[i] <- list(strenv$jnp$linalg$norm( grad_i_dag ))
+      if(!use_optax){ strenv$inv_learning_rate_dag_vec[i] <- list( inv_learning_rate_da_dag ) }
     }
 
     # da updates (max step)
     if( i %% 1 == 0 | (!adversarial) ){
+      seed_in_loop_at_i_dag <- 200L+ BASE_SEED+strenv$jnp$array(ai(nSGD+i+2) )
       grad_i_ast <- dQ_da_ast( a_i_ast, a_i_dag,
                                INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -98,10 +107,10 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, 
-                               strenv$jnp$array(1.),
-                               strenv$jnp$add(strenv$jnp$array(2L),
-                                              strenv$jnp$add(BASE_SEED,
-                                                             strenv$jnp$array(ai(nSGD+i +2) ) ) ) )
+                               Q_SIGN_ <- strenv$jnp$array(1.),
+                               seed_in_loop_at_i_dag  )
+      strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
+      
       if(i==1){ inv_learning_rate_da_ast <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm(grad_i_ast)))  }
       if(!use_optax){
         inv_learning_rate_da_ast <-  strenv$jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
@@ -115,12 +124,12 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                      state = opt_state_ast, 
                                                      params = a_i_ast)
         opt_state_ast <- updates_and_opt_state_ast[[2]]
-        a_i_ast <- jit_apply_updates_ast(params = grad_i_ast, 
+        a_i_ast <- jit_apply_updates_ast(params = a_i_ast, 
                                          updates = updates_and_opt_state_ast[[1]])
       }
 
-      grad_mag_ast_vec[i] <<- list( strenv$jnp$linalg$norm( grad_i_ast ) )
-      if(!use_optax){ inv_learning_rate_ast_vec[i] <<- list( inv_learning_rate_da_ast ) }
+      strenv$grad_mag_ast_vec[i] <- list( strenv$jnp$linalg$norm( grad_i_ast ) )
+      if(!use_optax){ strenv$inv_learning_rate_ast_vec[i] <- list( inv_learning_rate_da_ast ) }
     }
     if(i >= nSGD){goOn <- T}
   }
@@ -134,11 +143,13 @@ getPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
       pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
     }
-    if(glm_family!="gaussian"){ 
+    if(glm_family != "gaussian"){ 
       pi_star_ast_f_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_ast_, MNtemp, s_)},
-                                in_axes = list(0L))(strenv$jax$random$split( strenv$jax$random$PRNGKey( 3L + jax_seed ), nMonte_Qglm) )
+                                in_axes = list(0L))(strenv$jax$random$split( strenv$jax$random$PRNGKey( 30L + jax_seed ), 
+                                                                             nMonte_Qglm) )
       pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_dag_, MNtemp, s_)}, 
-                               in_axes = list(0L))( strenv$jax$random$split( strenv$jax$random$PRNGKey( 4L + jax_seed ), nMonte_Qglm) )
+                               in_axes = list(0L))( strenv$jax$random$split( strenv$jax$random$PRNGKey( 400L + jax_seed ), 
+                                                                             nMonte_Qglm) )
     }
 
     q_star_f <- Vectorized_QMonteIter(pi_star_ast_f_all,  pi_star_dag_f_all,

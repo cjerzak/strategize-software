@@ -198,6 +198,7 @@ cv_strategize       <-          function(
                                             use_regularization = F,
                                             force_gaussian = F,
                                             a_init_sd = 0.001,
+                                            learning_rate_max = 0.001, 
                                             penalty_type = "KL",
                                             compute_se = T,
                                             conda_env = NULL,

@@ -13,14 +13,14 @@ InitializeQMonteFxns <- function(){
                          LAMBDA_,
                          Q_SIGN,
                          SEED_IN_LOOP){
-    GeneralVoteShareResults_AstReferenced <- getQStar_diff_MultiGroup(TSAMP_ast, #pi_star_ast
+    GVShareResults_AstReferenced <- getQStar_diff_MultiGroup(TSAMP_ast, #pi_star_ast
                                                   TSAMP_dag, # pi_star_dag
                                                   INTERCEPT_ast_, # EST_INTERCEPT_tf_ast
                                                   COEFFICIENTS_ast_, # EST_COEFFICIENTS_tf_ast
                                                   INTERCEPT_dag_, # EST_INTERCEPT_tf_dag
                                                   COEFFICIENTS_dag_) #EST_COEFFICIENTS_tf_dag
-    GeneralVoteShareAstAmongAst <- strenv$jnp$take(GeneralVoteShareResults_AstReferenced,1L)
-    GeneralVoteShareAstAmongDag <- strenv$jnp$take(GeneralVoteShareResults_AstReferenced,2L)
+    GVShareAstAmongAst <- strenv$jnp$take(GVShareResults_AstReferenced,1L)
+    GVShareAstAmongDag <- strenv$jnp$take(GVShareResults_AstReferenced,2L)
   
     # primary stage analysis
     {
@@ -40,28 +40,34 @@ InitializeQMonteFxns <- function(){
         EST_INTERCEPT_tf_dag = INTERCEPT_dag0_,
         EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag0_),0L)
   
-      lax_cond_indicator_AstWinsPrimary <- strenv$jax$lax$cond(
+      Indicator_AstWinsPrimary <- strenv$jax$lax$cond(
         pred = strenv$jnp$greater(PrimaryVoteShareAstAmongAst,strenv$jnp$array(0.5)),
         true_fun = function(){ strenv$jnp$array(1.) },
         false_fun = function(){ strenv$jnp$array(0.)} )
-      lax_cond_indicator_DagWinsPrimary <- strenv$jax$lax$cond(
+      Indicator_DagWinsPrimary <- strenv$jax$lax$cond(
         pred = strenv$jnp$greater(PrimaryVoteShareDagAmongDag,strenv$jnp$array(0.5)),
         true_fun = function(){ strenv$jnp$array(1.) },
         false_fun = function(){ strenv$jnp$array(0.)} )
     }
   
     # combine all information together
-    return(list( list(GeneralVoteShareAstAmongAst, lax_cond_indicator_AstWinsPrimary, PrimaryVoteShareAstAmongAst),
-                 list(GeneralVoteShareAstAmongDag, lax_cond_indicator_DagWinsPrimary, PrimaryVoteShareDagAmongDag)) ) 
+    return(list( "AmongAst"=list("GVShareAstAmongAst"=GVShareAstAmongAst, 
+                                  "Indicator_AstWinsPrimary"=Indicator_AstWinsPrimary, 
+                                  "PrimaryVoteShareAstAmongAst"=PrimaryVoteShareAstAmongAst),
+                 "AmongDag"=list("GVShareAstAmongDag"=GVShareAstAmongDag, 
+                                  "Indicator_DagWinsPrimary"=Indicator_DagWinsPrimary, 
+                                  "PrimaryVoteShareDagAmongDag"=PrimaryVoteShareDagAmongDag)) ) 
   })), 
   in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,",
                       paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
 
-  Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (QMonteIter <- compile_fxn( function(pi_star_ast_f, pi_star_dag_f,
-                                  INTERCEPT_ast_,
-                                  COEFFICIENTS_ast_,
-                                  INTERCEPT_dag_,
-                                  COEFFICIENTS_dag_){
+  Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (QMonteIter <- compile_fxn( 
+                          function(pi_star_ast_f, 
+                                   pi_star_dag_f,
+                                   INTERCEPT_ast_,
+                                   COEFFICIENTS_ast_,
+                                   INTERCEPT_dag_,
+                                   COEFFICIENTS_dag_){
     # note: when diff == F, dag is ignored 
     q_star_ <- QFXN(pi_star_ast_f, 
                     pi_star_dag_f, 
