@@ -8,9 +8,9 @@ generate_ModelOutcome <- function(){
       main_info <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
         list(data.frame("d" = d_, 
                         "l" = 1:max(1,factor_levels[d_] - 
-                                        ifelse(nrp == 1,
-                                               yes = 1,
-                                               no = holdout_indicator) )))}))
+                                      ifelse(nrp == 1,
+                                             yes = 1,
+                                             no  = holdout_indicator) )))}))
       heldout_levels_list <- lapply(factor_levels,function(xer){xer})
       main_info <- cbind(main_info,"d_index"=1:nrow(main_info))
       if(nrp == 1){ a_structure <- main_info }
@@ -21,42 +21,47 @@ generate_ModelOutcome <- function(){
       a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
     }
 
-
     # interaction info
     main_info_inter <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
-      list(data.frame("d" = d_, "l" = 1:max(1,factor_levels[d_] - holdout_indicator )))}))
+      list(data.frame("d" = d_, 
+                      "l" = 1:max(1,factor_levels[d_] - holdout_indicator )))}))
     main_info_all <- main_info_inter <- cbind(main_info_inter,"d_full_index"=1:nrow(main_info_inter))
 
-    interaction_helper <- expand.grid(1:nrow(main_info_inter),1:nrow(main_info_inter))
-    interaction_helper <- interaction_helper[which(main_info_inter[interaction_helper[,1],1] !=
-                                                     main_info_inter[interaction_helper[,2],1]),]
-    interaction_helper <- t(   apply(interaction_helper,1,sort) )
-    interaction_helper <- interaction_helper[!duplicated(apply(interaction_helper,1,
-                                                 function(zer){paste(zer,collapse="_")})),]
-    interaction_info <- do.call(rbind, sapply(1:nrow(interaction_helper),function(zer){
-      interaction_ <- unlist( c( interaction_helper[zer,] ) )
-      l_lp_ <- data.frame("d" = (comp1 <- main_info_inter[interaction_[[1]],])$d,
-                          "l" = comp1$l,
-                          "dl_index" = interaction_[[1]],
-                          "dp" = (comp2 <- main_info_inter[interaction_[[2]],])$d,
-                          "lp" = comp2$l,
-                          "dplp_index" = interaction_[[2]],
-                          "inter_index" = zer)
-      return( list(l_lp_) )
-    }))
-    
-    # pre-processing step if seeking to incorporate sparsity
-    main_info$d_adj <- main_info$d
-    interaction_info$d_adj <- interaction_info$d
-    interaction_info$dp_adj <- interaction_info$dp
+    interaction_info <- data.frame(); if(nrow(main_info_inter) > 1){
+      interaction_helper <- expand.grid(1:nrow(main_info_inter),1:nrow(main_info_inter))
+      interaction_helper <- interaction_helper[which(main_info_inter[interaction_helper[,1],1] !=
+                                                       main_info_inter[interaction_helper[,2],1]),]
+      interaction_helper <- t(   apply(interaction_helper,1,sort) )
+      interaction_helper <- interaction_helper[!duplicated(apply(interaction_helper,1,
+                                                   function(zer){paste(zer,collapse="_")})),]
+      interaction_info <- do.call(rbind, sapply(1:nrow(interaction_helper),function(zer){
+        interaction_ <- unlist( c( interaction_helper[zer,] ) )
+        l_lp_ <- data.frame("d" = (comp1 <- main_info_inter[interaction_[[1]],])$d,
+                            "l" = comp1$l,
+                            "dl_index" = interaction_[[1]],
+                            "dp" = (comp2 <- main_info_inter[interaction_[[2]],])$d,
+                            "lp" = comp2$l,
+                            "dplp_index" = interaction_[[2]],
+                            "inter_index" = zer)
+        return( list(l_lp_) )
+      }))
+      
+      # pre-processing step if seeking to incorporate sparsity
+      main_info$d_adj <- main_info$d
+      interaction_info$d_adj <- interaction_info$d
+      interaction_info$dp_adj <- interaction_info$dp
+    }
+  }
 
-    # regularization entry
-    UsedRegularization <- F
-    ok_ <- F;ok_counter <- 0; while(ok_ == F){
+  # regularization 
+  {
+  UsedRegularization <- F
+  ok_ <- F;ok_counter <- 0; while(ok_ == F){
       message(sprintf("ok_counter = %s", ok_counter))
       ok_counter <- ok_counter + 1
-      forceSparsity <- nrow(W) <= (nrow(interaction_info)+nrow(main_info) + 2)
-      if(forceSparsity){
+      interacted_dat <- data.frame(); 
+      
+      if( ( nrow(W) <= choose(ncol(W),2) ) ){
         message("WARNING! More regression parameters than observations, enforcing sparsity...")
         use_regularization <- T
       }
@@ -68,23 +73,24 @@ generate_ModelOutcome <- function(){
               zer[ order( competing_group_variable_candidate[zer]) ] }) )
         }
         main_dat_use <- main_dat <- apply(main_info,1,function(row_){
-          1*(W_[,row_[['d']]] == row_[['l']]) })
+                    1*(W_[,row_[['d']]] == row_[['l']]) })
         if(ok_counter > 1){
           main_dat_use <- apply(main_info_PreRegularization,1,function(row_){
             1*(W_[,row_[['d']]] == row_[['l']]) })
         }
-        interacted_dat <- NULL;if(nrow(interaction_info)>0){
-          interacted_dat <- apply(interaction_info,1,function(row_){
-            1*(main_dat_use[,row_[["dl_index"]]]) *
-              1*(main_dat_use[,row_[["dplp_index"]]]) })
-          rm( main_dat_use )
+        if(nrow(interaction_info)>0){
+            interacted_dat <- apply(interaction_info,1,function(row_){
+              1*(main_dat_use[,row_[["dl_index"]]]) *
+                1*(main_dat_use[,row_[["dplp_index"]]]) })
         }
         Y_glm <- Y_[pair_mat[,1]]
         main_dat <- main_dat[pair_mat[,1],] - main_dat[pair_mat[,2],]
-        interacted_dat <- interacted_dat[pair_mat[,1],] - interacted_dat[pair_mat[,2],]
-        if(length(interacted_dat) == length(Y_glm)){
-          # deal with case where just one thing selected 
-          interacted_dat <- as.matrix(interacted_dat)
+        if(nrow(interaction_info)>0){
+          interacted_dat <- interacted_dat[pair_mat[,1],] - interacted_dat[pair_mat[,2],]
+          if(length(interacted_dat) == length(Y_glm)){
+            # deal with case where just one thing selected 
+            interacted_dat <- as.matrix(interacted_dat)
+          }
         }
         varcov_cluster_variable_glm <- varcov_cluster_variable_[pair_mat[,1]]
         #-mean(varcov_cluster_variable_[pair_mat[,1]] == varcov_cluster_variable_[pair_mat[,2]])
@@ -93,7 +99,6 @@ generate_ModelOutcome <- function(){
         #table( full_dat_$R_Partisanship[pair_mat[,1]] )
         #table( full_dat_$R_Partisanship[pair_mat[,2]] )
       }
-
       if(diff == F){
         main_dat_use <- main_dat <- apply(main_info,1,function(row_){
           1*(W_[,row_[['d']]] == row_[['l']]) })
@@ -101,18 +106,23 @@ generate_ModelOutcome <- function(){
           main_dat_use <- apply(main_info_PreRegularization,1,function(row_){
             1*(W_[,row_[['d']]] == row_[['l']]) })
         }
-        interacted_dat <- apply(interaction_info,1,function(row_){
-          1*(W_[,row_[['d']]] == row_[['l']]) *
-            1*(W_[,row_[['dp']]] == row_[['lp']]) })
+        if(nrow(interaction_info)>0){
+          interacted_dat <- apply(interaction_info,1,function(row_){
+            1*(W_[,row_[['d']]] == row_[['l']]) *
+              1*(W_[,row_[['dp']]] == row_[['lp']]) })
+        }
         Y_glm <- Y_
         varcov_cluster_variable_glm <- varcov_cluster_variable_
       }
-      interacted_dat <- try(as.matrix(interacted_dat[,indicator_InteractionVariation <- apply(as.matrix(interacted_dat), 2, sd)>0]), T)
-      if('try-error' %in% class(interacted_dat)){
-        stop("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
+      
+      if(nrow(interacted_dat)>0){ 
+        interacted_dat <- try(as.matrix(interacted_dat[,indicator_InteractionVariation <- apply(as.matrix(interacted_dat), 2, sd)>0]), T)
+        if('try-error' %in% class(interacted_dat)){
+          stop("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
+        }
+        interaction_info <- interaction_info[indicator_InteractionVariation,]
+        interaction_info$inter_index <- 1:nrow(interaction_info)
       }
-      interaction_info <- interaction_info[indicator_InteractionVariation,]
-      interaction_info$inter_index <- 1:nrow(interaction_info)
 
       # get adj
       if(ok_counter == 1){
@@ -125,9 +135,7 @@ generate_ModelOutcome <- function(){
         main_info_PreRegularization <- main_info
         interaction_info_PreRegularization <- interaction_info
       }
-
       if( use_regularization == F | ok_counter > 1 ){ ok_ <- T }
-
       if( use_regularization == T & ok_counter == 1 | K > 1 ){
         # original keys
         UsedRegularization <- T
@@ -267,13 +275,14 @@ generate_ModelOutcome <- function(){
   # re-run final outcomes to get covariance 
   ###################################
   if(K == 1){
-
   # fit outcome model, post regularization
   {
     # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
     # solve(t(main_dat) %*% main_dat); solve(t(interacted_dat) %*% interacted_dat)
     #  + 0 + 1 to get the glm to return the var-covar for the intercept
-    my_model <- glm(Y_glm ~ cbind(main_dat, interacted_dat ), family = glm_family)
+    if(nrow(interacted_dat) == 0){ glm_input <- main_dat } 
+    if(nrow(interacted_dat) > 0){ glm_input <- cbind(main_dat, interacted_dat ) } 
+    my_model <- glm(Y_glm ~ glm_input, family = glm_family)
     # summary(  my_model  )
     if(any(is.na(coef(my_model)))){
       stop("Some coefficients NA... This case hasn't been sufficiently tested!")
@@ -313,7 +322,7 @@ generate_ModelOutcome <- function(){
                                               interaction_info_PreRegularization$dl_dplp_comb)
     my_mean_inter_part[interaction_info$IntoPreRegIndex] <- model_coef_vec[-c(1:nrow(main_info))]
     my_mean <- c(my_mean_main_part, my_mean_inter_part)
-
+ 
     EST_COEFFICIENTS_tf <- strenv$jnp$array(as.matrix(my_mean), dtype = strenv$dtj)
   }
 

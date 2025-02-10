@@ -154,12 +154,10 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   if(is.null(log_pr_w)){
     log_pr_w <- log(
       sapply(1:ncol(FactorsMat),function(ze){
-        (assignmentProbList[[ze]][ FactorsMat[,ze] ]) })
-    )
+        (assignmentProbList[[ze]][ FactorsMat[,ze] ]) }) )
     if(all(class(log_pr_w) == "numeric")){ log_pr_w <- sum(log_pr_w)}
     if(any(class(log_pr_w) != "numeric")){ log_pr_w <- rowSums(log_pr_w)}
   }
-
 
   # Perform weighting to obtain bound for E_pi[c_t]
   {
