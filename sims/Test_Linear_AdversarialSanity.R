@@ -7,13 +7,13 @@
   
   # global parameters
   ConfirmSanity <- FALSE 
-  nObs <- 100000
-  lambda <- 0.1  # Regularization parameter for L2 penalty
+  nObs <- 10000
+  lambda <- 0.05  # Regularization parameter for L2 penalty
   tol <- 1e-6
   
   neqr <- c()
   #p_RVoters <- 0.5; { # Proportion of Republican voters
-  for(p_RVoters in seq(0.1, 0.9, length.out = 14)){ 
+  for(p_RVoters in seq(0.1, 0.9, length.out = 7)){ 
     
     # Nash via grid search
     {
@@ -34,10 +34,10 @@
       pr_ff_RVoters <- 0.9 + 0.05 - 0.05 # R female vs D female
       
       # D voters' probability of voting for R based on candidate genders
-      pr_mm_DVoters <- 0.10  # R male vs D male
-      pr_mf_DVoters <- 0.10 - 0.05  # R male vs D female
-      pr_fm_DVoters <- 0.10 + 0.05 # R female vs D male
-      pr_ff_DVoters <- 0.10 - 0.05 + 0.05  # R female vs D female
+      pr_mm_DVoters <- 0.1  # R male vs D male
+      pr_mf_DVoters <- 0.1 - 0.05  # R male vs D female
+      pr_fm_DVoters <- 0.1 + 0.05 # R female vs D male
+      pr_ff_DVoters <- 0.1 - 0.05 + 0.05  # R female vs D female
       
       # R voters' probability of voting for R in primary based on gender 
       # her (unlike in the general case, the first position 
@@ -956,7 +956,7 @@
   plot( neqr$pi_D_grid,
         neqr$pi_D_est_iterative ); abline(a=0,b=1)
   
-  # confirm grid vs. est grid 
+  # confirm grid vs. est grid - manual 
   plot( neqr$pi_R_grid,
         neqr$pi_R_est_grid_manual ); abline(a=0,b=1)
   plot( neqr$pi_D_grid,
