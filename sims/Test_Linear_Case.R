@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
-# try(devtools::install_github( 'cjerzak/strategize-software/strategize',ref="main", auth_token = "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" ),T)
+# try(devtools::install_github( 'cjerzak/strategize-software/strategize',ref="main" ),T)
 # https://chatgpt.com/share/67a16997-d684-800f-a352-08bafd4a3bad
 {
 {

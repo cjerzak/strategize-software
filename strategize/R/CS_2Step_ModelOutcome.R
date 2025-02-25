@@ -1,8 +1,6 @@
 generate_ModelOutcome <- function(){
   # obtain main + interaction info
   {
-    holdout_indicator  <-  1*(K == 1)
-
     # main_info + a_structure
     for(nrp in 1:2){
       main_info <- do.call(rbind,sapply(1:length(factor_levels),function(d_){
@@ -10,7 +8,7 @@ generate_ModelOutcome <- function(){
                         "l" = 1:max(1,factor_levels[d_] - 
                                       ifelse(nrp == 1,
                                              yes = 1,
-                                             no  = holdout_indicator) )))}))
+                                             no  = holdout_indicator)) ))}))
       heldout_levels_list <- lapply(factor_levels,function(xer){xer})
       main_info <- cbind(main_info,"d_index"=1:nrow(main_info))
       if(nrp == 1){ a_structure <- main_info }
@@ -68,12 +66,21 @@ generate_ModelOutcome <- function(){
       if(diff == T){
         #table(table(pair_id_)); length(unique(pair_id_))
         pair_mat <- do.call(rbind, tapply(1:length(pair_id_), pair_id_, c) )
-        if(!is.null(competing_group_variable_candidate)){
+        
+        if( !is.null(competing_group_variable_candidate_) ){
+          # sort pair IDs by competing_group_variable_candidate_
            pair_mat <- do.call(rbind, tapply(1:length(pair_id_), pair_id_, function(zer){
-              zer[ order( competing_group_variable_candidate[zer]) ] }) )
+              # pair_id_[zer]
+              # competing_group_variable_candidate_[zer]
+              zer[ order( competing_group_variable_candidate_[zer] ) ]
+              # competing_group_variable_candidate_[zer][ order( competing_group_variable_candidate_[zer] ) ]
+          }) )
+           # competing_group_variable_candidate_[ pair_mat[,1] ]
+           # plot(as.factor(competing_group_variable_candidate_[ pair_mat[,1] ]))
+           # competing_group_variable_respondent_[ pair_mat[,1] ]
         }
         main_dat_use <- main_dat <- apply(main_info,1,function(row_){
-                    1*(W_[,row_[['d']]] == row_[['l']]) })
+                        1*(W_[,row_[['d']]] == row_[['l']] ) })
         if(ok_counter > 1){
           main_dat_use <- apply(main_info_PreRegularization,1,function(row_){
             1*(W_[,row_[['d']]] == row_[['l']]) })
@@ -83,6 +90,9 @@ generate_ModelOutcome <- function(){
               1*(main_dat_use[,row_[["dl_index"]]]) *
                 1*(main_dat_use[,row_[["dplp_index"]]]) })
         }
+
+        # table(Y_); table(Y_[pair_mat[,1]])+table(Y_[pair_mat[,2]]) # should match 
+        # table(Y_[pair_mat[,1]]); table(Y_[pair_mat[,2]])
         Y_glm <- Y_[pair_mat[,1]]
         main_dat <- main_dat[pair_mat[,1],] - main_dat[pair_mat[,2],]
         if(nrow(interaction_info)>0){
@@ -283,7 +293,6 @@ generate_ModelOutcome <- function(){
     if(nrow(interacted_dat) == 0){ glm_input <- main_dat } 
     if(nrow(interacted_dat) > 0){ glm_input <- cbind(main_dat, interacted_dat ) } 
     my_model <- glm(Y_glm ~ glm_input, family = glm_family)
-    # summary(  my_model  )
     if(any(is.na(coef(my_model)))){
       stop("Some coefficients NA... This case hasn't been sufficiently tested!")
       which_na <- which( is.na(coef(my_model)[-1]) ) # minus 1 for intercept

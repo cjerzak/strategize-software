@@ -2,6 +2,7 @@
 
 export(build_backend)
 export(cv_strategize)
+export(plot_best_response_curves)
 export(strategize)
 export(strategize.plot)
 export(strategize_onestep)

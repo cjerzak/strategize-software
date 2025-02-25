@@ -25,19 +25,21 @@ getSE <- function(er){ sqrt( var(er,na.rm=T) /  length(na.omit(er)) )  }
 
 se <- function(.){sqrt(1/length(.) * var(.))}
 
-getMultinomialSamp <- function(pi_value, temperature, jax_seed){
-  # define d locator
-  d_locator_use <- ifelse(ParameterizationType == "Implicit",
-                          yes = list(d_locator), no = list(d_locator_full))[[1]]
-
+getMultinomialSamp_R <- function(pi_value, 
+                               temperature, 
+                               jax_seed, 
+                               ParameterizationType,
+                               d_locator_use){
   # get t samp
   T_star_samp <- tapply(1:length(d_locator_use),d_locator_use,function(zer){
-    pi_selection <- strenv$jnp$take(pi_value, strenv$jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
+    pi_selection <- strenv$jnp$take(pi_value, 
+                                    strenv$jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
 
     # add additional entry if implicit t ype
     if(ParameterizationType == "Implicit"){
       if(length(zer) == 1){ pi_selection <- strenv$jnp$expand_dims(pi_selection,0L) }
-      pi_implied <- strenv$jnp$expand_dims(strenv$jnp$expand_dims(strenv$jnp$subtract(strenv$jnp$array(1.), strenv$jnp$sum(pi_selection)),0L),0L)
+      pi_implied <- strenv$jnp$expand_dims(
+                      strenv$jnp$expand_dims( strenv$jnp$array(1.) - strenv$jnp$sum(pi_selection),0L),0L)
       
       # add holdout 
       # pi_selection <- strenv$jnp$concatenate(list(pi_implied, pi_selection)) # add FIRST entry 
@@ -50,7 +52,8 @@ getMultinomialSamp <- function(pi_value, temperature, jax_seed){
 
     # if implicit, drop a term to keep correct shapes
     #if(ParameterizationType == "Implicit"){ TSamp <- strenv$jnp$take(TSamp,strenv$jnp$array(ai(1L:length(zer))),axis=0L) } #drop FIRST entry
-    if(ParameterizationType == "Implicit"){ TSamp <- strenv$jnp$take(TSamp,strenv$jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop LAST entry
+    if(ParameterizationType == "Implicit"){ 
+      TSamp <- strenv$jnp$take(TSamp,strenv$jnp$array(ai(0L:(length(zer)-1L))),axis=0L) } #drop LAST entry
     
     if(length(zer) == 1){TSamp <- strenv$jnp$expand_dims(TSamp, 1L)}
     return (  TSamp   )
@@ -59,21 +62,27 @@ getMultinomialSamp <- function(pi_value, temperature, jax_seed){
   return( T_star_samp <-  strenv$jnp$concatenate(unlist(T_star_samp),0L) ) 
 }
 
-getPrettyPi <- function( pi_star_value ){
-  if(ParameterizationType == "Full"){
+getPrettyPi <- function( pi_star_value, 
+                         ParameterizationType,
+                         d_locator,
+                         main_comp_mat,
+                         shadow_comp_mat
+                         ){
+  if( ParameterizationType == "Full"){
     #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){strenv$jnp$take(pi_star_value,n2int(ai(zer-1L))) })
     pi_star_full <- pi_star_value
   }
-  if(ParameterizationType == "Implicit"){
-    pi_star_impliedTerms <- tapply(1:length(d_locator),d_locator,function(zer){
-            pi_implied <- strenv$jnp$subtract(OneTf, strenv$jnp$sum(strenv$jnp$take(pi_star_value,
-                                             n2int(ai(zer-1L)),0L))) })
+  if( ParameterizationType == "Implicit"){
+    pi_star_impliedTerms <- tapply(1:length(d_locator),
+                                   d_locator,function(zer){
+            pi_implied <- strenv$OneTf - strenv$jnp$sum(strenv$jnp$take(pi_star_value, n2int(ai(zer-1L)),0L)) })
 
     names(pi_star_impliedTerms) <- NULL
     pi_star_impliedTerms <- strenv$jnp$concatenate(pi_star_impliedTerms,0L)
 
-    pi_star_full <- strenv$jnp$expand_dims(strenv$jnp$add(strenv$jnp$matmul(main_comp_mat, pi_star_value)$flatten(),
-                            strenv$jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten()),1L)
+    pi_star_full <- strenv$jnp$expand_dims(
+                      strenv$jnp$matmul(main_comp_mat, pi_star_value)$flatten() +
+                            strenv$jnp$matmul(shadow_comp_mat, pi_star_impliedTerms)$flatten(),1L)
   }
 
   return( pi_star_full )
@@ -85,7 +94,8 @@ computeQ_conjoint_internal <- function(FactorsMat_internal,
                                        hypotheticalProbList_internal,
                                        assignmentProbList_internal,
                                        log_pr_w_internal = NULL,
-                                       hajek = T, knownNormalizationFactor = NULL,
+                                       hajek = T, 
+                                       knownNormalizationFactor = NULL,
                                        computeLB  = F){
   if(is.null(log_pr_w_internal)){
     log_pr_w_internal <- log( sapply(1:ncol(FactorsMat_internal),function(ze){
@@ -109,7 +119,6 @@ computeQ_conjoint_internal <- function(FactorsMat_internal,
     if(computeLB == T){
       minValue     <- min(Yobs_internal)
       Yobs_nonZero <- Yobs_internal + (abs(minValue) + 1)*(minValue <= 0)
-      #Qest <- exp(1/length(Yobs_internal)*sum(log(Yobs_nonZero)+log(my_wts)))
       Qest <- sum(log(Yobs_nonZero)+log(my_wts))
     }
   }
@@ -194,3 +203,5 @@ computeQse_conjoint <- function(FactorsMat, Yobs,
   if(returnLog == F){upperBound_se_ <- exp(upperBound_se_) }
   return( upperBound_se_ )
 }
+
+n2int <- function(x){  strenv$jnp$array(x,strenv$jnp$int32)  }

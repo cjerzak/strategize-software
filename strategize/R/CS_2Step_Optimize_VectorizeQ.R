@@ -1,6 +1,7 @@
 InitializeQMonteFxns <- function(){
-  Vectorized_QMonteIter_MaxMin <- compile_fxn( strenv$jax$vmap(
-    (QMonteIter_MaxMin <- compile_fxn(function(TSAMP_ast, TSAMP_dag,
+  strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn( strenv$jax$vmap(
+    (strenv$QMonteIter_MaxMin <- compile_fxn(function(
+                         TSAMP_ast, TSAMP_dag,
                          TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
                          a_i_ast,
                          a_i_dag,
@@ -13,7 +14,8 @@ InitializeQMonteFxns <- function(){
                          LAMBDA_,
                          Q_SIGN,
                          SEED_IN_LOOP){
-    GVShareResults_AstReferenced <- getQStar_diff_MultiGroup(TSAMP_ast, #pi_star_ast
+    GVShareResults_AstReferenced <- getQStar_diff_MultiGroup(
+                                                  TSAMP_ast, #pi_star_ast
                                                   TSAMP_dag, # pi_star_dag
                                                   INTERCEPT_ast_, # EST_INTERCEPT_tf_ast
                                                   COEFFICIENTS_ast_, # EST_COEFFICIENTS_tf_ast
@@ -31,6 +33,8 @@ InitializeQMonteFxns <- function(){
         EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast0_,
         EST_INTERCEPT_tf_dag = INTERCEPT_ast0_,
         EST_COEFFICIENTS_tf_dag = COEFFICIENTS_ast0_),0L)
+      #plot(strenv$np$array( TSAMP_ast$val ) - strenv$np$array( TSAMP_ast_PrimaryComp$val ) ,
+           #strenv$np$array( PrimaryVoteShareAstAmongAst$val ) )
       
       PrimaryVoteShareDagAmongDag <- strenv$jnp$take(getQStar_diff_SingleGroup(
         pi_star_ast = TSAMP_dag,
@@ -39,15 +43,16 @@ InitializeQMonteFxns <- function(){
         EST_COEFFICIENTS_tf_ast = COEFFICIENTS_dag0_,
         EST_INTERCEPT_tf_dag = INTERCEPT_dag0_,
         EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag0_),0L)
-  
-      Indicator_AstWinsPrimary <- strenv$jax$lax$cond(
-        pred = strenv$jnp$greater(PrimaryVoteShareAstAmongAst,strenv$jnp$array(0.5)),
-        true_fun = function(){ strenv$jnp$array(1.) },
-        false_fun = function(){ strenv$jnp$array(0.)} )
-      Indicator_DagWinsPrimary <- strenv$jax$lax$cond(
-        pred = strenv$jnp$greater(PrimaryVoteShareDagAmongDag,strenv$jnp$array(0.5)),
-        true_fun = function(){ strenv$jnp$array(1.) },
-        false_fun = function(){ strenv$jnp$array(0.)} )
+      #plot(strenv$np$array( TSAMP_dag$val$to_concrete_value() )-strenv$np$array( TSAMP_dag_PrimaryComp$val ) ,
+           #strenv$np$array( PrimaryVoteShareDagAmongDag$val$to_concrete_value() ) )
+
+      # win based on relaxed sample from bernoulli 
+      Indicator_AstWinsPrimary <- strenv$oryx$distributions$RelaxedBernoulli(
+              temperature = MNtemp, probs = PrimaryVoteShareAstAmongAst
+            )$sample(seed = SEED_IN_LOOP + 9992L)
+      Indicator_DagWinsPrimary <- strenv$oryx$distributions$RelaxedBernoulli(
+              temperature = MNtemp, probs = PrimaryVoteShareDagAmongDag
+            )$sample(seed = SEED_IN_LOOP + 153L)
     }
   
     # combine all information together
@@ -58,10 +63,10 @@ InitializeQMonteFxns <- function(){
                                   "Indicator_DagWinsPrimary"=Indicator_DagWinsPrimary, 
                                   "PrimaryVoteShareDagAmongDag"=PrimaryVoteShareDagAmongDag)) ) 
   })), 
-  in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,",
-                      paste(rep("NULL,",times = 15-1), collapse=""), "NULL",  ")",sep = "")))))
+  in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,", # vectorize over TSAMPs and SEED
+                      paste(rep("NULL,",times = 15-1), collapse=""), "0L",  ")",sep = "") ))))
 
-  Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (QMonteIter <- compile_fxn( 
+  strenv$Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (strenv$QMonteIter <- compile_fxn( 
                           function(pi_star_ast_f, 
                                    pi_star_dag_f,
                                    INTERCEPT_ast_,
@@ -77,10 +82,5 @@ InitializeQMonteFxns <- function(){
                     COEFFICIENTS_dag_)
     return( q_star_ )
   })), in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
-
-  return( list("QMonteIter"=QMonteIter,
-               "QMonteIter_MaxMin"=QMonteIter_MaxMin,
-               "Vectorized_QMonteIter"=Vectorized_QMonteIter,
-               "Vectorized_QMonteIter_MaxMin"=Vectorized_QMonteIter_MaxMin) )
   
 }
