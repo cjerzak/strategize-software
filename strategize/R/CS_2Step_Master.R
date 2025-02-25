@@ -284,7 +284,6 @@
 #' @md
 #' @export
 
-
 strategize       <-          function(
                                             Y,
                                             W,
@@ -302,15 +301,15 @@ strategize       <-          function(
                                             slate_list = NULL,
                                             K = 1,
                                             nSGD = 100,
-                                            diff = F, 
-                                            adversarial = F,
-                                            use_regularization = F,
-                                            force_gaussian = F,
+                                            diff = FALSE, 
+                                            adversarial = FALSE,
+                                            use_regularization = FALSE,
+                                            force_gaussian = FALSE,
                                             a_init_sd = 0.001,
                                             penalty_type = "KL",
-                                            compute_se = T,
+                                            compute_se = FALSE,
                                             conda_env = NULL,
-                                            conda_env_required = F,
+                                            conda_env_required = FALSE,
                                             conf_level = 0.90,
                                             nFolds_glm = 3L,
                                             folds = NULL, 
@@ -318,7 +317,7 @@ strategize       <-          function(
                                             nMonte_Qglm = 100L,
                                             learning_rate_max = 0.001, 
                                             temperature = 0.5, 
-                                            use_optax = F, 
+                                            use_optax = FALSE, 
                                             optim_type = "gd"){
   # [1.] ast then dag 
   #   ast is 1, based on sort(unique(competing_group_variable_candidate))[1]
@@ -341,8 +340,8 @@ strategize       <-          function(
   }
   
   # define compile fxn
-  compile_fxn <- function(x){strenv$jax$jit(x)}
-  #compile_fxn <- function(x){x} ; message("!!!!\nTURNING COMPILE OFF FOR SANITY ESTABLISHMENT!\n!!!!");
+  compile_fxn <- function(x, static_argnums=NULL){return(strenv$jax$jit(x, static_argnums=static_argnums))}
+  #compile_fxn <- function(x, static_argnums=NULL){ return(x) } ; message("!!!!\nTURNING COMPILE OFF FOR SANITY ESTABLISHMENT!\n!!!!");
 
   # setup pretty pi functions
   {
@@ -369,6 +368,7 @@ strategize       <-          function(
 
   nMonte_adversarial <- ai( nMonte_adversarial )
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
+  my_model_ast_jnp <- my_model_ast0_jnp <- my_model_ast_jnp <- my_model_dag0_jnp <- NULL
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
@@ -391,8 +391,9 @@ strategize       <-          function(
   # get info about # of levels per factor
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
-  # obtain outcome models
+  # model outcomes
   message("Initializing outcome models...")
+  holdout_indicator  <-  1*(K == 1)
   if(T == T){
     if(K > 1 & !use_regularization){ warning("K > 1; Forcing regularization...");use_regularization <- T }
     use_regularization_ORIG <- use_regularization
@@ -405,6 +406,7 @@ strategize       <-          function(
 
     for(Round_ in RoundsPool){
     for(GroupCounter in 1:length(GroupsPool)){
+      print(c(Round_,GroupCounter))
       print(c(Round_, GroupCounter))
       use_regularization <- use_regularization_ORIG
       if(adversarial == F){ indi_ <- 1:length( Y )  }
@@ -413,11 +415,18 @@ strategize       <-          function(
           indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                       ( competing_group_competition_variable_candidate == "Same" &
                           competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
+          # cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
+
         }
         if(Round_ == 1){
           indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                             ( competing_group_competition_variable_candidate == "Different" &
                                 competing_group_variable_candidate %in% GroupsPool) )
+          # this group comes first 
+          indi_which_CandidateThisGroup <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                                   ( competing_group_competition_variable_candidate == "Different" &
+                                       competing_group_variable_candidate == GroupsPool[GroupCounter]) )
+          #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
         }
         AstProp <- prop.table(table(competing_group_variable_respondent[
                       competing_group_variable_respondent %in% GroupsPool]))[1]
@@ -429,6 +438,9 @@ strategize       <-          function(
       W_ <- as.matrix(W[indi_,]); Y_ <- Y[indi_];
       varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
       pair_id_ <- pair_id[ indi_ ]
+      competing_group_competition_variable_candidate_ <- competing_group_competition_variable_candidate[ indi_ ]
+      competing_group_variable_respondent_ <- competing_group_variable_respondent[ indi_ ]
+      competing_group_variable_candidate_ <- competing_group_variable_candidate[ indi_ ]
 
       # run models with inputs: W_; Y_; varcov_cluster_variable_;
       initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")
@@ -452,17 +464,17 @@ strategize       <-          function(
                       "regularization_adjust_hash","main_dat", "my_mean",
                       "EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
       round_text <- ifelse( Round_==0, yes="0", no="")
-      #if( (doAst <- (GroupCounter == 1) | (adversarial == F)) ){
-      if( (doAst <- (GroupCounter == 1)  ) ){
-          # do ast
-          tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
-          rm(tmp)
+      if( (doAst <- (GroupCounter == 1)  ) ){ # do ast
+          tmp <- sapply(ret_chunks,function(chunk_){ 
+            eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment)
+          })
       }
-      if( !doAst ){
-          # do dag
-          tmp <- sapply(ret_chunks,function(chunk_){ eval(parse(text = sprintf("%s_dag%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) })
-          rm( tmp )
+      if( !doAst ){ # do dag
+          tmp <- sapply(ret_chunks,function(chunk_){
+            eval(parse(text = sprintf("%s_dag%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) 
+          })
        }
+      # rm( tmp )
     }
     }
   }
@@ -495,9 +507,10 @@ strategize       <-          function(
     p_vec_full <- unlist(lapply(p_list,function(zer){zer}))
   }
 
-  ParameterizationType <- ifelse( holdout_indicator == 0, yes = "Full", no = "Implicit")
-  n2int <- function(x){  strenv$jnp$array(x,strenv$jnp$int32)  }
+  strenv$ParameterizationType <- ifelse( holdout_indicator == 0,
+                                  yes = "Full", no = "Implicit" ) 
   d_locator <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d]-1)}))
+  d_locator_use <- ifelse(strenv$ParameterizationType == "Implicit", yes = list(d_locator), no = list(d_locator_full))[[1]]
   
   # p logic 
   p_vec_sum_prime <- unlist(tapply(1:length(p_vec),d_locator,function(er){
@@ -509,16 +522,15 @@ strategize       <-          function(
   inter_indices_i0 <- NULL; if( n_main_params != EST_COEFFICIENTS_tf$size){ 
     inter_indices_i0 <- strenv$jnp$array((ai(((n_main_params+1):EST_COEFFICIENTS_tf$size)-1L)),strenv$jnp$int32)
   }
-  if(ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
-  if(ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
+  if(strenv$ParameterizationType == "Implicit"){ p_vec_use <- p_vec; p_vec_sum_prime_use <- p_vec_sum_prime }
+  if(strenv$ParameterizationType == "Full"){ p_vec_use <- p_vec_full; p_vec_sum_prime_use <- p_vec_sum_prime_full }
 
   if(optim_type != "gd"){
-    message("Initializing manual exact solution code...")
     initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
     initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
     eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
-    if(ParameterizationType == "Implicit"){ getPiStar_exact <- generate_ExactSolImplicit }
-    if(ParameterizationType == "Full"){ getPiStar_exact <- generate_ExactSolExplicit }
+    if(strenv$ParameterizationType == "Implicit"){ getPiStar_exact <- generate_ExactSolImplicit }
+    if(strenv$ParameterizationType == "Full"){ getPiStar_exact <- generate_ExactSolExplicit }
   }
 
   # pi in constrained space using gradient ascent
@@ -547,7 +559,8 @@ strategize       <-          function(
     exp_a_ <- strenv$jnp$exp(a_)
     aOnSimplex <- tapply(1:nrow(a_structure),a_structure$d,function(zer){
       OnSimplex_ <- strenv$jnp$divide(  strenv$jnp$take(exp_a_, n2int(as.matrix(zer-1L) )),
-                        strenv$jnp$add(OneTf_flat,strenv$jnp$sum(strenv$jnp$take(exp_a_, n2int(zer-1L) ) )))
+                        strenv$jnp$add(
+                          strenv$OneTf_flat,strenv$jnp$sum(strenv$jnp$take(exp_a_, n2int(zer-1L) ) )))
       OnSimplex_ <- LabelSmoothingFxn( OnSimplex_ )
       return( list( OnSimplex_ ) ) })
     names(aOnSimplex) <- NULL
@@ -566,7 +579,7 @@ strategize       <-          function(
     names( aOnSimplex ) <- NULL
     return( strenv$jnp$concatenate(aOnSimplex,0L)  )
   })
-  OneTf_flat <- strenv$jnp$squeeze(OneTf <- strenv$jnp$array(matrix(1L), strenv$dtj)$flatten(), 0L)
+  strenv$OneTf_flat <- strenv$jnp$squeeze(strenv$OneTf <- strenv$jnp$array(matrix(1L), strenv$dtj)$flatten(), 0L)
   Neg2_tf <- strenv$jnp$array(-2., strenv$dtj)
 
   message("Defining Q functions..")
@@ -601,7 +614,7 @@ strategize       <-          function(
     add_to_term <- 1*rev(!duplicated(rev(d_locator)))
     # d_locator + add_to_term - CONFIRM DROP ??
     pi_star_value_loc <- rep(NA, times = n_main_params)
-    if(ParameterizationType == "Implicit"){
+    if(strenv$ParameterizationType == "Implicit"){
       pi_star_value_loc_shadow <- rep(NA,times=length(unique(d_locator)))
       atShadow <- atSpot <- 0; for(ra in 1:length(pi_star_value_loc)){
         isLast <- sum(d_locator[ra:length(d_locator)] %in% d_locator[ra])==1
@@ -639,23 +652,26 @@ strategize       <-          function(
 
     split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
                            rep(xz,times=factor_levels[xz])} ))
-    split_vec_use <- ifelse(ParameterizationType == "Implicit",
+    split_vec_use <- ifelse(strenv$ParameterizationType == "Implicit",
                             yes = list(split_vec), no = list(split_vec_full))[[1]]
   }
 
-  environment(getPrettyPi) <- evaluation_environment
-  getPrettyPi <- compile_fxn( getPrettyPi )
-
-  getPrettyPi_diff <- ifelse(ParameterizationType=="Implicit",
-                                  yes = list(getPrettyPi),
-                                  no = list(compile_fxn(function(x){x})))[[1]]
-  a2Simplex_diff_use <- ifelse(ParameterizationType == "Implicit",
+  strenv$getPrettyPi <- compile_fxn( getPrettyPi_R <- getPrettyPi )
+  strenv$getPrettyPi_diff <- compile_fxn(getPrettyPi_diff_R <- ifelse(strenv$ParameterizationType=="Implicit",
+                                  yes = list( getPrettyPi_R ),
+                                  no = list(function(x, a=NULL,b=NULL,c=NULL,d=NULL){x}))[[1]], 
+                                  static_argnums = 1L:2L)
+  strenv$a2Simplex_diff_use <- ifelse(strenv$ParameterizationType == "Implicit",
                                yes = list(a2Simplex),
                                no = list(a2FullSimplex))[[1]]
 
   ## get exact result
   pi_star_exact <- -10; if(optim_type %in% c("tryboth") & diff == F){
-    pi_star_exact <- strenv$np$array(getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  )) # pi_star_value =
+    pi_star_exact <- strenv$np$array(strenv$getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  ),
+                                                           strenv$ParameterizationType,
+                                                           d_locator,       
+                                                           main_comp_mat,   
+                                                           shadow_comp_mat) 
   }
 
   use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
@@ -690,7 +706,7 @@ strategize       <-          function(
                strenv$optax$chain(
                  #strenv$optax$scale(-1),strenv$optax$scale_by_rss(initial_accumulator_value = 0.01)  
                  strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
-               ))
+          ))
         assign(paste0("opt_state_", sfx), eval(parse(text=name_optimizer))$init(strenv$jnp$array(get(paste0("a_vec_init_", sfx)))))
         assign(paste0("jit_apply_updates_", sfx), compile_fxn(strenv$optax$apply_updates))
         assign(paste0("jit_update_", sfx), compile_fxn( eval(parse(text=name_optimizer))$update))
@@ -699,8 +715,8 @@ strategize       <-          function(
 
   message("Defining gd function...")
   # bring functions into env and compile as needed
-  environment(getMultinomialSamp) <- evaluation_environment; getMultinomialSamp <- compile_fxn( getMultinomialSamp )
-  environment(getPiStar_gd) <- evaluation_environment
+  strenv$getMultinomialSamp <- compile_fxn( getMultinomialSamp_R, static_argnum = 3L:5L)
+  environment(getQPiStar_gd) <- evaluation_environment
   }
 
   # get jax seed into correct type
@@ -708,8 +724,7 @@ strategize       <-          function(
 
   # Obtain solution via exact calculation
   message("Starting optimization...")
-  pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
-  q_star_OUTER <- q_star_se_OUTER <- replicate(n = K, list())
+  q_star_OUTER <- q_star_se_OUTER <- pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
   for(k_clust in 1:K){
   if(K > 1){
     message(sprintf("Optimizing cluster %s of %s...",k_clust, K))
@@ -731,8 +746,12 @@ strategize       <-          function(
     FxnForJacobian <- function(  INPUT_  ){
       EST_INTERCEPT_tf_ <- INPUT_[[1]]
       EST_COEFFICIENTS_tf_  <- INPUT_[[2]]
-      pi_star_full_exact <- pi_star_full <- getPrettyPi( pi_star_reduced <- 
-                                                           getPiStar_exact(EST_COEFFICIENTS_tf_))
+      pi_star_full_exact <- pi_star_full <- strenv$getPrettyPi( pi_star_reduced <- 
+                                                           getPiStar_exact(EST_COEFFICIENTS_tf_), 
+                                                           strenv$ParameterizationType,
+                                                           d_locator,       
+                                                           main_comp_mat,   
+                                                           shadow_comp_mat)
       q_star_exact <- q_star <- getQStar_single(pi_star_ast = pi_star_reduced,
                                                 pi_star_dag = pi_star_reduced,
                                                 EST_INTERCEPT_tf_ast = EST_INTERCEPT_tf_,
@@ -752,7 +771,6 @@ strategize       <-          function(
         strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[1]],1L),1L))),
         strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[2]],1L),2L))) )
     vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast_jnp
-    browser()
     q_star_exact <- q_star <- strenv$np$array( strenv$jnp$take(results_vec, 0L) )
     pi_star_full <- strenv$np$array( strenv$jnp$take(results_vec,
                                                      strenv$jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
@@ -776,33 +794,42 @@ strategize       <-          function(
     InitializeQMonteFxns_ <- eval( parse( text = InitializeQMonteFxns_ ), envir = evaluation_environment )
 
     # setup gd functions dparams
-    environment(FullGetQStar_) <- evaluation_environment; FullGetQStar_ <- compile_fxn(FullGetQStar_)
-    dQ_da_ast <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 0L))
-    dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L))
+    environment(FullGetQStar_) <- evaluation_environment # keep to avoid having to pass all subparameters like nMonte 
+    FullGetQStar_ <- compile_fxn(FullGetQStar_, static_argnums = (static_q <- c(18L:19L) - 1L))
+    dQ_da_ast <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 0L), 
+                             static_argnums = static_q)
+    dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L), 
+                             static_argnums = static_q)
     
     # perform GD 
-    q_with_pi_star_full <- getPiStar_gd(
-                             REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
-                             REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag_jnp,
-                             REGRESSION_PARAMETERS_ast0 = REGRESSION_PARAMS_jax_ast0_jnp,
-                             REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0_jnp,
-                             P_VEC_FULL_ast = p_vec_full_ast_jnp,
-                             P_VEC_FULL_dag = p_vec_full_dag_jnp,
-                             SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
-                             SLATE_VEC_dag = SLATE_VEC_dag_jnp,
-                             LAMBDA = strenv$jnp$array(  lambda  ),
-                             BASE_SEED = jax_seed,
-                             functionList = list(dQ_da_ast, dQ_da_dag,
-                                                 QFXN, getMultinomialSamp),
-                             a_i_ast = a_vec_init_ast, 
-                             a_i_dag = a_vec_init_dag, 
-                             functionReturn = T, 
-                             gd_full_simplex = T, 
-                             quiet = F)
-    dQ_da_ast <- q_with_pi_star_full[[2]][[1]]
-    dQ_da_dag <- q_with_pi_star_full[[2]][[2]]
-    QFXN <- q_with_pi_star_full[[2]][[3]]
-    getMultinomialSamp <- q_with_pi_star_full[[2]][[4]]
+    q_with_pi_star_full <- getQPiStar_gd(
+      REGRESSION_PARAMETERS_ast   = REGRESSION_PARAMS_jax_ast_jnp,   #  1
+      REGRESSION_PARAMETERS_dag   = REGRESSION_PARAMS_jax_dag_jnp,   #  2
+      REGRESSION_PARAMETERS_ast0  = REGRESSION_PARAMS_jax_ast0_jnp,  #  3
+      REGRESSION_PARAMETERS_dag0  = REGRESSION_PARAMS_jax_dag0_jnp,  #  4
+      P_VEC_FULL_ast              = p_vec_full_ast_jnp,              #  5
+      P_VEC_FULL_dag              = p_vec_full_dag_jnp,              #  6
+      SLATE_VEC_ast               = SLATE_VEC_ast_jnp,               #  7
+      SLATE_VEC_dag               = SLATE_VEC_dag_jnp,               #  8
+      LAMBDA                      = strenv$jnp$array(lambda),         #  9
+      BASE_SEED                   = jax_seed,                         # 10
+      functionList                = list(dQ_da_ast, dQ_da_dag,
+                                         QFXN, strenv$getMultinomialSamp),  # 11
+      a_i_ast                     = a_vec_init_ast,                   # 12
+      a_i_dag                     = a_vec_init_dag,                   # 13
+      functionReturn              = TRUE,                             # 14
+      gd_full_simplex             = TRUE,                             # 15
+      ParameterizationType        = strenv$ParameterizationType, 
+      d_locator                   = d_locator,
+      main_comp_mat               = main_comp_mat,
+      shadow_comp_mat             = shadow_comp_mat,
+      quiet                       = FALSE                             # 
+    )
+    dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
+    dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
+    a_i_ast_optimized <- q_with_pi_star_full[[2]]$a_i_ast
+    a_i_dag_optimized <- q_with_pi_star_full[[2]]$a_i_dag
+    QFXN <- q_with_pi_star_full[[2]]$QFXN
     q_with_pi_star_full <- strenv$jnp$array(q_with_pi_star_full[[1]], strenv$dtj)
     
     if(!use_optax){
@@ -825,7 +852,7 @@ strategize       <-          function(
     try(plot( loss_ast_vec, main = "Value (ast)", log ="y"),T)
     try(plot( loss_dag_vec, main = "Value (dag)", log ="y"),T)
     
-    pi_star_red <- getPiStar_gd(
+    pi_star_red <- getQPiStar_gd(
                         REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
                         REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag_jnp,
                         REGRESSION_PARAMETERS_ast0 = REGRESSION_PARAMS_jax_ast0_jnp,
@@ -837,12 +864,17 @@ strategize       <-          function(
                         LAMBDA = strenv$jnp$array(  lambda  ),
                         BASE_SEED = jax_seed,
                         functionList = list(dQ_da_ast, dQ_da_dag,
-                                            QFXN, getMultinomialSamp),
+                                            QFXN, strenv$getMultinomialSamp),
                         a_i_ast = a_vec_init_ast, 
                         a_i_dag = a_vec_init_dag, 
                         functionReturn = F,
                         gd_full_simplex = F, 
-                        quiet = F)
+                        ParameterizationType        = strenv$ParameterizationType, 
+                        d_locator                   = d_locator,
+                        main_comp_mat               = main_comp_mat,
+                        shadow_comp_mat             = shadow_comp_mat,
+                        quiet                       = FALSE                             # 
+                        )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
     pi_star_red_dag <- strenv$jnp$array(as.matrix(  pi_star_red[-c(1:(length(pi_star_red)/2))]))
@@ -871,7 +903,7 @@ strategize       <-          function(
       # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
       # For near-square matrices, jacfwd probably has an edge over jacrev.
       # note: do not jit compile as computation only used once (compilation induces overhead)
-      jacobian_mat <- strenv$jax$jacrev(getPiStar_gd, 0L:3L)(
+      jacobian_mat <- strenv$jax$jacrev(getQPiStar_gd, 0L:3L)(
                                   REGRESSION_PARAMS_jax_ast_jnp,
                                   REGRESSION_PARAMS_jax_dag_jnp,
                                   REGRESSION_PARAMS_jax_ast0_jnp,
@@ -883,12 +915,19 @@ strategize       <-          function(
                                   strenv$jnp$array(  lambda  ),
                                   jax_seed,
                                   functionList = list(dQ_da_ast, dQ_da_dag,
-                                                      QFXN, getMultinomialSamp),
+                                                      QFXN, strenv$getMultinomialSamp),
                                   functionReturn = F,
                                   a_i_ast = a_vec_init_ast, 
                                   a_i_dag = a_vec_init_dag, 
                                   gd_full_simplex = T, 
-                                  quiet = F )
+                                  quiet = F, 
+                                  
+                                  ParameterizationType        = strenv$ParameterizationType, 
+                                  d_locator                   = d_locator,
+                                  main_comp_mat               = main_comp_mat,
+                                  shadow_comp_mat             = shadow_comp_mat,
+                                  quiet                       = FALSE
+                                  )
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
         strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })
       jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
@@ -954,7 +993,7 @@ strategize       <-          function(
   }
 
   for(sign_ in c(-1,1)){
-    bound_ <- lapply(1:K,function(k_){
+    bound_ <- lapply(1:max(c(length(GroupsPool),K)),function(k_){
        l_ <- sapply(1:length(pi_star_list[[k_]]),function(zer){
           ret_ <- list( pi_star_list[[k_]][[zer]] + sign_*abs(qnorm((1-conf_level)/2))*pi_star_se_list[[k_]][[zer]] )
           names(ret_) <- names(pi_star_list[[k_]])[zer]
@@ -970,9 +1009,20 @@ strategize       <-          function(
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full
   }
   
-  names(pi_star_list) <- names(pi_star_list) <- GroupsPool
-  #names(lowerList) <- names(upperList) <- GroupsPool
-
+  if(adversarial){
+    names(pi_star_list) <- names(pi_star_list) <- GroupsPool
+    if(compute_se){
+      names(lowerList) <- names(upperList) <- GroupsPool
+      names(pi_star_se_list) <- GroupsPool
+    }
+  }
+  
+  # append to strenv 
+  strenv$dQ_da_ast          <- dQ_da_ast
+  strenv$dQ_da_dag          <- dQ_da_dag
+  strenv$QFXN               <- QFXN
+  strenv$getQPiStar_gd      <- getQPiStar_gd
+  
   message("strategize() call has finished...\n-------------")
   return( list(   "pi_star_point" = pi_star_list,
                   "pi_star_se" = pi_star_se_list,
@@ -989,14 +1039,16 @@ strategize       <-          function(
                   "pi_star_lb" = lowerList,
                   "pi_star_ub" = upperList,
                   "Q_point" = c(q_star),
+                  "penalty_type" = penalty_type,
                   "lambda" = lambda,
                   "p_vec_full" = p_vec_full,
                   "regularization_adjust_hash" = regularization_adjust_hash,
                   "p_list" = p_list,
                   "slate_list" = slate_list, 
+                  "ParameterizationType" = strenv$ParameterizationType, 
 
                   # reconstruct q info
-                  "Qfxn" = QFXN,
+                  "QFXN" = QFXN,
 
                   'p_vec_full_ast_jnp' = p_vec_full_ast_jnp,
                   'p_vec_full_dag_jnp' = p_vec_full_dag_jnp,
@@ -1012,6 +1064,36 @@ strategize       <-          function(
                   "force_gaussian" = force_gaussian,
                   "used_regularization" = UsedRegularization,
                   "estimation_type" = "TwoStep",
-                  "Y_model" = my_model ) )
+                  "gather_fxn" = gather_fxn, 
+                  "a_i_ast" = a_i_ast_optimized,
+                  "a_i_dag" = a_i_dag_optimized,
+                  
+                  "ParameterizationType" = strenv$ParameterizationType,
+                  "d_locator" = d_locator,  
+                  "d_locator_use" = d_locator_use, 
+                  "main_comp_mat" = main_comp_mat,
+                  "shadow_comp_mat" = shadow_comp_mat, 
+                  "getQPiStar_gd" = getQPiStar_gd, 
+                  "FullGetQStar_" = FullGetQStar_, 
+                  "dQ_da_dag" = dQ_da_dag, 
+                  "dQ_da_ast" = dQ_da_ast, 
+                  "REGRESSION_PARAMETERS_ast" = REGRESSION_PARAMS_jax_ast_jnp,
+                  "REGRESSION_PARAMETERS_dag" = REGRESSION_PARAMS_jax_dag_jnp,
+                  "REGRESSION_PARAMETERS_ast0"= REGRESSION_PARAMS_jax_ast0_jnp,
+                  "REGRESSION_PARAMETERS_dag0"= REGRESSION_PARAMS_jax_dag0_jnp,
+                  "P_VEC_FULL_ast" = p_vec_full_ast_jnp,
+                  "P_VEC_FULL_dag" = p_vec_full_dag_jnp,
+                  "SLATE_VEC_ast"  = SLATE_VEC_ast_jnp,
+                  "SLATE_VEC_dag"  = SLATE_VEC_dag_jnp,
+                  "temperature" = temperature, 
+                  "AstProp" = AstProp,   
+                  "DagProp" = DagProp,   
+                  "strenv" = strenv,
+                  "Y_models" = list(
+                    "my_model_ast_jnp" = my_model_ast_jnp, 
+                    "my_model_ast0_jnp"=my_model_ast0_jnp,
+                    "my_model_dag_jnp"=my_model_dag_jnp,
+                    "my_model_dag0_jnp"=my_model_dag0_jnp )
+                    ) )
 }
 

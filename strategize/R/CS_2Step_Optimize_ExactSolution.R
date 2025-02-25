@@ -6,7 +6,7 @@ generate_ExactSol <- function(){
   })
 
   # ParameterizationType == "Implicit" solution
-  if(ParameterizationType == "Implicit"){
+  if(strenv$ParameterizationType == "Implicit"){
   Neg4lambda_diag <-  strenv$jnp$array( rep(-4 * lambda,times=n_main_params))
   Neg4lambda_update <-  strenv$jnp$array(as.matrix(-4*lambda),strenv$dtj)
   Neg2lambda_update <-  strenv$jnp$array(as.matrix(-2*lambda),strenv$dtj)
@@ -73,7 +73,7 @@ generate_ExactSol <- function(){
   }
 
   # ParameterizationType == "Full" solution
-  if(ParameterizationType == "Full"){
+  if(strenv$ParameterizationType == "Full"){
     Const_2_lambda_pl <-  strenv$jnp$array(as.matrix( 2*lambda*p_vec_use),strenv$dtj)
     Const_2_lambda_plprime <-  strenv$jnp$array(as.matrix( 2*lambda*p_vec_sum_prime_use),strenv$dtj)
     Neg4lambda_update <-  strenv$jnp$array(as.matrix(-4*lambda),strenv$dtj)

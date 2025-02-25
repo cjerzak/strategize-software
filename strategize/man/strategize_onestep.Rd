@@ -22,8 +22,8 @@ strategize_onestep(
   learning_rate_max = 0.01,
   cycle_width  = 50,
   cycle_number = 4,
-  n_sgd = 500,
-  n_epoch = NULL,
+  nSGD = 500,
+  nEpoch = NULL,
   X_factorized = NULL,
   momentum = 0.99,
   n_full_cycles = 1,
@@ -103,10 +103,10 @@ factor-level assignments.}
 
 \item{cycle_number}{Number of cycles used in the learning-rate schedule.}
 
-\item{n_sgd}{Number of gradient-descent updates. If \code{n_epoch} is provided, that takes precedence.}
+\item{nSGD}{Number of gradient-descent updates. If \code{nEpoch} is provided, that takes precedence.}
 
-\item{n_epoch}{Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
-mini-batches. If provided, overrides \code{n_sgd}.}
+\item{nEpoch}{Number of epochs, each pass including \code{length(availableTrainIndices) / batch_size}
+mini-batches. If provided, overrides \code{nSGD}.}
 
 \item{X_factorized}{An optional matrix or data frame representing factorized (dummy-coded) versions
 of \code{X} for advanced modeling. If \code{NULL}, the function may factorize internally.}
@@ -238,7 +238,7 @@ result_one_step <- strategize_onestep(
   Y = Y,
   X = X,
   p_list = p_list,
-  n_sgd = 400,
+  nSGD = 400,
   use_hajek = TRUE,
   penalty_type = "LogMaxProb",
   lambda_seq = c(0.01, 0.1),

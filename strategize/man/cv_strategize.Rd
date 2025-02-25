@@ -25,17 +25,18 @@ cv_strategize(
   K = 1,
   nSGD = 100,
   diff = F,
-  MaxMin = F,
+  adversarial = F,
   use_regularization = F,
   force_gaussian = F,
   a_init_sd = 0.001,
+  learning_rate_max = 0.001,
   penalty_type = "KL",
   compute_se = T,
   conda_env = NULL,
   conda_env_required = F,
   confLevel = 0.9,
   nFolds_glm = 3L,
-  nMonte_MaxMin = 5L,
+  nMonte_adversarial = 5L,
   nMonte_Qglm = 100L,
   optim_type = "gd"
 )
@@ -123,7 +124,7 @@ to 100 but can be increased if convergence has not been reached.}
 forced-choice or difference-in-outcomes) is used. Defaults to \code{FALSE}, but 
 set \code{TRUE} in certain difference-of-utility designs.}
 
-\item{MaxMin}{Logical indicating whether to use a two-party or multi-agent 
+\item{adversarial}{Logical indicating whether to use a two-party or multi-agent 
 \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
 (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 or average-case optimization).}
@@ -161,8 +162,8 @@ default 0.90.}
 regression-based cross-validation (if used) for outcome model selection. 
 Defaults to 3.}
 
-\item{nMonte_MaxMin}{A positive integer specifying the number of Monte Carlo 
-draws for the min-max (adversarial) stage, if \code{MaxMin = TRUE}. Defaults 
+\item{nMonte_adversarial}{A positive integer specifying the number of Monte Carlo 
+draws for the min-max (adversarial) stage, if \code{adversarial = TRUE}. Defaults 
 to 5.}
 
 \item{nMonte_Qglm}{An integer specifying the number of Monte Carlo draws 
@@ -211,7 +212,7 @@ to the best value.
 
 The function supports a wide range of conjoints, including forced-choice 
 (where \code{diff = TRUE}), multi-cluster outcome modeling (where \eqn{K > 1}), 
-and adversarial designs (where \code{MaxMin = TRUE}). Regularization for the 
+and adversarial designs (where \code{adversarial = TRUE}). Regularization for the 
 outcome model or for the candidate distribution can be enabled via 
 \code{use_regularization} and \code{penalty_type}. Cross-validation is particularly 
 helpful when the data is limited or highly dimensional.

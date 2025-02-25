@@ -13,11 +13,9 @@ getQStar_single <- function(pi_star_ast, pi_star_dag,
   
     # get interaction info
     pi_dp <- strenv$jnp$take(pi_star_ast, 
-                             n2int( ai(interaction_info$dl_index_adj)-1L),
-                             axis=0L)
+                             n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
     pi_dpp <- strenv$jnp$take(pi_star_ast, 
-                              n2int( ai(interaction_info$dplp_index_adj)-1L),
-                              axis=0L)
+                              n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
     Qhat <-  glm_outcome_transform( EST_INTERCEPT_tf_ast + 
                                       strenv$jnp$matmul( main_coef$transpose(), 
                                                          pi_star_ast) +
@@ -44,7 +42,7 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   # coef
   main_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
                                    indices = main_indices_i0, axis = 0L),1L)
-  DELTA_pi_star <- pi_star_ast - pi_star_dag
+  DELTA_pi_star <- (pi_star_ast - pi_star_dag)
   
   if(!is.null(inter_indices_i0)){ 
   inter_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
@@ -95,19 +93,35 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
                                        Qhat_ast_among_dag), 0L)  )
 }
 
-FullGetQStar_ <- function(a_i_ast,
-                          a_i_dag,
-                          INTERCEPT_ast_, COEFFICIENTS_ast_,
-                          INTERCEPT_dag_, COEFFICIENTS_dag_,
-                          INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                          INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                          P_VEC_FULL_ast_, P_VEC_FULL_dag_,
-                          SLATE_VEC_ast_, SLATE_VEC_dag_,
-                          LAMBDA_,
-                          Q_SIGN,
-                          SEED_IN_LOOP){
-  pi_star_full_i_ast <- getPrettyPi_diff( pi_star_i_ast <- a2Simplex_diff_use( a_i_ast ))
-  pi_star_full_i_dag <- getPrettyPi_diff( pi_star_i_dag <- a2Simplex_diff_use( a_i_dag ))
+FullGetQStar_ <- function(a_i_ast,                                #1 
+                          a_i_dag,                                #2 
+                          INTERCEPT_ast_, COEFFICIENTS_ast_,      #3,4       
+                          INTERCEPT_dag_, COEFFICIENTS_dag_,      #5,6 
+                          INTERCEPT_ast0_, COEFFICIENTS_ast0_,    #7,8
+                          INTERCEPT_dag0_, COEFFICIENTS_dag0_,    #9,10
+                          P_VEC_FULL_ast_, P_VEC_FULL_dag_,       #11,12
+                          SLATE_VEC_ast_, SLATE_VEC_dag_,         #13,14
+                          LAMBDA_,                                #15
+                          Q_SIGN,                                 #16 
+                          SEED_IN_LOOP,                           #17
+                          
+                          # for getPrettyPi_diff in FullGetQStar_
+                          ParameterizationType,                   #18
+                          d_locator,                              #19
+                          main_comp_mat,                          #20
+                          shadow_comp_mat                         #21
+                          ){
+  message("Get pretty pi in FullGetQStar_...")
+  pi_star_full_i_ast <- strenv$getPrettyPi_diff( pi_star_i_ast<-strenv$a2Simplex_diff_use(a_i_ast), 
+                                                 ParameterizationType,
+                                                 d_locator,       
+                                                 main_comp_mat,   
+                                                 shadow_comp_mat  )
+  pi_star_full_i_dag <- strenv$getPrettyPi_diff( pi_star_i_dag<-strenv$a2Simplex_diff_use(a_i_dag),
+                                                 ParameterizationType,
+                                                 d_locator,       
+                                                 main_comp_mat,   
+                                                 shadow_comp_mat  )
 
   if(!adversarial){
     # NOTE: When diff == F, dag not used  
@@ -120,31 +134,37 @@ FullGetQStar_ <- function(a_i_ast,
   }
 
   if(adversarial){
+    message("Setup conditions...")
     # setup conditions 
     indicator_UseAst <- 0.5*(1 + Q_SIGN)
 
     # sample main competitor features
     TSAMP_ast_all <- strenv$jax$vmap(function(s_){ 
-                  getMultinomialSamp(pi_star_i_ast, MNtemp, s_)},in_axes = 0L)(
+                    strenv$getMultinomialSamp(pi_star_i_ast, MNtemp, s_,
+                                     ParameterizationType, d_locator_use)},in_axes = 0L)(
                           strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L),
                                                   nMonte_adversarial) )
     TSAMP_dag_all <- strenv$jax$vmap(function(s_){ 
-                  getMultinomialSamp(pi_star_i_dag, MNtemp, s_)},in_axes = list(0L))(
+                    strenv$getMultinomialSamp(pi_star_i_dag, MNtemp, s_,
+                                     ParameterizationType,d_locator_use)},in_axes = list(0L))(
                           strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 399L),
                                                   nMonte_adversarial) )
 
     # sample primary competitor features uniformly or using slates 
     TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-                   getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_)},in_axes = list(0L))(
+                  strenv$getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_,
+                                      ParameterizationType,d_locator_use)},in_axes = list(0L))(
                             strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 599L),
                                                     nMonte_adversarial) )
     TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-                   getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_)},in_axes = list(0L))(
+                  strenv$getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_,
+                                      ParameterizationType,d_locator_use)},in_axes = list(0L))(
                           strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 799L),
                                                   nMonte_adversarial) )
-    
+
     # compute electoral analysis 
-    QMonteRes <- Vectorized_QMonteIter_MaxMin(
+    message("Run strenv$Vectorized_QMonteIter_MaxMin")
+    QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
                         TSAMP_ast_all, TSAMP_dag_all,
                         TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
                         a_i_ast,
@@ -157,27 +177,230 @@ FullGetQStar_ <- function(a_i_ast,
                         P_VEC_FULL_dag_,
                         LAMBDA_,
                         Q_SIGN,
-                        SEED_IN_LOOP)
+                        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 1999L),
+                                                nMonte_adversarial))
     
+    # primaries 
+    PrAstWinsAstPrimary <- QMonteRes$AmongAst$PrimaryVoteShareAstAmongAst$mean()
+    PrAstLosesAstPrimary <- 1-PrAstWinsAstPrimary
+    PrDagWinsDagPrimary <- QMonteRes$AmongDag$PrimaryVoteShareDagAmongDag$mean()
+    PrDagLosesDagPrimary <- 1-PrDagWinsDagPrimary
+    
+    # generals 
     # Compute  average vote shares in the subset of simulations where candidate wins its primary.
     # Specifically, sum of votes in that subset divided by (sum of total votes in that subset + epsilon)
-    GVShareAstAmongAst_Given_AstWinsAstPrimary <- QMonteRes$AmongAst$GVShareAstAmongAst$sum()/ 
-                              (ep_<-0.01 + QMonteRes$AmongAst$Indicator_AstWinsPrimary$sum() )
-    GVShareDagAmongAst_Given_AstWinsAstPrimary <- ( 1 - QMonteRes$AmongAst$GVShareAstAmongAst )$sum() / 
-                              (ep_ + QMonteRes$AmongAst$Indicator_AstWinsPrimary$sum() )
     
-    GVShareAstAmongDag_Given_DagWinsDagPrimary <- QMonteRes$AmongDag$GVShareAstAmongDag$sum() / 
-                              (ep_ + QMonteRes$AmongDag$Indicator_DagWinsPrimary$sum() )
-    GVShareDagAmongDag_Given_DagWinsDagPrimary <- (1 - QMonteRes$AmongDag$GVShareAstAmongDag)$sum() / 
-                              (ep_ + QMonteRes$AmongDag$Indicator_DagWinsPrimary$sum() )
+    # among ast 
+    Indicator_AstWinsPrimary <- QMonteRes$AmongAst$Indicator_AstWinsPrimary # soft or hard 
+    GVShareAstAmongAst_Given_AstWinsAstPrimary <- 
+                  ( QMonteRes$AmongAst$GVShareAstAmongAst*Indicator_AstWinsPrimary )$sum()/ 
+                              ( (ep_<-0.01) + Indicator_AstWinsPrimary$sum() )
+    GVShareDagAmongAst_Given_AstWinsAstPrimary <-  1 - GVShareAstAmongAst_Given_AstWinsAstPrimary
     
-    PrAstWinsAstPrimary <- QMonteRes$AmongAst$PrimaryVoteShareAstAmongAst$mean()
-    PrDagWinsDagPrimary <- QMonteRes$AmongDag$PrimaryVoteShareDagAmongDag$mean()
+    # among dag 
+    Indicator_DagWinsPrimary <- QMonteRes$AmongDag$Indicator_DagWinsPrimary
+    GVShareAstAmongDag_Given_DagWinsDagPrimary <- 
+                    (  QMonteRes$AmongDag$GVShareAstAmongDag*Indicator_DagWinsPrimary )$sum() / 
+                              ( ep_ + Indicator_DagWinsPrimary$sum() )
+    GVShareDagAmongDag_Given_DagWinsDagPrimary <- 1 - GVShareAstAmongDag_Given_DagWinsDagPrimary
 
-    q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(AstProp) + 
-                 GVShareAstAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
-    q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(AstProp) + 
-                 GVShareDagAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    # calculate final expected value for ast and dag 
+    # base attempt 
+    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(AstProp) + 
+       #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(AstProp) + 
+       #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    
+    # attempt 1 
+    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary* strenv$jnp$array(AstProp) + 
+      #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(AstProp) + 
+      #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    
+    # attempt 2
+    #q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * AstProp + 
+         #GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary * PrDagWinsDagPrimary
+    #q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
+         #GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrAstWinsAstPrimary * PrDagWinsDagPrimary
+    
+    #Conceptually, if these events “Ast wins Ast primary” and “Dag wins Dag primary” are not guaranteed to co-occur simultaneously (and in fact might be correlated or logically complementary), then multiplying the two probabilities PrAstWinsAstPrimary * PrDagWinsDagPrimary can be incorrect. E.g. if one candidate’s winning their primary might preclude the other’s scenario. Unless there is a reason to treat them as “both definitely end up on the final ballot,” you typically do not want to multiply them if they are disjoint or if one event precludes the other.
+    #If it is indeed your design to treat them as independent events or force them both to appear in the general, then you should clarify that assumption. Statistically it can be suspect.
+    
+    # attempt here: - q_ast = (PrAstWinsAstPrimary)*[ expected general-election share given Ast is on the ballot ] + (1 - PrAstWinsAstPrimary)*0
+    # compute_vote_share_R(pi_R, pi_D)
+    
+    if(T == F){ 
+    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * AstProp + 
+                    GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary #* PrDagWinsDagPrimary
+    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
+                    GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrDagWinsDagPrimary #* PrAstWinsAstPrimary
+    }
+    
+    if(T == F){
+    PrAstLosesAstPrimary <- 1 - PrAstWinsAstPrimary
+    PrDagLosesDagPrimary <- 1 - PrDagWinsDagPrimary
+    GVShareAstAmongAst_Given_AstLosesAstPrimary <- 
+      (QMonteRes$AmongAst$GVShareAstAmongAst*(1-Indicator_AstWinsPrimary))$sum()/ 
+      ( (ep_<-0.01) + (1-Indicator_AstWinsPrimary)$sum() )
+    GVShareDagAmongAst_Given_AstLosesAstPrimary <-  1 - GVShareAstAmongAst_Given_AstLosesAstPrimary
+    GVShareAstAmongDag_Given_DagLosesDagPrimary <- 
+      (  QMonteRes$AmongDag$GVShareAstAmongDag*(1-Indicator_DagWinsPrimary) )$sum() / 
+      ( ep_ + (1-Indicator_DagWinsPrimary)$sum() )
+    GVShareDagAmongDag_Given_DagLosesDagPrimary <- 1 - GVShareAstAmongDag_Given_DagLosesDagPrimary
+    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * AstProp + 
+          GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary + 
+            (GVShareDagAmongAst_Given_AstLosesAstPrimary * AstProp + 
+               GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstLosesAstPrimary
+    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
+              GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrDagWinsDagPrimary +
+              (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
+                 GVShareDagAmongDag_Given_DagLosesDagPrimary * DagProp ) * PrDagLosesDagPrimary
+    }
+    
+    if(T == F){
+      # https://chatgpt.com/share/67b77b8c-8af0-800f-8882-6c1176a4e343
+      # https://grok.com/share/bGVnYWN5_1f041334-5758-44db-bc90-8b69929a9e1b
+      q_max_ast <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * 
+                                                   PrAstWinsAstPrimary* PrDagWinsDagPrimary * AstProp + 
+                                              QMonteRes$AmongDag$GVShareAstAmongDag*PrAstWinsAstPrimary* PrDagWinsDagPrimary * DagProp) *
+                (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
+                      (0.001+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
+
+      # For Dag
+      QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
+      QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
+      q_max_dag <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * PrAstWinsAstPrimary* PrDagWinsDagPrimary * AstProp +                         
+                                            QMonteRes$AmongDag$GVShareDagAmongDag *PrAstWinsAstPrimary* PrDagWinsDagPrimary *  DagProp) * 
+                                              (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
+        (0.001+((Indicator_DagWinsPrimary*Indicator_AstWinsPrimary))$sum())
+    }
+    
+    if(T == F){
+      # https://chatgpt.com/share/67b77b8c-8af0-800f-8882-6c1176a4e343
+      # https://grok.com/share/bGVnYWN5_1f041334-5758-44db-bc90-8b69929a9e1b
+      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * AstProp + 
+                          QMonteRes$AmongDag$GVShareAstAmongDag * DagProp) * Indicator_AstWinsPrimary )$sum() /(ep_+Indicator_AstWinsPrimary$sum())
+      q_max_ast <- PrAstWinsAstPrimar * E_VoteShare_Ast_Given_AstWinsPrimary
+      
+      # For Dag
+      QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
+      QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
+      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * AstProp +                         
+                          QMonteRes$AmongDag$GVShareDagAmongDag * DagProp) * Indicator_DagWinsPrimary )$sum() /(ep_+Indicator_DagWinsPrimary$sum())
+      q_max_dag <- PrDagWinsDagPrimary * E_VoteShare_Dag_Given_DagWinsPrimary
+    }
+    
+    if(T == F){
+      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * AstProp + 
+                                                   QMonteRes$AmongDag$GVShareAstAmongDag * DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
+      q_max_ast <- PrAstWinsAstPrimary * PrDagWinsDagPrimary * E_VoteShare_Ast_Given_AstWinsPrimary
+      
+      # For Dag
+      QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
+      QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
+      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * AstProp +                         
+                                                   QMonteRes$AmongDag$GVShareDagAmongDag * DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary+Indicator_AstWinsPrimary)$sum())
+      q_max_dag <- PrAstWinsAstPrimary * PrDagWinsDagPrimary * E_VoteShare_Dag_Given_DagWinsPrimary
+    }
+    
+    if(T == T){
+      # compute expected value 
+      QMonteRes$AmongAst$GVShareDagAmongAst <- 1-QMonteRes$AmongAst$GVShareAstAmongAst
+      QMonteRes$AmongDag$GVShareDagAmongDag <- 1-QMonteRes$AmongDag$GVShareAstAmongDag
+      
+      Indicator_DagLosesPrimary <- 1-Indicator_DagWinsPrimary
+      Indicator_AstLosesPrimary <- 1-Indicator_AstWinsPrimary
+      
+      # 2 by 2 AMONG AST 
+      {
+      # 1 ast 
+      E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary <-
+                ((QMonteRes$AmongAst$GVShareAstAmongAst)*
+                  (event_ <- (Indicator_AstWinsPrimary*Indicator_DagWinsPrimary) ))$sum() / 
+                (0.001+(event_))$sum()
+      
+      # 2 ast 
+      E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary <-
+        ((QMonteRes$AmongAst$GVShareAstAmongAst)*
+           ( event_ <- (Indicator_AstLosesPrimary*Indicator_DagLosesPrimary) ))$sum() / 
+        (0.001+(event_))$sum()
+      
+      # 3 ast
+      E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary <-
+        ((QMonteRes$AmongAst$GVShareAstAmongAst)*
+           (event_ <- (Indicator_AstLosesPrimary*Indicator_DagWinsPrimary) ))$sum() / 
+        (0.001+(event_))$sum()
+      
+      # 4 ast
+      E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary <-
+        ((QMonteRes$AmongAst$GVShareAstAmongAst)*
+           (event_ <- (Indicator_AstWinsPrimary*Indicator_DagLosesPrimary) ))$sum() / 
+        (0.001+(event_))$sum()
+      E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary
+      E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary
+      E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary
+      E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary
+      }
+      
+      # 2 by 2 among dag 
+      {
+        # 1 
+        E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary <-
+          ((QMonteRes$AmongDag$GVShareAstAmongDag)*
+             (event_ <- (Indicator_AstWinsPrimary*Indicator_DagWinsPrimary) ))$sum() / 
+          (0.001+(event_))$sum()
+        
+        # 2
+        E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary <-
+          ((QMonteRes$AmongDag$GVShareAstAmongDag)*
+             ( event_ <- (Indicator_AstLosesPrimary*Indicator_DagLosesPrimary) ))$sum() / 
+          (0.001+(event_))$sum()
+        
+        # 3 - 
+        E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary <-
+          ((QMonteRes$AmongDag$GVShareAstAmongDag)*
+             (event_ <- (Indicator_AstLosesPrimary*Indicator_DagWinsPrimary) ))$sum() / 
+          (0.001+(event_))$sum()
+        
+        # 4
+        E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary <-
+          ((QMonteRes$AmongDag$GVShareAstAmongDag)*
+             (event_ <- (Indicator_AstWinsPrimary*Indicator_DagLosesPrimary) ))$sum() / 
+          (0.001+(event_))$sum()
+        E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary
+        E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary
+        E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary
+        E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary
+      }
+      
+      E_VoteShare_Ast <- (
+          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*AstProp+
+          0*E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*AstProp+
+          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*AstProp+
+          0*E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*AstProp+
+                            
+          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*DagProp+
+          0*E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*DagProp+
+          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*DagProp+
+          0*E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*DagProp
+          )
+      
+      E_VoteShare_Dag <- (
+          E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*AstProp+
+          0*E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*AstProp+
+          0*E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*AstProp+
+          E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*AstProp+
+          
+          E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*DagProp+
+          0*E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*DagProp+
+          0*E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*DagProp+
+          E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*DagProp
+      )
+      q_max_ast <- E_VoteShare_Ast
+      q_max_dag <- E_VoteShare_Dag
+    }
+    #TRUE_ <- compute_vote_share_R(pi_R = mean(strenv$np$array( TSAMP_dag_all$to_concrete_value() )[,1,1]), pi_D = mean(strenv$np$array( TSAMP_ast_all )[,1,1]))
+    # q_max_ast+q_max_dag
 
     # quantity to maximize for ast and dag respectively 
     q_max <-  indicator_UseAst * q_max_ast  + (1-indicator_UseAst) * q_max_dag 
@@ -185,6 +408,7 @@ FullGetQStar_ <- function(a_i_ast,
 
   # regularization
   {
+    message("Apply regularization")
     if(penalty_type %in% c("L1","L2")){
       PenFxn <- ifelse(penalty_type == "L1", 
                        yes = list(strenv$jnp$abs),
@@ -194,12 +418,16 @@ FullGetQStar_ <- function(a_i_ast,
     }
     if(penalty_type == "LInfinity"){
       var_pen_ast__ <- tapply(1:length(split_vec_full), split_vec_full, function(zer){
-        list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_ast, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)))})
-      names(var_pen_ast__)<-NULL ; var_pen_ast__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum( strenv$jnp$stack(var_pen_ast__)))
+        list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_ast, 
+                                             indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)))})
+      names(var_pen_ast__)<-NULL ; var_pen_ast__ <- strenv$jnp$negative(LAMBDA_*
+                                                          strenv$jnp$sum( strenv$jnp$stack(var_pen_ast__)))
 
       var_pen_dag__ <- tapply(1:length(split_vec_full), split_vec_full, function(zer){
-        list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_dag, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)))})
-      names(var_pen_dag__)<-NULL ; var_pen_dag__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum( strenv$jnp$stack(var_pen_dag__)))
+        list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_dag, 
+                                             indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)))})
+      names(var_pen_dag__)<-NULL ; var_pen_dag__ <- strenv$jnp$negative(LAMBDA_*
+                                                    strenv$jnp$sum( strenv$jnp$stack(var_pen_dag__)))
     }
     if(penalty_type == "KL"){
       var_pen_ast__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_ast_ * (strenv$jnp$log(P_VEC_FULL_ast_) - strenv$jnp$log(pi_star_full_i_ast))))
@@ -207,9 +435,10 @@ FullGetQStar_ <- function(a_i_ast,
     }
   }
   
-  #if( adversarial ){ myLoss <- q_max + var_pen_ast__ + var_pen_dag__ }
-  if( adversarial ){ myLoss <- q_max + indicator_UseAst * var_pen_ast__  + (1-indicator_UseAst) * var_pen_dag__  } 
-  if( !adversarial ){ myLoss <- q_max + var_pen_ast__ }
+  message("Combine results + return")
+  if( adversarial ){ myMaximize <- q_max + indicator_UseAst * var_pen_ast__  + 
+                                       (1-indicator_UseAst) * var_pen_dag__  } 
+  if( !adversarial ){ myMaximize <- q_max + var_pen_ast__ }
    
-  return( myLoss )
+  return( myMaximize )
 }

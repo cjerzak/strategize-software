@@ -1,7 +1,7 @@
 {
   rm(list=ls()); options(error = NULL)  
   # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
-  # try(devtools::install_github( 'cjerzak/strategize-software/strategize',ref="main", auth_token = "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" ),T)
+  # try(devtools::install_github( 'cjerzak/strategize-software/strategize',ref="main" ),T)
   
   setwd("~/Dropbox/OptimizingSI")
   
