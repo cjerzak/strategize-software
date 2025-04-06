@@ -262,8 +262,10 @@ cv_strategize       <-          function(
           use_indices <- indi_list[type_,split_][[1]]
           nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
           
+          if(type_ == 1){type_<<-1}
+          if(type_ == 2){type_<<-2}
           # strategize call
-          Qoptimized__[[split_]][[type_]] <- { strategize(
+          Qoptimized__[[split_]][[type_]] <- strategize(
   
             # input data
             Y = Y[use_indices],
@@ -292,18 +294,20 @@ cv_strategize       <-          function(
             diff = diff,
             adversarial = adversarial,
             conda_env = conda_env,
-            conda_env_required = conda_env_required) }
+            conda_env_required = conda_env_required) 
         }
         
         # out of sample test of pi* on new estimates 
         q_vec_in <- c(q_vec_in, Qoptimized__[[split_]][[1]]$Q_point)
-        q_vec_out <- c(q_vec_out, unlist(Qoptimized__[[split_]][[2]]$Qfxn(
+        q_vec_out <- c(q_vec_out, 
+          unlist(Qoptimized__[[split_]][[2]]$QFXN(
           "pi_star_ast" = Qoptimized__[[split_]][[1]]$pi_star_red_ast,
           "pi_star_dag" = Qoptimized__[[split_]][[1]]$pi_star_red_dag,
           "EST_INTERCEPT_tf_ast" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
           "EST_COEFFICIENTS_tf_ast" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp,
           "EST_INTERCEPT_tf_dag" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
-          "EST_COEFFICIENTS_tf_dag" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp)$tolist()[[1]])
+          "EST_COEFFICIENTS_tf_dag" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp
+          )$tolist()[[1]])
         )
       }
       outsamp_results <- as.data.frame(rbind(outsamp_results, c(lambda__, mean(q_vec_out), se(q_vec_out), 0)))

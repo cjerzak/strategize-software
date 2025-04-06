@@ -39,6 +39,7 @@ getQStar_single <- function(pi_star_ast, pi_star_dag,
 getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
                                EST_INTERCEPT_tf_ast, EST_COEFFICIENTS_tf_ast,
                                EST_INTERCEPT_tf_dag, EST_COEFFICIENTS_tf_dag){
+
   # coef
   main_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
                                    indices = main_indices_i0, axis = 0L),1L)
@@ -46,7 +47,8 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   
   if(!is.null(inter_indices_i0)){ 
   inter_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
-                                                           indices = inter_indices_i0, axis = 0L),1L)
+                                                           indices = inter_indices_i0, 
+                                                           axis = 0L),1L)
 
   # get interaction info
   pi_ast_dp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
@@ -85,8 +87,8 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
     }
   
     # Pr( Ast | Ast Voter) * Pr(Ast Voters) +  Pr( Ast | Dag Voter) * Pr(Dag Voters)
-    Qhat_population <- Qhat_ast_among_ast * strenv$jnp$array(AstProp) +  
-                                Qhat_ast_among_dag * strenv$jnp$array(DagProp)
+    Qhat_population <- Qhat_ast_among_ast * strenv$jnp$array(strenv$AstProp) +  
+                                Qhat_ast_among_dag * strenv$jnp$array(strenv$DagProp)
   }
   return( strenv$jnp$concatenate( list(Qhat_population, 
                                        Qhat_ast_among_ast, 
@@ -103,25 +105,19 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                           SLATE_VEC_ast_, SLATE_VEC_dag_,         #13,14
                           LAMBDA_,                                #15
                           Q_SIGN,                                 #16 
-                          SEED_IN_LOOP,                           #17
-                          
-                          # for getPrettyPi_diff in FullGetQStar_
-                          ParameterizationType,                   #18
-                          d_locator,                              #19
-                          main_comp_mat,                          #20
-                          shadow_comp_mat                         #21
+                          SEED_IN_LOOP                           #17
                           ){
   message("Get pretty pi in FullGetQStar_...")
   pi_star_full_i_ast <- strenv$getPrettyPi_diff( pi_star_i_ast<-strenv$a2Simplex_diff_use(a_i_ast), 
-                                                 ParameterizationType,
-                                                 d_locator,       
-                                                 main_comp_mat,   
-                                                 shadow_comp_mat  )
+                                                 strenv$ParameterizationType,
+                                                 strenv$d_locator_use,       
+                                                 strenv$main_comp_mat,   
+                                                 strenv$shadow_comp_mat  )
   pi_star_full_i_dag <- strenv$getPrettyPi_diff( pi_star_i_dag<-strenv$a2Simplex_diff_use(a_i_dag),
-                                                 ParameterizationType,
-                                                 d_locator,       
-                                                 main_comp_mat,   
-                                                 shadow_comp_mat  )
+                                                 strenv$ParameterizationType,
+                                                 strenv$d_locator_use,       
+                                                 strenv$main_comp_mat,   
+                                                 strenv$shadow_comp_mat  )
 
   if(!adversarial){
     # NOTE: When diff == F, dag not used  
@@ -137,28 +133,50 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     message("Setup conditions...")
     # setup conditions 
     indicator_UseAst <- 0.5*(1 + Q_SIGN)
+    
+    #strenv$getMultinomialSamp_DEPRECIATED <-  getMultinomialSamp_R_DEPRECIATED
+    #TSAMP_ast_all_DEPRECIATED <- strenv$jax$vmap(function(s_){ 
+      #strenv$getMultinomialSamp_DEPRECIATED(pi_star_i_ast, MNtemp, s_,strenv$ParameterizationType, (strenv$np$array( strenv$d_locator_use) ) 
+        #)},in_axes = 0L)(
+        #strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L), nMonte_adversarial) )
 
     # sample main competitor features
     TSAMP_ast_all <- strenv$jax$vmap(function(s_){ 
-                    strenv$getMultinomialSamp(pi_star_i_ast, MNtemp, s_,
-                                     ParameterizationType, d_locator_use)},in_axes = 0L)(
+                    strenv$getMultinomialSamp(
+                                     pi_star_i_ast, 
+                                     MNtemp, 
+                                     s_,
+                                     strenv$ParameterizationType, 
+                                     strenv$d_locator_use
+                                     )},in_axes = 0L)(
                           strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L),
                                                   nMonte_adversarial) )
     TSAMP_dag_all <- strenv$jax$vmap(function(s_){ 
-                    strenv$getMultinomialSamp(pi_star_i_dag, MNtemp, s_,
-                                     ParameterizationType,d_locator_use)},in_axes = list(0L))(
+                    strenv$getMultinomialSamp(
+                                     pi_star_i_dag, 
+                                     MNtemp, 
+                                     s_,
+                                     strenv$ParameterizationType,
+                                     strenv$d_locator_use
+                                     )},in_axes = list(0L))(
                           strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 399L),
                                                   nMonte_adversarial) )
 
     # sample primary competitor features uniformly or using slates 
     TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-                  strenv$getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_,
-                                      ParameterizationType,d_locator_use)},in_axes = list(0L))(
+                  strenv$getMultinomialSamp(SLATE_VEC_ast_, 
+                                            MNtemp, 
+                                            s_,
+                                            strenv$ParameterizationType,
+                                            strenv$d_locator_use)},in_axes = list(0L))(
                             strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 599L),
                                                     nMonte_adversarial) )
     TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-                  strenv$getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_,
-                                      ParameterizationType,d_locator_use)},in_axes = list(0L))(
+                  strenv$getMultinomialSamp(SLATE_VEC_dag_, 
+                                            MNtemp, 
+                                            s_,
+                                            strenv$ParameterizationType,
+                                            strenv$d_locator_use)},in_axes = list(0L))(
                           strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 799L),
                                                   nMonte_adversarial) )
 
@@ -178,7 +196,8 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                         LAMBDA_,
                         Q_SIGN,
                         strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 1999L),
-                                                nMonte_adversarial))
+                                                nMonte_adversarial)
+                        )
     
     # primaries 
     PrAstWinsAstPrimary <- QMonteRes$AmongAst$PrimaryVoteShareAstAmongAst$mean()
@@ -206,21 +225,21 @@ FullGetQStar_ <- function(a_i_ast,                                #1
 
     # calculate final expected value for ast and dag 
     # base attempt 
-    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(AstProp) + 
-       #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
-    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(AstProp) + 
-       #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(strenv$AstProp) + 
+       #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
+    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(strenv$AstProp) + 
+       #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
     
     # attempt 1 
-    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary* strenv$jnp$array(AstProp) + 
-      #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
-    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(AstProp) + 
-      #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(DagProp)
+    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary* strenv$jnp$array(strenv$AstProp) + 
+      #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
+    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$AstProp) + 
+      #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
     
     # attempt 2
-    #q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * AstProp + 
+    #q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
          #GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary * PrDagWinsDagPrimary
-    #q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
+    #q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
          #GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrAstWinsAstPrimary * PrDagWinsDagPrimary
     
     #Conceptually, if these events “Ast wins Ast primary” and “Dag wins Dag primary” are not guaranteed to co-occur simultaneously (and in fact might be correlated or logically complementary), then multiplying the two probabilities PrAstWinsAstPrimary * PrDagWinsDagPrimary can be incorrect. E.g. if one candidate’s winning their primary might preclude the other’s scenario. Unless there is a reason to treat them as “both definitely end up on the final ballot,” you typically do not want to multiply them if they are disjoint or if one event precludes the other.
@@ -230,9 +249,9 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     # compute_vote_share_R(pi_R, pi_D)
     
     if(T == F){ 
-    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * AstProp + 
+    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
                     GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary #* PrDagWinsDagPrimary
-    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
+    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
                     GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrDagWinsDagPrimary #* PrAstWinsAstPrimary
     }
     
@@ -247,30 +266,30 @@ FullGetQStar_ <- function(a_i_ast,                                #1
       (  QMonteRes$AmongDag$GVShareAstAmongDag*(1-Indicator_DagWinsPrimary) )$sum() / 
       ( ep_ + (1-Indicator_DagWinsPrimary)$sum() )
     GVShareDagAmongDag_Given_DagLosesDagPrimary <- 1 - GVShareAstAmongDag_Given_DagLosesDagPrimary
-    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * AstProp + 
-          GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary + 
-            (GVShareDagAmongAst_Given_AstLosesAstPrimary * AstProp + 
-               GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstLosesAstPrimary
-    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
-              GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrDagWinsDagPrimary +
-              (GVShareDagAmongAst_Given_AstWinsAstPrimary * AstProp + 
-                 GVShareDagAmongDag_Given_DagLosesDagPrimary * DagProp ) * PrDagLosesDagPrimary
+    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
+          GVShareAstAmongDag_Given_DagWinsDagPrimary * strenv$DagProp) * PrAstWinsAstPrimary + 
+            (GVShareDagAmongAst_Given_AstLosesAstPrimary * strenv$AstProp + 
+               GVShareAstAmongDag_Given_DagWinsDagPrimary * strenv$DagProp) * PrAstLosesAstPrimary
+    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
+              GVShareDagAmongDag_Given_DagWinsDagPrimary * strenv$DagProp ) * PrDagWinsDagPrimary +
+              (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
+                 GVShareDagAmongDag_Given_DagLosesDagPrimary * strenv$DagProp ) * PrDagLosesDagPrimary
     }
     
     if(T == F){
       # https://chatgpt.com/share/67b77b8c-8af0-800f-8882-6c1176a4e343
       # https://grok.com/share/bGVnYWN5_1f041334-5758-44db-bc90-8b69929a9e1b
       q_max_ast <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * 
-                                                   PrAstWinsAstPrimary* PrDagWinsDagPrimary * AstProp + 
-                                              QMonteRes$AmongDag$GVShareAstAmongDag*PrAstWinsAstPrimary* PrDagWinsDagPrimary * DagProp) *
+                                                   PrAstWinsAstPrimary* PrDagWinsDagPrimary * strenv$AstProp + 
+                                              QMonteRes$AmongDag$GVShareAstAmongDag*PrAstWinsAstPrimary* PrDagWinsDagPrimary * strenv$DagProp) *
                 (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
                       (0.001+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
 
       # For Dag
       QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
       QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
-      q_max_dag <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * PrAstWinsAstPrimary* PrDagWinsDagPrimary * AstProp +                         
-                                            QMonteRes$AmongDag$GVShareDagAmongDag *PrAstWinsAstPrimary* PrDagWinsDagPrimary *  DagProp) * 
+      q_max_dag <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * PrAstWinsAstPrimary* PrDagWinsDagPrimary * strenv$AstProp +                         
+                                            QMonteRes$AmongDag$GVShareDagAmongDag *PrAstWinsAstPrimary* PrDagWinsDagPrimary *  strenv$DagProp) * 
                                               (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
         (0.001+((Indicator_DagWinsPrimary*Indicator_AstWinsPrimary))$sum())
     }
@@ -278,28 +297,28 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     if(T == F){
       # https://chatgpt.com/share/67b77b8c-8af0-800f-8882-6c1176a4e343
       # https://grok.com/share/bGVnYWN5_1f041334-5758-44db-bc90-8b69929a9e1b
-      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * AstProp + 
-                          QMonteRes$AmongDag$GVShareAstAmongDag * DagProp) * Indicator_AstWinsPrimary )$sum() /(ep_+Indicator_AstWinsPrimary$sum())
+      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * strenv$AstProp + 
+                          QMonteRes$AmongDag$GVShareAstAmongDag * strenv$DagProp) * Indicator_AstWinsPrimary )$sum() /(ep_+Indicator_AstWinsPrimary$sum())
       q_max_ast <- PrAstWinsAstPrimar * E_VoteShare_Ast_Given_AstWinsPrimary
       
       # For Dag
       QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
       QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
-      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * AstProp +                         
-                          QMonteRes$AmongDag$GVShareDagAmongDag * DagProp) * Indicator_DagWinsPrimary )$sum() /(ep_+Indicator_DagWinsPrimary$sum())
+      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * strenv$AstProp +                         
+                          QMonteRes$AmongDag$GVShareDagAmongDag * strenv$DagProp) * Indicator_DagWinsPrimary )$sum() /(ep_+Indicator_DagWinsPrimary$sum())
       q_max_dag <- PrDagWinsDagPrimary * E_VoteShare_Dag_Given_DagWinsPrimary
     }
     
     if(T == F){
-      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * AstProp + 
-                                                   QMonteRes$AmongDag$GVShareAstAmongDag * DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
+      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * strenv$AstProp + 
+                                                   QMonteRes$AmongDag$GVShareAstAmongDag * strenv$DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
       q_max_ast <- PrAstWinsAstPrimary * PrDagWinsDagPrimary * E_VoteShare_Ast_Given_AstWinsPrimary
       
       # For Dag
       QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
       QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
-      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * AstProp +                         
-                                                   QMonteRes$AmongDag$GVShareDagAmongDag * DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary+Indicator_AstWinsPrimary)$sum())
+      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * strenv$AstProp +                         
+                                                   QMonteRes$AmongDag$GVShareDagAmongDag * strenv$DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary+Indicator_AstWinsPrimary)$sum())
       q_max_dag <- PrAstWinsAstPrimary * PrDagWinsDagPrimary * E_VoteShare_Dag_Given_DagWinsPrimary
     }
     
@@ -374,27 +393,27 @@ FullGetQStar_ <- function(a_i_ast,                                #1
       }
       
       E_VoteShare_Ast <- (
-          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*AstProp+
-          0*E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*AstProp+
-          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*AstProp+
-          0*E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*AstProp+
+          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
+          0*E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
+          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
+          0*E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
                             
-          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*DagProp+
-          0*E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*DagProp+
-          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*DagProp+
-          0*E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*DagProp
+          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$DagProp +
+          0*E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
+          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
+          0*E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$DagProp
           )
       
       E_VoteShare_Dag <- (
-          E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*AstProp+
-          0*E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*AstProp+
-          0*E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*AstProp+
-          E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*AstProp+
+          E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
+          0*E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
+          0*E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
+          E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
           
-          E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagWinsPrimary*PrAstWinsAstPrimary*PrDagWinsDagPrimary*DagProp+
-          0*E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagLosesPrimary*PrAstLosesAstPrimary*PrDagLosesDagPrimary*DagProp+
-          0*E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagLosesPrimary*PrAstWinsAstPrimary*PrDagLosesDagPrimary*DagProp+
-          E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagWinsPrimary*PrAstLosesAstPrimary*PrDagWinsDagPrimary*DagProp
+          E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$DagProp +
+          0*E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
+          0*E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
+          E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$DagProp
       )
       q_max_ast <- E_VoteShare_Ast
       q_max_dag <- E_VoteShare_Dag

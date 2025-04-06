@@ -13,17 +13,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           a_i_dag,  # initial value, dag 
                           functionReturn = T,
                           gd_full_simplex, 
-                          ParameterizationType,
-                          d_locator,
-                          main_comp_mat,
-                          shadow_comp_mat,
-                          quiet = T
+                          quiet = TRUE
                           ){
   # throw fxns into env 
   dQ_da_ast <- functionList[[1]]
   dQ_da_dag <- functionList[[2]]
   QFXN <- functionList[[3]]
-  getMultinomialSamp <- functionList[[4]]
 
   REGRESSION_PARAMETERS_ast <- gather_fxn(REGRESSION_PARAMETERS_ast)
   INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
@@ -72,13 +67,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 SLATE_VEC_ast, SLATE_VEC_dag,        #13,14
                                 LAMBDA,                              #15
                                 Q_SIGN_ <- strenv$jnp$array(-1.),    #16
-                                seed_in_loop_at_i_dag,               #17
-                                
-                                # for getPrettyPi_diff in dQ_da_dag
-                                ParameterizationType,                #18
-                                d_locator,                           #19
-                                main_comp_mat,                       #20
-                                shadow_comp_mat                      #21
+                                seed_in_loop_at_i_dag                #17
                                 )
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
       
@@ -107,8 +96,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
     # do updates ("max" step)
     if( i %% 1 == 0 | (!adversarial) ){
-      #seed_in_loop_at_i_ast <- ai(200L+ BASE_SEED+nSGD+i+2) 
-      seed_in_loop_at_i_ast <- seed_in_loop_at_i_dag  # XXX EXPERIMENAL
+      seed_in_loop_at_i_ast <- BASE_SEED + strenv$jnp$array(ai(i*1000))
       grad_i_ast <- dQ_da_ast( a_i_ast, a_i_dag,
                                INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -118,13 +106,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, 
                                Q_SIGN_ <- strenv$jnp$array(1.),
-                               seed_in_loop_at_i_ast, 
-                               
-                               # for getPrettyPi_diff in dQ_da_dag
-                               ParameterizationType,                #18
-                               d_locator,                           #19
-                               main_comp_mat,                       #20
-                               shadow_comp_mat                      #21
+                               seed_in_loop_at_i_ast
                                )
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
       
@@ -154,27 +136,37 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   message("Saving output from gd...")
   {
     pi_star_ast_full_simplex_ <- getPrettyPi( pi_star_ast_<-strenv$a2Simplex_diff_use(a_i_ast),
-                                              ParameterizationType,
-                                              d_locator,       
-                                              main_comp_mat,   
-                                              shadow_comp_mat)
+                                              strenv$ParameterizationType,
+                                              strenv$d_locator_use,       
+                                              strenv$main_comp_mat,   
+                                              strenv$shadow_comp_mat)
     pi_star_dag_full_simplex_ <- getPrettyPi( pi_star_dag_<-strenv$a2Simplex_diff_use(a_i_dag),
-                                              ParameterizationType,
-                                              d_locator,       
-                                              main_comp_mat,   
-                                              shadow_comp_mat)
+                                              strenv$ParameterizationType,
+                                              strenv$d_locator_use,       
+                                              strenv$main_comp_mat,   
+                                              strenv$shadow_comp_mat)
 
     if(glm_family=="gaussian"){ 
       pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
       pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
     }
     if(glm_family != "gaussian"){ 
-      pi_star_ast_f_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_ast_, MNtemp, s_, 
-                                                                            ParameterizationType, d_locator_use)},
+      pi_star_ast_f_all <- strenv$jax$vmap(function(s_){ 
+                                    strenv$getMultinomialSamp(pi_star_ast_, 
+                                                              MNtemp, 
+                                                              s_, 
+                                                              strenv$ParameterizationType, 
+                                                              strenv$d_locator_use
+                                                              )},
                                 in_axes = list(0L))(strenv$jax$random$split( strenv$jax$random$PRNGKey( 30L + jax_seed ), 
                                                                              nMonte_Qglm) )
-      pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ getMultinomialSamp(pi_star_dag_, MNtemp, s_, 
-                                                                            ParameterizationType, d_locator_use)}, 
+      pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ 
+                                    strenv$getMultinomialSamp(pi_star_dag_, 
+                                                              MNtemp, 
+                                                              s_, 
+                                                              strenv$ParameterizationType, 
+                                                              strenv$d_locator_use
+                                                              )}, 
                                in_axes = list(0L))( strenv$jax$random$split( strenv$jax$random$PRNGKey( 400L + jax_seed ), 
                                                                              nMonte_Qglm) )
     }
@@ -191,14 +183,16 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                no  = list(list( q_star_f, 
                                                                 pi_star_ast_, 
                                                                 pi_star_dag_ )))[[1]])
-    if(functionReturn == T){ ret_array <- list(ret_array,
+    if( functionReturn ){ 
+                            ret_array <- list(ret_array,
                                                list("dQ_da_ast" = dQ_da_ast, 
                                                     "dQ_da_dag" = dQ_da_dag,
                                                     "QFXN" = QFXN, 
-                                                    "getMultinomialSamp" = getMultinomialSamp,
+                                                    "getMultinomialSamp" = strenv$getMultinomialSamp,
                                                     "a_i_ast" = a_i_ast, 
                                                     "a_i_dag" = a_i_dag
-                                                    ) ) }
+                                               ) )
+    }
     return( ret_array )
   }
 }

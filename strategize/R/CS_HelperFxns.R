@@ -25,13 +25,14 @@ getSE <- function(er){ sqrt( var(er,na.rm=T) /  length(na.omit(er)) )  }
 
 se <- function(.){sqrt(1/length(.) * var(.))}
 
-getMultinomialSamp_R <- function(pi_value, 
+getMultinomialSamp_R_DEPRECIATED <- function(
+                               pi_value, 
                                temperature, 
                                jax_seed, 
                                ParameterizationType,
                                d_locator_use){
   # get t samp
-  T_star_samp <- tapply(1:length(d_locator_use),d_locator_use,function(zer){
+  T_star_samp <- tapply(1:length(d_locator_use), d_locator_use, function(zer){
     pi_selection <- strenv$jnp$take(pi_value, 
                                     strenv$jnp$array(n2int(zer <- ai(  zer  ) - 1L)),0L)
 
@@ -62,23 +63,124 @@ getMultinomialSamp_R <- function(pi_value,
   return( T_star_samp <-  strenv$jnp$concatenate(unlist(T_star_samp),0L) ) 
 }
 
+getMultinomialSamp_R <- function(pi_value, 
+                                 temperature, 
+                                 jax_seed, 
+                                 ParameterizationType,
+                                 d_locator_use){
+  # Ensure d_locator_use is at least 1D, in case it was a scalar
+  d_locator_use <- strenv$jnp$atleast_1d(d_locator_use)
+  
+  # Identify each unique group + the inverse indices
+  unique_groups_inverse_indices <- strenv$jnp$unique(d_locator_use,
+                                                     return_inverse=TRUE,
+                                                     size = strenv$nUniqueFactors)
+  unique_groups <- unique_groups_inverse_indices[[1]]
+  inverse_indices <- unique_groups_inverse_indices[[2]]
+  
+  # Also ensure these are at least 1D
+  unique_groups <- strenv$jnp$atleast_1d(unique_groups)
+  inverse_indices <- strenv$jnp$atleast_1d(inverse_indices)
+  
+  # Number of unique groups
+  groupCount <- strenv$jnp$shape(unique_groups)[[1]]
+  
+  # Prepare a list for per-group samples
+  T_star_samp_list <- vector("list", groupCount)
+  
+  # Loop over each unique group
+  for(g_i in seq_len(groupCount)) {
+    g_jax <- g_i - 1L
+    
+    # Indices belonging to group g_jax
+    zer <- strenv$jnp$where(
+      strenv$jnp$equal(inverse_indices, 
+                       strenv$jnp$array(n2int(g_jax))),
+      size = ai(strenv$nUniqueLevelsByFactors[g_i]- 1L*(strenv$ParameterizationType == "Implicit"))
+    )[[1]]
+    
+    # pi_selection for that group
+    pi_selection <- strenv$jnp$take(pi_value, zer, axis=0L)
+
+    # For Implicit parameterizations, add the "holdout" probability
+    if(ParameterizationType == "Implicit"){
+      pi_implied <- strenv$jnp$expand_dims(
+        strenv$jnp$expand_dims(
+          strenv$jnp$array(1.) - strenv$jnp$sum(pi_selection),
+          0L), 0L)
+      
+      # Concatenate implied entry last
+      pi_selection <- strenv$jnp$concatenate(list(pi_selection, pi_implied), 0L)
+    }
+    
+    # Sample from RelaxedOneHotCategorical
+    TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
+      probs = pi_selection$transpose(),
+      temperature = temperature
+    )$sample(size = 1L, seed = jax_seed)$transpose()
+    
+    # If Implicit, remove that last extra dimension after sampling
+    if(ParameterizationType == "Implicit"){
+      group_len <- strenv$jnp$shape(pi_selection)[[1]] - 1L
+      TSamp <- strenv$jnp$take(TSamp, strenv$jnp$arange(group_len), axis=0L)
+    }
+    
+    # If the group originally had length 1, restore the shape by expanding axis=1
+    #if(strenv$jnp$shape(TSamp)[[1]] == 1) {
+    #  TSamp <- strenv$jnp$expand_dims(TSamp, 1L)
+    #}
+    
+    T_star_samp_list[[g_i]] <- TSamp
+  }
+  
+  # Concatenate all group samples along axis=0
+  T_star_samp <- strenv$jnp$concatenate(T_star_samp_list, 0L)
+  return(T_star_samp)
+}
+
+
 getPrettyPi <- function( pi_star_value, 
                          ParameterizationType,
                          d_locator,
                          main_comp_mat,
                          shadow_comp_mat
                          ){
-  if( ParameterizationType == "Full"){
+  if( ParameterizationType == "Full" ){
     #pi_star_full <- tapply(1:length(d_locator_full),d_locator_full,function(zer){strenv$jnp$take(pi_star_value,n2int(ai(zer-1L))) })
     pi_star_full <- pi_star_value
   }
-  if( ParameterizationType == "Implicit"){
-    pi_star_impliedTerms <- tapply(1:length(d_locator),
-                                   d_locator,function(zer){
-            pi_implied <- strenv$OneTf - strenv$jnp$sum(strenv$jnp$take(pi_star_value, n2int(ai(zer-1L)),0L)) })
+  if( ParameterizationType == "Implicit" ){
+    # Ensure d_locator is a JAX array (assumed to be provided as such)
+    # Map d_locator values to consecutive integers starting from 0
+    unique_groups_inverse_indices <- strenv$jnp$unique( d_locator, 
+                                                        return_inverse=TRUE, 
+                                                        size = strenv$nUniqueFactors # Needed for JIT 
+                                                        )
 
-    names(pi_star_impliedTerms) <- NULL
-    pi_star_impliedTerms <- strenv$jnp$concatenate(pi_star_impliedTerms,0L)
+    if(length(unique_groups_inverse_indices[[2]]$shape) == 0){
+      unique_groups_inverse_indices[[2]] <- strenv$jnp$expand_dims(unique_groups_inverse_indices[[2]],0L)
+    }
+    
+    # Compute the sum of pi_star_value for each group
+    group_sums <- strenv$jax$ops$segment_sum(
+      pi_star_value, 
+      unique_groups_inverse_indices[[2]],
+      num_segments = strenv$nUniqueFactors
+    )
+    #group_sums <- strenv$jax$ops$segment_sum(pi_star_value, 
+                                             #unique_groups_inverse_indices[[2]]) # fails with JIT 
+    
+    
+    
+    # Compute pi_star_impliedTerms for each group
+    pi_star_impliedTerms <- strenv$OneTf - group_sums$squeeze()
+    # pi_star_impliedTerms - pi_star_impliedTermsOLD
+    
+    # Old way of computing implied terms  
+    #pi_star_impliedTermsOLD <- tapply(1:length(d_locator), d_locator, function(zer){
+          #pi_implied <- strenv$OneTf -  strenv$jnp$sum(strenv$jnp$take(pi_star_value, n2int(ai(zer-1L)),0L)) })
+    #names(pi_star_impliedTermsOLD) <- NULL
+    #pi_star_impliedTermsOLD <- strenv$jnp$concatenate(pi_star_impliedTermsOLD,0L)
 
     pi_star_full <- strenv$jnp$expand_dims(
                       strenv$jnp$matmul(main_comp_mat, pi_star_value)$flatten() +
