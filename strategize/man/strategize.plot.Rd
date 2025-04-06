@@ -21,8 +21,13 @@ strategize.plot(
   margins_vec = NULL,
   add = FALSE,
   pch = 20,
-  factor_name_transformer = function(x) x,
-  level_name_transformer = function(x) x
+  factor_name_transformer = function(x) {
+     x
+ },
+  level_name_transformer = function(x) {
+     x
+ },
+  open_browser = FALSE
 )
 }
 \arguments{
