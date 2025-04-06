@@ -30,6 +30,7 @@ Imports:
     graphics,
     utils,
     methods,
+    glinternet,
     matrixStats,
     reticulate
 Suggests:
