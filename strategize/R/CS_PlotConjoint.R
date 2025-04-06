@@ -74,13 +74,26 @@
 #' 
 #' @export
 #' @md
-strategize.plot <- function(pi_star_list=NULL, pi_star_se_list = NULL, p_list=NULL, 
-                            col.main = "black", zStar = 1, xlim = NULL, ticks_type = "assignmentProbs",
-                            col_vec = NULL, plot_names = TRUE, plot_ci = TRUE, widths_vec, heights_vec,
-                            main_title = "", margins_vec = NULL, add = FALSE, pch = 20,
-                            factor_name_transformer = function(x) x,
-                            level_name_transformer = function(x) x) {
-  
+strategize.plot <- function(pi_star_list=NULL, 
+                            pi_star_se_list = NULL, 
+                            p_list=NULL, 
+                            col.main = "black", 
+                            zStar = 1, 
+                            xlim = NULL, 
+                            ticks_type = "assignmentProbs",
+                            col_vec = NULL, 
+                            plot_names = TRUE, 
+                            plot_ci = TRUE, 
+                            widths_vec, heights_vec,
+                            main_title = "", 
+                            margins_vec = NULL, 
+                            add = FALSE, 
+                            pch = 20,
+                            factor_name_transformer = function(x){x},
+                            level_name_transformer = function(x){x},
+                            open_browser = FALSE
+                            ) {
+  if(open_browser){browser()}
   p_list_ <- sapply(1:length(p_list), function(ze) {
     names(p_list[[ze]]) <- gsub(names(p_list[[ze]]), 
                                             pattern = names(p_list)[ze], 

@@ -368,7 +368,8 @@ strategize       <-          function(
 
   nMonte_adversarial <- ai( nMonte_adversarial )
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
-  my_model_ast_jnp <- my_model_ast0_jnp <- my_model_ast_jnp <- my_model_dag0_jnp <- NULL
+  my_model_ast_jnp <- my_model_ast0_jnp <- my_model_dag_jnp <- my_model_dag0_jnp <- NULL
+  main_comp_mat <- shadow_comp_mat <- NULL
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
@@ -428,9 +429,9 @@ strategize       <-          function(
                                        competing_group_variable_candidate == GroupsPool[GroupCounter]) )
           #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
         }
-        AstProp <- prop.table(table(competing_group_variable_respondent[
+        strenv$AstProp <- prop.table(table(competing_group_variable_respondent[
                       competing_group_variable_respondent %in% GroupsPool]))[1]
-        DagProp <- prop.table(table(competing_group_variable_respondent[
+        strenv$DagProp <- prop.table(table(competing_group_variable_respondent[
                           competing_group_variable_respondent %in% GroupsPool]))[2]
       }
 
@@ -509,13 +510,19 @@ strategize       <-          function(
 
   strenv$ParameterizationType <- ifelse( holdout_indicator == 0,
                                   yes = "Full", no = "Implicit" ) 
+  #strenv$d_locator_full <- strenv$d_locator_use
+  d_locator_full <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d])}))
   d_locator <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d]-1)}))
-  d_locator_use <- ifelse(strenv$ParameterizationType == "Implicit", yes = list(d_locator), no = list(d_locator_full))[[1]]
+  strenv$nUniqueFactors <- as.integer(length(unique(as.vector(d_locator))))
+  strenv$nUniqueLevelsByFactors <- as.integer( factor_levels )
+  strenv$d_locator_use <- strenv$jnp$array(
+                                    ifelse(strenv$ParameterizationType == "Implicit", 
+                                           yes = list(d_locator), 
+                                           no = list(d_locator_full))[[1]] ) 
   
   # p logic 
   p_vec_sum_prime <- unlist(tapply(1:length(p_vec),d_locator,function(er){
     sapply(er,function(re){sum(p_vec[er[!er %in% re]])}) }))
-  d_locator_full <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d])}))
   p_vec_sum_prime_full <- unlist(tapply(1:length(p_vec_full),d_locator_full,function(er){
     sapply(er,function(re){sum(p_vec_full[er[!er %in% re]])}) }))
   main_indices_i0 <- strenv$jnp$array((ai(1:n_main_params-1L)),strenv$jnp$int32)
@@ -643,11 +650,13 @@ strategize       <-          function(
       main_comp_mat <- strenv$jnp$array(sapply(1:length(pi_star_value_loc),function(zer){
         main_comp_mat[pi_star_value_loc[zer],zer] <- 1
         return( main_comp_mat[,zer] ) }),strenv$dtj)
+      strenv$main_comp_mat <- main_comp_mat
 
       shadow_comp_mat <- matrix(0, ncol = n_main_params, nrow = length_simplex_use)
       shadow_comp_mat <- strenv$jnp$array( sapply(1:length(pi_star_value_loc_shadow),function(zer){
         shadow_comp_mat[pi_star_value_loc_shadow[zer],zer] <- 1
         return( shadow_comp_mat[,zer] ) }),strenv$dtj)
+      strenv$shadow_comp_mat <- shadow_comp_mat
     }
 
     split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
@@ -660,7 +669,7 @@ strategize       <-          function(
   strenv$getPrettyPi_diff <- compile_fxn(getPrettyPi_diff_R <- ifelse(strenv$ParameterizationType=="Implicit",
                                   yes = list( getPrettyPi_R ),
                                   no = list(function(x, a=NULL,b=NULL,c=NULL,d=NULL){x}))[[1]], 
-                                  static_argnums = 1L:2L)
+                                  static_argnums = 1L)
   strenv$a2Simplex_diff_use <- ifelse(strenv$ParameterizationType == "Implicit",
                                yes = list(a2Simplex),
                                no = list(a2FullSimplex))[[1]]
@@ -669,9 +678,9 @@ strategize       <-          function(
   pi_star_exact <- -10; if(optim_type %in% c("tryboth") & diff == F){
     pi_star_exact <- strenv$np$array(strenv$getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  ),
                                                            strenv$ParameterizationType,
-                                                           d_locator,       
-                                                           main_comp_mat,   
-                                                           shadow_comp_mat) 
+                                                           strenv$d_locator_use,       
+                                                           strenv$main_comp_mat,   
+                                                           strenv$shadow_comp_mat) 
   }
 
   use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
@@ -715,7 +724,7 @@ strategize       <-          function(
 
   message("Defining gd function...")
   # bring functions into env and compile as needed
-  strenv$getMultinomialSamp <- compile_fxn( getMultinomialSamp_R, static_argnum = 3L:5L)
+  strenv$getMultinomialSamp <- compile_fxn( getMultinomialSamp_R, static_argnum = 4L-1L)
   environment(getQPiStar_gd) <- evaluation_environment
   }
 
@@ -749,9 +758,9 @@ strategize       <-          function(
       pi_star_full_exact <- pi_star_full <- strenv$getPrettyPi( pi_star_reduced <- 
                                                            getPiStar_exact(EST_COEFFICIENTS_tf_), 
                                                            strenv$ParameterizationType,
-                                                           d_locator,       
-                                                           main_comp_mat,   
-                                                           shadow_comp_mat)
+                                                           strenv$d_locator_use,       
+                                                           strenv$main_comp_mat,   
+                                                           strenv$shadow_comp_mat)
       q_star_exact <- q_star <- getQStar_single(pi_star_ast = pi_star_reduced,
                                                 pi_star_dag = pi_star_reduced,
                                                 EST_INTERCEPT_tf_ast = EST_INTERCEPT_tf_,
@@ -795,7 +804,8 @@ strategize       <-          function(
 
     # setup gd functions dparams
     environment(FullGetQStar_) <- evaluation_environment # keep to avoid having to pass all subparameters like nMonte 
-    FullGetQStar_ <- compile_fxn(FullGetQStar_, static_argnums = (static_q <- c(18L:19L) - 1L))
+    #FullGetQStar_ <- compile_fxn(FullGetQStar_, static_argnums = (static_q <- c(18L:19L) - 1L))
+    FullGetQStar_ <- compile_fxn(FullGetQStar_, static_argnums = (static_q <- NULL))
     dQ_da_ast <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 0L), 
                              static_argnums = static_q)
     dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L), 
@@ -811,19 +821,17 @@ strategize       <-          function(
       P_VEC_FULL_dag              = p_vec_full_dag_jnp,              #  6
       SLATE_VEC_ast               = SLATE_VEC_ast_jnp,               #  7
       SLATE_VEC_dag               = SLATE_VEC_dag_jnp,               #  8
-      LAMBDA                      = strenv$jnp$array(lambda),         #  9
-      BASE_SEED                   = jax_seed,                         # 10
-      functionList                = list(dQ_da_ast, dQ_da_dag,
-                                         QFXN, strenv$getMultinomialSamp),  # 11
+      LAMBDA                      = strenv$jnp$array(lambda),        #  9
+      BASE_SEED                   = jax_seed,                        # 10
+      functionList                = list(dQ_da_ast, 
+                                         dQ_da_dag,
+                                         QFXN),  # 11
       a_i_ast                     = a_vec_init_ast,                   # 12
       a_i_dag                     = a_vec_init_dag,                   # 13
+      
       functionReturn              = TRUE,                             # 14
       gd_full_simplex             = TRUE,                             # 15
-      ParameterizationType        = strenv$ParameterizationType, 
-      d_locator                   = d_locator,
-      main_comp_mat               = main_comp_mat,
-      shadow_comp_mat             = shadow_comp_mat,
-      quiet                       = FALSE                             # 
+      quiet                       = FALSE                             # 16
     )
     dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
     dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
@@ -836,21 +844,25 @@ strategize       <-          function(
       inv_learning_rate_ast_vec <- unlist(  lapply(strenv$inv_learning_rate_ast_vec,
                                                    function(zer){ strenv$np$array(zer) }))
     }
-
-    grad_mag_dag_vec <- try(unlist(  lapply(strenv$grad_mag_dag_vec,function(zer){
-      strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) )) }) ),T)
-    try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
-    try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     
     grad_mag_ast_vec <- unlist(  lapply(strenv$grad_mag_ast_vec,function(zer){
       strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) ))  }) )
     try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y"),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     
+    if(adversarial){ 
+      grad_mag_dag_vec <- try(unlist(  lapply(strenv$grad_mag_dag_vec,function(zer){
+        strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) )) }) ),T)
+      try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
+      try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
+    }
+    
     loss_ast_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_ast_vec,0L))
-    loss_dag_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_dag_vec,0L))
     try(plot( loss_ast_vec, main = "Value (ast)", log ="y"),T)
-    try(plot( loss_dag_vec, main = "Value (dag)", log ="y"),T)
+    if(adversarial){ 
+      loss_dag_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_dag_vec,0L))
+      try(plot( loss_dag_vec, main = "Value (dag)", log ="y"),T)
+    }
     
     pi_star_red <- getQPiStar_gd(
                         REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
@@ -864,16 +876,12 @@ strategize       <-          function(
                         LAMBDA = strenv$jnp$array(  lambda  ),
                         BASE_SEED = jax_seed,
                         functionList = list(dQ_da_ast, dQ_da_dag,
-                                            QFXN, strenv$getMultinomialSamp),
+                                            QFXN),
                         a_i_ast = a_vec_init_ast, 
                         a_i_dag = a_vec_init_dag, 
-                        functionReturn = F,
-                        gd_full_simplex = F, 
-                        ParameterizationType        = strenv$ParameterizationType, 
-                        d_locator                   = d_locator,
-                        main_comp_mat               = main_comp_mat,
-                        shadow_comp_mat             = shadow_comp_mat,
-                        quiet                       = FALSE                             # 
+                        functionReturn  = FALSE,
+                        gd_full_simplex = FALSE, 
+                        quiet           = FALSE                             # 
                         )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -881,7 +889,7 @@ strategize       <-          function(
 
     q_star_gd <- q_star <- strenv$np$array(  q_with_pi_star_full )[1]
     # sanity check: 
-    # strenv$np$array(  q_with_pi_star_full )[1]  - sum(strenv$np$array(  q_with_pi_star_full )[2:3]*c(AstProp, DagProp)) 
+    # strenv$np$array(  q_with_pi_star_full )[1]  - sum(strenv$np$array(  q_with_pi_star_full )[2:3]*c(strenv$AstProp, strenv$DagProp)) 
     pi_star_full_gd <- pi_star_full <- strenv$np$array( q_with_pi_star_full )[-c(1:3)]
 
     #  https://github.com/google/jax/issues/1696 
@@ -914,18 +922,14 @@ strategize       <-          function(
                                   SLATE_VEC_dag_jnp,
                                   strenv$jnp$array(  lambda  ),
                                   jax_seed,
-                                  functionList = list(dQ_da_ast, dQ_da_dag,
-                                                      QFXN, strenv$getMultinomialSamp),
+                                  functionList = list(dQ_da_ast,
+                                                      dQ_da_dag,
+                                                      QFXN),
                                   functionReturn = F,
                                   a_i_ast = a_vec_init_ast, 
                                   a_i_dag = a_vec_init_dag, 
                                   gd_full_simplex = T, 
                                   quiet = F, 
-                                  
-                                  ParameterizationType        = strenv$ParameterizationType, 
-                                  d_locator                   = d_locator,
-                                  main_comp_mat               = main_comp_mat,
-                                  shadow_comp_mat             = shadow_comp_mat,
                                   quiet                       = FALSE
                                   )
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
@@ -943,7 +947,9 @@ strategize       <-          function(
   pi_star_numeric <- strenv$np$array( pi_star_full ) # - c(1:3) already extracted 
 
   # drop the q part
-  if(diff == T){ pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] ) }
+  if(diff == T){ 
+    pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] )
+  }
   if(diff == F){
     # CHECK HERE - CHECK 
     take_indices <- 1:length( pi_star_numeric )
@@ -1024,7 +1030,8 @@ strategize       <-          function(
   strenv$getQPiStar_gd      <- getQPiStar_gd
   
   message("strategize() call has finished...\n-------------")
-  return( list(   "pi_star_point" = pi_star_list,
+  return( 
+          list(   "pi_star_point" = pi_star_list,
                   "pi_star_se" = pi_star_se_list,
                   "Q_point_mEst" = q_star,
                   "Q_se_mEst"= q_star_se,
@@ -1070,7 +1077,7 @@ strategize       <-          function(
                   
                   "ParameterizationType" = strenv$ParameterizationType,
                   "d_locator" = d_locator,  
-                  "d_locator_use" = d_locator_use, 
+                  "d_locator_use" = strenv$d_locator_use, 
                   "main_comp_mat" = main_comp_mat,
                   "shadow_comp_mat" = shadow_comp_mat, 
                   "getQPiStar_gd" = getQPiStar_gd, 
@@ -1086,14 +1093,16 @@ strategize       <-          function(
                   "SLATE_VEC_ast"  = SLATE_VEC_ast_jnp,
                   "SLATE_VEC_dag"  = SLATE_VEC_dag_jnp,
                   "temperature" = temperature, 
-                  "AstProp" = AstProp,   
-                  "DagProp" = DagProp,   
+                  "AstProp" = strenv$AstProp,   
+                  "DagProp" = strenv$DagProp,   
                   "strenv" = strenv,
                   "Y_models" = list(
-                    "my_model_ast_jnp" = my_model_ast_jnp, 
-                    "my_model_ast0_jnp"=my_model_ast0_jnp,
-                    "my_model_dag_jnp"=my_model_dag_jnp,
-                    "my_model_dag0_jnp"=my_model_dag0_jnp )
-                    ) )
+                    "my_model_ast_jnp"  = my_model_ast_jnp, 
+                    "my_model_ast0_jnp" = my_model_ast0_jnp,
+                    "my_model_dag_jnp"  = my_model_dag_jnp,
+                    "my_model_dag0_jnp" = my_model_dag0_jnp 
+                    )
+                  )  # end outout list 
+          )
 }
 
