@@ -33,7 +33,8 @@ Imports:
     glinternet,
     matrixStats,
     FactorHet,
-    tgp,
+    tgp, 
+    mclust,
     reticulate
 Suggests:
     testthat (>= 3.0.0),

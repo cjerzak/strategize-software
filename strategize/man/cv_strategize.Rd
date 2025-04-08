@@ -28,13 +28,14 @@ cv_strategize(
   adversarial = F,
   use_regularization = F,
   force_gaussian = F,
+  temperature = NULL,
   a_init_sd = 0.001,
   learning_rate_max = 0.001,
   penalty_type = "KL",
   compute_se = T,
   conda_env = NULL,
   conda_env_required = F,
-  confLevel = 0.9,
+  conf_level = 0.9,
   nFolds_glm = 3L,
   nMonte_adversarial = 5L,
   nMonte_Qglm = 100L,
@@ -155,7 +156,7 @@ using M-estimation or the Delta method. Defaults to \code{TRUE}.}
 Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
 back gracefully.}
 
-\item{confLevel}{The confidence level (between 0 and 1) for interval estimation, 
+\item{conf_level}{The confidence level (between 0 and 1) for interval estimation, 
 default 0.90.}
 
 \item{nFolds_glm}{An integer specifying the number of folds in internal 
