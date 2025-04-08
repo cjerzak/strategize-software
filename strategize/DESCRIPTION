@@ -32,6 +32,8 @@ Imports:
     methods,
     glinternet,
     matrixStats,
+    FactorHet,
+    tgp,
     reticulate
 Suggests:
     testthat (>= 3.0.0),

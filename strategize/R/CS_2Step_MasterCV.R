@@ -92,7 +92,7 @@
 #' @param conda_env_required Logical. If \code{TRUE}, errors if the specified 
 #'   Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
 #'   back gracefully.
-#' @param confLevel The confidence level (between 0 and 1) for interval estimation, 
+#' @param conf_level The confidence level (between 0 and 1) for interval estimation, 
 #'   default 0.90.
 #' @param nFolds_glm An integer specifying the number of folds in internal 
 #'   regression-based cross-validation (if used) for outcome model selection. 
@@ -197,13 +197,14 @@ cv_strategize       <-          function(
                                             diff = F, adversarial = F,
                                             use_regularization = F,
                                             force_gaussian = F,
+                                            temperature = NULL,
                                             a_init_sd = 0.001,
                                             learning_rate_max = 0.001, 
                                             penalty_type = "KL",
                                             compute_se = T,
                                             conda_env = NULL,
                                             conda_env_required = F,
-                                            confLevel = 0.90,
+                                            conf_level = 0.90,
                                             nFolds_glm = 3L,
                                             nMonte_adversarial = 5L,
                                             nMonte_Qglm = 100L,
@@ -282,6 +283,7 @@ cv_strategize       <-          function(
             lambda = lambda__,
   
             # hyperparameters
+            temperature = temperature, 
             compute_se = F, 
             nSGD = nSGD_use,
             penalty_type = penalty_type,
@@ -344,6 +346,7 @@ cv_strategize       <-          function(
                               lambda = lambda__, # this lambda is the one chosen via CV
 
                               # hyperparameters
+                              temperature = temperature, 
                               optim_type = optim_type,
                               force_gaussian = force_gaussian,
                               use_regularization = use_regularization,
