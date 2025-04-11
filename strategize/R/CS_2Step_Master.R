@@ -303,7 +303,7 @@ strategize       <-          function(
                                             nSGD = 100,
                                             diff = FALSE, 
                                             adversarial = FALSE,
-                                            use_regularization = FALSE,
+                                            use_regularization = TRUE,
                                             force_gaussian = FALSE,
                                             a_init_sd = 0.001,
                                             penalty_type = "KL",
@@ -1033,8 +1033,12 @@ strategize       <-          function(
   return( 
           list(   "pi_star_point" = pi_star_list,
                   "pi_star_se" = pi_star_se_list,
+                  
+                  "Q_point" = q_star,
+                  "Q_se"= q_star_se,
                   "Q_point_mEst" = q_star,
                   "Q_se_mEst"= q_star_se,
+                  
                   "pi_star_vec" = pi_star_numeric,
                   "pi_star_red_ast" = pi_star_red_ast,
                   "pi_star_red_dag" = pi_star_red_dag,

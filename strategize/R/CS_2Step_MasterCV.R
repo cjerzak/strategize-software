@@ -195,7 +195,7 @@ cv_strategize       <-          function(
                                             K = 1,
                                             nSGD = 100,
                                             diff = F, adversarial = F,
-                                            use_regularization = F,
+                                            use_regularization = TRUE,
                                             force_gaussian = F,
                                             temperature = NULL,
                                             a_init_sd = 0.001,

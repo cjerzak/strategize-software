@@ -145,8 +145,8 @@ generate_ModelOutcome <- function(){
         main_info_PreRegularization <- main_info
         interaction_info_PreRegularization <- interaction_info
       }
-      if( use_regularization == F | ok_counter > 1 ){ ok_ <- T }
-      if( use_regularization == T & ok_counter == 1 | K > 1 ){
+      if( use_regularization == FALSE | ok_counter > 1 ){ ok_ <- T }
+      if( use_regularization == TRUE & ok_counter == 1 | K > 1 ){
         # original keys
         UsedRegularization <- T
         if(K == 1){
@@ -276,7 +276,7 @@ generate_ModelOutcome <- function(){
         base_dl_vec <- paste(main_info$d,main_info$l,sep ="_")
         interaction_info$dl_index_adj <-  (1:length(base_dl_vec))[match(dl_vec,base_dl_vec)]
         interaction_info$dplp_index_adj <- (1:length(base_dl_vec))[match(dplp_vec,base_dl_vec)]
-        use_regularization <- F
+        use_regularization <- FALSE
       }
     }
   }
@@ -292,6 +292,7 @@ generate_ModelOutcome <- function(){
     #  + 0 + 1 to get the glm to return the var-covar for the intercept
     if(nrow(interacted_dat) == 0){ glm_input <- main_dat } 
     if(nrow(interacted_dat) > 0){ glm_input <- cbind(main_dat, interacted_dat ) } 
+    if( ncol(glm_input) > 0.5*nrow(glm_input)){stop("Too many possible interactions given data size. Set use_regularization = TRUE")}
     my_model <- glm(Y_glm ~ glm_input, family = glm_family)
     if(any(is.na(coef(my_model)))){
       stop("Some coefficients NA... This case hasn't been sufficiently tested!")
