@@ -316,7 +316,9 @@ cv_strategize       <-          function(
       insamp_results <- as.data.frame(rbind(insamp_results, c(lambda__, mean(q_vec_in), se(q_vec_in), 0)))
     }
 
-    outsamp_results$l_bound <- outsamp_results$Qhat - (qStar_lambda <- 1) * outsamp_results$Qse
+    # Use the requested confidence level to build SE-based bounds
+    qStar_lambda <- stats::qnorm(1 - (1 - conf_level)/2)
+    outsamp_results$l_bound <- outsamp_results$Qhat - qStar_lambda * outsamp_results$Qse
     outsamp_results$u_bound <- outsamp_results$Qhat + qStar_lambda * outsamp_results$Qse
     lambda__ <- lambda_seq[which_selected <- which.max(outsamp_results$Qhat)] # lambda.min rule
     #lambda__ <- lambda_seq[which_selected <- which(max(outsamp_results$Qhat <= outsamp_results$u_bound)[1]] # lambda.se rule
