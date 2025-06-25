@@ -3,7 +3,7 @@
 [<img src="https://img.shields.io/badge/Demo-View%20Demo-blue" alt="Demo Button">](https://connorjerzak.com/wp-content/uploads/2025/02/MainVignette.html)
 
 
-Software for implementing optimal stochastic intervention analysis. Current implementation handles conjoint data from experiments. Future implementation may also include text, network, and/or time series, with observational data also potentially allowed as well. ABC.
+Software for implementing optimal stochastic intervention analysis. Current implementation handles conjoint data from experiments. Future work may also include text, network, and time series data, with observational designs potentially supported.
 
 # Installation
 
@@ -14,9 +14,9 @@ devtools::install_github("cjerzak/strategize-software/strategize")
 
 The package can then be loaded into your R session like so: 
 ```
-library(    strategize   )
+library(strategize)
 ```
-Package functions can also be assessed like so: `strategize::function_name``. 
+Package functions can also be accessed as `strategize::function_name`.
 
 # Tutorial 
 
@@ -24,7 +24,7 @@ Package functions can also be assessed like so: `strategize::function_name``.
 
 # License
 
-GLP-3.
+GPL-3.
 
 ## References 
 
