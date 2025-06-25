@@ -1,4 +1,6 @@
-#' A function to build the environment for strategize Builds a conda environment in which 'JAX' and 'np' are installed. Users can also create a conda environment where 'JAX' and 'np' are installed themselves. 
+#' Build the environment for `strategize`. Creates a conda environment in which
+#' 'JAX' and 'np' are installed. Users may also create such an environment
+#' themselves.
 #'
 #' @param conda_env (default = `"strategize"`) Name of the conda environment in which to place the backends.
 #' @param conda (default = `auto`) The path to a conda executable. Using `"auto"` allows reticulate to attempt to automatically find an appropriate conda binary.
