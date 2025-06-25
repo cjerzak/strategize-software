@@ -78,6 +78,7 @@ strategize.plot <- function(pi_star_list=NULL,
                             pi_star_se_list = NULL, 
                             p_list=NULL, 
                             col.main = "black", 
+                            cex.main = 1.5, 
                             zStar = 1, 
                             xlim = NULL, 
                             ticks_type = "assignmentProbs",
@@ -130,7 +131,7 @@ strategize.plot <- function(pi_star_list=NULL,
     plot(pd_[ordering_d], 1:length(pd_),
          ylim = ylim,
          main = prettyFactorNames,
-         cex.main = 2, cex = 0,
+         cex.main = cex.main, cex = 0,
          xlim = if(is.null(xlim)) c(0, 1) else xlim,
          yaxt = "n", xlab = "", ylab = "")
     
@@ -152,8 +153,8 @@ strategize.plot <- function(pi_star_list=NULL,
         }
         
         if(plot_ci) {
-          points(c(min(xlim[2], pi_kd[l_] + zStar * se_kd[l_]),
-                   max(xlim[1], pi_kd[l_] - zStar * se_kd[l_])),
+          points(c(min(xlim[2], min(1,pi_kd[l_] + zStar * se_kd[l_])),
+                   max(xlim[1], max(0,pi_kd[l_] - zStar * se_kd[l_]))),
                  c(y_loc, y_loc), lwd = 2, type = "l", col = col_)
         }
         points(pi_kd[l_], y_loc, pch = pch, col = col_, cex = 1.5)
