@@ -305,7 +305,7 @@ strategize_onestep <- function(
     Qhat_all <- computeQ_conjoint_internal(FactorsMat_internal = FactorsMat_numeric,
                                        Yobs_internal = Y,
                                        log_pr_w_internal = NULL,
-                                       known_norm_factor = known_norm_factor,
+                                       knownNormalizationFactor = known_norm_factor,
                                        assignmentProbList_internal = p_list,
                                        hypotheticalProbList_internal = pi_list,
                                        hajek = useHajek)
@@ -315,12 +315,12 @@ strategize_onestep <- function(
                                 # log_PrW = NULL,
                                 # log_treatment_combs = NULL,
                                 hajek = useHajek,
-                                known_norm_factor = known_norm_factor,
+                                knownNormalizationFactor = known_norm_factor,
                                 assignmentProbList = p_list,
                                 returnLog = F,
                                 pi_list = pi_list)
     Q_interval_all <- c(Qhat_all$Qest - abs(qnorm((1-confLevel)/2))*SE_Q_all,
-                        Qhat_all$Qest_all + abs(qnorm((1-confLevel)/2))*SE_Q_all)
+                        Qhat_all$Qest + abs(qnorm((1-confLevel)/2))*SE_Q_all)
     return(    list("Q_point_all" = RescaleFxn(Qhat_all$Qest, estMean = mean_Y, estSD = sd_Y),
                     "Q_se_all" = RescaleFxn(SE_Q_all, estMean = mean_Y, estSD = sd_Y,center=F),
                     "Q_interval_all" = RescaleFxn(Q_interval_all, estMean = mean_Y, estSD = sd_Y),
