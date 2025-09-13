@@ -2,7 +2,9 @@
 % Please edit documentation in R/CS_BuildBackend.R
 \name{build_backend}
 \alias{build_backend}
-\title{Build the environment for strategize}
+\title{Build the environment for \code{strategize}. Creates a conda environment in which
+'JAX' and 'np' are installed. Users may also create such an environment
+themselves.}
 \usage{
 build_backend(conda_env = "strategize", conda = "auto")
 }
@@ -18,7 +20,9 @@ This function requires an Internet connection.
 You can find out a list of conda Python paths via: \code{Sys.which("python")}
 }
 \description{
-Build the environment for \code{strategize}. Creates a conda environment where 'JAX' and 'np' are installed. Users may also create such an environment themselves.
+Build the environment for \code{strategize}. Creates a conda environment in which
+'JAX' and 'np' are installed. Users may also create such an environment
+themselves.
 }
 \examples{
 \dontrun{
