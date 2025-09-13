@@ -14,5 +14,21 @@ bibentry(
   url = "https://github.com/cjerzak/strategize-software"
 )
 
-citFooter("If you use strategize, please cite it as above.")
+bibentry(
+  bibtype = "Misc",
+  key = "jerzak2025selectingoptimalcandidateprofiles",
+  title = "Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning",
+  author = c(
+    person("Connor T.", "Jerzak"),
+    person("Priyanshi", "Chandra"),
+    person("Rishi", "Hazra")
+  ),
+  year = "2025",
+  eprint = "2504.19043",
+  archivePrefix = "arXiv",
+  primaryClass = "stat.ME",
+  url = "https://arxiv.org/abs/2504.19043"
+)
+
+citFooter("If you use strategize, please cite it as above. For methodological details, see Jerzak, Chandra, and Hazra (2025).")
 

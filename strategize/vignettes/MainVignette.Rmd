@@ -361,6 +361,22 @@ This vignette has illustrated the core usage of the `strategize` package for:
 
 We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `strategize`, `cv_strategize`, and `strategize_onestep` for additional arguments and more advanced use-cases.
 
+## References
+
+Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2025. "Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning." *arXiv preprint* arXiv:2504.19043. https://arxiv.org/abs/2504.19043.
+
+```bibtex
+@misc{jerzak2025selectingoptimalcandidateprofiles,
+      title={Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning},
+      author={Connor T. Jerzak and Priyanshi Chandra and Rishi Hazra},
+      year={2025},
+      eprint={2504.19043},
+      archivePrefix={arXiv},
+      primaryClass={stat.ME},
+      url={https://arxiv.org/abs/2504.19043},
+}
+```
+
 <!--
  install.packages( "~/Documents/strategize-software/strategize", repos = NULL, type = "source",force = FALSE)
 -->
