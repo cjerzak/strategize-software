@@ -66,5 +66,18 @@ GPL-3.
 
 ## References
 
-TBD.
+Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2025. "Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning." *arXiv preprint* arXiv:2504.19043. https://arxiv.org/abs/2504.19043.
+
+```bibtex
+@misc{jerzak2025selectingoptimalcandidateprofiles,
+      title={Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning},
+      author={Connor T. Jerzak and Priyanshi Chandra and Rishi Hazra},
+      year={2025},
+      eprint={2504.19043},
+      archivePrefix={arXiv},
+      primaryClass={stat.ME},
+      url={https://arxiv.org/abs/2504.19043}, 
+}
+```
+
 
