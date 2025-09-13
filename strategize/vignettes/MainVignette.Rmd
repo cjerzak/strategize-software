@@ -1,9 +1,9 @@
 ---
-title: "Strategizer Package Tutorial"
+title: "Strategize Package Tutorial"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Strategizer Package Tutorial}
+  %\VignetteIndexEntry{Strategize Package Tutorial}
   %\VignetteEngine{knitr::rmarkdown}
   %\usepackage[UTF-8]{inputenc}
 ---
@@ -23,7 +23,7 @@ Throughout, we will use raw `R` code chunks to illustrate typical usage in `R`, 
 
 ## Installation
 
-This tutorial assumes you have installed the fastrerandomize package, either from source or via GitHub:
+This tutorial assumes you have installed the strategize package, either from source or via GitHub:
 
 ```
 # If you haven't installed or set up the package:
