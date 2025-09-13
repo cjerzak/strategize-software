@@ -9,6 +9,7 @@ strategize.plot(
   pi_star_se_list = NULL,
   p_list = NULL,
   col.main = "black",
+  cex.main = 1.5,
   zStar = 1,
   xlim = NULL,
   ticks_type = "assignmentProbs",
