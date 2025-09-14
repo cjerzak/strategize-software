@@ -1,5 +1,6 @@
 options(error=NULL)
 # devtools::install_github("cjerzak/strategize-software/strategize")
+# strategize::build_backend()
 library(testthat); library(strategize)
 source(file.path("./Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
 
