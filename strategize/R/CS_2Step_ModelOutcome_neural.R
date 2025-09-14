@@ -1,6 +1,6 @@
 generate_ModelOutcome_neural <- function(){
   #generate_ModelOutcome_neural <- function(W_, Y_, mcmc_control, estimation_method, observables_) {
-  mcmc_control <-  mcmc_control = list(
+  mcmc_control <- list(
                                 backend = "numpyro",  # will override to use NumPyro-based MCMC
                                 n_samples_warmup = 500L,
                                 n_samples_mcmc   = 1000L,
@@ -12,7 +12,6 @@ generate_ModelOutcome_neural <- function(){
   # -------------------------------
   # Hyperparameters (JAX_TRANSFORMERS_GUIDE-style defaults)
   # -------------------------------
-  browser()
   ai <- get("ai", inherits = TRUE)  # assumes `ai()` util already available in your session
   ModelDims  <- ai(128L)                          # hidden width
   ModelDepth <- as.integer(2L)                    # transformer blocks
@@ -173,7 +172,7 @@ generate_ModelOutcome_neural <- function(){
   # -------------------------------
   # NumPyro / MCMC configuration (NUMPYRO_GUIDE style)
   # -------------------------------
-  numpyro$set_host_device_count(mcmc_control$n_chains)  # use all chains’ CPUs if parallel. :contentReference[oaicite:4]{index=4}
+  numpyro$set_host_device_count(mcmc_control$n_chains)  # use all chains’ CPUs if parallel. 
   
   # Kernel
   if (identical(mcmc_control$subsample_method, "batch")) {
