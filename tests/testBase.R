@@ -4,7 +4,7 @@ options(error=NULL)
 # devtools::install_github("cjerzak/strategize-software/strategize")
 # strategize::build_backend()
 library(testthat); library(strategize)
-source(file.path("./Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
+source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
 
 # test of helper functions
 test_that("toSimplex returns a valid probability vector", {
@@ -38,59 +38,63 @@ test_that("getSE handles missing values", {
 
 
 # Test core strategize functionality
-test_that("strategize returns a valid result", {
-
-  set.seed(1234321)
-  n <- 500
-  W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
-             matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
-  Y <- rnorm(n)
-  res <- strategize(
-    Y = Y,
-    W = W,
-    lambda = 0.1,
-    K = 1,
-    nSGD = 1,
-    force_gaussian = TRUE,
-    nFolds_glm = 1L,
-    nMonte_adversarial = 1L,
-    nMonte_Qglm = 1L,
-    compute_se = FALSE,
-    conda_env_required = FALSE
-  )
-  expect_type(res, "list")
-  expect_true("PiStar_point" %in% names(res))
-})
-
-# Test cross-validation functionality
-test_that("cv_strategize selects lambda", {
-  skip_if_not_installed("reticulate")
-  skip_if_not(reticulate::py_module_available("jax"),
-              "jax not available for cv_strategize tests")
-
-  set.seed(123)
-  n <- 80
-  W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
-             matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
-  Y <- rnorm(n)
-  cv <- cv_strategize(
-    Y = Y,
-    W = W,
-    lambda = 0.1,
-    folds = 2L,
-    respondent_id = 1:n,
-    respondent_task_id = 1:n,
-    K = 1,
-    nSGD = 1,
-    force_gaussian = TRUE,
-    nMonte_adversarial = 1L,
-    nMonte_Qglm = 1L,
-    nFolds_glm = 1L,
-    compute_se = FALSE,
-    conda_env_required = FALSE
-  )
-  expect_type(cv, "list")
-  expect_true("lambda" %in% names(cv))
-  expect_equal(cv$lambda, 0.1)
-})
+for(outcome_model_type in c("glm","neural")){
+  test_that(sprintf("strategize returns a valid result [%s]", outcome_model_type), {
+  
+    set.seed(1234321)
+    n <- 500
+    W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
+    Y <- rnorm(n)
+    res <- strategize(
+      Y = Y,
+      W = W,
+      lambda = 0.1,
+      K = 1,
+      nSGD = 1,
+      outcome_model_type = outcome_model_type, 
+      force_gaussian = TRUE,
+      nFolds_glm = 1L,
+      nMonte_adversarial = 1L,
+      nMonte_Qglm = 1L,
+      compute_se = FALSE,
+      conda_env_required = FALSE
+    )
+    expect_type(res, "list")
+    expect_true("PiStar_point" %in% names(res))
+  })
+  
+  # Test cross-validation functionality
+  test_that(sprintf("cv_strategize selects lambda [%s]",outcome_model_type), {
+    skip_if_not_installed("reticulate")
+    skip_if_not(reticulate::py_module_available("jax"),
+                "jax not available for cv_strategize tests")
+  
+    set.seed(123)
+    n <- 80
+    W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
+    Y <- rnorm(n)
+    cv <- cv_strategize(
+      Y = Y,
+      W = W,
+      lambda = 0.1,
+      folds = 2L,
+      respondent_id = 1:n,
+      respondent_task_id = 1:n,
+      K = 1,
+      nSGD = 1,
+      outcome_model_type = outcome_model_type, 
+      force_gaussian = TRUE,
+      nMonte_adversarial = 1L,
+      nMonte_Qglm = 1L,
+      nFolds_glm = 1L,
+      compute_se = FALSE,
+      conda_env_required = FALSE
+    )
+    expect_type(cv, "list")
+    expect_true("lambda" %in% names(cv))
+    expect_equal(cv$lambda, 0.1)
+  })
+}
 }
