@@ -73,22 +73,31 @@
 #'   \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
 #'   (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 #'   or average-case optimization).
-#' @param use_regularization Logical; if \code{TRUE}, penalty-based regularization 
-#'   is used for the outcome model. Usually set to \code{TRUE} for large designs. 
+#' @param use_regularization Logical; if \code{TRUE}, penalty-based regularization
+#'   is used for the outcome model. Usually set to \code{TRUE} for large designs.
+#'   Defaults to \code{TRUE}.
+#' @param force_gaussian Logical indicating whether a Gaussian family
+#'   (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary.
 #'   Defaults to \code{FALSE}.
-#' @param force_gaussian Logical indicating whether a Gaussian family 
-#'   (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary. 
-#'   Defaults to \code{FALSE}.
-#' @param a_init_sd A numeric controlling the random initialization scale for 
-#'   unconstrained parameters in gradient-based optimization. Defaults to 0.001. 
+#' @param temperature Optional numeric temperature controlling the smoothness of
+#'   Gumbel-Softmax sampling when exploring probability vectors. Smaller values
+#'   lead to distributions closer to the argmax. Defaults to \code{NULL}, which
+#'   allows internal defaults.
+#' @param a_init_sd A numeric controlling the random initialization scale for
+#'   unconstrained parameters in gradient-based optimization. Defaults to 0.001.
 #'   Larger values can help avoid local minima in complex outcome landscapes.
-#' @param penalty_type A character string specifying the type of penalty for the 
-#'   \emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"}, 
+#' @param learning_rate_max Base learning rate for gradient-based optimizers.
+#'   Defaults to \code{0.001}.
+#' @param penalty_type A character string specifying the type of penalty for the
+#'   \emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"},
 #'   or \code{"LogMaxProb"}. The default is \code{"KL"}.
-#' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors 
+#' @param outcome_model_type Character string indicating the outcome model to
+#'   use, such as \code{"glm"} for generalized linear models or \code{"neural"}
+#'   for a neural-network approximation. Defaults to \code{"glm"}.
+#' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors
 #'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
-#' @param conda_env A character specifying the name of a Conda environment for 
-#'   \pkg{reticulate}. If \code{NULL}, the default environment is used.
+#' @param conda_env A character specifying the name of a Conda environment for
+#'   \pkg{reticulate}. Defaults to \code{"strategize_env"}.
 #' @param conda_env_required Logical. If \code{TRUE}, errors if the specified 
 #'   Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
 #'   back gracefully.
