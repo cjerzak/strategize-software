@@ -23,18 +23,21 @@ strategize(
   nSGD = 100,
   diff = FALSE,
   adversarial = FALSE,
-  use_regularization = FALSE,
+  use_regularization = TRUE,
   force_gaussian = FALSE,
-  a_init_sd = 0,
+  a_init_sd = 0.001,
+  outcome_model_type = "glm",
   penalty_type = "KL",
-  compute_se = TRUE,
-  conda_env = NULL,
+  compute_se = FALSE,
+  conda_env = "strategize_env",
   conda_env_required = FALSE,
   conf_level = 0.90,
   nFolds_glm = 3L,
   folds = NULL,
   nMonte_adversarial = 5L,
   nMonte_Qglm = 100L,
+  learning_rate_max = 0.001,
+  temperature = 0.5,
   use_optax = FALSE,
   optim_type = "gd"
 )
@@ -109,7 +112,7 @@ Defaults to \code{FALSE}.}
 
 \item{use_regularization}{Logical indicating whether to regularize the outcome model (in addition
 to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
-high-dimensional designs. Defaults to \code{FALSE}.}
+high-dimensional designs. Defaults to \code{TRUE}.}
 
 \item{force_gaussian}{Logical indicating whether to force a Gaussian-based outcome modeling
 approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
@@ -117,18 +120,22 @@ to choose a more appropriate link (e.g., \code{"binomial"}). Defaults to \code{F
 
 \item{a_init_sd}{Numeric scalar specifying the standard deviation for random initialization
 of unconstrained parameters used in the gradient-based search over factor-level probabilities.
-Defaults to \code{0}.}
+Defaults to \code{0.001}.}
+
+\item{outcome_model_type}{Character string specifying the outcome model to use. Currently
+supports \code{"glm"} for generalized linear models or \code{"neural"} for a neural-network
+approximation. Defaults to \code{"glm"}.}
 
 \item{penalty_type}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
 away from the baseline \code{p_list}. Defaults to \code{"KL"}.}
 
 \item{compute_se}{Logical indicating whether standard errors should be computed for the final
-estimates (via the delta method or related expansions). Defaults to \code{TRUE}.}
+estimates (via the delta method or related expansions). Defaults to \code{FALSE}.}
 
 \item{conda_env}{A character string naming a Python conda environment that includes \pkg{jax},
 \pkg{optax}, and other dependencies. If not \code{NULL}, the function attempts to activate
-that environment. Defaults to \code{NULL}.}
+that environment. Defaults to \code{"strategize_env"}.}
 
 \item{conda_env_required}{Logical; if \code{TRUE}, raises an error if the environment given by
 \code{conda_env} cannot be activated. Otherwise, the function attempts to proceed with any
@@ -150,6 +157,13 @@ expected payoffs. Defaults to \code{5L}.}
 \item{nMonte_Qglm}{Integer specifying the number of Monte Carlo samples for evaluating or
 approximating the quantity of interest under certain outcomes or distributions. Defaults to
 \code{100L}.}
+
+\item{learning_rate_max}{Base learning rate for gradient-based optimizers. Defaults to
+\code{0.001}.}
+
+\item{temperature}{Numeric temperature parameter used in Gumbel-Softmax sampling to smooth
+the exploration of the probability simplex. Smaller values yield distributions closer to the
+argmax. Defaults to \code{0.5}.}
 
 \item{use_optax}{Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
 library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
