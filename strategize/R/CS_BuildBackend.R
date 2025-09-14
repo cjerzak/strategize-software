@@ -36,6 +36,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto"){
                         "jax",
                         "jaxlib",
                         "equinox", 
+                        "numpyro", 
                         "optax")
   reticulate::py_install(Packages2Install, conda = conda, pip = TRUE, envname = conda_env)
 }
