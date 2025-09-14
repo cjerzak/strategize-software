@@ -293,6 +293,7 @@ cv_strategize       <-          function(
             lambda = lambda__,
   
             # hyperparameters
+            outcome_model_type = outcome_model_type,
             temperature = temperature, 
             compute_se = F, 
             nSGD = nSGD_use,
@@ -358,6 +359,7 @@ cv_strategize       <-          function(
                               lambda = lambda__, # this lambda is the one chosen via CV
 
                               # hyperparameters
+                              outcome_model_type = outcome_model_type,
                               temperature = temperature, 
                               optim_type = optim_type,
                               force_gaussian = force_gaussian,
