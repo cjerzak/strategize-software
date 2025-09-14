@@ -40,7 +40,7 @@ test_that("strategize returns a valid result", {
   skip_if_not_installed("reticulate")
 
   set.seed(123)
-  n <- 20
+  n <- 500
   W <- matrix(rep(c("A", "B"), length.out = n), ncol = 1)
   Y <- rnorm(n)
   res <- strategize(
