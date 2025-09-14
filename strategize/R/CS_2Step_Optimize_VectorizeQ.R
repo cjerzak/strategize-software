@@ -46,13 +46,19 @@ InitializeQMonteFxns <- function(){
       #plot(strenv$np$array( TSAMP_dag$val$to_concrete_value() )-strenv$np$array( TSAMP_dag_PrimaryComp$val ) ,
            #strenv$np$array( PrimaryVoteShareDagAmongDag$val$to_concrete_value() ) )
 
-      # win based on relaxed sample from bernoulli 
-      Indicator_AstWinsPrimary <- strenv$oryx$distributions$RelaxedBernoulli(
-              temperature = MNtemp, probs = PrimaryVoteShareAstAmongAst
-            )$sample(seed = SEED_IN_LOOP + 9992L)
-      Indicator_DagWinsPrimary <- strenv$oryx$distributions$RelaxedBernoulli(
-              temperature = MNtemp, probs = PrimaryVoteShareDagAmongDag
-            )$sample(seed = SEED_IN_LOOP + 153L)
+      # win based on relaxed sample from bernoulli using oryx (depreciated)
+      #Indicator_AstWinsPrimary <- strenv$oryx$distributions$RelaxedBernoulli(
+              #temperature = MNtemp, probs = PrimaryVoteShareAstAmongAst )$sample(seed = SEED_IN_LOOP + 9992L)
+      #Indicator_DagWinsPrimary <- strenv$oryx$distributions$RelaxedBernoulli(
+              #temperature = MNtemp, probs = PrimaryVoteShareDagAmongDag )$sample(seed = SEED_IN_LOOP + 153L)
+      
+      # win based on relaxed sample from bernoulli using base JAX
+      Indicator_AstWinsPrimary <- strenv$jax$nn$sigmoid(
+        (strenv$jnp$log(PrimaryVoteShareAstAmongAst / (1 - PrimaryVoteShareAstAmongAst)) +
+           strenv$jax$random$gumbel(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 9992L))) / MNtemp)
+      Indicator_DagWinsPrimary <- strenv$jax$nn$sigmoid(
+        (strenv$jnp$log(PrimaryVoteShareDagAmongDag / (1 - PrimaryVoteShareDagAmongDag)) +
+           strenv$jax$random$gumbel(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 153L))) / MNtemp)
     }
   
     # combine all information together
