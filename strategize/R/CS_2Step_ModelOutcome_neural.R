@@ -97,7 +97,7 @@ generate_ModelOutcome_neural <- function(){
                            subsample_size = ai(mcmc_control$batch_size),
                            dim = -1L) %as% "idx", {
                              X_b <- jnp$take(X, idx, axis = 0L)
-                             Y_b <- if (likelihood == "categorical") jnp$take(Y_obs, idx) else jnp$take(Y_obs, idx)
+                             Y_b <- jnp$take(Y_obs, idx, axis = 0L)
                              do_forward_and_lik_(X_b, Y_b)
                            })
       } else {
@@ -291,8 +291,16 @@ generate_ModelOutcome_neural <- function(){
   
   # Export objects (match your pattern)
   EST_COEFFICIENTS_tf <- ParamsMean$W_out  # exposed for downstream use
+  EST_INTERCEPT_tf <- jnp$expand_dims(ParamsMean$b_out, 0L)
   my_model <- function(X_new) TransformerPredict(ParamsMean, X_new)
-  
+
+  # placeholders for compatibility with downstream code
+  main_info <- data.frame()
+  interaction_info <- data.frame()
+  interaction_info_PreRegularization <- data.frame()
+  regularization_adjust_hash <- numeric(0)
+  main_dat <- matrix(0, 0, 0)
+
   # Compute posterior covariance matrix for W_out (flattened)
   wout_shape <- PosteriorDraws$W_out$shape
   nchains <- wout_shape[[1L]]
@@ -303,6 +311,8 @@ generate_ModelOutcome_neural <- function(){
   wout_flat <- jnp$reshape(PosteriorDraws$W_out, list(nchains, nsamps, total_params))
   wout_all <- jnp$reshape(wout_flat, list(nchains * nsamps, total_params))
   EST_VCOV_tf <- jnp$cov(wout_all, rowvar = FALSE)
+  vcov_OutcomeModel <- as.matrix(reticulate::py_to_r(EST_VCOV_tf))
+  my_mean <- as.numeric(reticulate::py_to_r(jnp$reshape(ParamsMean$W_out, -1L)))
   
   message(sprintf("Bayesian Transformer complete. Heads=%d, Depth=%d, Hidden=%d; likelihood=%s.",
                   TransformerHeads, ModelDepth, MD_int, likelihood))
