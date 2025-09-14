@@ -23,7 +23,7 @@
 #' @export
 #' @md
 
-build_backend <- function(conda_env = "strategize", conda = "auto"){
+build_backend <- function(conda_env = "strategize_env", conda = "auto"){
   # Create a new conda environment
   reticulate::conda_create(envname = conda_env,
                            conda = conda,

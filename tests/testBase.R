@@ -1,8 +1,9 @@
-library(testthat)
+options(error=NULL)
+# devtools::install_github("cjerzak/strategize-software/strategize")
+library(testthat); library(strategize)
+source(file.path("./Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
 
-# Load helper functions directly
-source(file.path("strategize", "R", "CS_HelperFxns.R"))
-
+# test of helper functions
 test_that("toSimplex returns a valid probability vector", {
   x <- c(0.1, -0.2, 0.3)
   s <- toSimplex(x)
@@ -34,11 +35,8 @@ test_that("getSE handles missing values", {
 
 
 # Test core strategize functionality
-
 test_that("strategize returns a valid result", {
   skip_if_not_installed("reticulate")
-  skip_if_not(reticulate::py_module_available("jax"),
-              "jax not available for strategize tests")
 
   set.seed(123)
   n <- 20
@@ -62,7 +60,6 @@ test_that("strategize returns a valid result", {
 })
 
 # Test cross-validation functionality
-
 test_that("cv_strategize selects lambda", {
   skip_if_not_installed("reticulate")
   skip_if_not(reticulate::py_module_available("jax"),

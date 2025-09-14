@@ -202,7 +202,7 @@ cv_strategize       <-          function(
                                             learning_rate_max = 0.001, 
                                             penalty_type = "KL",
                                             compute_se = T,
-                                            conda_env = NULL,
+                                            conda_env = "strategize_env",
                                             conda_env_required = F,
                                             conf_level = 0.90,
                                             nFolds_glm = 3L,

@@ -308,7 +308,7 @@ strategize       <-          function(
                                             a_init_sd = 0.001,
                                             penalty_type = "KL",
                                             compute_se = FALSE,
-                                            conda_env = NULL,
+                                            conda_env = "strategize_env",
                                             conda_env_required = FALSE,
                                             conf_level = 0.90,
                                             nFolds_glm = 3L,
