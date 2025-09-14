@@ -32,10 +32,11 @@ cv_strategize(
   a_init_sd = 0.001,
   learning_rate_max = 0.001,
   penalty_type = "KL",
+  outcome_model_type = "glm",
   compute_se = T,
-  conda_env = NULL,
+  conda_env = "strategize_env",
   conda_env_required = F,
-  conf_level = 0.9,
+  conf_level = 0.90,
   nFolds_glm = 3L,
   nMonte_adversarial = 5L,
   nMonte_Qglm = 100L,
@@ -130,27 +131,38 @@ set \code{TRUE} in certain difference-of-utility designs.}
 (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 or average-case optimization).}
 
-\item{use_regularization}{Logical; if \code{TRUE}, penalty-based regularization 
-is used for the outcome model. Usually set to \code{TRUE} for large designs. 
+\item{use_regularization}{Logical; if \code{TRUE}, penalty-based regularization
+is used for the outcome model. Usually set to \code{TRUE} for large designs.
+Defaults to \code{TRUE}.}
+
+\item{force_gaussian}{Logical indicating whether a Gaussian family
+(\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary.
 Defaults to \code{FALSE}.}
 
-\item{force_gaussian}{Logical indicating whether a Gaussian family 
-(\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary. 
-Defaults to \code{FALSE}.}
+\item{temperature}{Optional numeric temperature controlling the smoothness of
+Gumbel-Softmax sampling when exploring probability vectors. Smaller values lead
+to distributions closer to the argmax. Defaults to \code{NULL}.}
 
-\item{a_init_sd}{A numeric controlling the random initialization scale for 
-unconstrained parameters in gradient-based optimization. Defaults to 0.001. 
+\item{a_init_sd}{A numeric controlling the random initialization scale for
+unconstrained parameters in gradient-based optimization. Defaults to 0.001.
 Larger values can help avoid local minima in complex outcome landscapes.}
 
-\item{penalty_type}{A character string specifying the type of penalty for the 
-\emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"}, 
+\item{learning_rate_max}{Base learning rate for gradient-based optimizers.
+Defaults to \code{0.001}.}
+
+\item{penalty_type}{A character string specifying the type of penalty for the
+\emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}. The default is \code{"KL"}.}
 
-\item{compute_se}{Logical; if \code{TRUE}, attempts to compute standard errors 
+\item{outcome_model_type}{Character string indicating the outcome model to
+use, such as \code{"glm"} for generalized linear models or \code{"neural"}
+for a neural-network approximation. Defaults to \code{"glm"}.}
+
+\item{compute_se}{Logical; if \code{TRUE}, attempts to compute standard errors
 using M-estimation or the Delta method. Defaults to \code{TRUE}.}
 
-\item{conda_env}{A character specifying the name of a Conda environment for 
-\pkg{reticulate}. If \code{NULL}, the default environment is used.}
+\item{conda_env}{A character specifying the name of a Conda environment for
+\pkg{reticulate}. Defaults to \code{"strategize_env"}.}
 
 \item{conda_env_required}{Logical. If \code{TRUE}, errors if the specified 
 Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
