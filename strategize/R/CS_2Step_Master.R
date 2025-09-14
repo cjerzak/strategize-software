@@ -306,6 +306,7 @@ strategize       <-          function(
                                             use_regularization = TRUE,
                                             force_gaussian = FALSE,
                                             a_init_sd = 0.001,
+                                            outcome_model_type = "glm",
                                             penalty_type = "KL",
                                             compute_se = FALSE,
                                             conda_env = "strategize_env",
@@ -444,8 +445,8 @@ strategize       <-          function(
       competing_group_variable_candidate_ <- competing_group_variable_candidate[ indi_ ]
 
       # run models with inputs: W_; Y_; varcov_cluster_variable_;
-      #initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n") # linear w interactions
-      initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n") # neural
+      if(outcome_model_type == "glm"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")} # linear w interactions
+      if(outcome_model_type == "neural"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n") 
       initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
       
