@@ -122,7 +122,7 @@
 #'
 #' @param use_regularization Logical indicating whether to regularize the outcome model (in addition
 #'   to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
-#'   high-dimensional designs. Defaults to \code{FALSE}.
+#'   high-dimensional designs. Defaults to \code{TRUE}.
 #'
 #' @param force_gaussian Logical indicating whether to force a Gaussian-based outcome modeling
 #'   approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
@@ -130,18 +130,22 @@
 #'
 #' @param a_init_sd Numeric scalar specifying the standard deviation for random initialization
 #'   of unconstrained parameters used in the gradient-based search over factor-level probabilities.
-#'   Defaults to \code{0}.
+#'   Defaults to \code{0.001}.
+#'
+#' @param outcome_model_type Character string specifying the outcome model to use. Currently
+#'   supports \code{"glm"} for generalized linear models or \code{"neural"} for a neural-network
+#'   approximation. Defaults to \code{"glm"}.
 #'
 #' @param penalty_type A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 #'   or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
 #'   away from the baseline \code{p_list}. Defaults to \code{"KL"}.
 #'
 #' @param compute_se Logical indicating whether standard errors should be computed for the final
-#'   estimates (via the delta method or related expansions). Defaults to \code{TRUE}.
+#'   estimates (via the delta method or related expansions). Defaults to \code{FALSE}.
 #'
 #' @param conda_env A character string naming a Python conda environment that includes \pkg{jax},
 #'   \pkg{optax}, and other dependencies. If not \code{NULL}, the function attempts to activate
-#'   that environment. Defaults to \code{NULL}.
+#'   that environment. Defaults to \code{"strategize_env"}.
 #'
 #' @param conda_env_required Logical; if \code{TRUE}, raises an error if the environment given by
 #'   \code{conda_env} cannot be activated. Otherwise, the function attempts to proceed with any
@@ -163,6 +167,13 @@
 #' @param nMonte_Qglm Integer specifying the number of Monte Carlo samples for evaluating or
 #'   approximating the quantity of interest under certain outcomes or distributions. Defaults to
 #'   \code{100L}.
+#'
+#' @param learning_rate_max Base learning rate for gradient-based optimizers. Defaults to
+#'   \code{0.001}.
+#'
+#' @param temperature Numeric temperature parameter used in Gumbel-Softmax sampling to smooth
+#'   the exploration of the probability simplex. Smaller values yield distributions closer to the
+#'   argmax. Defaults to \code{0.5}.
 #'
 #' @param use_optax Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
 #'   library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
