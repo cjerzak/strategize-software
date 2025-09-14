@@ -405,97 +405,95 @@ strategize       <-          function(
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
   # model outcomes
-    message("Initializing outcome models...")
-    holdout_indicator  <-  1*(K == 1)
-    if(K > 1 & !use_regularization){ warning("K > 1; Forcing regularization...");use_regularization <- T }
-    use_regularization_ORIG <- use_regularization
+  message("Initializing outcome models...")
+  holdout_indicator  <-  1*(K == 1)
+  if(K > 1 & !use_regularization){ warning("K > 1; Forcing regularization...");use_regularization <- T }
+  use_regularization_ORIG <- use_regularization
 
-    RoundsPool <- nRounds <- GroupsPool <- 1
-    if(adversarial){
-      nRounds <- length( RoundsPool <- c(0,1) ) 
-      GroupsPool <- sort(unique(competing_group_variable_candidate))
-    }
+  RoundsPool <- nRounds <- GroupsPool <- 1
+  if(adversarial){
+    nRounds <- length( RoundsPool <- c(0,1) ) 
+    GroupsPool <- sort(unique(competing_group_variable_candidate))
+  }
 
-    for(Round_ in RoundsPool){
-    for(GroupCounter in 1:length(GroupsPool)){
-      print(c(Round_,GroupCounter))
-      print(c(Round_, GroupCounter))
-      use_regularization <- use_regularization_ORIG
-      if(adversarial == F){ indi_ <- 1:length( Y )  }
-      if(adversarial == T){
-        if(Round_ == 0){
-          indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
-                      ( competing_group_competition_variable_candidate == "Same" &
-                          competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
-          # cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
+  for(Round_ in RoundsPool){
+  for(GroupCounter in 1:length(GroupsPool)){
+    print(c(Round_,GroupCounter))
+    print(c(Round_, GroupCounter))
+    use_regularization <- use_regularization_ORIG
+    if(adversarial == F){ indi_ <- 1:length( Y )  }
+    if(adversarial == T){
+      if(Round_ == 0){
+        indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                    ( competing_group_competition_variable_candidate == "Same" &
+                        competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
+        # cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
 
-        }
-        if(Round_ == 1){
-          indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
-                            ( competing_group_competition_variable_candidate == "Different" &
-                                competing_group_variable_candidate %in% GroupsPool) )
-          # this group comes first 
-          indi_which_CandidateThisGroup <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
-                                   ( competing_group_competition_variable_candidate == "Different" &
-                                       competing_group_variable_candidate == GroupsPool[GroupCounter]) )
-          #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
-        }
-        strenv$AstProp <- prop.table(table(competing_group_variable_respondent[
-                      competing_group_variable_respondent %in% GroupsPool]))[1]
-        strenv$DagProp <- prop.table(table(competing_group_variable_respondent[
-                          competing_group_variable_respondent %in% GroupsPool]))[2]
       }
-
-      # subset data
-      W_ <- as.matrix(W[indi_,]); Y_ <- Y[indi_];
-      varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
-      pair_id_ <- pair_id[ indi_ ]
-      competing_group_competition_variable_candidate_ <- competing_group_competition_variable_candidate[ indi_ ]
-      competing_group_variable_respondent_ <- competing_group_variable_respondent[ indi_ ]
-      competing_group_variable_candidate_ <- competing_group_variable_candidate[ indi_ ]
-
-      # run models with inputs: W_; Y_; varcov_cluster_variable_;
-      if(outcome_model_type == "glm"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")} # linear w interactions
-      if(outcome_model_type == "neural"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n") 
-      initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
-      eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
-      
-      # define combined parameter vector & fxn for reextracting intercept & coefficient 
-      REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf, 
-                                                           EST_COEFFICIENTS_tf), 0L)
-      gather_fxn <- compile_fxn(function(x){
-        INTERCEPT_ <- strenv$jnp$expand_dims(strenv$jnp$take(x,0L),0L)
-        COEFFS_ <- strenv$jnp$take(x, strenv$jnp$array( 1L:(strenv$jnp$shape(x)[[1]]-1L) ) )
-        if(length(COEFFS_$shape)==0){
-          COEFFS_ <- strenv$jnp$expand_dims(strenv$jnp$expand_dims(COEFFS_, 0L), 0L) 
-        }
-        return( list(INTERCEPT_, COEFFS_)) } ) 
-
-      # rename as appropriate
-      ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info",
-                      "interaction_info_PreRegularization", "REGRESSION_PARAMS_jax",
-                      "regularization_adjust_hash","main_dat", "my_mean",
-                      "EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
-      round_text <- ifelse( Round_==0, yes="0", no="")
-      if( (doAst <- (GroupCounter == 1)  ) ){ # do ast
-          tmp <- sapply(ret_chunks,function(chunk_){ 
-            eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment)
-          })
+      if(Round_ == 1){
+        indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                          ( competing_group_competition_variable_candidate == "Different" &
+                              competing_group_variable_candidate %in% GroupsPool) )
+        # this group comes first 
+        indi_which_CandidateThisGroup <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                                 ( competing_group_competition_variable_candidate == "Different" &
+                                     competing_group_variable_candidate == GroupsPool[GroupCounter]) )
+        #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
       }
-      if( !doAst ){ # do dag
-          tmp <- sapply(ret_chunks,function(chunk_){
-            eval(parse(text = sprintf("%s_dag%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) 
-          })
-       }
-      # rm( tmp )
+      strenv$AstProp <- prop.table(table(competing_group_variable_respondent[
+                    competing_group_variable_respondent %in% GroupsPool]))[1]
+      strenv$DagProp <- prop.table(table(competing_group_variable_respondent[
+                        competing_group_variable_respondent %in% GroupsPool]))[2]
     }
+
+    # subset data
+    W_ <- as.matrix(W[indi_,]); Y_ <- Y[indi_];
+    varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
+    pair_id_ <- pair_id[ indi_ ]
+    competing_group_competition_variable_candidate_ <- competing_group_competition_variable_candidate[ indi_ ]
+    competing_group_variable_respondent_ <- competing_group_variable_respondent[ indi_ ]
+    competing_group_variable_candidate_ <- competing_group_variable_candidate[ indi_ ]
+
+    # run models with inputs: W_; Y_; varcov_cluster_variable_;
+    if(outcome_model_type == "glm"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n") } # linear w interactions
+    if(outcome_model_type == "neural"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n")}  
+    initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
+    eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
+    
+    # define combined parameter vector & fxn for reextracting intercept & coefficient 
+    REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf, 
+                                                         EST_COEFFICIENTS_tf), 0L)
+    gather_fxn <- compile_fxn(function(x){
+      INTERCEPT_ <- strenv$jnp$expand_dims(strenv$jnp$take(x,0L),0L)
+      COEFFS_ <- strenv$jnp$take(x, strenv$jnp$array( 1L:(strenv$jnp$shape(x)[[1]]-1L) ) )
+      if(length(COEFFS_$shape)==0){
+        COEFFS_ <- strenv$jnp$expand_dims(strenv$jnp$expand_dims(COEFFS_, 0L), 0L) 
+      }
+      return( list(INTERCEPT_, COEFFS_)) } ) 
+
+    # rename as appropriate
+    ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info",
+                    "interaction_info_PreRegularization", "REGRESSION_PARAMS_jax",
+                    "regularization_adjust_hash","main_dat", "my_mean",
+                    "EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
+    round_text <- ifelse( Round_==0, yes="0", no="")
+    if( (doAst <- (GroupCounter == 1)  ) ){ # do ast
+        tmp <- sapply(ret_chunks,function(chunk_){ 
+          eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment)
+        })
     }
+    if( !doAst ){ # do dag
+        tmp <- sapply(ret_chunks,function(chunk_){
+          eval(parse(text = sprintf("%s_dag%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) 
+        })
+     }
+    # rm( tmp )
+  }
   }
 
   #for(suffix in c("ast0", "dag0", "dag")) {
   for( suffix in c("ast0", "dag0", "ast", "dag") ) {
     if( !paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp") %in% ls() ){
-      browser()
       assign(paste0("EST_INTERCEPT_tf_", suffix, "_jnp"), EST_INTERCEPT_tf_ast_jnp)
       assign(paste0("EST_COEFFICIENTS_tf_", suffix, "_jnp"), EST_COEFFICIENTS_tf_ast_jnp)
       assign(paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp"), REGRESSION_PARAMS_jax_ast_jnp)
