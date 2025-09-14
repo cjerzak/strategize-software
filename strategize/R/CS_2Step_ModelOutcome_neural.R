@@ -1,5 +1,4 @@
 generate_ModelOutcome_neural <- function(){
-  #generate_ModelOutcome_neural <- function(W_, Y_, mcmc_control, estimation_method, observables_) {
   mcmc_control <- list(
                                 backend = "numpyro",  # will override to use NumPyro-based MCMC
                                 n_samples_warmup = 500L,
@@ -9,8 +8,9 @@ generate_ModelOutcome_neural <- function(){
                                 subsample_method = "full", 
                                 n_thin_by = 1L, 
                                 n_chains = 2L)
+  browser()
   # -------------------------------
-  # Hyperparameters (JAX_TRANSFORMERS_GUIDE-style defaults)
+  # Hyperparameters
   # -------------------------------
   ai <- get("ai", inherits = TRUE)  # assumes `ai()` util already available in your session
   ModelDims  <- ai(128L)                          # hidden width
