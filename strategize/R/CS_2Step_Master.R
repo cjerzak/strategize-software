@@ -493,8 +493,9 @@ strategize       <-          function(
   }
 
   #for(suffix in c("ast0", "dag0", "dag")) {
-  for(suffix in c("ast0", "dag0", "ast", "dag")) {
-    if(!paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp") %in% ls()){
+  for( suffix in c("ast0", "dag0", "ast", "dag") ) {
+    if( !paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp") %in% ls() ){
+      browser()
       assign(paste0("EST_INTERCEPT_tf_", suffix, "_jnp"), EST_INTERCEPT_tf_ast_jnp)
       assign(paste0("EST_COEFFICIENTS_tf_", suffix, "_jnp"), EST_COEFFICIENTS_tf_ast_jnp)
       assign(paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp"), REGRESSION_PARAMS_jax_ast_jnp)
