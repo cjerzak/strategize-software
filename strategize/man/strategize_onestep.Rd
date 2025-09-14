@@ -116,8 +116,7 @@ of \code{X} for advanced modeling. If \code{NULL}, the function may factorize in
 \item{n_full_cycles}{If \code{>1}, repeats training cycles without restarts for a total
 number of gradient steps. Useful for stability checks.}
 
-\item{optim_method}{A character specifying the optimization backend (e.g., \code{"tf"} for
-TensorFlow-based, or \code{"jax"} for JAX-based). Defaults to \code{"tf"} if available.}
+\item{optim_method}{A character specifying the optimization backend. Defaults to \code{"jax"} if available.}
 
 \item{sg_method}{A character controlling the type of gradient updates (e.g., \code{"adanorm"}, \code{"wngrad"}).
 If \code{NULL}, a default method is chosen.}
