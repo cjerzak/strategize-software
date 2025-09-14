@@ -1,14 +1,15 @@
-initialize_jax <- function(conda_env = "strategize", 
+initialize_jax <- function(conda_env = "strategize_env", 
                            conda_env_required = TRUE) {
   library(reticulate)
   # Load reticulate (Declared in Imports: in DESCRIPTION)
+  browser()
   reticulate::use_condaenv(condaenv = conda_env, required = conda_env_required)
   
   # Import Python packages once, storing them in strenv
   strenv$jax <- reticulate::import("jax")
   strenv$jnp <- reticulate::import("jax.numpy")
   strenv$np  <- reticulate::import("numpy")
-  strenv$oryx  <- reticulate::import("tensorflow_probability.substrates.jax")
+  # strenv$oryx  <- reticulate::import("tensorflow_probability.substrates.jax") # depreciated 
   strenv$py_gc  <- reticulate::import("gc")
   strenv$optax  <- reticulate::import("optax")
   

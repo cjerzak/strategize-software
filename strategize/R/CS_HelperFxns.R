@@ -47,9 +47,16 @@ getMultinomialSamp_R_DEPRECIATED <- function(
       pi_selection <- strenv$jnp$concatenate(list(pi_selection, pi_implied)) # add LAST entry 
     }
 
-    TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
-      probs = pi_selection$transpose(),
-      temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
+    # Sample from RelaxedOneHotCategorical using oryx
+    # TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
+      # probs = pi_selection$transpose(),
+      #temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
+    
+    # Sample from RelaxedOneHotCategorical using base JAX
+    logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
+    gumbels <- strenv$jax$random$gumbel(jax_seed, shape = logits$shape)
+    TSamp <- strenv$jax$nn$softmax( ((logits + gumbels) / temperature),
+                                    axis = 0L)$transpose()
 
     # if implicit, drop a term to keep correct shapes
     #if(ParameterizationType == "Implicit"){ TSamp <- strenv$jnp$take(TSamp,strenv$jnp$array(ai(1L:length(zer))),axis=0L) } #drop FIRST entry
@@ -113,11 +120,16 @@ getMultinomialSamp_R <- function(pi_value,
       pi_selection <- strenv$jnp$concatenate(list(pi_selection, pi_implied), 0L)
     }
     
-    # Sample from RelaxedOneHotCategorical
-    TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
-      probs = pi_selection$transpose(),
-      temperature = temperature
-    )$sample(size = 1L, seed = jax_seed)$transpose()
+    # Sample from RelaxedOneHotCategorical using oryx - depreciated 
+    #TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
+      #probs = pi_selection$transpose(),
+      #temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
+    
+    # Sample from RelaxedOneHotCategorical using base JAX
+    logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
+    gumbels <- strenv$jax$random$gumbel(jax_seed, shape = logits$shape)
+    TSamp <- strenv$jax$nn$softmax( ((logits + gumbels) / temperature),
+                                   axis = 0L)$transpose()
     
     # If Implicit, remove that last extra dimension after sampling
     if(ParameterizationType == "Implicit"){

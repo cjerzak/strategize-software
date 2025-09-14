@@ -100,8 +100,7 @@
 #' @param momentum Numeric specifying momentum for stochastic gradient descent. Defaults to 0.99.
 #' @param n_full_cycles If \code{>1}, repeats training cycles without restarts for a total
 #'   number of gradient steps. Useful for stability checks.
-#' @param optim_method A character specifying the optimization backend (e.g., \code{"tf"} for
-#'   TensorFlow-based, or \code{"jax"} for JAX-based). Defaults to \code{"tf"} if available.
+#' @param optim_method A character specifying the optimization backend. Defaults to \code{"jax"} if available.
 #' @param sg_method A character controlling the type of gradient updates (e.g., \code{"adanorm"}, \code{"wngrad"}).
 #'   If \code{NULL}, a default method is chosen.
 #' @param forceSEs Logical. If \code{TRUE}, attempts to compute standard errors by M-estimation or the

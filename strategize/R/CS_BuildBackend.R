@@ -27,12 +27,12 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto"){
   # Create a new conda environment
   reticulate::conda_create(envname = conda_env,
                            conda = conda,
-                           python_version = "3.11")
+                           python_version = "3.12")
   
   # Install Python packages within the environment
   Packages2Install <- c("numpy",
-                        "tensorflow",
-                        "tensorflow_probability",
+                        #"tensorflow",
+                        #"tensorflow_probability",  depreciated 
                         "jax",
                         "jaxlib",
                         "equinox", 
