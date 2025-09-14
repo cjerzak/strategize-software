@@ -36,7 +36,7 @@ cv_strategize(
   compute_se = T,
   conda_env = "strategize_env",
   conda_env_required = F,
-  conf_level = 0.90,
+  conf_level = 0.9,
   nFolds_glm = 3L,
   nMonte_adversarial = 5L,
   nMonte_Qglm = 100L,
@@ -140,8 +140,9 @@ Defaults to \code{TRUE}.}
 Defaults to \code{FALSE}.}
 
 \item{temperature}{Optional numeric temperature controlling the smoothness of
-Gumbel-Softmax sampling when exploring probability vectors. Smaller values lead
-to distributions closer to the argmax. Defaults to \code{NULL}.}
+Gumbel-Softmax sampling when exploring probability vectors. Smaller values
+lead to distributions closer to the argmax. Defaults to \code{NULL}, which
+allows internal defaults.}
 
 \item{a_init_sd}{A numeric controlling the random initialization scale for
 unconstrained parameters in gradient-based optimization. Defaults to 0.001.

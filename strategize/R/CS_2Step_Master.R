@@ -405,9 +405,8 @@ strategize       <-          function(
   factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
 
   # model outcomes
-  message("Initializing outcome models...")
-  holdout_indicator  <-  1*(K == 1)
-  if(T == T){
+    message("Initializing outcome models...")
+    holdout_indicator  <-  1*(K == 1)
     if(K > 1 & !use_regularization){ warning("K > 1; Forcing regularization...");use_regularization <- T }
     use_regularization_ORIG <- use_regularization
 

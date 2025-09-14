@@ -6,7 +6,7 @@
 'JAX' and 'np' are installed. Users may also create such an environment
 themselves.}
 \usage{
-build_backend(conda_env = "strategize", conda = "auto")
+build_backend(conda_env = "strategize_env", conda = "auto")
 }
 \arguments{
 \item{conda_env}{(default = \code{"strategize"}) Name of the conda environment in which to place the backends.}
