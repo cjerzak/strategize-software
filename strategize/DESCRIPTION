@@ -49,3 +49,6 @@ Suggests:
 VignetteBuilder: knitr
 RoxygenNote: 7.3.2
 NeedsCompilation: no
+RemoteType: local
+RemotePkgRef: local::~/Documents/strategize-software/strategize
+RemoteUrl: /Users/cjerzak/Documents/strategize-software/strategize

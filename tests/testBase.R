@@ -1,4 +1,6 @@
+{
 options(error=NULL)
+# install.packages("~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F)
 # devtools::install_github("cjerzak/strategize-software/strategize")
 # strategize::build_backend()
 library(testthat); library(strategize)
@@ -37,11 +39,11 @@ test_that("getSE handles missing values", {
 
 # Test core strategize functionality
 test_that("strategize returns a valid result", {
-  skip_if_not_installed("reticulate")
 
-  set.seed(123)
+  set.seed(1234321)
   n <- 500
-  W <- matrix(rep(c("A", "B"), length.out = n), ncol = 1)
+  W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+             matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
   Y <- rnorm(n)
   res <- strategize(
     Y = Y,
@@ -68,7 +70,8 @@ test_that("cv_strategize selects lambda", {
 
   set.seed(123)
   n <- 80
-  W <- matrix(rep(c("A", "B"), each = n/2), ncol = 1)
+  W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+             matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
   Y <- rnorm(n)
   cv <- cv_strategize(
     Y = Y,
@@ -90,4 +93,4 @@ test_that("cv_strategize selects lambda", {
   expect_true("lambda" %in% names(cv))
   expect_equal(cv$lambda, 0.1)
 })
-
+}

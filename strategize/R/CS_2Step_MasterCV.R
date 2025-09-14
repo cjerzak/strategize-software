@@ -201,6 +201,7 @@ cv_strategize       <-          function(
                                             a_init_sd = 0.001,
                                             learning_rate_max = 0.001, 
                                             penalty_type = "KL",
+                                            outcome_model_type = "glm",
                                             compute_se = T,
                                             conda_env = "strategize_env",
                                             conda_env_required = F,

@@ -8,10 +8,9 @@ initialize_jax <- function(conda_env = "strategize_env",
   strenv$jax <- reticulate::import("jax")
   strenv$jnp <- reticulate::import("jax.numpy")
   strenv$np  <- reticulate::import("numpy")
-  # strenv$oryx  <- reticulate::import("tensorflow_probability.substrates.jax") # depreciated 
   strenv$py_gc  <- reticulate::import("gc")
+  strenv$numpyro  <- reticulate::import("numpyro")
   strenv$optax  <- reticulate::import("optax")
-  
   
   # setup numerical precisions
   strenv$jaxFloatType <- strenv$jnp$float32
