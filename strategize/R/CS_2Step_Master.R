@@ -444,7 +444,8 @@ strategize       <-          function(
       competing_group_variable_candidate_ <- competing_group_variable_candidate[ indi_ ]
 
       # run models with inputs: W_; Y_; varcov_cluster_variable_;
-      initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n")
+      #initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n") # linear w interactions
+      initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n") # neural
       initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
       eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
       
