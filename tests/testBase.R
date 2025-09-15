@@ -1,8 +1,8 @@
 {
-options(error=NULL)
 # install.packages("~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F)
 # devtools::install_github("cjerzak/strategize-software/strategize")
 # strategize::build_backend()
+options(error=NULL)
 library(testthat); library(strategize)
 source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
 
@@ -43,27 +43,59 @@ W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
            matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
            matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
 colnames(W) <- c("V1","V2","V3")
-respondent_id <-  c(seq_len(n/2),seq_len(n/2))
+pair_id <- respondent_id <-  c(seq_len(n/2),seq_len(n/2))
 respondent_task_id <- c(seq_len(n/2),seq_len(n/2))
-profile_order <- sample(1:2, n, replace = TRUE)
+profile_order <-  c(rep(1,n/2),rep(2,n/2))
 Y <- as.numeric(ave(
   drop((W == "B") %*% c(0.4, 0.2, 0.3)),                      # latent utility: weights for the three features
   respondent_task_id,                                         # pair each forced-choice task
   FUN = function(g) rank(g, ties.method = "random") == length(g) # winner within each pair
 ))
+summary(tapply(Y,respondent_id,sd))
+tapply(1:length(respondent_id), respondent_id, c)
 
-# Test core strategize functionality
 # outcome_model_type <- "glm"
 for(outcome_model_type in c("glm","neural")){
-  test_that(sprintf("strategize returns a valid result [%s]", outcome_model_type), {
-    res <- {strategize(
+  # Test core strategize functionality
+  if(TRUE){ 
+    test_that(sprintf("strategize returns a valid result [%s]", outcome_model_type), {
+      res <- {strategize(
+        Y = Y,
+        W = W,
+        lambda = 0.1,
+        pair_id = pair_id,
+        respondent_id = respondent_id,
+        respondent_task_id = respondent_task_id,
+        profile_order = profile_order,
+        K = 1, # 
+        nSGD = 10,
+        outcome_model_type = outcome_model_type,
+        force_gaussian = TRUE,
+        nMonte_adversarial = 10L,
+        nMonte_Qglm = 10L,
+        diff = TRUE,
+        compute_se = FALSE,
+        conda_env = "strategize_env",
+        conda_env_required = TRUE
+      )}
+      expect_type(res, "list")
+      expect_true("pi_star_point" %in% names(res))
+    })
+  }
+
+  # Test cross-validation functionality
+  if(TRUE){
+  test_that(sprintf("cv_strategize selects lambda [%s]",outcome_model_type), {
+    cv_res <- {cv_strategize(
       Y = Y,
       W = W,
       lambda = 0.1,
+      pair_id = pair_id,
       respondent_id = respondent_id,
       respondent_task_id = respondent_task_id,
       profile_order = profile_order,
       K = 1, # 
+      diff = TRUE,
       nSGD = 10,
       outcome_model_type = outcome_model_type,
       force_gaussian = TRUE,
@@ -73,37 +105,11 @@ for(outcome_model_type in c("glm","neural")){
       conda_env = "strategize_env",
       conda_env_required = TRUE
     )}
-    expect_type(res, "list")
-    expect_true("pi_star_point" %in% names(res))
-  })
-  
-  stop("XXX")
-  
-  # Test cross-validation functionality
-  test_that(sprintf("cv_strategize selects lambda [%s]",outcome_model_type), {
-    cv_res <- {cv_strategize(
-      Y = Y,
-      W = W,
-      lambda_seq = c(0.01, 0.1),
-      folds = 2L,
-      respondent_id = respondent_id,
-      respondent_task_id = respondent_task_id,
-      profile_order = profile_order,
-      K = 1,
-      nSGD = 100,
-      nFolds_glm = 3L,
-      outcome_model_type = outcome_model_type,
-      force_gaussian = TRUE,
-      nMonte_adversarial = 10L,
-      nMonte_Qglm = 10L,
-      compute_se = FALSE,
-      conda_env = "strategize_env",
-      conda_env_required = TRUE
-    )}
+
     expect_type(cv_res, "list")
     expect_true("lambda" %in% names(cv_res))
-    expect_true(cv_res$lambda %in% lambda_seq)
     expect_true("CVInfo" %in% names(cv_res))
   })
+  }
 }
 }

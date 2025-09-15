@@ -353,7 +353,7 @@ strategize       <-          function(
   
   # define compile fxn
   compile_fxn <- function(x, static_argnums=NULL){return(strenv$jax$jit(x, static_argnums=static_argnums))}
-  #compile_fxn <- function(x, static_argnums=NULL){ return(x) } ; message("!!!!\nTURNING COMPILE OFF FOR SANITY ESTABLISHMENT!\n!!!!");
+  #compile_fxn <- function(x, static_argnums=NULL){ return(x) } ; warning("!!!!\nTURNING COMPILE OFF FOR SANITY ESTABLISHMENT!\n!!!!");
 
   # setup pretty pi functions
   {
@@ -385,7 +385,7 @@ strategize       <-          function(
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
-  MNtemp <- strenv$jnp$array( temperature ) 
+  MNtemp <- strenv$jnp$array( ifelse(!is.null(temperature), yes = temperature, no = 0.5)  ) 
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
   if(!force_gaussian){ 
     if(mean(unique(Y) %in% c(0,1)) == 1){ 
