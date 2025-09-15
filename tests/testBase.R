@@ -4,8 +4,7 @@ options(error=NULL)
 # devtools::install_github("cjerzak/strategize-software/strategize")
 # strategize::build_backend()
 library(testthat); library(strategize)
-# source helper functions from the package directly
-source(file.path("strategize", "R", "CS_HelperFxns.R"))
+source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
 
 # test of helper functions
 test_that("toSimplex returns a valid probability vector", {
@@ -39,18 +38,24 @@ test_that("getSE handles missing values", {
 
 
 # Test core strategize functionality
+# outcome_model_type <- "glm"
 for(outcome_model_type in c("glm","neural")){
+  set.seed(1234321)
+  n <- 1000
+  W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+             matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+             matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
+  respondent_id <-  c(seq_len(n/2),seq_len(n/2))
+  respondent_task_id <- c(seq_len(n/2),seq_len(n/2))
+  profile_order <- sample(1:2, n, replace = TRUE)
+  Y <- as.numeric(ave(
+    drop((W == "B") %*% c(0.4, 0.2, 0.3)),                      # latent utility: weights for the three features
+    respondent_task_id,                                         # pair each forced-choice task
+    FUN = function(g) rank(g, ties.method = "random") == length(g) # winner within each pair
+  ))
+  
   test_that(sprintf("strategize returns a valid result [%s]", outcome_model_type), {
   
-    set.seed(1234321)
-    n <- 100
-    W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
-               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
-               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
-    Y <-  rowSums( W == "A" ) + rnorm(n,sd=0.1)
-    respondent_id <- seq_len(n)
-    respondent_task_id <- seq_len(n)
-    profile_order <- sample(1:2, n, replace = TRUE)
     res <- {strategize(
       Y = Y,
       W = W,
@@ -74,17 +79,6 @@ for(outcome_model_type in c("glm","neural")){
   
   # Test cross-validation functionality
   test_that(sprintf("cv_strategize selects lambda [%s]",outcome_model_type), {
-    skip_if_not_installed("reticulate")
-    skip_if_not(reticulate::py_module_available("jax"),
-                "jax not available for cv_strategize tests")
-  
-    set.seed(123)
-    n <- 80
-    W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
-               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
-               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
-    Y <- rnorm(n)
-    profile_order <- sample(1:2, n, replace = TRUE)
     lambda_seq <- c(0.01, 0.1)
     cv <- {cv_strategize(
       Y = Y,
