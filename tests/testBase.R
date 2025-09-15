@@ -70,7 +70,8 @@ for(outcome_model_type in c("glm","neural")){
       nMonte_adversarial = 10L,
       nMonte_Qglm = 10L,
       compute_se = FALSE,
-      conda_env_required = FALSE
+      conda_env = "strategize_env",
+      conda_env_required = TRUE
     )}
     expect_type(res, "list")
     expect_true("pi_star_point" %in% names(res))
@@ -90,12 +91,14 @@ for(outcome_model_type in c("glm","neural")){
       profile_order = profile_order,
       K = 1,
       nSGD = 100,
+      nFolds_glm = 3L,
       outcome_model_type = outcome_model_type,
       force_gaussian = TRUE,
       nMonte_adversarial = 10L,
       nMonte_Qglm = 10L,
       compute_se = FALSE,
-      conda_env_required = FALSE
+      conda_env = "strategize_env",
+      conda_env_required = TRUE
     )}
     expect_type(cv_res, "list")
     expect_true("lambda" %in% names(cv_res))
