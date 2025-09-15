@@ -4,7 +4,8 @@ options(error=NULL)
 # devtools::install_github("cjerzak/strategize-software/strategize")
 # strategize::build_backend()
 library(testthat); library(strategize)
-source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
+# source helper functions from the package directly
+source(file.path("strategize", "R", "CS_HelperFxns.R"))
 
 # test of helper functions
 test_that("toSimplex returns a valid probability vector", {
@@ -42,18 +43,24 @@ for(outcome_model_type in c("glm","neural")){
   test_that(sprintf("strategize returns a valid result [%s]", outcome_model_type), {
   
     set.seed(1234321)
-    n <- 500
+    n <- 100
     W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
                matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
                matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
     Y <-  rowSums( W == "A" ) + rnorm(n,sd=0.1)
+    respondent_id <- seq_len(n)
+    respondent_task_id <- seq_len(n)
+    profile_order <- sample(1:2, n, replace = TRUE)
     res <- {strategize(
       Y = Y,
       W = W,
       lambda = 0.1,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id,
+      profile_order = profile_order,
       K = 1,
       nSGD = 1,
-      outcome_model_type = outcome_model_type, 
+      outcome_model_type = outcome_model_type,
       force_gaussian = TRUE,
       nFolds_glm = 1L,
       nMonte_adversarial = 1L,
@@ -77,16 +84,19 @@ for(outcome_model_type in c("glm","neural")){
                matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
                matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
     Y <- rnorm(n)
+    profile_order <- sample(1:2, n, replace = TRUE)
+    lambda_seq <- c(0.01, 0.1)
     cv <- {cv_strategize(
       Y = Y,
       W = W,
-      lambda = 0.1,
+      lambda_seq = lambda_seq,
       folds = 2L,
       respondent_id = 1:n,
       respondent_task_id = 1:n,
+      profile_order = profile_order,
       K = 1,
       nSGD = 1,
-      outcome_model_type = outcome_model_type, 
+      outcome_model_type = outcome_model_type,
       force_gaussian = TRUE,
       nMonte_adversarial = 1L,
       nMonte_Qglm = 1L,
@@ -96,7 +106,8 @@ for(outcome_model_type in c("glm","neural")){
     )}
     expect_type(cv, "list")
     expect_true("lambda" %in% names(cv))
-    expect_equal(cv$lambda, 0.1)
+    expect_true(cv$lambda %in% lambda_seq)
+    expect_true("CVInfo" %in% names(cv))
   })
 }
 }
