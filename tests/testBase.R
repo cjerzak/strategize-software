@@ -44,9 +44,10 @@ for(outcome_model_type in c("glm","neural")){
     set.seed(1234321)
     n <- 500
     W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
                matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
-    Y <- rnorm(n)
-    res <- strategize(
+    Y <-  rowSums( W == "A" ) + rnorm(n,sd=0.1)
+    res <- {strategize(
       Y = Y,
       W = W,
       lambda = 0.1,
@@ -59,7 +60,7 @@ for(outcome_model_type in c("glm","neural")){
       nMonte_Qglm = 1L,
       compute_se = FALSE,
       conda_env_required = FALSE
-    )
+    )}
     expect_type(res, "list")
     expect_true("PiStar_point" %in% names(res))
   })
@@ -73,9 +74,10 @@ for(outcome_model_type in c("glm","neural")){
     set.seed(123)
     n <- 80
     W <- cbind(matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
+               matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1),
                matrix(sample(c("A", "B"), n, replace = TRUE), ncol = 1))
     Y <- rnorm(n)
-    cv <- cv_strategize(
+    cv <- {cv_strategize(
       Y = Y,
       W = W,
       lambda = 0.1,
@@ -91,7 +93,7 @@ for(outcome_model_type in c("glm","neural")){
       nFolds_glm = 1L,
       compute_se = FALSE,
       conda_env_required = FALSE
-    )
+    )}
     expect_type(cv, "list")
     expect_true("lambda" %in% names(cv))
     expect_equal(cv$lambda, 0.1)
