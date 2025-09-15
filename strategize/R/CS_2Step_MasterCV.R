@@ -274,6 +274,7 @@ cv_strategize       <-          function(
           
           if(type_ == 1){type_<<-1}
           if(type_ == 2){type_<<-2}
+          browser()
           # strategize call
           Qoptimized__[[split_]][[type_]] <- strategize(
   
