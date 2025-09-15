@@ -53,7 +53,7 @@ generate_ModelOutcome <- function(){
 
   # regularization 
   {
-  UsedRegularization <- F
+  UsedRegularization <- FALSE
   ok_ <- F;ok_counter <- 0; while(ok_ == F){
       message(sprintf("ok_counter = %s", ok_counter))
       ok_counter <- ok_counter + 1
@@ -148,7 +148,7 @@ generate_ModelOutcome <- function(){
       if( use_regularization == FALSE | ok_counter > 1 ){ ok_ <- T }
       if( use_regularization == TRUE & ok_counter == 1 | K > 1 ){
         # original keys
-        UsedRegularization <- T
+        UsedRegularization <- TRUE
         if(K == 1){
             library(glinternet)
             InteractionPairs <- t(combn(1:nrow(main_info), m = 2))
