@@ -206,7 +206,7 @@ cv_strategize       <-          function(
                                             diff = F, adversarial = F,
                                             use_regularization = TRUE,
                                             force_gaussian = F,
-                                            temperature = NULL,
+                                            temperature = 0.5,
                                             a_init_sd = 0.001,
                                             learning_rate_max = 0.001, 
                                             penalty_type = "KL",
@@ -266,7 +266,9 @@ cv_strategize       <-          function(
 
       # CV sequence
       q_vec_in <- q_vec_out <- c()
+      if(lambda_counter > 1){ browser() }
       for(split_ in c(1:folds)){
+        message(sprintf("On fold %s",split_))
         for(type_ in c(1,2)){ 
           # in sample optimization of pi*, evaluation on OOS coefficients 
           use_indices <- indi_list[type_,split_][[1]]
@@ -274,7 +276,7 @@ cv_strategize       <-          function(
           
           if(type_ == 1){type_<<-1}
           if(type_ == 2){type_<<-2}
-          browser()
+          
           # strategize call
           Qoptimized__[[split_]][[type_]] <- strategize(
   
@@ -307,7 +309,8 @@ cv_strategize       <-          function(
             diff = diff,
             adversarial = adversarial,
             conda_env = conda_env,
-            conda_env_required = conda_env_required) 
+            conda_env_required = conda_env_required
+          )
         }
         
         # out of sample test of pi* on new estimates 
