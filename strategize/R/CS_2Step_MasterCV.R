@@ -266,7 +266,6 @@ cv_strategize       <-          function(
 
       # CV sequence
       q_vec_in <- q_vec_out <- c()
-      if(lambda_counter > 1){ browser() }
       for(split_ in c(1:folds)){
         message(sprintf("On fold %s",split_))
         for(type_ in c(1,2)){ 
