@@ -765,7 +765,11 @@ strategize       <-          function(
     # reset covariates
     vcov_OutcomeModel_ast_jnp <- vcov_OutcomeModel_dag_jnp <- vcov_OutcomeModel_ast0_jnp <- vcov_OutcomeModel_dag0_jnp <- vcov_OutcomeModel_jnp <- vcov_OutcomeModel_by_k[[ k_clust ]]
   }
-
+    
+  # exact approach
+  dQ_da_ast <- dQ_da_dag <- NULL
+  a_i_ast_optimized <- a_i_dag_optimized <- NULL
+  SLATE_VEC_dag_jnp <- SLATE_VEC_ast_jnp <- NULL
   if(use_exact){
     message("Optimization type: Exact")
     FxnForJacobian <- function(  INPUT_  ){
@@ -805,7 +809,6 @@ strategize       <-          function(
   if(!adversarial & !diff){ QFXN <- getQStar_single }
   if(!adversarial & diff){ QFXN <- getQStar_diff_SingleGroup }
   if(adversarial & diff){ QFXN <- getQStar_diff_MultiGroup }
-
   if(use_gd){
     message("Optimization type: Gradient ascent")
 
@@ -1112,6 +1115,7 @@ strategize       <-          function(
                   "P_VEC_FULL_dag" = p_vec_full_dag_jnp,
                   "SLATE_VEC_ast"  = SLATE_VEC_ast_jnp,
                   "SLATE_VEC_dag"  = SLATE_VEC_dag_jnp,
+                  
                   "temperature" = temperature, 
                   "AstProp" = strenv$AstProp,   
                   "DagProp" = strenv$DagProp,   
