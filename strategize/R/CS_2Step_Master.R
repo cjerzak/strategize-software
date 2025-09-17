@@ -519,6 +519,7 @@ strategize       <-          function(
     p_vec_full <- unlist(lapply(p_list,function(zer){zer}))
   }
 
+  message("Defining some preliminary objects...")
   strenv$ParameterizationType <- ifelse( holdout_indicator == 0,
                                   yes = "Full", no = "Implicit" ) 
   #strenv$d_locator_full <- strenv$d_locator_use
@@ -615,7 +616,8 @@ strategize       <-          function(
   for(DisaggreateQ in ifelse(adversarial, yes = list(c(F,T)), no = list(F))[[1]]){
     # general specifications
     getQStar_diff_ <- paste(deparse(getQStar_diff_BASE),collapse="\n")
-    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", replace = sprintf("T == %s", DisaggreateQ))
+    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", 
+                           replace = sprintf("T == %s", DisaggreateQ))
     getQStar_diff_ <- eval( parse( text = getQStar_diff_ ), envir = evaluation_environment )
 
     # specifications for case (getQStar_diff_MultiGroup getQStar_diff_SingleGroup)
@@ -676,7 +678,7 @@ strategize       <-          function(
                             yes = list(split_vec), no = list(split_vec_full))[[1]]
   }
 
-  strenv$getPrettyPi <- compile_fxn( getPrettyPi_R <- getPrettyPi )
+  strenv$getPrettyPi <- compile_fxn( getPrettyPi_R <- getPrettyPi, static_argnums = 1L )
   strenv$getPrettyPi_diff <- compile_fxn(getPrettyPi_diff_R <- ifelse(strenv$ParameterizationType=="Implicit",
                                   yes = list( getPrettyPi_R ),
                                   no = list(function(x, a=NULL,b=NULL,c=NULL,d=NULL){x}))[[1]], 
@@ -687,11 +689,14 @@ strategize       <-          function(
 
   ## get exact result
   pi_star_exact <- -10; if(optim_type %in% c("tryboth") & diff == F){
-    pi_star_exact <- strenv$np$array(strenv$getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  ),
+    pi_star_exact <- strenv$np$array(
+                                    strenv$getPrettyPi(   getPiStar_exact( EST_COEFFICIENTS_tf )  ,
                                                            strenv$ParameterizationType,
                                                            strenv$d_locator_use,       
                                                            strenv$main_comp_mat,   
-                                                           strenv$shadow_comp_mat) 
+                                                           strenv$shadow_comp_mat
+                                                           ) 
+                                     )  
   }
 
   use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
@@ -822,6 +827,7 @@ strategize       <-          function(
     dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L), 
                              static_argnums = static_q)
     
+    browser()
     # perform GD 
     q_with_pi_star_full <- getQPiStar_gd(
       REGRESSION_PARAMETERS_ast   = REGRESSION_PARAMS_jax_ast_jnp,   #  1
