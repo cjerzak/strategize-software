@@ -827,7 +827,6 @@ strategize       <-          function(
     dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L), 
                              static_argnums = static_q)
     
-    browser()
     # perform GD 
     q_with_pi_star_full <- getQPiStar_gd(
       REGRESSION_PARAMETERS_ast   = REGRESSION_PARAMS_jax_ast_jnp,   #  1
