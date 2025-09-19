@@ -299,33 +299,6 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                               (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
         (0.001+((Indicator_DagWinsPrimary*Indicator_AstWinsPrimary))$sum())
     }
-    
-    if(T == F){
-      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * strenv$AstProp + 
-                          QMonteRes$AmongDag$GVShareAstAmongDag * strenv$DagProp) * Indicator_AstWinsPrimary )$sum() /(ep_+Indicator_AstWinsPrimary$sum())
-      q_max_ast <- PrAstWinsAstPrimar * E_VoteShare_Ast_Given_AstWinsPrimary
-      
-      # For Dag
-      QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
-      QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
-      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * strenv$AstProp +                         
-                          QMonteRes$AmongDag$GVShareDagAmongDag * strenv$DagProp) * Indicator_DagWinsPrimary )$sum() /(ep_+Indicator_DagWinsPrimary$sum())
-      q_max_dag <- PrDagWinsDagPrimary * E_VoteShare_Dag_Given_DagWinsPrimary
-    }
-    
-    if(T == F){
-      E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * strenv$AstProp + 
-                                                   QMonteRes$AmongDag$GVShareAstAmongDag * strenv$DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
-      q_max_ast <- PrAstWinsAstPrimary * PrDagWinsDagPrimary * E_VoteShare_Ast_Given_AstWinsPrimary
-      
-      # For Dag
-      QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
-      QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
-      E_VoteShare_Dag_Given_DagWinsPrimary <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * strenv$AstProp +                         
-                                                   QMonteRes$AmongDag$GVShareDagAmongDag * strenv$DagProp) * Indicator_DagWinsPrimary*Indicator_AstWinsPrimary )$sum() /(ep_+(Indicator_DagWinsPrimary+Indicator_AstWinsPrimary)$sum())
-      q_max_dag <- PrAstWinsAstPrimary * PrDagWinsDagPrimary * E_VoteShare_Dag_Given_DagWinsPrimary
-    }
-    
     if(T == T){
       # compute expected value 
       QMonteRes$AmongAst$GVShareDagAmongAst <- 1-QMonteRes$AmongAst$GVShareAstAmongAst
