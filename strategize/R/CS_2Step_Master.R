@@ -1124,7 +1124,7 @@ strategize       <-          function(
                     "my_model_ast_jnp"  = my_model_ast_jnp, 
                     "my_model_ast0_jnp" = my_model_ast0_jnp,
                     "my_model_dag_jnp"  = my_model_dag_jnp,
-                    "my_model_=dag0_jnp" = my_model_dag0_jnp 
+                    "my_model_dag0_jnp" = my_model_dag0_jnp 
                     )
                   )  # end outout list 
           )
