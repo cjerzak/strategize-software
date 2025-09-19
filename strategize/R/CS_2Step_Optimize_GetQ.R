@@ -186,7 +186,6 @@ FullGetQStar_ <- function(a_i_ast,                                #1
 
     # compute electoral analysis 
     message("Run strenv$Vectorized_QMonteIter_MaxMin")
-    browser()
     QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
                         TSAMP_ast_all, TSAMP_dag_all,
                         TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,

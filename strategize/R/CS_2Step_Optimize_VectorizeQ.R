@@ -53,12 +53,19 @@ InitializeQMonteFxns <- function(){
               #temperature = MNtemp, probs = PrimaryVoteShareDagAmongDag )$sample(seed = SEED_IN_LOOP + 153L)
       
       # win based on relaxed sample from bernoulli using base JAX
-      Indicator_AstWinsPrimary <- strenv$jax$nn$sigmoid(
-        (strenv$jnp$log(PrimaryVoteShareAstAmongAst / (1 - PrimaryVoteShareAstAmongAst)) +
-           strenv$jax$random$gumbel(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 9992L))) / MNtemp)
-      Indicator_DagWinsPrimary <- strenv$jax$nn$sigmoid(
-        (strenv$jnp$log(PrimaryVoteShareDagAmongDag / (1 - PrimaryVoteShareDagAmongDag)) +
-           strenv$jax$random$gumbel(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 153L))) / MNtemp)
+      # (ast)
+      eps <- 0.01 
+      p_ast      <- strenv$jnp$clip(PrimaryVoteShareAstAmongAst, eps, 1 - eps)
+      logits_ast <- strenv$jnp$log(p_ast) - strenv$jnp$log1p(-p_ast)
+      u_ast      <- strenv$jax$random$uniform(SEED_IN_LOOP, shape = strenv$jnp$shape(p_ast), minval = eps, maxval = 1 - eps)
+      Indicator_AstWinsPrimary <- strenv$jax$nn$sigmoid((logits_ast + strenv$jnp$log(u_ast) - strenv$jnp$log1p(-u_ast)) / MNtemp)
+      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      # (dag)
+      p_dag      <- strenv$jnp$clip(PrimaryVoteShareDagAmongDag, eps, 1 - eps)
+      logits_dag <- strenv$jnp$log(p_dag) - strenv$jnp$log1p(-p_dag)
+      u_dag      <- strenv$jax$random$uniform(SEED_IN_LOOP, shape = strenv$jnp$shape(p_dag), minval = eps, maxval = 1 - eps)
+      Indicator_DagWinsPrimary <- strenv$jax$nn$sigmoid((logits_dag + strenv$jnp$log(u_dag) - strenv$jnp$log1p(-u_dag)) / MNtemp)
+      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     }
   
     # combine all information together
