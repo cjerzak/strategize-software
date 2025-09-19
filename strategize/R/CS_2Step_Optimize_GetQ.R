@@ -95,7 +95,7 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
                                        Qhat_ast_among_dag), 0L)  )
 }
 
-FullGetQStar_ <- function(a_i_ast,                                #1 
+FullGetQStar_VSept19_ <- function(a_i_ast,                                #1 
                           a_i_dag,                                #2 
                           INTERCEPT_ast_, COEFFICIENTS_ast_,      #3,4       
                           INTERCEPT_dag_, COEFFICIENTS_dag_,      #5,6 
@@ -105,7 +105,7 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                           SLATE_VEC_ast_, SLATE_VEC_dag_,         #13,14
                           LAMBDA_,                                #15
                           Q_SIGN,                                 #16 
-                          SEED_IN_LOOP                           #17
+                          SEED_IN_LOOP                            #17
                           ){
   message("Get pretty pi in FullGetQStar_...")
   pi_star_full_i_ast <- strenv$getPrettyPi_diff( pi_star_i_ast<-strenv$a2Simplex_diff_use(a_i_ast), 
@@ -147,10 +147,9 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                      MNtemp, 
                                      s_,
                                      strenv$ParameterizationType, 
-                                     strenv$d_locator_use
+                                     strenv$jnp$array(strenv$d_locator_use)
                                      )},in_axes = 0L)(
-                          strenv$jax$random$split(SEED_IN_LOOP,
-                                                  nMonte_adversarial) )
+                          strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial) )
     SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     TSAMP_dag_all <- strenv$jax$vmap(function(s_){ 
                     strenv$getMultinomialSamp(
@@ -158,7 +157,7 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                      MNtemp, 
                                      s_,
                                      strenv$ParameterizationType,
-                                     strenv$d_locator_use
+                                     strenv$jnp$array(strenv$d_locator_use)
                                      )},in_axes = list(0L))(
                           strenv$jax$random$split(SEED_IN_LOOP,
                                                   nMonte_adversarial) )
@@ -170,7 +169,8 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                             MNtemp, 
                                             s_,
                                             strenv$ParameterizationType,
-                                            strenv$d_locator_use)},in_axes = list(0L))(
+                                            strenv$jnp$array(strenv$d_locator_use)
+                                            )},in_axes = list(0L))(
                             strenv$jax$random$split(SEED_IN_LOOP,
                                                     nMonte_adversarial) )
     SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
@@ -179,7 +179,8 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                             MNtemp, 
                                             s_,
                                             strenv$ParameterizationType,
-                                            strenv$d_locator_use)},in_axes = list(0L))(
+                                            strenv$jnp$array(strenv$d_locator_use)
+                                            )},in_axes = list(0L))(
                           strenv$jax$random$split(SEED_IN_LOOP,
                                                   nMonte_adversarial) )
     SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
@@ -228,76 +229,6 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                               ( ep_ + Indicator_DagWinsPrimary$sum() )
     GVShareDagAmongDag_Given_DagWinsDagPrimary <- 1 - GVShareAstAmongDag_Given_DagWinsDagPrimary
 
-    # calculate final expected value for ast and dag 
-    # base attempt 
-    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(strenv$AstProp) + 
-       #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
-    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * strenv$jnp$array(strenv$AstProp) + 
-       #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
-    
-    # attempt 1 
-    #q_max_ast <- GVShareAstAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary* strenv$jnp$array(strenv$AstProp) + 
-      #GVShareAstAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
-    #q_max_dag <- GVShareDagAmongAst_Given_AstWinsAstPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$AstProp) + 
-      #GVShareDagAmongDag_Given_DagWinsDagPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$jnp$array(strenv$DagProp)
-    
-    # attempt 2
-    #q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-         #GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary * PrDagWinsDagPrimary
-    #q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-         #GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrAstWinsAstPrimary * PrDagWinsDagPrimary
-    
-    #Conceptually, if these events “Ast wins Ast primary” and “Dag wins Dag primary” are not guaranteed to co-occur simultaneously (and in fact might be correlated or logically complementary), then multiplying the two probabilities PrAstWinsAstPrimary * PrDagWinsDagPrimary can be incorrect. E.g. if one candidate’s winning their primary might preclude the other’s scenario. Unless there is a reason to treat them as “both definitely end up on the final ballot,” you typically do not want to multiply them if they are disjoint or if one event precludes the other.
-    #If it is indeed your design to treat them as independent events or force them both to appear in the general, then you should clarify that assumption. Statistically it can be suspect.
-    
-    # attempt here: - q_ast = (PrAstWinsAstPrimary)*[ expected general-election share given Ast is on the ballot ] + (1 - PrAstWinsAstPrimary)*0
-    # compute_vote_share_R(pi_R, pi_D)
-    
-    if(T == F){ 
-    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-                    GVShareAstAmongDag_Given_DagWinsDagPrimary * DagProp) * PrAstWinsAstPrimary #* PrDagWinsDagPrimary
-    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-                    GVShareDagAmongDag_Given_DagWinsDagPrimary * DagProp ) * PrDagWinsDagPrimary #* PrAstWinsAstPrimary
-    }
-    
-    if(T == F){
-    PrAstLosesAstPrimary <- 1 - PrAstWinsAstPrimary
-    PrDagLosesDagPrimary <- 1 - PrDagWinsDagPrimary
-    GVShareAstAmongAst_Given_AstLosesAstPrimary <- 
-      (QMonteRes$AmongAst$GVShareAstAmongAst*(1-Indicator_AstWinsPrimary))$sum()/ 
-      ( (ep_<-0.01) + (1-Indicator_AstWinsPrimary)$sum() )
-    GVShareDagAmongAst_Given_AstLosesAstPrimary <-  1 - GVShareAstAmongAst_Given_AstLosesAstPrimary
-    GVShareAstAmongDag_Given_DagLosesDagPrimary <- 
-      (  QMonteRes$AmongDag$GVShareAstAmongDag*(1-Indicator_DagWinsPrimary) )$sum() / 
-      ( ep_ + (1-Indicator_DagWinsPrimary)$sum() )
-    GVShareDagAmongDag_Given_DagLosesDagPrimary <- 1 - GVShareAstAmongDag_Given_DagLosesDagPrimary
-    q_max_ast <- (GVShareAstAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-          GVShareAstAmongDag_Given_DagWinsDagPrimary * strenv$DagProp) * PrAstWinsAstPrimary + 
-            (GVShareDagAmongAst_Given_AstLosesAstPrimary * strenv$AstProp + 
-               GVShareAstAmongDag_Given_DagWinsDagPrimary * strenv$DagProp) * PrAstLosesAstPrimary
-    q_max_dag <- (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-              GVShareDagAmongDag_Given_DagWinsDagPrimary * strenv$DagProp ) * PrDagWinsDagPrimary +
-              (GVShareDagAmongAst_Given_AstWinsAstPrimary * strenv$AstProp + 
-                 GVShareDagAmongDag_Given_DagLosesDagPrimary * strenv$DagProp ) * PrDagLosesDagPrimary
-    }
-    
-    if(T == F){
-      # https://chatgpt.com/share/67b77b8c-8af0-800f-8882-6c1176a4e343
-      # https://grok.com/share/bGVnYWN5_1f041334-5758-44db-bc90-8b69929a9e1b
-      q_max_ast <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * 
-                                                   PrAstWinsAstPrimary* PrDagWinsDagPrimary * strenv$AstProp + 
-                                              QMonteRes$AmongDag$GVShareAstAmongDag*PrAstWinsAstPrimary* PrDagWinsDagPrimary * strenv$DagProp) *
-                (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
-                      (0.001+(Indicator_DagWinsPrimary*Indicator_AstWinsPrimary)$sum())
-
-      # For Dag
-      QMonteRes$AmongAst$GVShareDagAmongAst <- 1 - QMonteRes$AmongAst$GVShareAstAmongAst
-      QMonteRes$AmongDag$GVShareDagAmongDag <- 1 - QMonteRes$AmongDag$GVShareAstAmongDag
-      q_max_dag <- ( (QMonteRes$AmongAst$GVShareDagAmongAst * PrAstWinsAstPrimary* PrDagWinsDagPrimary * strenv$AstProp +                         
-                                            QMonteRes$AmongDag$GVShareDagAmongDag *PrAstWinsAstPrimary* PrDagWinsDagPrimary *  strenv$DagProp) * 
-                                              (Indicator_DagWinsPrimary*Indicator_AstWinsPrimary) )$sum() /
-        (0.001+((Indicator_DagWinsPrimary*Indicator_AstWinsPrimary))$sum())
-    }
     if(T == T){
       # compute expected value 
       QMonteRes$AmongAst$GVShareDagAmongAst <- 1-QMonteRes$AmongAst$GVShareAstAmongAst
@@ -434,6 +365,122 @@ FullGetQStar_ <- function(a_i_ast,                                #1
   if( adversarial ){ myMaximize <- q_max + indicator_UseAst * var_pen_ast__  + 
                                        (1-indicator_UseAst) * var_pen_dag__  } 
   if( !adversarial ){ myMaximize <- q_max + var_pen_ast__ }
-   
   return( myMaximize )
 }
+
+
+FullGetQStar_ <- function(a_i_ast,                                #1 
+                          a_i_dag,                                #2 
+                          INTERCEPT_ast_, COEFFICIENTS_ast_,      #3,4       
+                          INTERCEPT_dag_, COEFFICIENTS_dag_,      #5,6 
+                          INTERCEPT_ast0_, COEFFICIENTS_ast0_,    #7,8
+                          INTERCEPT_dag0_, COEFFICIENTS_dag0_,    #9,10
+                          P_VEC_FULL_ast_, P_VEC_FULL_dag_,       #11,12
+                          SLATE_VEC_ast_, SLATE_VEC_dag_,         #13,14
+                          LAMBDA_,                                #15
+                          Q_SIGN,                                 #16 
+                          SEED_IN_LOOP                            #17
+){
+  
+  # Map logits -> simplex (respecting ParameterizationType)
+  pi_star_full_i_ast <- strenv$getPrettyPi_diff( pi_star_i_ast<-strenv$a2Simplex_diff_use(a_i_ast), 
+                                                 strenv$ParameterizationType,
+                                                 strenv$d_locator_use,       
+                                                 strenv$main_comp_mat,   
+                                                 strenv$shadow_comp_mat  )
+  pi_star_full_i_dag <- strenv$getPrettyPi_diff( pi_star_i_dag<-strenv$a2Simplex_diff_use(a_i_dag),
+                                                 strenv$ParameterizationType,
+                                                 strenv$d_locator_use,       
+                                                 strenv$main_comp_mat,   
+                                                 strenv$shadow_comp_mat  )
+  
+  # Average-case path (unchanged)
+  if(!adversarial){
+    q_vec <- QFXN(pi_star_ast =  pi_star_i_ast,
+                  pi_star_dag =  pi_star_i_dag,
+                  EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
+                  EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
+                  EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
+                  EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
+    q_max <- strenv$jnp$take(q_vec, 0L)
+  }
+  
+  # Adversarial path: institution-aware push-forward (four-quadrant mixture)
+  if(adversarial){
+    
+    # Draw policy samples
+    TSAMP_ast_all <- strenv$jax$vmap(function(s_){ 
+      strenv$getMultinomialSamp(pi_star_i_ast, MNtemp, s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
+    }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+    
+    TSAMP_dag_all <- strenv$jax$vmap(function(s_){ 
+      strenv$getMultinomialSamp(pi_star_i_dag, MNtemp, s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
+    }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+    
+    # Draw field (“slate”) samples
+    TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
+      strenv$getMultinomialSamp(SLATE_VEC_ast_, MNtemp, s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
+    }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+    
+    TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
+      strenv$getMultinomialSamp(SLATE_VEC_dag_, MNtemp, s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
+    }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+    
+    # Evaluate institutional objective (push-forward over nominees)
+    QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
+      TSAMP_ast_all, TSAMP_dag_all,
+      TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+      a_i_ast, a_i_dag,
+      INTERCEPT_ast_,  COEFFICIENTS_ast_,
+      INTERCEPT_dag_,  COEFFICIENTS_dag_,
+      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+      P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+      LAMBDA_, Q_SIGN, SEED_IN_LOOP
+    )
+    
+    q_max_ast <- QMonteRes$q_ast
+    q_max_dag <- QMonteRes$q_dag
+    
+    # Choose which side we’re optimizing in this call
+    indicator_UseAst <- strenv$jnp$multiply(0.5, strenv$jnp$add(strenv$jnp$array(1.), Q_SIGN))
+    q_max <- strenv$jnp$add(
+      strenv$jnp$multiply(indicator_UseAst,                    q_max_ast),
+      strenv$jnp$multiply(strenv$jnp$subtract(1., indicator_UseAst), q_max_dag)
+    )
+  }
+  
+  # ---- Regularization (unchanged), applied to the player being updated ----
+  if(penalty_type %in% c("L1","L2")){
+    PenFxn <- ifelse(penalty_type == "L1", 
+                     yes = list(strenv$jnp$abs),
+                     no = list(strenv$jnp$square))[[1]]
+    var_pen_ast__ <- LAMBDA_ * strenv$jnp$negative(strenv$jnp$sum(PenFxn( pi_star_full_i_ast - P_VEC_FULL_ast_ )  ))
+    var_pen_dag__ <- LAMBDA_ * strenv$jnp$negative(strenv$jnp$sum(PenFxn( pi_star_full_i_dag - P_VEC_FULL_dag_ )  ))
+  } else if(penalty_type == "LInfinity"){
+    var_pen_ast__ <- tapply(1:length(split_vec_full), split_vec_full, function(zer){
+      list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_ast, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)) )})
+    names(var_pen_ast__)<-NULL ; var_pen_ast__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum(strenv$jnp$stack(var_pen_ast__)))
+    var_pen_dag__ <- tapply(1:length(split_vec_full), split_vec_full, function(zer){
+      list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_dag, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)) )})
+    names(var_pen_dag__)<-NULL ; var_pen_dag__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum(strenv$jnp$stack(var_pen_dag__)))
+  } else { # "KL" default
+    var_pen_ast__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_ast_ * (strenv$jnp$log(P_VEC_FULL_ast_) - strenv$jnp$log(pi_star_full_i_ast))))
+    var_pen_dag__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_dag_ * (strenv$jnp$log(P_VEC_FULL_dag_) - strenv$jnp$log(pi_star_full_i_dag))))
+  }
+  
+  indicator_UseAst <- strenv$jnp$multiply(0.5, strenv$jnp$add(strenv$jnp$array(1.), Q_SIGN))
+  myMaximize <- strenv$jnp$add(
+    q_max,
+    strenv$jnp$add(
+      strenv$jnp$multiply(indicator_UseAst,                          var_pen_ast__),
+      strenv$jnp$multiply(strenv$jnp$subtract(strenv$jnp$array(1.), indicator_UseAst), var_pen_dag__)
+    ))
+  
+  return( myMaximize )
+}
+

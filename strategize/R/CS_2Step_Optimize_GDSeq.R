@@ -158,8 +158,9 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                               strenv$ParameterizationType, 
                                                               strenv$d_locator_use
                                                               )},
-                                in_axes = list(0L))(strenv$jax$random$split( strenv$jax$random$PRNGKey( 30L + jax_seed ), 
+                                in_axes = list(0L))(strenv$jax$random$split( SEED, 
                                                                              nMonte_Qglm) )
+      SEED   <- strenv$jax$random$split(SEED)[[1L]]
       pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ 
                                     strenv$getMultinomialSamp(pi_star_dag_, 
                                                               MNtemp, 
@@ -167,11 +168,13 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                               strenv$ParameterizationType, 
                                                               strenv$d_locator_use
                                                               )}, 
-                               in_axes = list(0L))( strenv$jax$random$split( strenv$jax$random$PRNGKey( 400L + jax_seed ), 
+                               in_axes = list(0L))( strenv$jax$random$split( SEED, 
                                                                              nMonte_Qglm) )
+      SEED   <- strenv$jax$random$split(SEED)[[1L]]
     }
 
-    q_star_f <- strenv$Vectorized_QMonteIter(pi_star_ast_f_all,  pi_star_dag_f_all,
+    q_star_f <- strenv$Vectorized_QMonteIter(
+                                       pi_star_ast_f_all,  pi_star_dag_f_all,
                                        INTERCEPT_ast_, COEFFICIENTS_ast_,
                                        INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
 

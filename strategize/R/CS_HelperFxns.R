@@ -121,15 +121,15 @@ getMultinomialSamp_R <- function(pi_value,
     }
     
     # Sample from RelaxedOneHotCategorical using oryx - depreciated 
-    #TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(
-      #probs = pi_selection$transpose(),
-      #temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
+    # TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(probs = pi_selection$transpose(), temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
     
     # Sample from RelaxedOneHotCategorical using base JAX
+    # jax_seed <- strenv$jax$random$PRNGKey(4L) # for testing 
     logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
-    gumbels <- strenv$jax$random$gumbel(jax_seed, shape = logits$shape)
+    gumbels <- strenv$jax$random$gumbel(key = jax_seed, shape = logits$shape)
     TSamp <- strenv$jax$nn$softmax( ((logits + gumbels) / temperature),
-                                   axis = 0L)$transpose()
+                                    axis = -1L)$transpose()
+    jax_seed   <- strenv$jax$random$split(jax_seed)[[1L]]
     
     # If Implicit, remove that last extra dimension after sampling
     if(ParameterizationType == "Implicit"){
