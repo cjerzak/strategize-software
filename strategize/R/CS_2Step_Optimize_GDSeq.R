@@ -7,7 +7,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           SLATE_VEC_ast, 
                           SLATE_VEC_dag,
                           LAMBDA,
-                          BASE_SEED,
+                          SEED,
                           functionList,
                           a_i_ast,  # initial value, ast 
                           a_i_dag,  # initial value, dag 
@@ -57,7 +57,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     if( i %% 1 == 0 & adversarial ){
       
       # dQ_da_dag built off FullGetQStar_
-      seed_in_loop_at_i_dag <- BASE_SEED + strenv$jnp$array(ai(i))
+      SEED   <- strenv$jax$random$split(SEED)[[1L]]
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,                    #1,2
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
                                 INTERCEPT_dag_,  COEFFICIENTS_dag_,  #5,6
@@ -67,7 +67,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 SLATE_VEC_ast, SLATE_VEC_dag,        #13,14
                                 LAMBDA,                              #15
                                 Q_SIGN_ <- strenv$jnp$array(-1.),    #16
-                                seed_in_loop_at_i_dag                #17
+                                SEED                                 #17
                                 )
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
       
@@ -96,7 +96,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
     # do updates ("max" step)
     if( i %% 1 == 0 | (!adversarial) ){
-      seed_in_loop_at_i_ast <- BASE_SEED + strenv$jnp$array(ai(i*1000))
+      SEED   <- strenv$jax$random$split(SEED)[[1L]]
       grad_i_ast <- dQ_da_ast( a_i_ast, a_i_dag,
                                INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -105,8 +105,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, 
-                               Q_SIGN_ <- strenv$jnp$array(1.),
-                               seed_in_loop_at_i_ast
+                               (Q_SIGN_ <- strenv$jnp$array(1.)),
+                               SEED
                                )
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
       

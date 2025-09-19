@@ -382,6 +382,9 @@ strategize       <-          function(
   q_ave <- q_dag_ave <- pi_star_ave <- NULL
   my_model_ast_jnp <- my_model_ast0_jnp <- my_model_dag_jnp <- my_model_dag0_jnp <- NULL
   main_comp_mat <- shadow_comp_mat <- NULL
+  dQ_da_ast <- dQ_da_dag <- NULL
+  a_i_ast_optimized <- a_i_dag_optimized <- NULL
+  SLATE_VEC_dag_jnp <- SLATE_VEC_ast_jnp <- NULL
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
@@ -699,8 +702,8 @@ strategize       <-          function(
                                      )  
   }
 
-  use_exact <- !( use_gd <- any(pi_star_exact<0) | any(pi_star_exact>1)  |
-    (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5) )
+  use_exact <- !( use_gd <- (any(pi_star_exact<0) | any(pi_star_exact>1)  | adversarial |  diff | 
+    (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5) ))
   if( use_gd ){
 
   # define GD function
@@ -745,7 +748,7 @@ strategize       <-          function(
   }
 
   # get jax seed into correct type
-  jax_seed <- strenv$jnp$array( ai(runif(1,1,1000)) )
+  jax_seed <- strenv$jax$random$PRNGKey( ai(runif(1,1,1000)) )
 
   # Obtain solution via exact calculation
   message("Starting optimization...")
@@ -767,9 +770,6 @@ strategize       <-          function(
   }
     
   # exact approach
-  dQ_da_ast <- dQ_da_dag <- NULL
-  a_i_ast_optimized <- a_i_dag_optimized <- NULL
-  SLATE_VEC_dag_jnp <- SLATE_VEC_ast_jnp <- NULL
   if(use_exact){
     message("Optimization type: Exact")
     FxnForJacobian <- function(  INPUT_  ){
@@ -841,7 +841,7 @@ strategize       <-          function(
       SLATE_VEC_ast               = SLATE_VEC_ast_jnp,               #  7
       SLATE_VEC_dag               = SLATE_VEC_dag_jnp,               #  8
       LAMBDA                      = strenv$jnp$array(lambda),        #  9
-      BASE_SEED                   = jax_seed,                        # 10
+      SEED                        = jax_seed,                        # 10
       functionList                = list(dQ_da_ast, 
                                          dQ_da_dag,
                                          QFXN),  # 11
@@ -893,7 +893,7 @@ strategize       <-          function(
                         SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
                         SLATE_VEC_dag = SLATE_VEC_dag_jnp,
                         LAMBDA = strenv$jnp$array(  lambda  ),
-                        BASE_SEED = jax_seed,
+                        SEED   = jax_seed,
                         functionList = list(dQ_da_ast, dQ_da_dag,
                                             QFXN),
                         a_i_ast = a_vec_init_ast, 
@@ -1124,7 +1124,7 @@ strategize       <-          function(
                     "my_model_ast_jnp"  = my_model_ast_jnp, 
                     "my_model_ast0_jnp" = my_model_ast0_jnp,
                     "my_model_dag_jnp"  = my_model_dag_jnp,
-                    "my_model_dag0_jnp" = my_model_dag0_jnp 
+                    "my_model_=dag0_jnp" = my_model_dag0_jnp 
                     )
                   )  # end outout list 
           )

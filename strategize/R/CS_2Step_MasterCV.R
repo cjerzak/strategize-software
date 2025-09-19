@@ -325,8 +325,10 @@ cv_strategize       <-          function(
           )$tolist()[[1]])
         )
       }
-      outsamp_results <- as.data.frame(rbind(outsamp_results, c(lambda__, mean(q_vec_out), se(q_vec_out), 0)))
-      insamp_results <- as.data.frame(rbind(insamp_results, c(lambda__, mean(q_vec_in), se(q_vec_in), 0)))
+      outsamp_results <- as.data.frame(rbind(outsamp_results, 
+                                             c(lambda__, mean(q_vec_out), se(q_vec_out), 0)))
+      insamp_results <- as.data.frame(rbind(insamp_results, 
+                                            c(lambda__, mean(q_vec_in), se(q_vec_in), 0)))
     }
 
     # Use the requested confidence level to build SE-based bounds
@@ -336,7 +338,8 @@ cv_strategize       <-          function(
     lambda__ <- lambda_seq[which_selected <- which.max(outsamp_results$Qhat)] # lambda.min rule
     #lambda__ <- lambda_seq[which_selected <- which(max(outsamp_results$Qhat <= outsamp_results$u_bound)[1]] # lambda.se rule
     outsamp_results$selected[which_selected] <- 1 
-    message(sprintf("Done with CV sequence & starting final run with log(lambda) of %.2f...", log(lambda__)))
+    message(sprintf("Done with CV sequence & starting final run with log(lambda) of %.2f...",
+                    log(f2n(lambda__))))
   }
 
   # final output

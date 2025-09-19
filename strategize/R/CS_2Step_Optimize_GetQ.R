@@ -138,8 +138,8 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     #TSAMP_ast_all_DEPRECIATED <- strenv$jax$vmap(function(s_){ 
       #strenv$getMultinomialSamp_DEPRECIATED(pi_star_i_ast, MNtemp, s_,strenv$ParameterizationType, (strenv$np$array( strenv$d_locator_use) ) 
         #)},in_axes = 0L)(
-        #strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L), nMonte_adversarial) )
-
+        #strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial) )
+  
     # sample main competitor features
     TSAMP_ast_all <- strenv$jax$vmap(function(s_){ 
                     strenv$getMultinomialSamp(
@@ -149,8 +149,9 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                      strenv$ParameterizationType, 
                                      strenv$d_locator_use
                                      )},in_axes = 0L)(
-                          strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 199L),
+                          strenv$jax$random$split(SEED_IN_LOOP,
                                                   nMonte_adversarial) )
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     TSAMP_dag_all <- strenv$jax$vmap(function(s_){ 
                     strenv$getMultinomialSamp(
                                      pi_star_i_dag, 
@@ -159,8 +160,9 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                      strenv$ParameterizationType,
                                      strenv$d_locator_use
                                      )},in_axes = list(0L))(
-                          strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 399L),
+                          strenv$jax$random$split(SEED_IN_LOOP,
                                                   nMonte_adversarial) )
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
 
     # sample primary competitor features uniformly or using slates 
     TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
@@ -169,19 +171,22 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                             s_,
                                             strenv$ParameterizationType,
                                             strenv$d_locator_use)},in_axes = list(0L))(
-                            strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 599L),
+                            strenv$jax$random$split(SEED_IN_LOOP,
                                                     nMonte_adversarial) )
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
                   strenv$getMultinomialSamp(SLATE_VEC_dag_, 
                                             MNtemp, 
                                             s_,
                                             strenv$ParameterizationType,
                                             strenv$d_locator_use)},in_axes = list(0L))(
-                          strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 799L),
+                          strenv$jax$random$split(SEED_IN_LOOP,
                                                   nMonte_adversarial) )
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
 
     # compute electoral analysis 
     message("Run strenv$Vectorized_QMonteIter_MaxMin")
+    browser()
     QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
                         TSAMP_ast_all, TSAMP_dag_all,
                         TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
@@ -195,9 +200,10 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                         P_VEC_FULL_dag_,
                         LAMBDA_,
                         Q_SIGN,
-                        strenv$jax$random$split(strenv$jax$random$PRNGKey(SEED_IN_LOOP + 1999L),
+                        strenv$jax$random$split(SEED_IN_LOOP,
                                                 nMonte_adversarial)
                         )
+    SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     
     # primaries 
     PrAstWinsAstPrimary <- QMonteRes$AmongAst$PrimaryVoteShareAstAmongAst$mean()
@@ -295,8 +301,6 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     }
     
     if(T == F){
-      # https://chatgpt.com/share/67b77b8c-8af0-800f-8882-6c1176a4e343
-      # https://grok.com/share/bGVnYWN5_1f041334-5758-44db-bc90-8b69929a9e1b
       E_VoteShare_Ast_Given_AstWinsPrimary <- ( (QMonteRes$AmongAst$GVShareAstAmongAst * strenv$AstProp + 
                           QMonteRes$AmongDag$GVShareAstAmongDag * strenv$DagProp) * Indicator_AstWinsPrimary )$sum() /(ep_+Indicator_AstWinsPrimary$sum())
       q_max_ast <- PrAstWinsAstPrimar * E_VoteShare_Ast_Given_AstWinsPrimary
