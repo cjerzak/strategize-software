@@ -172,11 +172,42 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                                              nMonte_Qglm) )
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
     }
-
-    q_star_f <- strenv$Vectorized_QMonteIter(
-                                       pi_star_ast_f_all,  pi_star_dag_f_all,
-                                       INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                       INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
+    
+    if(!adversarial){ 
+      q_star_f <- strenv$Vectorized_QMonteIter(
+                                         pi_star_ast_f_all,  pi_star_dag_f_all,
+                                         INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                         INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
+    }
+    if(adversarial){ 
+      # Push-forward (two-round) MC for adversarial case; return 3-vector like avg case
+      TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){
+        strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
+      }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
+      SEED <- strenv$jax$random$split(SEED)[[1L]]
+      
+      TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){
+        strenv$getMultinomialSamp(SLATE_VEC_dag, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
+      }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
+      SEED <- strenv$jax$random$split(SEED)[[1L]]
+      
+      Qres <- strenv$Vectorized_QMonteIter_MaxMin(
+        pi_star_ast_f_all, pi_star_dag_f_all,
+        TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+        a_i_ast, a_i_dag,
+        INTERCEPT_ast_, COEFFICIENTS_ast_,
+        INTERCEPT_dag_, COEFFICIENTS_dag_,
+        INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+        INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+        P_VEC_FULL_ast, P_VEC_FULL_dag,
+        LAMBDA, strenv$jnp$array(1.), SEED
+      )
+      
+      # Package as [Q_pop, Q_ast|Ast, Q_ast|Dag] to match avg-case shape
+      # (we repeat the population value to keep dimensions consistent)
+      q_star_f <- strenv$jnp$stack(list(Qres$q_ast, Qres$q_ast, Qres$q_ast), 0L)
+      
+    }
 
     # setup results for returning
     ret_array <- strenv$jnp$concatenate(ifelse(gd_full_simplex, 
