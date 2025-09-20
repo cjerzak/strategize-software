@@ -36,7 +36,9 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   
   # --- (A) Choose CUDA 13 vs 12 *by driver version* and install JAX FIRST ---
   install_jax_gpu <- function() {
-    if (!identical(os, "Linux")) return(pip_install("jax"))  # GPU wheels only supported on Linux releases now
+    if (!identical(os, "Linux")){
+      return(pip_install("jax")) 
+    }
     
     # Read driver version as integer major (e.g., 580)
     drv <- try(suppressWarnings(system("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", intern=TRUE)), TRUE)
