@@ -114,6 +114,7 @@ InitializeQMonteFxns <- function(){
     }, in_axes = 0L)(TSAMP_ast_PrimaryComp)   # [nA', nB']
     
     # ---- Push-forward mixture weights ----
+    if(FALSE){ # slow but notationally clear 
     one <- strenv$OneTf_flat
     W1 <- strenv$jnp$outer(kA_mean_over_field,             kB_mean_over_field)             # [nA,  nB]
     W2 <- strenv$jnp$outer(kA_mean_over_field,             one - kB_mean_over_entrant)     # [nA,  nB']
@@ -125,6 +126,23 @@ InitializeQMonteFxns <- function(){
     E2 <- (C_tu_field    * W2)$mean()   # A entrant vs B field
     E3 <- (C_field_u     * W3)$mean()   # A field   vs B entrant
     E4 <- (C_field_field * W4)$mean()   # A field   vs B field
+    }
+    if(TRUE){ # more efficient implementation avoiding outer products 
+      one <- strenv$OneTf_flat
+      kA_field <- kA_mean_over_field
+      kB_field <- kB_mean_over_field
+      kA_entr  <- kA_mean_over_entrant
+      kB_entr  <- kB_mean_over_entrant
+      
+      u3 <- one - kA_entr
+      v2 <- one - kB_entr
+      
+      # divisor = total elements in C (nA * nB)
+      E1 <- strenv$jnp$einsum('ij,i,j->', C_tu,         kA_field, kB_field)     / C_tu$size
+      E2 <- strenv$jnp$einsum('ij,i,j->', C_tu_field,   kA_field, v2)           / C_tu_field$size
+      E3 <- strenv$jnp$einsum('ij,i,j->', C_field_u,    u3,       kB_field)     / C_field_u$size
+      E4 <- strenv$jnp$einsum('ij,i,j->', C_field_field, u3,      v2)           / C_field_field$size
+    }
     
     q_ast <- E1 + E2 + E3 + E4
     q_dag <- one - q_ast  # zero-sum
