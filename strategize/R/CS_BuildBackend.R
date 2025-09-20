@@ -57,17 +57,13 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   
   # --- Install JAX (GPU/METAL first, else CPU fallback) ---
   jax_installed <- FALSE
-  
-  # --- Install JAX (GPU first, else CPU fallback) ---
-  jax_installed <- FALSE
-  
   if (identical(os, "Linux")) {
     msg("Detected Linux: checking NVIDIA driver for CUDA support...")
     
     # Run nvidia-smi and capture output
-    nvidia_output <- suppressWarnings(system("nvidia-smi", intern = TRUE))
+    nvidia_output <- try(suppressWarnings(system("nvidia-smi", intern = TRUE)),T)
     
-    if (length(nvidia_output) == 0 || attr(nvidia_output, "status") != 0) {
+    if (length(nvidia_output) == 0 | 'try-error' %in% class(nvidia_output)) {
       msg("No NVIDIA GPU or nvidia-smi unavailable; falling back to CPU-only JAX.")
       jax_installed <- pip_install("jax")
     } else {
