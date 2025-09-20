@@ -291,8 +291,12 @@ generate_ModelOutcome <- function(){
     # solve(t(main_dat) %*% main_dat); solve(t(interacted_dat) %*% interacted_dat)
     #  + 0 + 1 to get the glm to return the var-covar for the intercept
     if(nrow(interacted_dat) == 0){ glm_input <- main_dat } 
-    if(nrow(interacted_dat) > 0){ glm_input <- cbind(main_dat, interacted_dat ) } 
-    if( ncol(glm_input) > 0.5*nrow(glm_input)){stop("Too many possible interactions given data size. Set use_regularization = TRUE")}
+    if(nrow(interacted_dat) > 0){ 
+      glm_input <- cbind(main_dat, interacted_dat ) 
+      if( ncol(glm_input) > 0.5*nrow(glm_input)){
+        stop("Too many possible interactions given data size. Set use_regularization = TRUE")
+      }
+    } 
     my_model <- glm(Y_glm ~ glm_input, family = glm_family)
     if(any(is.na(coef(my_model)))){
       stop("Some coefficients NA... This case hasn't been sufficiently tested!")
