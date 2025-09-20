@@ -771,6 +771,7 @@ strategize       <-          function(
     
   # exact approach
   if(use_exact){
+    gc()
     message("Optimization type: Exact")
     FxnForJacobian <- function(  INPUT_  ){
       EST_INTERCEPT_tf_ <- INPUT_[[1]]
