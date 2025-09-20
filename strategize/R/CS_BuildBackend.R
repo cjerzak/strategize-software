@@ -24,91 +24,55 @@
 #' @md
 
 build_backend <- function(conda_env = "strategize_env", conda = "auto") {
-  # Create the conda environment with Python 3.12
   reticulate::conda_create(envname = conda_env, conda = conda, python_version = "3.12")
   
   os <- Sys.info()[["sysname"]]
   msg <- function(...) message(sprintf(...))
   
-  # Helper: install packages with pip into our env; return TRUE on success, FALSE on error
-  pip_install <- function(pkgs) {
-    tryCatch({
-      reticulate::py_install(
-        packages = pkgs,
-        envname  = conda_env,
-        conda    = conda,
-        pip      = TRUE
-      )
-      TRUE
-    }, error = function(e) {
-      msg("  -> Install failed for: %s\n     %s", paste(pkgs, collapse = ", "), e$message)
-      FALSE
-    })
+  pip_install <- function(pkgs, ...) {
+    reticulate::py_install(packages = pkgs, envname = conda_env, conda = conda, pip = TRUE, ...)
+    TRUE
   }
   
-  # --- Ecosystem packages ---
-  other_pkgs <- c(
-    "numpy",
-    "equinox",
-    "numpyro",
-    "optax"
-  )
-  invisible(pip_install(other_pkgs))
-  
-  # --- Install JAX (GPU/METAL first, else CPU fallback) ---
-  jax_installed <- FALSE
-  if (identical(os, "Linux")) {
-    msg("Detected Linux: checking NVIDIA driver for CUDA support...")
+  # --- (A) Choose CUDA 13 vs 12 *by driver version* and install JAX FIRST ---
+  install_jax_gpu <- function() {
+    if (!identical(os, "Linux")) return(pip_install("jax"))  # GPU wheels only supported on Linux releases now
     
-    # Run nvidia-smi and capture output
-    nvidia_output <- try(suppressWarnings(system("nvidia-smi", intern = TRUE)),T)
+    # Read driver version as integer major (e.g., 580)
+    drv <- try(suppressWarnings(system("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", intern=TRUE)), TRUE)
+    drv_major <- suppressWarnings(as.integer(sub("^([0-9]+).*", "\\1", drv[1])))
     
-    if (length(nvidia_output) == 0 | 'try-error' %in% class(nvidia_output)) {
-      msg("No NVIDIA GPU or nvidia-smi unavailable; falling back to CPU-only JAX.")
-      jax_installed <- pip_install("jax")
+    # Prefer CUDA 13 if the driver is new enough; otherwise CUDA 12; else CPU fallback
+    if (!is.na(drv_major) && drv_major >= 580) {
+      msg("Driver %s detected (>=580): installing JAX CUDA 13 wheels.", drv[1])
+      tryCatch(pip_install('jax[cuda13]'), error = function(e) {
+        msg("CUDA 13 wheels failed (%s); falling back to CUDA 12.", e$message)
+        pip_install('jax[cuda12]')
+      })
+    } else if (!is.na(drv_major) && drv_major >= 525) {
+      msg("Driver %s detected (>=525,<580): installing JAX CUDA 12 wheels.", drv[1])
+      pip_install('jax[cuda12]')
     } else {
-      # Parse the CUDA Version line (e.g., "| NVIDIA-SMI ... CUDA Version: 12.6 |")
-      cuda_line <- nvidia_output[grep("CUDA Version", nvidia_output)]
-      if (length(cuda_line) > 0) {
-        cuda_ver_str <- sub(".*CUDA Version: ([0-9.]+).*", "\\1", cuda_line)
-        cuda_major <- as.numeric(sub("([0-9]+)\\..*", "\\1", cuda_ver_str))
-        
-        if (is.na(cuda_major)) {
-          msg("Could not parse CUDA version from nvidia-smi; falling back to CPU-only JAX.")
-          jax_installed <- pip_install("jax")
-        } else if (cuda_major >= 13) {
-          msg("CUDA driver supports >= 13.x; installing JAX with CUDA 13 support.")
-          jax_installed <- pip_install("jax[cuda13]")
-        } else if (cuda_major >= 12) {
-          msg("CUDA driver supports 12.x; installing JAX with CUDA 12 support.")
-          jax_installed <- pip_install("jax[cuda12]")
-        } else {
-          msg("CUDA driver supports < 12.x; falling back to CPU-only JAX.")
-          jax_installed <- pip_install("jax")
-        }
-      } else {
-        msg("Could not find CUDA version in nvidia-smi output; falling back to CPU-only JAX.")
-        jax_installed <- pip_install("jax")
-      }
+      msg("Driver %s too old for CUDA wheels; installing CPU-only JAX.", drv[1])
+      pip_install('jax')
     }
-  } 
-  if (identical(os, "Darwin")) {
-    msg("Detected macOS: attempting Metal-enabled JAX via jax-metal (pinned to JAX 0.5.0).")
-    # As noted, jax-metal currently works with JAX==0.5.0; pin both jax and jaxlib.
-    #jax_installed <- pip_install(c("jax==0.5.0", "jaxlib==0.5.0", "jax-metal"))
-    jax_installed <- FALSE
-    if (!jax_installed) {
-      msg("  Metal install failed; falling back to CPU-only JAX.")
-      jax_installed <- pip_install("jax")
-    }
-  }
-  if (!(os %in% c("Darwin","Linux")) ){ 
-    msg("Non-Linux/macOS detected (%s); installing CPU-only JAX.", os)
-    jax_installed <- pip_install("jax")
   }
   
-  if (!jax_installed) stop("Failed to install JAX in any configuration.", call. = FALSE)
-
+  # (Optional) neutralize LD_LIBRARY_PATH inside this env to prevent overrides
+  try({
+    actdir <- file.path(Sys.getenv("HOME"), "miniconda3/envs", conda_env, "etc", "conda", "activate.d")
+    dir.create(actdir, recursive = TRUE, showWarnings = FALSE)
+    writeLines("unset LD_LIBRARY_PATH", file.path(actdir, "00-unset-ld.sh"))
+  }, silent = TRUE)
+  
+  # Install JAX first (so later deps don't pull a CPU variant)
+  install_jax_gpu()
+  
+  # --- (B) Now install the rest (pip’s default upgrade strategy is "only-if-needed") ---
+  other_pkgs <- c("numpy", "equinox", "numpyro", "optax")
+  pip_install(other_pkgs)
+  
   msg("Environment '%s' is ready.", conda_env)
 }
+
 
