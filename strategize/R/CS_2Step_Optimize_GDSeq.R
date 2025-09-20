@@ -205,8 +205,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       
       # Package as [Q_pop, Q_ast|Ast, Q_ast|Dag] to match avg-case shape
       # (we repeat the population value to keep dimensions consistent)
-      q_star_f <- strenv$jnp$stack(list(Qres$q_ast, Qres$q_ast, Qres$q_ast), 0L)
-      
+      q_star_f <- strenv$jnp$expand_dims(strenv$jnp$stack(list(Qres$q_ast, Qres$q_ast, Qres$q_ast), 0L),1L)
     }
 
     # setup results for returning
