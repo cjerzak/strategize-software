@@ -81,8 +81,8 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
       msg("  Metal install failed; falling back to CPU-only JAX.")
       jax_installed <- pip_install("jax")
     }
-    
-  } else {
+  }
+  if (!(os %in% c("Darwin","Linux")) ){ 
     msg("Non-Linux/macOS detected (%s); installing CPU-only JAX.", os)
     jax_installed <- pip_install("jax")
   }
