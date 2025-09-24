@@ -514,7 +514,7 @@ strategize       <-          function(
     p_vec <- unlist(p_list_red <- sapply(factor_levels,function(l_d){rep(1/l_d,times=l_d-1)}))
   }
   if(!is.null(p_list)){
-    if(any(names(p_list) != colnames(W))){stop("p_list and W not aligned")}
+    if(any(names(p_list) != colnames(W))){  stop("p_list and W not aligned") }
     p_list_full <- p_list
     p_vec_full_PreRegularization <- p_list_full
     p_list_PreRegularization <- p_list
@@ -721,12 +721,13 @@ strategize       <-          function(
   
   if(use_optax == T){
       LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
-                                            warmup_steps =  min(c(20L,nSGD)),
-                                            decay_steps = max(c(21L,nSGD-100L)),
+                                            warmup_steps =  max(c(4L,0.1*nSGD)),
+                                            decay_steps = max(c(4L,0.9*nSGD)),
                                             init_value = learning_rate_max/100, 
                                             peak_value = learning_rate_max, 
                                             end_value =  learning_rate_max/100)
-    
+      plot(strenv$np$array(LR_schedule(strenv$jnp$array(1:nSGD))), 
+           xlab = "Iteration", ylab = "Optax LR Schedule")
       
       for(sfx in c("ast", "dag")){
         # model partition + setup state

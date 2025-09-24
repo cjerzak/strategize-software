@@ -14,8 +14,8 @@ initialize_jax <- function(conda_env = "strategize_env",
   
   # setup numerical precisions
   strenv$jaxFloatType <- strenv$jnp$float32
-  strenv$dtj <- strenv$jnp$float64; strenv$jax$config$update("jax_enable_x64", TRUE) # use float64
-  #strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", F) # use float32
+  #strenv$dtj <- strenv$jnp$float64; strenv$jax$config$update("jax_enable_x64", TRUE) # use float64
+  strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", FALSE) # use float32
 }
 strenv <- new.env( parent = emptyenv() )
 
