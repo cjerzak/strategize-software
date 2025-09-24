@@ -118,7 +118,7 @@ InitializeQMonteFxns <- function(){
     # corresponding to the primary outcomes (entrant vs. entrant, entrant vs. field, etc.), 
     # each approximated directly over samples
     (q_ast <- E1 + E2 + E3 + E4)
-    q_dag <- one  - q_ast  # zero-sum
+    q_dag <- one - q_ast  # zero-sum
     
     return(list("q_ast" = q_ast, 
                 "q_dag" = q_dag))

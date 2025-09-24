@@ -283,19 +283,6 @@ to enforce that environment activation is mandatory.
 }
 
 }
-\references{
-\itemize{
-\item Hainmueller, J., Hopkins, D. J., & Yamamoto, T. (2014). Causal Inference in Conjoint Analysis:
-Understanding Multidimensional Choices via Stated Preference Experiments. \emph{Political
-Analysis}, 22(1), 1–30.
-\item Egami, N., & Imai, K. (2019). Causal Interaction in Factorial Experiments:
-Application to Conjoint Analysis. \emph{Journal of the American Statistical Association}, 114(526), 529–540.
-\item Goplerud, M., & Titiunik, R. (2022). Analysis of High-Dimensional Factorial Experiments:
-Estimation of Interactive and Non-Interactive Effects. \emph{arXiv preprint arXiv:2207.XXXX}.
-\item (Paper Reference) A forthcoming or accompanying manuscript describing in detail the methods
-for \emph{optimal} or \emph{adversarial} stochastic interventions in conjoint settings.
-}
-}
 \seealso{
 \code{\link{cv_strategize}} for cross-validation across candidate values of \code{lambda}.
 See also \code{\link{strategize_onestep}} for a function that implements a \dQuote{one-step}

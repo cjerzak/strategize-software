@@ -28,7 +28,7 @@ cv_strategize(
   adversarial = F,
   use_regularization = TRUE,
   force_gaussian = F,
-  temperature = NULL,
+  temperature = 0.5,
   a_init_sd = 0.001,
   learning_rate_max = 0.001,
   penalty_type = "KL",

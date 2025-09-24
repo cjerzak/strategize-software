@@ -237,17 +237,6 @@
 #' load a \pkg{conda} environment if specified, though advanced users can pass \code{conda_env_required = TRUE}
 #' to enforce that environment activation is mandatory.
 #'
-#' @references
-#' - Hainmueller, J., Hopkins, D. J., & Yamamoto, T. (2014). Causal Inference in Conjoint Analysis:
-#'   Understanding Multidimensional Choices via Stated Preference Experiments. \emph{Political
-#'   Analysis}, 22(1), 1–30.
-#' - Egami, N., & Imai, K. (2019). Causal Interaction in Factorial Experiments:
-#'   Application to Conjoint Analysis. \emph{Journal of the American Statistical Association}, 114(526), 529–540.
-#' - Goplerud, M., & Titiunik, R. (2022). Analysis of High-Dimensional Factorial Experiments:
-#'   Estimation of Interactive and Non-Interactive Effects. \emph{arXiv preprint arXiv:2207.XXXX}.
-#' - (Paper Reference) A forthcoming or accompanying manuscript describing in detail the methods
-#'   for \emph{optimal} or \emph{adversarial} stochastic interventions in conjoint settings.
-#'
 #' @seealso
 #' \code{\link{cv_strategize}} for cross-validation across candidate values of \code{lambda}.
 #' See also \code{\link{strategize_onestep}} for a function that implements a \dQuote{one-step}
@@ -610,6 +599,9 @@ strategize       <-          function(
                              no = list(a2FullSimplex) )[[1]]
   pi_star_value_init_ast <- a2Simplex_optim( a_vec_init_ast ) # a_ = a_vec_init_ast
   pi_star_value_init_dag <- a2Simplex_optim( a_vec_init_dag )
+  
+  if(adversarial){ stopifnot(length(unique(competing_group_variable_respondent))==2) }
+  if(adversarial){ stopifnot(length(unique(competing_group_variable_respondent))==2) }
 
   # define Q functions
   environment(getQStar_single) <- evaluation_environment
@@ -733,8 +725,7 @@ strategize       <-          function(
         assign(name_optimizer <- paste0("optax_optimizer_", sfx), 
                strenv$optax$chain(
                  #strenv$optax$scale(-1),strenv$optax$scale_by_rss(initial_accumulator_value = 0.01)  
-                 #strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
-                 strenv$optax$scale(-1), strenv$optax$contrib$muon(LR_schedule)
+                 strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
           ))
         assign(paste0("opt_state_", sfx), eval(parse(text=name_optimizer))$init(strenv$jnp$array(get(paste0("a_vec_init_", sfx)))))
         assign(paste0("jit_apply_updates_", sfx), compile_fxn(strenv$optax$apply_updates))
