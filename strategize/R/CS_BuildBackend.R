@@ -24,7 +24,7 @@
 #' @md
 
 build_backend <- function(conda_env = "strategize_env", conda = "auto") {
-  reticulate::conda_create(envname = conda_env, conda = conda, python_version = "3.12")
+  reticulate::conda_create(envname = conda_env, conda = conda, python_version = "3.13")
   
   os <- Sys.info()[["sysname"]]
   msg <- function(...) message(sprintf(...))

@@ -720,21 +720,21 @@ strategize       <-          function(
   }
   
   if(use_optax == T){
-      LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
-                                            warmup_steps =  max(c(4L,0.1*nSGD)),
-                                            decay_steps = max(c(4L,0.9*nSGD)),
-                                            init_value = learning_rate_max/100, 
-                                            peak_value = learning_rate_max, 
-                                            end_value =  learning_rate_max/100)
-      plot(strenv$np$array(LR_schedule(strenv$jnp$array(1:nSGD))), 
-           xlab = "Iteration", ylab = "Optax LR Schedule")
       
       for(sfx in c("ast", "dag")){
+        # Lr schedule 
+        LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
+                                              warmup_steps =  max(c(4L,0.1*nSGD)),
+                                              decay_steps = max(c(4L,0.9*nSGD)),
+                                              init_value = learning_rate_max/100, 
+                                              peak_value = learning_rate_max, 
+                                              end_value =  learning_rate_max/100)
         # model partition + setup state
         assign(name_optimizer <- paste0("optax_optimizer_", sfx), 
                strenv$optax$chain(
                  #strenv$optax$scale(-1),strenv$optax$scale_by_rss(initial_accumulator_value = 0.01)  
-                 strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
+                 #strenv$optax$scale(-1), strenv$optax$adabelief(LR_schedule)
+                 strenv$optax$scale(-1), strenv$optax$contrib$muon(LR_schedule)
           ))
         assign(paste0("opt_state_", sfx), eval(parse(text=name_optimizer))$init(strenv$jnp$array(get(paste0("a_vec_init_", sfx)))))
         assign(paste0("jit_apply_updates_", sfx), compile_fxn(strenv$optax$apply_updates))
