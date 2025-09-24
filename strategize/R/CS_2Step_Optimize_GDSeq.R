@@ -55,8 +55,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
     # do dag updates ("min" step)
     if( i %% 1 == 0 & adversarial ){
-      
-      # dQ_da_dag built off FullGetQStar_
+      # note: dQ_da_dag built off FullGetQStar_
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,                    #1,2
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
@@ -84,7 +83,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       if(use_optax){
         updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, 
                                                      state = opt_state_dag, 
-                                                     params = a_i_dag)
+                                                     params = a_i_dag )
         opt_state_dag <- updates_and_opt_state_dag[[2]]
         a_i_dag <- jit_apply_updates_dag(params = a_i_dag,  
                                          updates = updates_and_opt_state_dag[[1]])
@@ -96,7 +95,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
     # do updates ("max" step)
     if( i %% 1 == 0 | (!adversarial) ){
-      SEED   <- strenv$jax$random$split(SEED)[[1L]]
+      SEED   <- strenv$jax$random$split(SEED)[[1L]] 
       grad_i_ast <- dQ_da_ast( a_i_ast, a_i_dag,
                                INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -105,7 +104,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                P_VEC_FULL_ast, P_VEC_FULL_dag,
                                SLATE_VEC_ast, SLATE_VEC_dag,
                                LAMBDA, 
-                               (Q_SIGN_ <- strenv$jnp$array(1.)),
+                               Q_SIGN_ <- strenv$jnp$array(1.),
                                SEED
                                )
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]

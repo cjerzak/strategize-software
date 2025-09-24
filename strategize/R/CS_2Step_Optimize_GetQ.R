@@ -149,13 +149,19 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     
     # Draw field (“slate”) samples
     TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-      strenv$getMultinomialSamp(SLATE_VEC_ast_, MNtemp, 
+      strenv$getMultinomialSamp(
+                                #strenv$jax$lax$stop_gradient(pi_star_i_ast), # if using optimized dist
+                                SLATE_VEC_ast_, # if using slate 
+                                MNtemp, 
                                 s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
     }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
     SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     
     TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-      strenv$getMultinomialSamp(SLATE_VEC_dag_, MNtemp,
+      strenv$getMultinomialSamp(
+                                #strenv$jax$lax$stop_gradient(pi_star_i_dag),  # if using optimized dist
+                                SLATE_VEC_dag_,  # if using slate
+                                MNtemp,
                                 s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
     }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
     SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
@@ -201,7 +207,6 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     var_pen_dag__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_dag_ * (strenv$jnp$log(P_VEC_FULL_dag_) - strenv$jnp$log(pi_star_full_i_dag))))
   }
   
-  indicator_UseAst <- (0.5 * (1. + Q_SIGN))
   myMaximize <- 
     q_max + ( (indicator_UseAst * var_pen_ast__) +
              (1.- indicator_UseAst) * var_pen_dag__ )
