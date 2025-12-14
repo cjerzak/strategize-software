@@ -325,7 +325,9 @@ get_se <- function(){
           colnames(PrXdGivenClust_se) <- colnames(PrXdGivenClust_mat)
         }
       }
-      if(any(is.na(unlist(seList_automatic)))){browser()}
+      if(any(is.na(unlist(seList_automatic)))){
+        warning("NA values encountered in standard error calculations")
+      }
 
       for(k__ in 1:K){
         try(seList_automatic[[k__]] <- sapply(1:length(pi_list[[k__]]),function(d_){

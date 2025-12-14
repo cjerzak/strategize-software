@@ -121,7 +121,7 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                                                  strenv$main_comp_mat,   
                                                  strenv$shadow_comp_mat  )
   
-  # Average-case path 
+  # Average-case path
   if(!adversarial){
     q_vec <- QFXN(pi_star_ast =  pi_star_i_ast,
                   pi_star_dag =  pi_star_i_dag,
@@ -130,6 +130,8 @@ FullGetQStar_ <- function(a_i_ast,                                #1
                   EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
                   EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
     q_max <- strenv$jnp$take(q_vec, 0L)
+    # In non-adversarial mode, we always optimize the "ast" player
+    indicator_UseAst <- 1.0
   }
   
   # Adversarial path: institution-aware push-forward (four-quadrant mixture)

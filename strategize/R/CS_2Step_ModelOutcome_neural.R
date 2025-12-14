@@ -205,7 +205,6 @@ generate_ModelOutcome_neural <- function(){
   # -------------------------------
   # Run sampling
   # -------------------------------
-  browser()
   t0_ <- Sys.time()
   sampler$run(strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000))),
               X = strenv$jnp$array(as.matrix(W_))$astype(ddtype_), 
