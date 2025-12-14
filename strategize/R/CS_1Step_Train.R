@@ -234,7 +234,9 @@ for(trainIndicator in trainIndicator_pool){
             try_ <- try(print(sprintf("[%s] Iter %i of - Fold %i - Lambda %i of %i - Current obj: %.3f",
                                       format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
                                       i, nSGD, fold_, lambda_counter, length(lambda_seq), currentLossGlobal)),T)
-            if("try-error" %in% class(try_)){browser()}
+            if("try-error" %in% class(try_)){
+              warning("Error encountered while printing progress")
+            }
           }
 
           # cycle info

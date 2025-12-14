@@ -69,10 +69,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 SEED                                 #17
                                 )
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
-      
-      
-      browser()
-      if(FALSE){ # sanity view of utilities 
+
+      if(FALSE){ # sanity view of utilities (debug code) 
         TSAMP1 <- strenv$jax$vmap(function(s_){
           strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
         }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))

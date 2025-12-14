@@ -9,7 +9,10 @@ ess_fxn <- function(wz){ sum(wz)^2 / sum(wz^2)}
 toSimplex = function(x){
   x[x>22] <- 22; x[x< -22] <- -22
   sim_x = exp(x)/sum(exp(x))
-  if(any(is.nan(sim_x))){browser()}
+  if(any(is.nan(sim_x))){
+    warning("NaN values encountered in toSimplex; returning uniform distribution")
+    sim_x <- rep(1/length(x), length(x))
+  }
   return(sim_x)
 }
 
