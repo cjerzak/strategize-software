@@ -25,7 +25,8 @@
 #' plot_best_response_curves(
 #'   res,
 #'   d_ = 1,
-#'   nPoints_br = 51,
+#'   nPoints_br = 100L,
+#'   nPoints_heat = 50L,
 #'   title = NULL,
 #'   col_ast = "blue",
 #'   col_dag = "red",
@@ -43,10 +44,12 @@
 #' @param d_ (Integer) The dimension of \eqn{\pi_{\mathrm{ast}}, \pi_{\mathrm{dag}}} to examine. 
 #'   For example, if you have multiple factors (dimensions), each is indexed by a positive integer. 
 #'   Defaults to 1.
-#' @param nPoints_br (Integer) Number of equally spaced grid points in \eqn{[0,1]} 
-#'   to sample for \emph{the outer} loop. The code does an internal small search 
-#'   for best responses at each grid point. Larger \code{nPoints_br} => smoother curves 
-#'   but more computation. Defaults to 51.
+#' @param nPoints_br (Integer) Number of equally spaced grid points in \eqn{[0,1]}
+#'   to sample for \emph{the outer} loop. The code does an internal small search
+#'   for best responses at each grid point. Larger \code{nPoints_br} => smoother curves
+#'   but more computation. Defaults to \code{100L}.
+#' @param nPoints_heat (Integer) Number of grid points for heat map calculations.
+#'   Defaults to \code{50L}.
 #' @param title (Character or \code{NULL}) Main plot title. If \code{NULL}, 
 #'   an auto-generated title is used, e.g. "Best-Response Curves (Dimension d_=1)".
 #' @param col_ast,col_dag (Character) Colors for ast’s and dag’s best-response curves, 

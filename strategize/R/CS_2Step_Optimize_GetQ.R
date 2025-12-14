@@ -46,31 +46,32 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   DELTA_pi_star <- (pi_star_ast - pi_star_dag)
   
   if(!is.null(inter_indices_i0)){ 
-  inter_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
-                                                           indices = inter_indices_i0, 
-                                                           axis = 0L),1L)
-
-  # get interaction info
-  pi_ast_dp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
-  pi_ast_dpp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
-
-  pi_dag_dp <- strenv$jnp$take(pi_star_dag, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
-  pi_dag_dpp <- strenv$jnp$take(pi_star_dag, n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
-  DELTA_pi_star_prod <- pi_ast_dp * pi_ast_dpp - pi_dag_dp * pi_dag_dpp
+    inter_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
+                                                             indices = inter_indices_i0, 
+                                                             axis = 0L),1L)
   
-  Qhat_ast_among_ast <- glm_outcome_transform( 
-            EST_INTERCEPT_tf_ast + 
-            strenv$jnp$matmul(main_coef_ast$transpose(), DELTA_pi_star) + 
-            strenv$jnp$matmul( inter_coef_ast$transpose(),  DELTA_pi_star_prod ) )
+    # get interaction info
+    pi_ast_dp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
+    pi_ast_dpp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
+  
+    pi_dag_dp <- strenv$jnp$take(pi_star_dag, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
+    pi_dag_dpp <- strenv$jnp$take(pi_star_dag, n2int( ai(interaction_info$dplp_index_adj)-1L), axis=0L)
+    DELTA_pi_star_prod <- pi_ast_dp * pi_ast_dpp - pi_dag_dp * pi_dag_dpp
+    
+    Qhat_ast_among_ast <- glm_outcome_transform( 
+              EST_INTERCEPT_tf_ast + 
+              strenv$jnp$matmul(main_coef_ast$transpose(), DELTA_pi_star) + 
+              strenv$jnp$matmul( inter_coef_ast$transpose(),  DELTA_pi_star_prod ) 
+            )
   }
 
   if(is.null(inter_indices_i0)){ 
     Qhat_ast_among_ast <- glm_outcome_transform( 
       EST_INTERCEPT_tf_ast +  strenv$jnp$matmul(main_coef_ast$transpose(), DELTA_pi_star)  )
   }
-  
+
   if( !Q_DISAGGREGATE ){ Qhat_population <- Qhat_ast_among_dag <- Qhat_ast_among_ast }
-  if( Q_DISAGGREGATE ){
+  if( Q_DISAGGREGATE ){ # run if DisaggreateQ
     main_coef_dag <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_dag, 
                                  indices = main_indices_i0, axis=0L), 1L)
     if(!is.null(inter_indices_i0)){ 
@@ -147,7 +148,7 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
     SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
     
-    # Draw field (“slate”) samples
+    # Draw field (slate) samples
     TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
       strenv$getMultinomialSamp(
                                 #strenv$jax$lax$stop_gradient(pi_star_i_ast), # if using optimized dist
@@ -176,11 +177,11 @@ FullGetQStar_ <- function(a_i_ast,                                #1
       INTERCEPT_ast0_, COEFFICIENTS_ast0_,
       INTERCEPT_dag0_, COEFFICIENTS_dag0_,
       P_VEC_FULL_ast_, P_VEC_FULL_dag_,
-      LAMBDA_, Q_SIGN, SEED_IN_LOOP
+      LAMBDA_, Q_SIGN, 
+      strenv$jax$random$split(SEED_IN_LOOP, TSAMP_ast_PrimaryComp_all$shape[[1]])
     )
-    
-    q_max_ast <- QMonteRes$q_ast
-    q_max_dag <- QMonteRes$q_dag
+    q_max_ast <- QMonteRes$q_ast$mean()
+    q_max_dag <- QMonteRes$q_dag$mean()
     
     # Choose which side we’re optimizing in this call
     indicator_UseAst <- (0.5 * ( 1. + Q_SIGN ))
@@ -201,15 +202,16 @@ FullGetQStar_ <- function(a_i_ast,                                #1
     var_pen_dag__ <- tapply(1:length(split_vec_full), split_vec_full, function(zer){
       list( strenv$jnp$max(strenv$jnp$take(pi_star_full_i_dag, indices = strenv$jnp$array( ai(zer-1L)),axis = 0L)) )})
     names(var_pen_dag__)<-NULL ; var_pen_dag__ <- strenv$jnp$negative(LAMBDA_*strenv$jnp$sum(strenv$jnp$stack(var_pen_dag__)))
-  } else { 
-    # "KL" default
-    var_pen_ast__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_ast_ * (strenv$jnp$log(P_VEC_FULL_ast_) - strenv$jnp$log(pi_star_full_i_ast))))
-    var_pen_dag__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_dag_ * (strenv$jnp$log(P_VEC_FULL_dag_) - strenv$jnp$log(pi_star_full_i_dag))))
+  } else {
+    # "KL" default (with epsilon clipping to prevent log(0) = -Inf)
+    eps <- 1e-8
+    var_pen_ast__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_ast_ * (strenv$jnp$log(strenv$jnp$clip(P_VEC_FULL_ast_, eps, 1.0)) - strenv$jnp$log(strenv$jnp$clip(pi_star_full_i_ast, eps, 1.0)))))
+    var_pen_dag__ <- LAMBDA_*strenv$jnp$negative(strenv$jnp$sum(P_VEC_FULL_dag_ * (strenv$jnp$log(strenv$jnp$clip(P_VEC_FULL_dag_, eps, 1.0)) - strenv$jnp$log(strenv$jnp$clip(pi_star_full_i_dag, eps, 1.0)))))
   }
   
   myMaximize <- 
-    q_max + ( (indicator_UseAst * var_pen_ast__) +
-             (1.- indicator_UseAst) * var_pen_dag__ )
+    q_max + ( (indicator_UseAst * var_pen_ast__) 
+       + (1.- indicator_UseAst) * var_pen_dag__ )
   
   return( myMaximize )
 }

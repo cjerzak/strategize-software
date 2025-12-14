@@ -47,6 +47,9 @@ baseline probabilities to be overlaid as vertical ticks on each plot
 \item{col.main}{Character. Color for the main title in each subplot.
 Default is \code{"black"}.}
 
+\item{cex.main}{Numeric. Character expansion factor for main titles.
+Default is \code{1.5}.}
+
 \item{zStar}{Numeric. Multiplier for the standard error bars (e.g., 1.96
 for approximately 95\\% confidence intervals). Default is \code{1}.}
 
@@ -86,6 +89,9 @@ Should accept and return a character vector. Default is identity function.}
 
 \item{level_name_transformer}{Function to transform level names for display.
 Should accept and return a character vector. Default is identity function.}
+
+\item{open_browser}{Logical. If \code{TRUE}, opens a browser for debugging.
+Default is \code{FALSE}. Intended for development use only.}
 }
 \value{
 Invisibly returns \code{NULL}. This function is primarily called for its

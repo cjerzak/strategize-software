@@ -1,14 +1,16 @@
 #' Build the environment for `strategize`. Creates a conda environment in which
-#' 'JAX' and 'np' are installed. Users may also create such an environment
+#' JAX and NumPy are installed. Users may also create such an environment
 #' themselves.
 #'
-#' @param conda_env (default = `"strategize"`) Name of the conda environment in which to place the backends.
-#' @param conda (default = `auto`) The path to a conda executable. Using `"auto"` allows reticulate to attempt to automatically find an appropriate conda binary.
-
-#' @return Invisibly returns NULL; this function is used for its side effects 
-#' of creating and configuring a conda environment for `strategize`. 
-#' This function requires an Internet connection.
-#' You can find out a list of conda Python paths via: `Sys.which("python")`
+#' @param conda_env Name of the conda environment in which to place the backends.
+#'   Defaults to \code{"strategize_env"}.
+#' @param conda The path to a conda executable. Using \code{"auto"} allows reticulate
+#'   to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.
+#'
+#' @return Invisibly returns \code{NULL}. This function is called for its side effects
+#'   of creating and configuring a conda environment for \code{strategize}.
+#'   This function requires an Internet connection.
+#'   You can find a list of conda Python paths via: \code{Sys.which("python")}
 #'
 #' @examples
 #' \dontrun{

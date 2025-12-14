@@ -3,25 +3,27 @@
 \name{build_backend}
 \alias{build_backend}
 \title{Build the environment for \code{strategize}. Creates a conda environment in which
-'JAX' and 'np' are installed. Users may also create such an environment
+JAX and NumPy are installed. Users may also create such an environment
 themselves.}
 \usage{
 build_backend(conda_env = "strategize_env", conda = "auto")
 }
 \arguments{
-\item{conda_env}{(default = \code{"strategize"}) Name of the conda environment in which to place the backends.}
+\item{conda_env}{Name of the conda environment in which to place the backends.
+Defaults to \code{"strategize_env"}.}
 
-\item{conda}{(default = \code{auto}) The path to a conda executable. Using \code{"auto"} allows reticulate to attempt to automatically find an appropriate conda binary.}
+\item{conda}{The path to a conda executable. Using \code{"auto"} allows reticulate
+to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.}
 }
 \value{
-Invisibly returns NULL; this function is used for its side effects
+Invisibly returns \code{NULL}. This function is called for its side effects
 of creating and configuring a conda environment for \code{strategize}.
 This function requires an Internet connection.
-You can find out a list of conda Python paths via: \code{Sys.which("python")}
+You can find a list of conda Python paths via: \code{Sys.which("python")}
 }
 \description{
 Build the environment for \code{strategize}. Creates a conda environment in which
-'JAX' and 'np' are installed. Users may also create such an environment
+JAX and NumPy are installed. Users may also create such an environment
 themselves.
 }
 \examples{
