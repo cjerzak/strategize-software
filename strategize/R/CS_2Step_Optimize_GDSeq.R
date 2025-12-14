@@ -70,11 +70,38 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 )
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
       
-      if(i == 1){
-        inv_learning_rate_da_dag <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm( grad_i_dag )))
+      
+      browser()
+      if(FALSE){ # sanity view of utilities 
+        TSAMP1 <- strenv$jax$vmap(function(s_){
+          strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
+        }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
+        TSAMP2 <- strenv$jax$vmap(function(s_){
+          strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
+        }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
+        ast0_ <- strenv$np$array(strenv$jax$vmap(function(t_,t__){ getQStar_single(t_, t__,
+                                                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_)}, in_axes = list(0L,0L))(TSAMP1,TSAMP2))[,1,1]
+        ast_ <- strenv$np$array(strenv$jax$vmap(function(t_,t__){ getQStar_single(t_, t__,
+                        INTERCEPT_ast_, COEFFICIENTS_ast_,
+                        INTERCEPT_ast_, COEFFICIENTS_ast_)}, in_axes = list(0L,0L))(TSAMP1,TSAMP2))[,1,1]
+        dag0_ <- strenv$np$array(strenv$jax$vmap(function(t_,t__){ getQStar_single(t_, t__,
+                                                                   INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                                                   INTERCEPT_dag0_, COEFFICIENTS_dag0_)}, in_axes = list(0L,0L))(TSAMP1,TSAMP2))[,1,1]
+        dag_ <- strenv$np$array(strenv$jax$vmap(function(t_,t__){ getQStar_single(t_, t__,
+                                                                  INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                                                  INTERCEPT_dag_, COEFFICIENTS_dag_)}, in_axes = list(0L,0L))(TSAMP1,TSAMP2))[,1,1]
+        cor(cbind(ast0_,ast_,dag0_,dag_))
+        plot(ast_,dag_)
       }
-
+      
       if(!use_optax){
+        if(i == 1){
+          inv_learning_rate_da_dag <- 
+            strenv$jax$lax$stop_gradient(
+                strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm( grad_i_dag )))
+            )
+        }
         inv_learning_rate_da_dag <-  strenv$jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, 
                                         grad_i = grad_i_dag,
@@ -109,8 +136,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                )
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
       
-      if(i==1){ inv_learning_rate_da_ast <- strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm(grad_i_ast)))  }
       if(!use_optax){
+        if(i==1){ 
+          inv_learning_rate_da_ast <- strenv$jax$lax$stop_gradient(
+                strenv$jnp$maximum(INIT_MIN_GRAD_ACCUM, 10*strenv$jnp$square(strenv$jnp$linalg$norm(grad_i_ast)))  
+            )
+        }
         inv_learning_rate_da_ast <-  strenv$jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
         a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
                                         grad_i = grad_i_ast,
@@ -129,10 +160,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       strenv$grad_mag_ast_vec[i] <- list( strenv$jnp$linalg$norm( grad_i_ast ) )
       if(!use_optax){ strenv$inv_learning_rate_ast_vec[i] <- list( inv_learning_rate_da_ast ) }
     }
-    if(i >= nSGD){goOn <- T}
+    if(i >= nSGD){goOn <- TRUE}
   }
 
-  message("Saving output from gd...")
+  message("Saving output from gd [getQPiStar_gd]...")
   {
     pi_star_ast_full_simplex_ <- getPrettyPi( pi_star_ast_<-strenv$a2Simplex_diff_use(a_i_ast),
                                               strenv$ParameterizationType,
@@ -179,6 +210,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                          INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
     }
     if(adversarial){ 
+      if(FALSE){
       # Push-forward (two-round) MC for adversarial case; return 3-vector like avg case
       TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){
         strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
@@ -189,7 +221,6 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         strenv$getMultinomialSamp(SLATE_VEC_dag, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
       }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
       SEED <- strenv$jax$random$split(SEED)[[1L]]
-      
       Qres <- strenv$Vectorized_QMonteIter_MaxMin(
         pi_star_ast_f_all, pi_star_dag_f_all,
         TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
@@ -199,14 +230,20 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         INTERCEPT_ast0_, COEFFICIENTS_ast0_,
         INTERCEPT_dag0_, COEFFICIENTS_dag0_,
         P_VEC_FULL_ast, P_VEC_FULL_dag,
-        LAMBDA, strenv$jnp$array(1.), SEED
+        LAMBDA, strenv$jnp$array(1.), 
+        strenv$jax$random$split(SEED, TSAMP_ast_PrimaryComp_all$shape[[1]])
+        #SEED
       )
-      
       # Package as [Q_pop, Q_ast|Ast, Q_ast|Dag] to match avg-case shape
       # (we repeat the population value to keep dimensions consistent)
       q_star_f <- strenv$jnp$expand_dims(strenv$jnp$stack(list(Qres$q_ast, 
                                                                Qres$q_ast, 
                                                                Qres$q_ast), 0L),1L)
+      }
+      q_star_f <- strenv$Vectorized_QMonteIter(
+        pi_star_ast_f_all,  pi_star_dag_f_all,
+        INTERCEPT_ast_, COEFFICIENTS_ast_,
+        INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
     }
 
     # setup results for returning

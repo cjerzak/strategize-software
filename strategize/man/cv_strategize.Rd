@@ -216,7 +216,7 @@ performance, returning the model that maximizes a chosen criterion (e.g., out-of
 expected utility or log-likelihood).
 }
 \details{
-\code{strategize_cv} implements a cross-validation routine for 
+\code{cv_strategize} implements a cross-validation routine for
 \code{\link{strategize}}. First, the data is split into \code{folds} parts. 
 For each fold, we train candidate outcome models and compute out-of-sample 
 performance. The best-performing \eqn{\lambda} is selected. Finally, a 

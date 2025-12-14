@@ -24,6 +24,7 @@
 #'   lambda,
 #'   varcov_cluster_variable = NULL,
 #'   competing_group_variable_respondent = NULL,
+#'   competing_group_variable_respondent_proportions = NULL,
 #'   competing_group_variable_candidate = NULL,
 #'   competing_group_competition_variable_candidate = NULL,
 #'   pair_id = NULL,
@@ -36,18 +37,23 @@
 #'   nSGD = 100,
 #'   diff = FALSE,
 #'   adversarial = FALSE,
-#'   use_regularization = FALSE,
+#'   use_regularization = TRUE,
 #'   force_gaussian = FALSE,
-#'   a_init_sd = 0,
+#'   a_init_sd = 0.001,
+#'   outcome_model_type = "glm",
 #'   penalty_type = "KL",
-#'   compute_se = TRUE,
-#'   conda_env = NULL,
+#'   compute_se = FALSE,
+#'   conda_env = "strategize_env",
 #'   conda_env_required = FALSE,
 #'   conf_level = 0.90,
 #'   nFolds_glm = 3L,
 #'   folds = NULL,
 #'   nMonte_adversarial = 5L,
 #'   nMonte_Qglm = 100L,
+#'   learning_rate_max = 0.001,
+#'   temperature = 0.5,
+#'   save_outcome_model = FALSE,
+#'   presaved_outcome_model = FALSE,
 #'   use_optax = FALSE,
 #'   optim_type = "gd"
 #' )
@@ -81,6 +87,11 @@
 #'   membership of respondents or candidate profiles. Particularly relevant in adversarial settings
 #'   (\code{adversarial = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
 #'   respondent or candidate. Defaults to \code{NULL}.
+#'
+#' @param competing_group_variable_respondent_proportions Optional numeric vector specifying
+#'   the population proportions of each competing group. If \code{NULL}, proportions are estimated
+#'   from the data. Useful when the sample proportions differ from the target population proportions.
+#'   Defaults to \code{NULL}.
 #'
 #' @param pair_id A factor or numeric vector identifying the forced-choice pair. If each row of
 #'   \code{W} is a single profile, \code{pair_id} groups the rows belonging to the same choice set.
@@ -175,15 +186,18 @@
 #'   the exploration of the probability simplex. Smaller values yield distributions closer to the
 #'   argmax. Defaults to \code{0.5}.
 #'
+#' @param save_outcome_model Logical indicating whether to save the fitted outcome model to
+#'   disk for reuse. Useful for large models or repeated runs. Defaults to \code{FALSE}.
+#'
+#' @param presaved_outcome_model Logical indicating whether to use a previously saved outcome
+#'   model instead of re-fitting. Defaults to \code{FALSE}.
+#'
 #' @param use_optax Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
 #'   library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 #'   Defaults to \code{FALSE}.
 #'
-#' @param jax_seed Integer seed for reproducible JAX-based computations. Defaults to
-#'   \code{as.integer(Sys.time())}.
-#'
 #' @param optim_type A character string for choosing which optimizer or approach is used internally
-#'   (e.g., \code{"default"}, \code{"SecondOrder"}, or \code{"tryboth"}). Defaults to \code{"tryboth"}.
+#'   (e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.
 #'
 #' @return A named \code{list} containing:
 #' \describe{
@@ -291,6 +305,7 @@ strategize       <-          function(
                                             lambda,
                                             varcov_cluster_variable = NULL,
                                             competing_group_variable_respondent = NULL,
+                                            competing_group_variable_respondent_proportions = NULL,
                                             competing_group_variable_candidate = NULL,
                                             competing_group_competition_variable_candidate = NULL,
                                             pair_id = NULL,
@@ -318,6 +333,8 @@ strategize       <-          function(
                                             nMonte_Qglm = 100L,
                                             learning_rate_max = 0.001, 
                                             temperature = 0.5, 
+                                            save_outcome_model = FALSE,
+                                            presaved_outcome_model = FALSE, 
                                             use_optax = FALSE, 
                                             optim_type = "gd"){
   # [1.] ast then dag 
@@ -410,7 +427,6 @@ strategize       <-          function(
 
   for(Round_ in RoundsPool){
   for(GroupCounter in 1:length(GroupsPool)){
-    print(c(Round_,GroupCounter))
     print(c(Round_, GroupCounter))
     use_regularization <- use_regularization_ORIG
     if(adversarial == F){ indi_ <- 1:length( Y )  }
@@ -420,22 +436,28 @@ strategize       <-          function(
                     ( competing_group_competition_variable_candidate == "Same" &
                         competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
         # cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
-
       }
       if(Round_ == 1){
         indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                           ( competing_group_competition_variable_candidate == "Different" &
                               competing_group_variable_candidate %in% GroupsPool) )
         # this group comes first 
-        indi_which_CandidateThisGroup <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+        indi_which_CandidateThisGroup <- 
+                                which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
                                  ( competing_group_competition_variable_candidate == "Different" &
                                      competing_group_variable_candidate == GroupsPool[GroupCounter]) )
         #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
       }
-      strenv$AstProp <- prop.table(table(competing_group_variable_respondent[
-                    competing_group_variable_respondent %in% GroupsPool]))[1]
-      strenv$DagProp <- prop.table(table(competing_group_variable_respondent[
-                        competing_group_variable_respondent %in% GroupsPool]))[2]
+      if(is.null(competing_group_variable_respondent_proportions)){ 
+        strenv$AstProp <- prop.table(table(competing_group_variable_respondent[
+                      competing_group_variable_respondent %in% GroupsPool]))[1]
+        strenv$DagProp <- prop.table(table(competing_group_variable_respondent[
+                          competing_group_variable_respondent %in% GroupsPool]))[2]
+      }
+      if(!is.null(competing_group_variable_respondent_proportions)){ 
+        strenv$AstProp <- c(competing_group_variable_respondent_proportions[GroupsPool[1]])
+        strenv$DagProp <- c(competing_group_variable_respondent_proportions[GroupsPool[2]])
+      }
     }
 
     # subset data
@@ -601,7 +623,7 @@ strategize       <-          function(
   pi_star_value_init_dag <- a2Simplex_optim( a_vec_init_dag )
   
   if(adversarial){ stopifnot(length(unique(competing_group_variable_respondent))==2) }
-  if(adversarial){ stopifnot(length(unique(competing_group_variable_respondent))==2) }
+  if(adversarial){ stopifnot(length(unique(competing_group_variable_candidate))==2) }
 
   # define Q functions
   environment(getQStar_single) <- evaluation_environment
@@ -940,9 +962,8 @@ strategize       <-          function(
                                   functionReturn = F,
                                   a_i_ast = a_vec_init_ast, 
                                   a_i_dag = a_vec_init_dag, 
-                                  gd_full_simplex = T, 
-                                  quiet = F, 
-                                  quiet                       = FALSE
+                                  gd_full_simplex = T,
+                                  quiet = F
                                   )
       jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
         strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })

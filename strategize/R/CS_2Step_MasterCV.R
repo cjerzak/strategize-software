@@ -116,7 +116,7 @@
 #'   or \code{"SecondOrder"} for testing or advanced routines.
 #'
 #' @details
-#' \code{strategize_cv} implements a cross-validation routine for 
+#' \code{cv_strategize} implements a cross-validation routine for
 #' \code{\link{strategize}}. First, the data is split into \code{folds} parts. 
 #' For each fold, we train candidate outcome models and compute out-of-sample 
 #' performance. The best-performing \eqn{\lambda} is selected. Finally, a 
@@ -224,7 +224,7 @@ cv_strategize       <-          function(
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
   }
 
-  # setup lamba 
+  # setup lambda
   if(is.null(lambda_seq) & is.null(lambda)){
     lambda_seq <- 10^seq(-4, 0, length.out = 5) * sd(Y, na.rm = T)
   }
@@ -336,7 +336,7 @@ cv_strategize       <-          function(
     outsamp_results$l_bound <- outsamp_results$Qhat - qStar_lambda * outsamp_results$Qse
     outsamp_results$u_bound <- outsamp_results$Qhat + qStar_lambda * outsamp_results$Qse
     lambda__ <- lambda_seq[which_selected <- which.max(outsamp_results$Qhat)] # lambda.min rule
-    #lambda__ <- lambda_seq[which_selected <- which(max(outsamp_results$Qhat <= outsamp_results$u_bound)[1]] # lambda.se rule
+    #lambda__ <- lambda_seq[which_selected <- which(outsamp_results$Qhat >= max(outsamp_results$l_bound))[1]] # lambda.se rule
     outsamp_results$selected[which_selected] <- 1 
     message(sprintf("Done with CV sequence & starting final run with log(lambda) of %.2f...",
                     log(f2n(lambda__))))

@@ -17,6 +17,8 @@
 #'   (depending on \code{ticks_type}).
 #' @param col.main Character. Color for the main title in each subplot.
 #'   Default is \code{"black"}.
+#' @param cex.main Numeric. Character expansion factor for main titles.
+#'   Default is \code{1.5}.
 #' @param zStar Numeric. Multiplier for the standard error bars (e.g., 1.96
 #'   for approximately 95\% confidence intervals). Default is \code{1}.
 #' @param xlim Numeric vector of length 2. The x-axis limits for all subplots.
@@ -44,6 +46,8 @@
 #'   Should accept and return a character vector. Default is identity function.
 #' @param level_name_transformer Function to transform level names for display.
 #'   Should accept and return a character vector. Default is identity function.
+#' @param open_browser Logical. If \code{TRUE}, opens a browser for debugging.
+#'   Default is \code{FALSE}. Intended for development use only.
 #'
 #' @details
 #' \code{strategize.plot} arranges multiple subplots (3 columns by default) in a grid

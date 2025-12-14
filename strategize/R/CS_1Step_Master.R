@@ -172,7 +172,7 @@
 #' known or hypothesized distribution (e.g., \dQuote{status quo}).
 #'
 #' Most users do not need to call \code{strategize_onestep} directly, as this is a lower-level
-#' routine. The \code{\link{OptiConjoint}} or \code{\link{cv_strategize}} functions may suffice
+#' routine. The \code{\link{strategize}} or \code{\link{cv_strategize}} functions may suffice
 #' in many typical workflows.
 #'
 #' @note
@@ -191,8 +191,8 @@
 #'   \emph{optimal} or \emph{adversarial} stochastic interventions in conjoint settings.
 #'
 #' @seealso
-#' \code{\link{OptiConjoint}} for an approach that first fits an outcome model and then re-optimizes
-#' factor-level probabilities. \\
+#' \code{\link{strategize}} for an approach that first fits an outcome model and then re-optimizes
+#' factor-level probabilities.
 #' \code{\link{cv_strategize}} for cross-validation across candidate values of \code{lambda}.
 #'
 #' @examples

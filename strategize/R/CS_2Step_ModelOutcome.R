@@ -63,6 +63,7 @@ generate_ModelOutcome <- function(){
         message("WARNING! More regression parameters than observations, enforcing sparsity...")
         use_regularization <- T
       }
+      
       if(diff == T){
         #table(table(pair_id_)); length(unique(pair_id_))
         pair_mat <- do.call(rbind, tapply(1:length(pair_id_), pair_id_, c) )
@@ -149,6 +150,7 @@ generate_ModelOutcome <- function(){
       if( use_regularization == TRUE & ok_counter == 1 | K > 1 ){
         # original keys
         UsedRegularization <- TRUE
+        if(!presaved_outcome_model){
         if(K == 1){
             library(glinternet)
             InteractionPairs <- t(combn(1:nrow(main_info), m = 2))
@@ -268,6 +270,17 @@ generate_ModelOutcome <- function(){
             #AllMain <- 1:nrow( main_info  )
             #main_info$d_adj
             ok_ <- T
+        }
+        }
+        
+        if(save_outcome_model){ 
+          dir.create('./StrategizeInternals',showWarnings=FALSE)
+          write.csv(main_info, file = sprintf("./StrategizeInternals/main_%s_%s.csv",GroupsPool[GroupCounter],Round_)) 
+          write.csv(interaction_info, file = sprintf("./StrategizeInternals/inter_%s_%s.csv",GroupsPool[GroupCounter],Round_)) 
+        }
+        if(presaved_outcome_model){
+          main_info <- read.csv(file = sprintf("./StrategizeInternals/main_%s_%s.csv",GroupsPool[GroupCounter],Round_)) 
+          interaction_info <- read.csv(file = sprintf("./StrategizeInternals/inter_%s_%s.csv",GroupsPool[GroupCounter],Round_)) 
         }
 
         # perform get adjustments

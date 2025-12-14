@@ -47,7 +47,7 @@ Suggests:
     knitr,
     rmarkdown
 VignetteBuilder: knitr
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 NeedsCompilation: no
 RemoteType: local
 RemotePkgRef: local::~/Documents/strategize-software/strategize

@@ -11,6 +11,7 @@ strategize(
   lambda,
   varcov_cluster_variable = NULL,
   competing_group_variable_respondent = NULL,
+  competing_group_variable_respondent_proportions = NULL,
   competing_group_variable_candidate = NULL,
   competing_group_competition_variable_candidate = NULL,
   pair_id = NULL,
@@ -23,18 +24,23 @@ strategize(
   nSGD = 100,
   diff = FALSE,
   adversarial = FALSE,
-  use_regularization = FALSE,
+  use_regularization = TRUE,
   force_gaussian = FALSE,
-  a_init_sd = 0,
+  a_init_sd = 0.001,
+  outcome_model_type = "glm",
   penalty_type = "KL",
-  compute_se = TRUE,
-  conda_env = NULL,
+  compute_se = FALSE,
+  conda_env = "strategize_env",
   conda_env_required = FALSE,
   conf_level = 0.90,
   nFolds_glm = 3L,
   folds = NULL,
   nMonte_adversarial = 5L,
   nMonte_Qglm = 100L,
+  learning_rate_max = 0.001,
+  temperature = 0.5,
+  save_outcome_model = FALSE,
+  presaved_outcome_model = FALSE,
   use_optax = FALSE,
   optim_type = "gd"
 )
@@ -68,6 +74,11 @@ the usual IID assumption is made. Defaults to \code{NULL}.}
 membership of respondents or candidate profiles. Particularly relevant in adversarial settings
 (\code{adversarial = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
 respondent or candidate. Defaults to \code{NULL}.}
+
+\item{competing_group_variable_respondent_proportions}{Optional numeric vector specifying
+the population proportions of each competing group. If \code{NULL}, proportions are estimated
+from the data. Useful when the sample proportions differ from the target population proportions.
+Defaults to \code{NULL}.}
 
 \item{pair_id}{A factor or numeric vector identifying the forced-choice pair. If each row of
 \code{W} is a single profile, \code{pair_id} groups the rows belonging to the same choice set.
@@ -162,15 +173,18 @@ approximating the quantity of interest under certain outcomes or distributions. 
 the exploration of the probability simplex. Smaller values yield distributions closer to the
 argmax. Defaults to \code{0.5}.}
 
+\item{save_outcome_model}{Logical indicating whether to save the fitted outcome model to
+disk for reuse. Useful for large models or repeated runs. Defaults to \code{FALSE}.}
+
+\item{presaved_outcome_model}{Logical indicating whether to use a previously saved outcome
+model instead of re-fitting. Defaults to \code{FALSE}.}
+
 \item{use_optax}{Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
 library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 Defaults to \code{FALSE}.}
 
 \item{optim_type}{A character string for choosing which optimizer or approach is used internally
-(e.g., \code{"default"}, \code{"SecondOrder"}, or \code{"tryboth"}). Defaults to \code{"tryboth"}.}
-
-\item{jax_seed}{Integer seed for reproducible JAX-based computations. Defaults to
-\code{as.integer(Sys.time())}.}
+(e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.}
 }
 \value{
 A named \code{list} containing:

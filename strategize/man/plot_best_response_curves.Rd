@@ -7,7 +7,8 @@
 plot_best_response_curves(
   res,
   d_ = 1,
-  nPoints_br = 51,
+  nPoints_br = 100L,
+  nPoints_heat = 50L,
   title = NULL,
   col_ast = "blue",
   col_dag = "red",
@@ -31,7 +32,10 @@ Defaults to 1.}
 \item{nPoints_br}{(Integer) Number of equally spaced grid points in \eqn{[0,1]}
 to sample for \emph{the outer} loop. The code does an internal small search
 for best responses at each grid point. Larger \code{nPoints_br} => smoother curves
-but more computation. Defaults to 51.}
+but more computation. Defaults to \code{100L}.}
+
+\item{nPoints_heat}{(Integer) Number of grid points for heat map calculations.
+Defaults to \code{50L}.}
 
 \item{title}{(Character or \code{NULL}) Main plot title. If \code{NULL},
 an auto-generated title is used, e.g. "Best-Response Curves (Dimension d_=1)".}
