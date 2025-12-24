@@ -230,12 +230,14 @@ plot_best_response_curves  <- function(
   }
   
   # environment management
-  adversarial <- TRUE; 
-  nMonte_adversarial <<- 200L; MNtemp <<- res$temperature; nMonte_Qglm <<- 200L
-  d_locator_use <<- d_locator_use
+  adversarial <- TRUE
+  nMonte_adversarial <- 200L
+  MNtemp <- res$temperature
+  nMonte_Qglm <- 200L
+  # d_locator_use already defined at line 186
   environment(adversarial) <- evaluation_environment
   environment(AstProp) <- environment(DagProp) <- evaluation_environment
-  library(rlang); library(reticulate)
+  # rlang and reticulate are in Suggests/Imports - use :: syntax when needed
   environment(FullGetQStar_) <- evaluation_environment
   FullGetQStar_jit <- strenv$jax$jit(FullGetQStar_,
                                   static_argnames = c("ParameterizationType", "d_locator"))
@@ -538,8 +540,12 @@ plot_best_response_curves  <- function(
     # We'll rely on row ix varying fastest along x, col iy along y
     # Actually, it’s standard to do expand.grid(xvals, yvals).
     # Then fill row by row: z_ast[ix, iy] => df_ast$utility_ast[row].
-    library(ggplot2)
-    library(gridExtra)
+    if (!requireNamespace("ggplot2", quietly = TRUE)) {
+      stop("Package 'ggplot2' is required for plotting. Please install it.", call. = FALSE)
+    }
+    if (!requireNamespace("gridExtra", quietly = TRUE)) {
+      stop("Package 'gridExtra' is required for plotting. Please install it.", call. = FALSE)
+    }
     
     df_ast <- data.frame(
                     "pi_ast"=c(xvals_mat),
@@ -606,9 +612,9 @@ plot_best_response_curves  <- function(
     df_br_astGivenDag$pi_ast_br_hat <- predict(model_br_ast,
                                             newx=data.frame("pi_dag"=seq(0,1,length.out=10)))
     
-    p_ast <- ggplot(df_ast, aes(x = pi_ast, y = pi_dag, fill = utility_ast)) +
-      geom_tile() +
-      scale_fill_gradient2(
+    p_ast <- ggplot2::ggplot(df_ast, ggplot2::aes(x = pi_ast, y = pi_dag, fill = utility_ast)) +
+      ggplot2::geom_tile() +
+      ggplot2::scale_fill_gradient2(
         midpoint = mid_ast,
         low = "white", mid = "skyblue", high = "blue"
       ) +
@@ -616,78 +622,78 @@ plot_best_response_curves  <- function(
       geom_smooth2(
         data = df_br_astGivenDag,
         #aes(x = pi_ast_br, y = pi_dag),
-        aes(x = pi_ast_br_hat, y = pi_dag), # to handle 
+        ggplot2::aes(x = pi_ast_br_hat, y = pi_dag), # to handle
         color = col_ast, linewidth = lwd_ast, inherit.aes = FALSE
       ) +
       geom_smooth2(
-        data = df_br_dagGivenAst, 
-        aes(x = pi_ast, y = pi_dag_br),
-        color = col_dag, linewidth = lwd_dag, inherit.aes = FALSE, 
+        data = df_br_dagGivenAst,
+        ggplot2::aes(x = pi_ast, y = pi_dag_br),
+        color = col_dag, linewidth = lwd_dag, inherit.aes = FALSE,
       ) +
       # intersection point if found
       {
         if(showIntersection) {
-          annotate("point", x = intersection_point$pi_ast, y = intersection_point$pi_dag,
-                   shape = point_pch, size = 3, color = "black")
-        } else {
-          NULL
-        }
-      } + 
-      # equilibrium point 
-      geom_point(
-        data = eq_pt,
-        aes(x = pi_ast, y = pi_dag),
-        shape = 8, color = "green", size = 5, inherit.aes=FALSE
-      ) + 
-      labs(
-        title = mainTitle,
-        subtitle = " -- ast's Utility", 
-        x = expression(pi[ast]^{(d)}),
-        y = expression(pi[dag]^{(d)}),
-        fill = "Utility(ast)"
-      ) +
-      theme_minimal()
-    
-    p_dag <- ggplot(df_dag, aes(x = pi_ast, y = pi_dag, fill = utility_dag+0.001)) +
-      geom_tile() +
-      scale_fill_gradient2(
-        midpoint = mid_dag,
-        low = "white", mid = "pink", high = "red"
-      )  + 
-      # best response line
-      geom_smooth2(
-        data = df_br_astGivenDag,
-        #aes(x = pi_ast_br, y = pi_dag),
-        aes(x = pi_ast_br_hat, y = pi_dag),
-        color = col_ast, linewidth = lwd_ast, inherit.aes = FALSE
-      ) +
-      geom_smooth2(
-        data = df_br_dagGivenAst, 
-        aes(x = pi_ast, y = pi_dag_br),
-        color = col_dag, linewidth = lwd_dag, inherit.aes = FALSE
-      ) +
-      {
-        if(showIntersection) {
-          annotate("point", x = intersection_point$pi_ast, y = intersection_point$pi_dag,
+          ggplot2::annotate("point", x = intersection_point$pi_ast, y = intersection_point$pi_dag,
                    shape = point_pch, size = 3, color = "black")
         } else {
           NULL
         }
       } +
-      # equilibrium point 
-      geom_point(
+      # equilibrium point
+      ggplot2::geom_point(
         data = eq_pt,
-        aes(x = pi_ast, y = pi_dag),
+        ggplot2::aes(x = pi_ast, y = pi_dag),
         shape = 8, color = "green", size = 5, inherit.aes=FALSE
-      ) + 
-      labs(
+      ) +
+      ggplot2::labs(
+        title = mainTitle,
+        subtitle = " -- ast's Utility",
+        x = expression(pi[ast]^{(d)}),
+        y = expression(pi[dag]^{(d)}),
+        fill = "Utility(ast)"
+      ) +
+      ggplot2::theme_minimal()
+    
+    p_dag <- ggplot2::ggplot(df_dag, ggplot2::aes(x = pi_ast, y = pi_dag, fill = utility_dag+0.001)) +
+      ggplot2::geom_tile() +
+      ggplot2::scale_fill_gradient2(
+        midpoint = mid_dag,
+        low = "white", mid = "pink", high = "red"
+      )  +
+      # best response line
+      geom_smooth2(
+        data = df_br_astGivenDag,
+        #aes(x = pi_ast_br, y = pi_dag),
+        ggplot2::aes(x = pi_ast_br_hat, y = pi_dag),
+        color = col_ast, linewidth = lwd_ast, inherit.aes = FALSE
+      ) +
+      geom_smooth2(
+        data = df_br_dagGivenAst,
+        ggplot2::aes(x = pi_ast, y = pi_dag_br),
+        color = col_dag, linewidth = lwd_dag, inherit.aes = FALSE
+      ) +
+      {
+        if(showIntersection) {
+          ggplot2::annotate("point", x = intersection_point$pi_ast, y = intersection_point$pi_dag,
+                   shape = point_pch, size = 3, color = "black")
+        } else {
+          NULL
+        }
+      } +
+      # equilibrium point
+      ggplot2::geom_point(
+        data = eq_pt,
+        ggplot2::aes(x = pi_ast, y = pi_dag),
+        shape = 8, color = "green", size = 5, inherit.aes=FALSE
+      ) +
+      ggplot2::labs(
         title = mainTitle,
         subtitle = " -- dag's Utility",
         x = expression(pi[ast]^{(d)}),
         y = expression(pi[dag]^{(d)}),
         fill = "Utility(dag)"
       ) +
-      theme_minimal()
+      ggplot2::theme_minimal()
     
     # Print side-by-side via grid.arrange (optional)
     p_grid <- gridExtra::grid.arrange(p_ast, p_dag, nrow = 1)

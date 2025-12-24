@@ -232,6 +232,17 @@ cv_strategize       <-          function(
 
   if(is.null(respondent_id)){ respondent_id <- 1:length(Y) }
 
+  # Ensure p_list is computed from full data for consistent dimensions across folds
+  # This prevents dimension mismatches when different CV folds see different factor levels
+  if(is.null(p_list)){
+    p_list <- lapply(1:ncol(W), function(col_idx){
+      tab <- table(W[, col_idx])
+      p_vec <- prop.table(tab)
+      return(p_vec)
+    })
+    names(p_list) <- colnames(W)
+  }
+
   # CV sequence
   {
     message("Starting CV sequence...")
@@ -273,12 +284,12 @@ cv_strategize       <-          function(
           use_indices <- indi_list[type_,split_][[1]]
           nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
           
-          if(type_ == 1){type_<<-1}
-          if(type_ == 2){type_<<-2}
+          if(type_ == 1){type_<-1}
+          if(type_ == 2){type_<-2}
           
           # strategize call
           Qoptimized__[[split_]][[type_]] <- strategize(
-  
+
             # input data
             Y = Y[use_indices],
             W = W[use_indices,],
@@ -288,15 +299,18 @@ cv_strategize       <-          function(
             respondent_id = respondent_id[ use_indices ],
             respondent_task_id = respondent_task_id[ use_indices ],
             profile_order = profile_order[ use_indices ],
+            competing_group_variable_respondent = if(!is.null(competing_group_variable_respondent)) competing_group_variable_respondent[use_indices] else NULL,
+            competing_group_variable_candidate = if(!is.null(competing_group_variable_candidate)) competing_group_variable_candidate[use_indices] else NULL,
+            competing_group_competition_variable_candidate = if(!is.null(competing_group_competition_variable_candidate)) competing_group_competition_variable_candidate[use_indices] else NULL,
             p_list = p_list,
-            slate_list = slate_list, 
-            use_optax = use_optax, 
+            slate_list = slate_list,
+            use_optax = use_optax,
             lambda = lambda__,
-  
+
             # hyperparameters
             outcome_model_type = outcome_model_type,
-            temperature = temperature, 
-            compute_se = F, 
+            temperature = temperature,
+            compute_se = F,
             nSGD = nSGD_use,
             penalty_type = penalty_type,
             K = K,
@@ -305,6 +319,7 @@ cv_strategize       <-          function(
             optim_type = optim_type,
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
+            nMonte_adversarial = nMonte_adversarial,
             diff = diff,
             adversarial = adversarial,
             conda_env = conda_env,

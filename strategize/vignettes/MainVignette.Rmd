@@ -8,6 +8,41 @@ vignette: >
   %\usepackage[UTF-8]{inputenc}
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+# Check if code should be evaluated
+# By default, code is NOT executed. This ensures the vignette builds
+# successfully during R CMD check and on systems without the conda environment.
+#
+# To enable code execution when building the vignette manually:
+#   Sys.setenv(STRATEGIZE_RUN_VIGNETTE = "true")
+#   rmarkdown::render("vignettes/MainVignette.Rmd")
+
+CONDA_AVAILABLE <- FALSE
+
+if (identical(Sys.getenv("STRATEGIZE_RUN_VIGNETTE"), "true")) {
+  # User explicitly opted in to run code - check if conda env exists
+  CONDA_AVAILABLE <- tryCatch({
+    if (requireNamespace("reticulate", quietly = TRUE)) {
+      conda_list <- reticulate::conda_list()
+      "strategize" %in% conda_list$name || "strategize_env" %in% conda_list$name
+    } else {
+      FALSE
+    }
+  }, error = function(e) FALSE)
+}
+
+# Inform about execution status (only when not in check)
+if (!CONDA_AVAILABLE && interactive()) {
+  message("Note: Vignette code chunks are not executed by default. ",
+          "To run code: Sys.setenv(STRATEGIZE_RUN_VIGNETTE='true') before rendering.")
+}
+```
+
 # Introduction 
 
 The `strategize` package implements methods for finding optimal stochastic interventions in high-dimensional factorial (including conjoint) experiments. Unlike standard AMCE-based analyses, which marginalize outcomes over the existing experimental distribution (often uniform), these methods identify a counterfactual distribution over factors that best achieves a target (e.g., maximizing a vote-choice outcome). In adversarial contexts, multiple distributions can be learned simultaneously (e.g., two political parties each optimizing candidate features in competition). 
@@ -120,7 +155,7 @@ This toy dataset has 3 factors, each with 3 levels, and `Y` is a binary outcome 
 ## Using `strategize`
 We now pass this fitted model to `strategize`, which will search for the factor-level distribution that maximizes the average predicted outcome. Because we are in a simpler context, we might specify `MaxMin=FALSE` to do the \emph{average case} scenario.  We'll set `lambda` for a mild $L_2$ regularization penalty so that our new distribution does not stray too far from `p_list`:
 
-```{r}
+```{r average-case, eval=CONDA_AVAILABLE}
 library(strategize)
 
 AdversarialValue <- FALSE 
@@ -196,7 +231,7 @@ In this snippet, `strategize` searches for the factor-level distribution maximiz
 
 We can compare `p_list` vs. `res_avg$PiStar_point` to see how the method reweights each factor. A simple barplot can suffice:
 
-```{r}
+```{r plotting, eval=CONDA_AVAILABLE}
 oldpar <- par(mfrow=c(1,3))
 for(d in seq_along(p_list)){
   old_probs <- p_list[[d]]
@@ -218,9 +253,9 @@ In a real analysis, you would interpret which factor levels are up-weighted vs. 
 ## Max-Min Example
 Suppose we want to model a scenario where `Party="A"` tries to maximize the outcome, while `Party="B"` tries to minimize it.  We can approximate the equilibrium by specifying `adversarial=TRUE`:
 
-```{r}
+```{r adversarial, eval=CONDA_AVAILABLE}
 AdversarialValue <- TRUE
-# if AdversarialValue = TRUE, use 'strategize' for a max-min problem; 
+# if AdversarialValue = TRUE, use 'strategize' for a max-min problem;
 
 res_adversarial <- {strategize(
   # Core inputs:
@@ -285,8 +320,8 @@ Each side's factor-level probabilities can be inspected.  For instance, `k1` mig
 
 ## Cluster-based Optimiation
 
-TBA 
-```{r}
+TBA
+```{r cluster-based, eval=CONDA_AVAILABLE}
 res_clust <- {cv_strategize(
   # Core inputs:
   Y = Yobs,

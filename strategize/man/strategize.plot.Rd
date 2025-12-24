@@ -51,7 +51,7 @@ Default is \code{"black"}.}
 Default is \code{1.5}.}
 
 \item{zStar}{Numeric. Multiplier for the standard error bars (e.g., 1.96
-for approximately 95\\% confidence intervals). Default is \code{1}.}
+for approximately 95 percent confidence intervals). Default is \code{1}.}
 
 \item{xlim}{Numeric vector of length 2. The x-axis limits for all subplots.
 Defaults to \code{c(0, 1)} if not specified.}
@@ -114,16 +114,26 @@ reference ticks can be added, showing values from \code{p_list} or zero
 depending on \code{ticks_type}.
 }
 \examples{
-\donttest{
+\dontrun{
 # Example usage (assuming appropriate data structures)
-hypotheticalProbs <- list(est1 = c(0.2, 0.5), est2 = c(0.3, 0.6))
-SEs <- list(est1 = c(0.05, 0.07), est2 = c(0.06, 0.08))
-assignmentProbs <- list(factor1 = c(0.25, 0.55))
+# Note: p_list elements must have named levels
+hypotheticalProbs <- list(k1 = list(
+  Gender = c(Male = 0.4, Female = 0.6),
+  Party = c(Dem = 0.3, Rep = 0.7)
+))
+SEs <- list(k1 = list(
+  Gender = c(Male = 0.05, Female = 0.05),
+  Party = c(Dem = 0.06, Rep = 0.06)
+))
+assignmentProbs <- list(
+  Gender = c(Male = 0.5, Female = 0.5),
+  Party = c(Dem = 0.5, Rep = 0.5)
+)
 strategize.plot(
   pi_star_list = hypotheticalProbs,
   pi_star_se_list = SEs,
   p_list = assignmentProbs,
-  col_vec = c("red", "blue"),
+  col_vec = c("blue"),
   main_title = "Example Plot"
 )
 }

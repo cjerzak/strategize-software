@@ -82,11 +82,16 @@
 #'   used to form a robust variance-covariance estimate of the outcome model. If \code{NULL},
 #'   the usual IID assumption is made. Defaults to \code{NULL}.
 #'
-#' @param competing_group_variable_respondent,competing_group_variable_candidate,
-#'   competing_group_competition_variable_candidate Optional variables that mark competition group
-#'   membership of respondents or candidate profiles. Particularly relevant in adversarial settings
+#' @param competing_group_variable_respondent Optional variable marking competition group
+#'   membership of respondents. Particularly relevant in adversarial settings
 #'   (\code{adversarial = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
-#'   respondent or candidate. Defaults to \code{NULL}.
+#'   respondent. Defaults to \code{NULL}.
+#'
+#' @param competing_group_variable_candidate Optional variable marking competition group
+#'   membership of candidate profiles. Defaults to \code{NULL}.
+#'
+#' @param competing_group_competition_variable_candidate Optional variable indicating whether
+#'   a candidate profile belongs to the competing group in adversarial settings. Defaults to \code{NULL}.
 #'
 #' @param competing_group_variable_respondent_proportions Optional numeric vector specifying
 #'   the population proportions of each competing group. If \code{NULL}, proportions are estimated
@@ -411,7 +416,12 @@ strategize       <-          function(
   W <- sapply(1:ncol(W),function(zer){ match(W[,zer],names_list[[zer]][[1]]) })
 
   # get info about # of levels per factor
-  factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
+  # When p_list is provided, use its structure to ensure consistent dimensions across CV folds
+  if(!is.null(p_list) & !is.null(names(p_list[[1]]))){
+    factor_levels_full <- factor_levels <- sapply(p_list, length)
+  } else {
+    factor_levels_full <- factor_levels <- apply(W,2,function(zer){length(unique(zer))})
+  }
 
   # model outcomes
   message("Initializing outcome models...")
@@ -1044,7 +1054,8 @@ strategize       <-          function(
   }
 
   if(!diff){
-    pi_star_dag_vec_jnp <- pi_star_vec_jnp <- pi_star_red_dag <- pi_star_red_ast <- pi_star_numeric
+    # Set _vec_jnp to full pi_star, but keep pi_star_red_ast/dag in reduced form for QFXN compatibility
+    pi_star_dag_vec_jnp <- pi_star_vec_jnp <- pi_star_numeric
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full
   }
   

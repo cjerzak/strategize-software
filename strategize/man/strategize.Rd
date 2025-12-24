@@ -70,15 +70,21 @@ baseline distribution \code{p_list}. Typically set via either domain knowledge o
 used to form a robust variance-covariance estimate of the outcome model. If \code{NULL},
 the usual IID assumption is made. Defaults to \code{NULL}.}
 
-\item{competing_group_variable_respondent, competing_group_variable_candidate, }{competing_group_competition_variable_candidate Optional variables that mark competition group
-membership of respondents or candidate profiles. Particularly relevant in adversarial settings
+\item{competing_group_variable_respondent}{Optional variable marking competition group
+membership of respondents. Particularly relevant in adversarial settings
 (\code{adversarial = TRUE}) or multi-stage electoral settings, e.g., capturing the party of each
-respondent or candidate. Defaults to \code{NULL}.}
+respondent. Defaults to \code{NULL}.}
 
 \item{competing_group_variable_respondent_proportions}{Optional numeric vector specifying
 the population proportions of each competing group. If \code{NULL}, proportions are estimated
 from the data. Useful when the sample proportions differ from the target population proportions.
 Defaults to \code{NULL}.}
+
+\item{competing_group_variable_candidate}{Optional variable marking competition group
+membership of candidate profiles. Defaults to \code{NULL}.}
+
+\item{competing_group_competition_variable_candidate}{Optional variable indicating whether
+a candidate profile belongs to the competing group in adversarial settings. Defaults to \code{NULL}.}
 
 \item{pair_id}{A factor or numeric vector identifying the forced-choice pair. If each row of
 \code{W} is a single profile, \code{pair_id} groups the rows belonging to the same choice set.

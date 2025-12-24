@@ -1,4 +1,9 @@
 generate_ModelOutcome <- function(){
+  # Initialize vcov_OutcomeModel to ensure it's defined in all code paths
+  # (particularly needed when K > 1 AND presaved_outcome_model == TRUE)
+  vcov_OutcomeModel <- NULL
+  vcov_OutcomeModel_by_k <- NULL
+
   # obtain main + interaction info
   {
     # main_info + a_structure
@@ -152,12 +157,12 @@ generate_ModelOutcome <- function(){
         UsedRegularization <- TRUE
         if(!presaved_outcome_model){
         if(K == 1){
-            library(glinternet)
-            InteractionPairs <- t(combn(1:nrow(main_info), m = 2))
+            # glinternet is in Imports - use :: syntax
+            InteractionPairs <- t(utils::combn(1:nrow(main_info), m = 2))
             InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ],]
-            
+
             message("Starting a glinternet fit...")
-            glinternet_results <- glinternet.cv(X = main_dat,
+            glinternet_results <- glinternet::glinternet.cv(X = main_dat,
                                                 Y = Y_glm, family = glm_family,
                                                 numLevels = rep(1,times = ncol(main_dat)),
                                                 interactionPairs = InteractionPairs,
@@ -167,7 +172,7 @@ generate_ModelOutcome <- function(){
             keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
             keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
             if(is.null(keep_MainWithInter)){
-              glinternet_results <- glinternet(X = main_dat,
+              glinternet_results <- glinternet::glinternet(X = main_dat,
                                                Y = Y_glm, family = glm_family,
                                                numLevels = rep(1,times = ncol(main_dat)),
                                                interactionPairs = InteractionPairs,

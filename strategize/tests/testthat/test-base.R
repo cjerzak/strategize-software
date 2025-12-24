@@ -1,10 +1,9 @@
-{
-# install.packages("~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F)
-# devtools::install_github("cjerzak/strategize-software/strategize")
-# strategize::build_backend()
-options(error=NULL)
-library(testthat); library(strategize)
-source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
+# =============================================================================
+# Base Tests for the strategize Package
+# =============================================================================
+# Tests for core functionality including helper functions, strategize(),
+# cv_strategize(), adversarial mode, multi-cluster, and various edge cases.
+# =============================================================================
 
 # =============================================================================
 # SECTION 1: Helper Function Tests
@@ -12,7 +11,7 @@ source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFx
 
 test_that("toSimplex returns a valid probability vector", {
   x <- c(0.1, -0.2, 0.3)
-  s <- toSimplex(x)
+  s <- strategize:::toSimplex(x)
   expect_equal(sum(s), 1, tolerance = 1e-7)
   expect_true(all(s >= 0))
 })
@@ -20,51 +19,51 @@ test_that("toSimplex returns a valid probability vector", {
 test_that("toSimplex handles extreme values", {
   # Test with large positive values
   x_large <- c(25, 30, 20)
-  s_large <- toSimplex(x_large)
+  s_large <- strategize:::toSimplex(x_large)
   expect_equal(sum(s_large), 1, tolerance = 1e-7)
   expect_true(all(s_large >= 0))
 
   # Test with large negative values
   x_neg <- c(-25, -30, -20)
-  s_neg <- toSimplex(x_neg)
+  s_neg <- strategize:::toSimplex(x_neg)
   expect_equal(sum(s_neg), 1, tolerance = 1e-7)
   expect_true(all(s_neg >= 0))
 })
 
 test_that("ess_fxn computes effective sample size correctly", {
   w <- c(1, 1, 1, 1)
-  expect_equal(ess_fxn(w), 4)
+  expect_equal(strategize:::ess_fxn(w), 4)
 
   w2 <- c(1, 0.5)
-  expect_equal(ess_fxn(w2), sum(w2)^2 / sum(w2^2))
+  expect_equal(strategize:::ess_fxn(w2), sum(w2)^2 / sum(w2^2))
 })
 
 test_that("ess_fxn handles edge cases", {
   # Single weight
-  expect_equal(ess_fxn(1), 1)
+  expect_equal(strategize:::ess_fxn(1), 1)
 
   # All zeros except one (extreme unbalance)
   w_extreme <- c(1, 0, 0, 0)
-  expect_equal(ess_fxn(w_extreme), 1)
+  expect_equal(strategize:::ess_fxn(w_extreme), 1)
 })
 
 test_that("RescaleFxn rescales and recenters", {
   x <- c(-1, 0, 1)
-  res <- RescaleFxn(x, estMean = 2, estSD = 3)
+  res <- strategize:::RescaleFxn(x, estMean = 2, estSD = 3)
   expect_equal(res, x * 3 + 2)
 
-  res_no_center <- RescaleFxn(x, estMean = 2, estSD = 3, center = FALSE)
+  res_no_center <- strategize:::RescaleFxn(x, estMean = 2, estSD = 3, center = FALSE)
   expect_equal(res_no_center, x * 3)
 })
 
 test_that("getSE handles missing values", {
   vals <- c(1, 2, 3, NA)
-  expect_equal(getSE(vals), sqrt(var(vals, na.rm = TRUE) / 3))
+  expect_equal(strategize:::getSE(vals), sqrt(var(vals, na.rm = TRUE) / 3))
 })
 
 test_that("getSE handles all NA values", {
   vals_na <- c(NA, NA, NA)
-  expect_true(is.na(getSE(vals_na)))
+  expect_true(is.na(strategize:::getSE(vals_na)))
 })
 
 # =============================================================================
@@ -825,7 +824,6 @@ test_that("strategize returns valid probability distributions", {
                  info = sprintf("Baseline probabilities don't sum to 1 in factor %d", d))
   }
 })
-}
 
 # =============================================================================
 # SECTION 14: Visualization Function Tests (strategize.plot)
