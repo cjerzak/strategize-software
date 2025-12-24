@@ -1,0 +1,6 @@
+build_backend	build_backend
+cv_strategize	cv_strategize
+plot_best_response_curves	plot_best_response_curves
+strategize	strategize
+strategize.plot	strategize.plot
+strategize_onestep	strategize_onestep
