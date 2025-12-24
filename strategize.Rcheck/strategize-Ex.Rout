@@ -799,7 +799,7 @@ Done with strategic analysis!
 > cleanEx()
 > options(digits = 7L)
 > base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
-Time elapsed:  38.514 1.934 22.396 1.381 0.389 
+Time elapsed:  29.705 1.667 16.511 0.936 0.279 
 > grDevices::dev.off()
 null device 
           1 

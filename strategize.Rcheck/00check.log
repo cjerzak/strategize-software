@@ -541,27 +541,10 @@ to your NAMESPACE file.
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [42s/23s] OK
+* checking examples with --run-donttest ... [33s/17s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... [54s/35s] ERROR
-  Running ‘testthat.R’ [54s/35s]
-Running the tests in ‘tests/testthat.R’ failed.
-Last 13 lines of output:
-  ── Error ('test-base.R:294:3'): cv_strategize handles K > 1 (multi-cluster) ────
-  Error in `FactorHet::FactorHet_mbo_control(iters = 3)`: tgp must be installed to use mbo_method="regr.bgp"
-  Backtrace:
-      ▆
-   1. └─strategize::cv_strategize(...) at test-base.R:294:3
-   2.   └─strategize::strategize(...)
-   3.     ├─base::eval(parse(text = initialize_ModelOutcome), envir = evaluation_environment)
-   4.     │ └─base::eval(parse(text = initialize_ModelOutcome), envir = evaluation_environment)
-   5.     ├─FactorHet::FactorHet_mbo(...)
-   6.     └─FactorHet::FactorHet_mbo_control(iters = 3)
-  
-  [ FAIL 2 | WARN 0 | SKIP 11 | PASS 90 ]
-  Error:
-  ! Test failures.
-  Execution halted
+* checking tests ... OK
+  Running ‘testthat.R’
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK
@@ -570,4 +553,4 @@ Last 13 lines of output:
 * checking for non-standard things in the check directory ... OK
 * checking for detritus in the temp directory ... OK
 * DONE
-Status: 1 ERROR, 2 NOTEs
+Status: 2 NOTEs

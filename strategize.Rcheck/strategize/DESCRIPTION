@@ -13,17 +13,17 @@ License: GPL-3
 Encoding: UTF-8
 Imports: stats, compositions, graphics, utils, glinternet, matrixStats,
         FactorHet, sandwich, reticulate
-Suggests: testthat (>= 3.0.0), Matrix, Rcpp, devtools, knitr,
+Suggests: testthat (>= 3.0.0), withr, Matrix, Rcpp, devtools, knitr,
         rmarkdown, ggplot2, gridExtra, rlang, rrapply
 VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
 NeedsCompilation: no
-Packaged: 2025-12-24 02:57:21 UTC; cjerzak
+Packaged: 2025-12-24 04:26:56 UTC; cjerzak
 Author: Connor T. Jerzak [aut, cre] (ORCID:
     <https://orcid.org/0000-0001-9858-2050>),
   Priyanshi Chandra [aut] (ORCID:
     <https://orcid.org/0009-0003-1625-8823>),
   Rishi Hazra [aut] (ORCID: <https://orcid.org/0000-0001-5018-4440>)
 Maintainer: Connor T. Jerzak <connor.jerzak@austin.utexas.edu>
-Built: R 4.5.2; ; 2025-12-24 02:57:34 UTC; unix
+Built: R 4.5.2; ; 2025-12-24 04:27:08 UTC; unix

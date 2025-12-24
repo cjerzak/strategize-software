@@ -1,6 +1,6 @@
 name	user	system	elapsed
 build_backend	0	0	0	
-cv_strategize	39.413	 2.317	21.906	
+cv_strategize	30.374	 1.942	16.240	
 plot_best_response_curves	0	0	0	
 strategize	0	0	0	
 strategize.plot	0	0	0	
