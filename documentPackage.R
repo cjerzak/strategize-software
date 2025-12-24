@@ -16,6 +16,9 @@
   # Generate datalist for package data (if any)
   try(tools::add_datalist(package_path, force = TRUE, small.size = 1L), silent = TRUE)
 
+  # Build vignettes
+  devtools::build_vignettes(package_path)
+
   # Document package (generates .Rd files and NAMESPACE)
   devtools::document(package_path)
 
@@ -26,6 +29,19 @@
   # Create new PDF manual
   system(sprintf("R CMD Rd2pdf %s", shQuote(package_path)))
 
+  # Run tests (stop on failure)
+  test_results <- devtools::test(package_path)
+  if (any(as.data.frame(test_results)$failed > 0)) {
+    stop("Tests failed! Stopping build process.")
+  }
+  cat("\n\U2713 All tests passed!\n\n")
+
+  # Show object sizes in environment (for debugging memory usage)
+  log(sort(sapply(ls(), function(l_) { object.size(eval(parse(text = l_))) })))
+
+  # Check package to ensure it meets CRAN standards
+  devtools::check(package_path)
+
   # Build tarball
   system(paste(
     shQuote(file.path(R.home("bin"), "R")),
@@ -33,7 +49,7 @@
     shQuote(package_path)
   ))
 
-  # Check package with CRAN standards (includes running tests)
+  # Check as CRAN
   tarball <- sprintf("%s_%s.tar.gz", package_name, versionNumber)
   system(paste(
     shQuote(file.path(R.home("bin"), "R")),
@@ -41,16 +57,11 @@
     shQuote(tarball)
   ))
 
+  # Manual commands for reference:
+  # R CMD build --resave-data ~/Documents/strategize-software/strategize
+  # R CMD check --as-cran ~/Documents/strategize-software/strategize_0.0.1.tar.gz
+
   # Install from local source
   install.packages(package_path, repos = NULL, type = "source", force = FALSE)
-
-  # Run tests interactively (optional, for development)
-  # Tests are also run during R CMD check above
-  cat("\n--- Running testthat tests ---\n")
-  if (requireNamespace("testthat", quietly = TRUE)) {
-    testthat::test_dir(file.path(package_path, "tests", "testthat"),
-                       reporter = testthat::ProgressReporter)
-  } else {
-    cat("testthat not installed, skipping interactive test run\n")
-  }
+  # devtools::install_github("cjerzak/strategize-software/strategize") # install from github
 }

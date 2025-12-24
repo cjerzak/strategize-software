@@ -22,6 +22,7 @@ Imports:
     reticulate
 Suggests:
     testthat (>= 3.0.0),
+    withr,
     Matrix,
     Rcpp,
     devtools,
