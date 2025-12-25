@@ -262,42 +262,65 @@
 #' approach to M-estimation of the same target quantity. 
 #'
 #' @examples
-#' \dontrun{
-#'   # Suppose we have a forced-choice conjoint dataset with
-#'   # factor matrix W, outcome Y, and baseline probabilities p_list
+#' \donttest{
+#' # ============================================
+#' # Example 1: Basic single-agent optimization
+#' # ============================================
+#' # Generate synthetic conjoint data
+#' set.seed(42)
+#' n <- 400  # Number of profiles (200 pairs)
 #'
-#'   # Basic usage: single agent optimizing expected outcome
-#'   opt_result <- strategize(
-#'       Y = Y,
-#'       W = W,
-#'       lambda = 0.1,
-#'       p_list = p_list,
-#'       adversarial = FALSE,         # No adversarial component
-#'       penalty_type = "KL",         # Kullback-Leibler penalty
-#'       nSGD = 200              # # of gradient descent iterations
-#'   )
+#' # Factor matrix: candidate attributes
+#' W <- data.frame(
+#'   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+#'   Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE),
+#'   Party = sample(c("Dem", "Rep"), n, replace = TRUE)
+#' )
 #'
-#'   # Inspect the learned distribution and performance
-#'   print(opt_result$pi_star_point)
-#'   print(opt_result$Q_point_mEst)
-#'   print(opt_result$CVInfo)            # If cross-validation was used
+#' # Simulate outcome: Female + Young candidates preferred
+#' latent <- 0.3 * (W$Gender == "Female") +
+#'           0.2 * (W$Age == "Young") -
+#'           0.1 * (W$Age == "Old")
+#' prob <- plogis(latent)
 #'
-#'   # Adversarial scenario with multi-stage structure
-#'   # E.g., define 'competing_group_variable_respondent' for two parties' supporters
-#'   adv_result <- strategize(
-#'       Y = Y,
-#'       W = W,
-#'       lambda = 0.2,
-#'       p_list = p_list,
-#'       adversarial = TRUE,         # Solve zero-sum game across two sets of respondents
-#'       competing_group_variable_respondent = partyID,
-#'       nSGD = 300
-#'   )
+#' # Paired forced-choice: within each pair, one wins
+#' pair_id <- rep(1:(n/2), each = 2)
+#' Y <- numeric(n)
+#' for (p in unique(pair_id)) {
+#'   idx <- which(pair_id == p)
+#'   winner <- sample(idx, 1, prob = prob[idx])
+#'   Y[idx] <- as.integer(seq_along(idx) == which(idx == winner))
+#' }
+#' profile_order <- rep(1:2, n/2)
 #'
-#'   # 'adv_result' now contains distributions for each party's candidate
-#'   # that approximate a mixed-strategy Nash equilibrium
-#'   print(adv_result$pi_star_point$k1)   # Party A distribution
-#'   print(adv_result$pi_star_point$k2)   # Party B distribution
+#' # Baseline probabilities (uniform assignment)
+#' p_list <- list(
+#'   Gender = c(Male = 0.5, Female = 0.5),
+#'   Age = c(Young = 1/3, Middle = 1/3, Old = 1/3),
+#'   Party = c(Dem = 0.5, Rep = 0.5)
+#' )
+#'
+#' # Run strategize to find optimal distribution
+#' # (requires conda environment with JAX - see build_backend())
+#' result <- strategize(
+#'   Y = Y,
+#'   W = W,
+#'   lambda = 0.1,
+#'   pair_id = pair_id,
+#'   respondent_id = pair_id,
+#'   respondent_task_id = pair_id,
+#'   profile_order = profile_order,
+#'   p_list = p_list,
+#'   diff = TRUE,
+#'   nSGD = 50,
+#'   compute_se = FALSE
+#' )
+#'
+#' # View optimal distribution
+#' print(result$pi_star_point)
+#'
+#' # View expected outcome under optimal strategy
+#' print(result$Q_point)
 #' }
 #'
 #' @md
@@ -348,8 +371,19 @@ strategize       <-          function(
   # [2.] when simplex constrained with holdout, LAST entry is held out 
   
   message("-------------\nstrategize() call has begun...")
-  
-  # define evaluation environment 
+
+  # Input validation with clear error messages
+  validate_strategize_inputs(
+    Y = Y, W = W, X = X, lambda = lambda,
+    p_list = p_list, K = K, pair_id = pair_id,
+    adversarial = adversarial,
+    competing_group_variable_respondent = competing_group_variable_respondent,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    outcome_model_type = outcome_model_type,
+    penalty_type = penalty_type, diff = diff
+  )
+
+  # define evaluation environment
   evaluation_environment <- environment()
   
   # add colnames if not available 
@@ -891,21 +925,21 @@ strategize       <-          function(
     
     grad_mag_ast_vec <- unlist(  lapply(strenv$grad_mag_ast_vec,function(zer){
       strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) ))  }) )
-    try(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y"),T)
+    try(suppressWarnings(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y")),T)
     try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     
     if(adversarial){ 
       grad_mag_dag_vec <- try(unlist(  lapply(strenv$grad_mag_dag_vec,function(zer){
         strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) )) }) ),T)
-      try(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y"),T)
+      try(suppressWarnings(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y")),T)
       try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
     }
     
     loss_ast_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_ast_vec,0L))
-    try(plot( loss_ast_vec, main = "Value (ast)", log ="y"),T)
+    try(suppressWarnings(plot( loss_ast_vec, main = "Value (ast)", log ="y")),T)
     if(adversarial){ 
       loss_dag_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_dag_vec,0L))
-      try(plot( loss_dag_vec, main = "Value (dag)", log ="y"),T)
+      try(suppressWarnings(plot( loss_dag_vec, main = "Value (dag)", log ="y")),T)
     }
     
     pi_star_red <- getQPiStar_gd(

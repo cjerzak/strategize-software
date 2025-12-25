@@ -100,25 +100,49 @@
 #'
 #' @examples
 #' \dontrun{
-#' # After fitting an adversarial strategize model:
-#' adv_res <- strategize(
-#'   Y = Yobs,
+#' # =====================================================
+#' # Visualize best-response curves in adversarial mode
+#' # =====================================================
+#' # First, fit an adversarial strategize model
+#' set.seed(42)
+#' n <- 400
+#'
+#' # Generate data with party structure
+#' W <- data.frame(
+#'   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+#'   Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE)
+#' )
+#'
+#' # Party affiliations for respondents and candidates
+#' respondent_party <- sample(c("Dem", "Rep"), n/2, replace = TRUE)
+#' candidate_party <- rep(c("Dem", "Rep"), n/2)
+#'
+#' Y <- rbinom(n, 1, 0.5)  # Simplified outcome
+#'
+#' # Fit adversarial model
+#' adv_result <- strategize(
+#'   Y = Y,
 #'   W = W,
+#'   lambda = 0.1,
 #'   adversarial = TRUE,
-#'   ...
+#'   competing_group_variable_respondent = rep(respondent_party, each = 2),
+#'   competing_group_variable_candidate = candidate_party,
+#'   nSGD = 100
 #' )
 #'
-#' # Suppose dimension 1 is "Gender." Then to see each player's best response:
+#' # Plot best-response curves for Gender dimension (d_ = 1)
+#' # Shows how each party's optimal Gender distribution responds
+#' # to changes in the other party's Gender distribution
 #' plot_best_response_curves(
-#'   res    = adv_res,
-#'   d_     = 1,
-#'   nPoints_br= 41,         # can reduce or enlarge
-#'   title  = "Gender Best-Response Curves",
-#'   col_ast= "blue",
-#'   col_dag= "red"
+#'   res = adv_result,
+#'   d_ = 1,  # Gender is first factor
+#'   nPoints_br = 50,
+#'   title = "Gender: Best-Response Curves",
+#'   col_ast = "blue",   # Democrats
+#'   col_dag = "red"     # Republicans
 #' )
 #'
-#' # The intersection (if shown) approximates an equilibrium for dimension 1.
+#' # Intersection point indicates Nash equilibrium for this dimension
 #' }
 #'
 #' @md

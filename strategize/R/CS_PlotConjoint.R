@@ -62,29 +62,40 @@
 #' side effect: producing a multi-panel base R plot.
 #'
 #' @examples
-#' \dontrun{
-#' # Example usage (assuming appropriate data structures)
-#' # Note: p_list elements must have named levels
-#' hypotheticalProbs <- list(k1 = list(
-#'   Gender = c(Male = 0.4, Female = 0.6),
-#'   Party = c(Dem = 0.3, Rep = 0.7)
+#' # =============================================
+#' # Visualize optimal vs baseline distributions
+#' # =============================================
+#' # This function works without JAX - just needs the result structure
+#'
+#' # Create mock strategize result for plotting
+#' # (In practice, use output from strategize())
+#' pi_star_list <- list(k1 = list(
+#'   Gender = c(Male = 0.35, Female = 0.65),
+#'   Age = c(Young = 0.45, Middle = 0.30, Old = 0.25),
+#'   Party = c(Dem = 0.40, Rep = 0.60)
 #' ))
-#' SEs <- list(k1 = list(
-#'   Gender = c(Male = 0.05, Female = 0.05),
-#'   Party = c(Dem = 0.06, Rep = 0.06)
+#'
+#' pi_star_se_list <- list(k1 = list(
+#'   Gender = c(Male = 0.04, Female = 0.04),
+#'   Age = c(Young = 0.03, Middle = 0.03, Old = 0.03),
+#'   Party = c(Dem = 0.05, Rep = 0.05)
 #' ))
-#' assignmentProbs <- list(
+#'
+#' # Baseline (original assignment) probabilities
+#' p_list <- list(
 #'   Gender = c(Male = 0.5, Female = 0.5),
+#'   Age = c(Young = 0.33, Middle = 0.33, Old = 0.34),
 #'   Party = c(Dem = 0.5, Rep = 0.5)
 #' )
+#'
+#' # Plot comparing optimal to baseline
 #' strategize.plot(
-#'   pi_star_list = hypotheticalProbs,
-#'   pi_star_se_list = SEs,
-#'   p_list = assignmentProbs,
-#'   col_vec = c("blue"),
-#'   main_title = "Example Plot"
+#'   pi_star_list = pi_star_list,
+#'   pi_star_se_list = pi_star_se_list,
+#'   p_list = p_list,
+#'   main_title = "Optimal vs Baseline Distribution",
+#'   ticks_type = "assignmentProbs"  # Show baseline as reference ticks
 #' )
-#' }
 #'
 #' @importFrom graphics plot points par axis abline
 #' @export
@@ -122,26 +133,39 @@ strategize.plot <- function(pi_star_list=NULL,
   
   ncols <- 3
   nrows <- ceiling(length(p_list_)/3)
+
+  # Save original par settings and restore on exit
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+
   par(mfrow = c(nrows, ncols))
-  
+
   for(d_ in 1:length(p_list_)) {
-    ordering_d <- order(unlist(lapply(strsplit(names(pd_ <- p_list_[[d_]]), 
-                                               split = ""), 
+    ordering_d <- order(unlist(lapply(strsplit(names(pd_ <- p_list_[[d_]]),
+                                               split = ""),
                                       function(zer) { zer[1] })),
                         decreasing = TRUE)
-    
+
     # Apply factor name transformation
     prettyFactorNames <- factor_name_transformer(names(p_list)[d_])
-    
+
     # Preliminary calculations
     zStar <- 1; yScale <- 0.2
     k_EST <- length(pi_star_list)
     p_d <- p_list[[d_]][ordering_d]
     ypos_grid <- expand.grid(k = 1:k_EST, l = 1:length(pd_))
     ypos_grid$ypos <- (1.5 * ypos_grid$l + (yScale) * (ypos_grid$k - 1)/1)
-    
-    # Start plot
-    par(mar = c(3.5, 17, 2, 1))
+
+    # Calculate adaptive margins based on label lengths
+    max_label_len <- max(nchar(names(p_list_[[d_]])), na.rm = TRUE)
+    left_margin <- min(max(5, max_label_len * 0.6), 12)  # Cap at 12
+
+    # Use provided margins if available, otherwise use adaptive defaults
+    if (!is.null(margins_vec)) {
+      par(mar = margins_vec)
+    } else {
+      par(mar = c(3.5, left_margin, 2, 1))
+    }
     ylim <- c(0.8, max(ypos_grid$ypos) + 0.20)
     plot(pd_[ordering_d], 1:length(pd_),
          ylim = ylim,

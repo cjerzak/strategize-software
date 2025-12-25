@@ -2,11 +2,15 @@ build_backend           Build the environment for 'strategize'. Creates
                         a conda environment in which JAX and NumPy are
                         installed. Users may also create such an
                         environment themselves.
+create_p_list           Create Baseline Probability List from Data
 cv_strategize           Cross-validation for Optimal Stochastic
                         Interventions in Conjoint Analysis
+helpers                 User-Facing Helper Functions for strategize
 plot_best_response_curves
                         Plot Dimension-by-Dimension Best-Response
                         Curves from Adversarial 'strategize()' Output
+print.strategize_result
+                        Print Method for strategize Results
 strategize              Estimate Optimal (or Adversarial) Stochastic
                         Interventions for Conjoint Experiments
 strategize.plot         Plot Estimated Probabilities for Hypothetical
@@ -14,3 +18,6 @@ strategize.plot         Plot Estimated Probabilities for Hypothetical
 strategize_onestep      Estimate an Optimal (or Adversarial) Stochastic
                         Intervention for Conjoint Analysis Using a
                         One-Step M-estimation Approach
+strategize_preset       Get Recommended Parameter Settings
+summary.strategize_result
+                        Summary Method for strategize Results

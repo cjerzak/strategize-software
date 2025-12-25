@@ -22,24 +22,44 @@ Type 'q()' to quit R.
 > library(strategize)
 > 
 > test_check("strategize")
-[ FAIL 0 | WARN 0 | SKIP 23 | PASS 21 ]
+[ FAIL 0 | WARN 0 | SKIP 67 | PASS 21 ]
 
-══ Skipped tests (23) ══════════════════════════════════════════════════════════
-• On CRAN (22): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+══ Skipped tests (67) ══════════════════════════════════════════════════════════
+• On CRAN (66): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
   'test-cv-strategize.R:9:3', 'test-cv-strategize.R:29:3',
-  'test-cv-strategize.R:48:3', 'test-cv-strategize.R:69:3',
+  'test-cv-strategize.R:48:3', 'test-cv-strategize.R:70:3',
   'test-edge-cases.R:8:3', 'test-edge-cases.R:54:3', 'test-edge-cases.R:103:3',
-  'test-penalty-types.R:8:3', 'test-penalty-types.R:25:3',
-  'test-penalty-types.R:42:3', 'test-strategize.R:9:3',
-  'test-strategize.R:25:3', 'test-strategize.R:45:3', 'test-strategize.R:62:3',
-  'test-strategize.R:78:3', 'test-strategize.R:97:3',
-  'test-strategize.R:116:3', 'test-strategize.R:143:3'
+  'test-input-validation.R:13:3', 'test-input-validation.R:24:3',
+  'test-input-validation.R:35:3', 'test-input-validation.R:47:3',
+  'test-input-validation.R:59:3', 'test-input-validation.R:75:3',
+  'test-input-validation.R:87:3', 'test-input-validation.R:99:3',
+  'test-input-validation.R:115:3', 'test-input-validation.R:128:3',
+  'test-input-validation.R:141:3', 'test-input-validation.R:154:3',
+  'test-input-validation.R:167:3', 'test-input-validation.R:184:3',
+  'test-input-validation.R:210:3', 'test-input-validation.R:227:3',
+  'test-input-validation.R:248:3', 'test-input-validation.R:263:3',
+  'test-input-validation.R:282:3', 'test-input-validation.R:304:3',
+  'test-input-validation.R:320:3', 'test-input-validation.R:336:3',
+  'test-input-validation.R:348:3', 'test-input-validation.R:360:3',
+  'test-input-validation.R:376:3', 'test-input-validation.R:390:3',
+  'test-onestep.R:13:3', 'test-onestep.R:40:3', 'test-onestep.R:75:3',
+  'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
+  'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
+  'test-penalty-types.R:25:3', 'test-penalty-types.R:42:3',
+  'test-strategize.R:9:3', 'test-strategize.R:25:3', 'test-strategize.R:46:3',
+  'test-strategize.R:63:3', 'test-strategize.R:79:3', 'test-strategize.R:98:3',
+  'test-strategize.R:117:3', 'test-strategize.R:144:3',
+  'test-visualization.R:14:3', 'test-visualization.R:44:3',
+  'test-visualization.R:70:3', 'test-visualization.R:105:3',
+  'test-visualization.R:131:3', 'test-visualization.R:152:3',
+  'test-visualization.R:176:3', 'test-visualization.R:209:3',
+  'test-visualization.R:225:3', 'test-visualization.R:250:3'
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 0 | SKIP 23 | PASS 21 ]
+[ FAIL 0 | WARN 0 | SKIP 67 | PASS 21 ]
 > 
 > proc.time()
    user  system elapsed 
-  1.567   0.053   1.625 
+  2.602   0.099   2.698 

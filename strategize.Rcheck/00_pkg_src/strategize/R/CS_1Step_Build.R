@@ -7,7 +7,7 @@ ml_build <- function(){
   useHajekInOptimization_orig <- use_hajek
   if(penalty_type == "LogMaxProb"){
     RegularizationPiAction <- 'strenv$jnp$add(strenv$jnp$max(( (  (log_pidk) ) )),
-    strenv$jnp$log(strenv$jnp$squeeze(strenv$jnp$divide(strenv$jnp$take(ClassProbsMarginal, k_ - 1L, axis = 1L),DFactors)))'
+    strenv$jnp$log(strenv$jnp$squeeze(strenv$jnp$divide(strenv$jnp$take(ClassProbsMarginal, k_ - 1L, axis = 1L),DFactors))))'
   }
   if(penalty_type == "L2"){
     ## if equal weighting of the penalty by cluster
@@ -49,7 +49,11 @@ ml_build <- function(){
     {
       base_tf_function <- eval(parse(text = paste('myLoss_or_returnWeights <- (function(
                                                 ModelList_, Y_, X_,factorMat_, logProb_,REGULARIZATION_LAMBDA){
-          if(K == 1){ logClassProbs <- strenv$jnp$zeros(strenv$jnp$shape(Y_),strenv$jnp$float32)  }
+          if(K == 1){
+              logClassProbs <- strenv$jnp$zeros(strenv$jnp$shape(Y_),strenv$jnp$float32)
+              # Define ClassProbsMarginal for K=1 (single cluster has probability 1.0)
+              ClassProbsMarginal <- strenv$jnp$ones(list(1L, 1L), strenv$jnp$float32)
+          }
           if(K >  1){
               ProjectionList_ <- ModelList_[[2]]
               logClassProbs <- strenv$jnp$log( ClassProbs <- getClassProb(ProjectionList_,  X_ )  )
@@ -77,7 +81,11 @@ ml_build <- function(){
               log_PrWd_given_k <- strenv$jnp$take(log_pidk, indices = received_wd, axis = 0L)
 
               logPrW_given_k <- strenv$jnp$add(logPrW_given_k, log_PrWd_given_k)
-              RegularizationContribPi <- RegularizationContribPi + eval(parse(text=sprintf(" ', RegularizationPiAction,' ",d__)))
+              if (grepl("%s", RegularizationPiAction, fixed = TRUE)) {
+                RegularizationContribPi <- RegularizationContribPi + eval(parse(text = sprintf(RegularizationPiAction, d__)))
+              } else {
+                RegularizationContribPi <- RegularizationContribPi + eval(parse(text = RegularizationPiAction))
+              }
             }
             logPrWGivenAllClasses[[k_]] <- logPrW_given_k
           }
@@ -142,18 +150,20 @@ ml_build <- function(){
   # initialize pd -  assignment probabilities for penalty and pr(w)
     DFactors <- length( nLevels_vec <- apply(W,2,function(l){length(unique(l))}) )
     for(d_ in 1:(DFactors <- length(nLevels_vec))){
-        eval(parse(text=sprintf( "pd%s = strenv$jnp$array(as.matrix(p_list[[d_]]), dtype = strenv$jnp$float32)",d_,d_)) )
+        eval(parse(text=sprintf( "pd%s = strenv$jnp$array(as.matrix(p_list[[d_]]), dtype = strenv$jnp$float32)",d_)) )
     }
 
   # initialize av- the new probability generators
   initialize_avs <- function(b_SCALE=1){
     AVSList <- replicate(K, list(replicate(DFactors,list())))
     for(k_ in 1:K){ for(d_ in 1:DFactors){
-          b_ <- f2n(attr(pi_init_list[d_,k_,1L][[1]],"random_"))[1]
-          INIT_systemic <- as.matrix(f2n(attr(pi_init_list[d_,k_,1L][[1]],"sys_")))
-          INIT_random <- matrix(runif(length(pi_init_list[d_,k_,1L][[1]]),
+          # Access pi_init_list as nested list: [[fold]][[k]][[d]]
+          pi_init_elem <- pi_init_list[[1L]][[k_]][[d_]]
+          b_ <- f2n(attr(pi_init_elem,"random_"))[1]
+          INIT_systemic <- as.matrix(f2n(attr(pi_init_elem,"sys_")))
+          INIT_random <- matrix(runif(length(pi_init_elem),
                                 min = -b_SCALE*b_, max = b_SCALE*b_),
-                                ncol = dim(pi_init_list[d_,k_,1L][[1]])[2])
+                                ncol = dim(pi_init_elem)[2])
           INIT_VALUE <- INIT_systemic + INIT_random
           if(!sprintf("av%sk%s",d_,k_) %in% ls(envir = evaluation_environment)){
             eval(parse(text=sprintf( "AVSList[[k_]][[d_]] <-  av%sk%s <- strenv$jnp$array( INIT_VALUE, dtype = strenv$jnp$float32)",d_,k_)) )
@@ -241,7 +251,7 @@ ml_build <- function(){
                          ModelList_ = list(AVSList, ProjectionList),
                          Y_ = tfConst(as.matrix(Y[my_batch])),
                          X_ = tfConst(X[my_batch,]),
-                         factorMat_ = tfConst(FactorsMat_numeric_0Indexed[my_batch,],strenv$jnp$int32),
+                         factorMat_ = tfConst(FactorsMat_numeric_0Indexed[my_batch, , drop=FALSE],strenv$jnp$int32),
                          logProb_ = tfConst(as.matrix(log_PrW[my_batch])),
                          REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(lambda_seq[1])))
 
@@ -253,7 +263,7 @@ ml_build <- function(){
               ModelList_object, # ModelList_ =
               tfConst(as.matrix(Y[my_batch])), # Y_ =
               tfConst(X[my_batch,]), # X_ =
-              tfConst(FactorsMat_numeric_0Indexed[my_batch,],strenv$jnp$int32), # factorMat_ =
+              tfConst(FactorsMat_numeric_0Indexed[my_batch, , drop=FALSE],strenv$jnp$int32), # factorMat_ =
               tfConst(as.matrix(log_PrW[my_batch])), # logProb_ =
               tfConst(returnWeightsFxn(lambda_seq[1])) # REGULARIZATION_LAMBDA =
              )

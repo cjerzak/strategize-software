@@ -225,30 +225,55 @@ Advanced arguments like \code{X_factorized}, \code{conda_env}, \code{optim_metho
 }
 \examples{
 \dontrun{
-# Suppose we have a forced-choice conjoint dataset (W, Y) and baseline probabilities p_list.
-# We want to estimate an optimal distribution that maximizes average Y.
+# ================================================
+# One-step M-estimation approach
+# ================================================
+# This approach simultaneously estimates the outcome model and
+# optimal distribution, rather than the two-step approach
 
 set.seed(123)
-# X could be respondent covariates, if any
-X <- matrix(rnorm(nrow(W)*2), nrow(W), 2)
+n <- 400
 
-result_one_step <- strategize_onestep(
+# Generate factor matrix
+W <- data.frame(
+  Gender = sample(c("Male", "Female"), n, replace = TRUE),
+  Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE),
+  Party = sample(c("Dem", "Rep"), n, replace = TRUE)
+)
+
+# Simulate outcome (Female and Young preferred)
+latent <- 0.3 * (W$Gender == "Female") + 0.2 * (W$Age == "Young")
+Y <- rbinom(n, 1, plogis(latent))
+
+# Baseline probabilities (uniform)
+p_list <- list(
+  Gender = c(Male = 0.5, Female = 0.5),
+  Age = c(Young = 1/3, Middle = 1/3, Old = 1/3),
+  Party = c(Dem = 0.5, Rep = 0.5)
+)
+
+# Optional respondent covariates
+X <- matrix(rnorm(n * 2), n, 2)
+colnames(X) <- c("Income", "Education")
+
+# Run one-step estimation
+result <- strategize_onestep(
   W = W,
   Y = Y,
   X = X,
   p_list = p_list,
-  nSGD = 400,
-  use_hajek = TRUE,
+  nSGD = 100,
   penalty_type = "LogMaxProb",
   lambda_seq = c(0.01, 0.1),
-  test_fraction = 0.3
+  test_fraction = 0.3,
+  quiet = TRUE
 )
 
-# Inspect the estimated distribution over factor levels
-str(result_one_step$pi_star_point)
+# View optimal distribution
+print(result$pi_star_point)
 
-# Evaluate estimated performance
-print( result_one_step$Q_point )
+# View expected outcome under optimal strategy
+print(result$Q_point)
 }
 
 }

@@ -47,6 +47,44 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
 base::cat("build_backend", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
 cleanEx()
+nameEx("create_p_list")
+### * create_p_list
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: create_p_list
+### Title: Create Baseline Probability List from Data
+### Aliases: create_p_list
+
+### ** Examples
+
+# Create sample factor matrix
+W <- data.frame(
+  Gender = c("Male", "Female", "Male", "Female"),
+  Age = c("Young", "Old", "Young", "Old")
+)
+
+# Uniform probabilities (for balanced designs)
+p_list_uniform <- create_p_list(W, uniform = TRUE)
+print(p_list_uniform)
+# $Gender
+#   Male Female
+#    0.5    0.5
+# $Age
+#   Young    Old
+#     0.5    0.5
+
+# Observed frequencies
+p_list_observed <- create_p_list(W, uniform = FALSE)
+print(p_list_observed)
+
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("create_p_list", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
 nameEx("cv_strategize")
 ### * cv_strategize
 
@@ -61,29 +99,53 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 ### ** Examples
 
 ## No test: 
-# A minimal example using hypothetical data
+# ================================================
+# Cross-validation to select regularization lambda
+# ================================================
 set.seed(123)
-# Suppose Y is a binary forced choice outcome, W has several attributes (factors)
-Y <- rbinom(200, size = 1, prob = 0.5)
+n <- 400  # profiles (200 pairs)
+
+# Generate factor matrix
 W <- data.frame(
-  Gender = sample(c("Male","Female"), 200, TRUE),
-  Age    = sample(c("35","50","65"),  200, TRUE),
-  Party  = sample(c("Dem","Rep"),     200, TRUE)
+  Gender = sample(c("Male", "Female"), n, replace = TRUE),
+  Age = sample(c("35", "50", "65"), n, replace = TRUE),
+  Party = sample(c("Dem", "Rep"), n, replace = TRUE)
 )
 
-# Cross-validate over a range of lambda
-lam_seq <- c(0, 0.001, 0.01, 0.1)
-cv_fit <- cv_strategize(
-  Y = Y, 
-  W = W, 
-  lambda_seq = lam_seq, 
-  folds = 2
+# Simulate outcome with true effects
+latent <- 0.2 * (W$Gender == "Female") + 0.15 * (W$Age == "35")
+prob <- plogis(latent)
+
+# Create paired forced-choice structure
+pair_id <- rep(1:(n/2), each = 2)
+Y <- numeric(n)
+for (p in unique(pair_id)) {
+  idx <- which(pair_id == p)
+  winner <- sample(idx, 1, prob = prob[idx])
+  Y[idx] <- as.integer(seq_along(idx) == which(idx == winner))
+}
+profile_order <- rep(1:2, n/2)
+
+# Cross-validate over lambda values
+# Lower lambda = less regularization = further from baseline
+cv_result <- cv_strategize(
+  Y = Y,
+  W = W,
+  lambda_seq = c(0.01, 0.1, 0.5, 1.0),
+  folds = 2,
+  pair_id = pair_id,
+  respondent_id = pair_id,
+  profile_order = profile_order,
+  diff = TRUE,
+  nSGD = 50,
+  compute_se = FALSE
 )
 
-# Extract optimal lambda and final fit
-print(cv_fit$lambda)
-print(cv_fit$CVInfo)
-print(names(cv_fit$pi_star_point))
+# View CV results and selected lambda
+print(cv_result$lambda)       # Optimal lambda
+print(cv_result$CVInfo)       # Performance at each lambda
+print(cv_result$pi_star_point) # Optimal distribution
+print(cv_result$Q_point)       # Expected outcome
 ## End(No test)
 
 
@@ -106,25 +168,49 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 ### ** Examples
 
 ## Not run: 
-##D # After fitting an adversarial strategize model:
-##D adv_res <- strategize(
-##D   Y = Yobs,
+##D # =====================================================
+##D # Visualize best-response curves in adversarial mode
+##D # =====================================================
+##D # First, fit an adversarial strategize model
+##D set.seed(42)
+##D n <- 400
+##D 
+##D # Generate data with party structure
+##D W <- data.frame(
+##D   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+##D   Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE)
+##D )
+##D 
+##D # Party affiliations for respondents and candidates
+##D respondent_party <- sample(c("Dem", "Rep"), n/2, replace = TRUE)
+##D candidate_party <- rep(c("Dem", "Rep"), n/2)
+##D 
+##D Y <- rbinom(n, 1, 0.5)  # Simplified outcome
+##D 
+##D # Fit adversarial model
+##D adv_result <- strategize(
+##D   Y = Y,
 ##D   W = W,
+##D   lambda = 0.1,
 ##D   adversarial = TRUE,
-##D   ...
+##D   competing_group_variable_respondent = rep(respondent_party, each = 2),
+##D   competing_group_variable_candidate = candidate_party,
+##D   nSGD = 100
 ##D )
 ##D 
-##D # Suppose dimension 1 is "Gender." Then to see each player's best response:
+##D # Plot best-response curves for Gender dimension (d_ = 1)
+##D # Shows how each party's optimal Gender distribution responds
+##D # to changes in the other party's Gender distribution
 ##D plot_best_response_curves(
-##D   res    = adv_res,
-##D   d_     = 1,
-##D   nPoints_br= 41,         # can reduce or enlarge
-##D   title  = "Gender Best-Response Curves",
-##D   col_ast= "blue",
-##D   col_dag= "red"
+##D   res = adv_result,
+##D   d_ = 1,  # Gender is first factor
+##D   nPoints_br = 50,
+##D   title = "Gender: Best-Response Curves",
+##D   col_ast = "blue",   # Democrats
+##D   col_dag = "red"     # Republicans
 ##D )
 ##D 
-##D # The intersection (if shown) approximates an equilibrium for dimension 1.
+##D # Intersection point indicates Nash equilibrium for this dimension
 ## End(Not run)
 
 
@@ -146,43 +232,66 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 
 ### ** Examples
 
-## Not run: 
-##D   # Suppose we have a forced-choice conjoint dataset with
-##D   # factor matrix W, outcome Y, and baseline probabilities p_list
-##D 
-##D   # Basic usage: single agent optimizing expected outcome
-##D   opt_result <- strategize(
-##D       Y = Y,
-##D       W = W,
-##D       lambda = 0.1,
-##D       p_list = p_list,
-##D       adversarial = FALSE,         # No adversarial component
-##D       penalty_type = "KL",         # Kullback-Leibler penalty
-##D       nSGD = 200              # # of gradient descent iterations
-##D   )
-##D 
-##D   # Inspect the learned distribution and performance
-##D   print(opt_result$pi_star_point)
-##D   print(opt_result$Q_point_mEst)
-##D   print(opt_result$CVInfo)            # If cross-validation was used
-##D 
-##D   # Adversarial scenario with multi-stage structure
-##D   # E.g., define 'competing_group_variable_respondent' for two parties' supporters
-##D   adv_result <- strategize(
-##D       Y = Y,
-##D       W = W,
-##D       lambda = 0.2,
-##D       p_list = p_list,
-##D       adversarial = TRUE,         # Solve zero-sum game across two sets of respondents
-##D       competing_group_variable_respondent = partyID,
-##D       nSGD = 300
-##D   )
-##D 
-##D   # 'adv_result' now contains distributions for each party's candidate
-##D   # that approximate a mixed-strategy Nash equilibrium
-##D   print(adv_result$pi_star_point$k1)   # Party A distribution
-##D   print(adv_result$pi_star_point$k2)   # Party B distribution
-## End(Not run)
+## No test: 
+# ============================================
+# Example 1: Basic single-agent optimization
+# ============================================
+# Generate synthetic conjoint data
+set.seed(42)
+n <- 400  # Number of profiles (200 pairs)
+
+# Factor matrix: candidate attributes
+W <- data.frame(
+  Gender = sample(c("Male", "Female"), n, replace = TRUE),
+  Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE),
+  Party = sample(c("Dem", "Rep"), n, replace = TRUE)
+)
+
+# Simulate outcome: Female + Young candidates preferred
+latent <- 0.3 * (W$Gender == "Female") +
+          0.2 * (W$Age == "Young") -
+          0.1 * (W$Age == "Old")
+prob <- plogis(latent)
+
+# Paired forced-choice: within each pair, one wins
+pair_id <- rep(1:(n/2), each = 2)
+Y <- numeric(n)
+for (p in unique(pair_id)) {
+  idx <- which(pair_id == p)
+  winner <- sample(idx, 1, prob = prob[idx])
+  Y[idx] <- as.integer(seq_along(idx) == which(idx == winner))
+}
+profile_order <- rep(1:2, n/2)
+
+# Baseline probabilities (uniform assignment)
+p_list <- list(
+  Gender = c(Male = 0.5, Female = 0.5),
+  Age = c(Young = 1/3, Middle = 1/3, Old = 1/3),
+  Party = c(Dem = 0.5, Rep = 0.5)
+)
+
+# Run strategize to find optimal distribution
+# (requires conda environment with JAX - see build_backend())
+result <- strategize(
+  Y = Y,
+  W = W,
+  lambda = 0.1,
+  pair_id = pair_id,
+  respondent_id = pair_id,
+  respondent_task_id = pair_id,
+  profile_order = profile_order,
+  p_list = p_list,
+  diff = TRUE,
+  nSGD = 50,
+  compute_se = FALSE
+)
+
+# View optimal distribution
+print(result$pi_star_point)
+
+# View expected outcome under optimal strategy
+print(result$Q_point)
+## End(No test)
 
 
 
@@ -202,29 +311,40 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 
 ### ** Examples
 
-## Not run: 
-##D # Example usage (assuming appropriate data structures)
-##D # Note: p_list elements must have named levels
-##D hypotheticalProbs <- list(k1 = list(
-##D   Gender = c(Male = 0.4, Female = 0.6),
-##D   Party = c(Dem = 0.3, Rep = 0.7)
-##D ))
-##D SEs <- list(k1 = list(
-##D   Gender = c(Male = 0.05, Female = 0.05),
-##D   Party = c(Dem = 0.06, Rep = 0.06)
-##D ))
-##D assignmentProbs <- list(
-##D   Gender = c(Male = 0.5, Female = 0.5),
-##D   Party = c(Dem = 0.5, Rep = 0.5)
-##D )
-##D strategize.plot(
-##D   pi_star_list = hypotheticalProbs,
-##D   pi_star_se_list = SEs,
-##D   p_list = assignmentProbs,
-##D   col_vec = c("blue"),
-##D   main_title = "Example Plot"
-##D )
-## End(Not run)
+# =============================================
+# Visualize optimal vs baseline distributions
+# =============================================
+# This function works without JAX - just needs the result structure
+
+# Create mock strategize result for plotting
+# (In practice, use output from strategize())
+pi_star_list <- list(k1 = list(
+  Gender = c(Male = 0.35, Female = 0.65),
+  Age = c(Young = 0.45, Middle = 0.30, Old = 0.25),
+  Party = c(Dem = 0.40, Rep = 0.60)
+))
+
+pi_star_se_list <- list(k1 = list(
+  Gender = c(Male = 0.04, Female = 0.04),
+  Age = c(Young = 0.03, Middle = 0.03, Old = 0.03),
+  Party = c(Dem = 0.05, Rep = 0.05)
+))
+
+# Baseline (original assignment) probabilities
+p_list <- list(
+  Gender = c(Male = 0.5, Female = 0.5),
+  Age = c(Young = 0.33, Middle = 0.33, Old = 0.34),
+  Party = c(Dem = 0.5, Rep = 0.5)
+)
+
+# Plot comparing optimal to baseline
+strategize.plot(
+  pi_star_list = pi_star_list,
+  pi_star_se_list = pi_star_se_list,
+  p_list = p_list,
+  main_title = "Optimal vs Baseline Distribution",
+  ticks_type = "assignmentProbs"  # Show baseline as reference ticks
+)
 
 
 
@@ -246,30 +366,55 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 ### ** Examples
 
 ## Not run: 
-##D # Suppose we have a forced-choice conjoint dataset (W, Y) and baseline probabilities p_list.
-##D # We want to estimate an optimal distribution that maximizes average Y.
+##D # ================================================
+##D # One-step M-estimation approach
+##D # ================================================
+##D # This approach simultaneously estimates the outcome model and
+##D # optimal distribution, rather than the two-step approach
 ##D 
 ##D set.seed(123)
-##D # X could be respondent covariates, if any
-##D X <- matrix(rnorm(nrow(W)*2), nrow(W), 2)
+##D n <- 400
 ##D 
-##D result_one_step <- strategize_onestep(
+##D # Generate factor matrix
+##D W <- data.frame(
+##D   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+##D   Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE),
+##D   Party = sample(c("Dem", "Rep"), n, replace = TRUE)
+##D )
+##D 
+##D # Simulate outcome (Female and Young preferred)
+##D latent <- 0.3 * (W$Gender == "Female") + 0.2 * (W$Age == "Young")
+##D Y <- rbinom(n, 1, plogis(latent))
+##D 
+##D # Baseline probabilities (uniform)
+##D p_list <- list(
+##D   Gender = c(Male = 0.5, Female = 0.5),
+##D   Age = c(Young = 1/3, Middle = 1/3, Old = 1/3),
+##D   Party = c(Dem = 0.5, Rep = 0.5)
+##D )
+##D 
+##D # Optional respondent covariates
+##D X <- matrix(rnorm(n * 2), n, 2)
+##D colnames(X) <- c("Income", "Education")
+##D 
+##D # Run one-step estimation
+##D result <- strategize_onestep(
 ##D   W = W,
 ##D   Y = Y,
 ##D   X = X,
 ##D   p_list = p_list,
-##D   nSGD = 400,
-##D   use_hajek = TRUE,
+##D   nSGD = 100,
 ##D   penalty_type = "LogMaxProb",
 ##D   lambda_seq = c(0.01, 0.1),
-##D   test_fraction = 0.3
+##D   test_fraction = 0.3,
+##D   quiet = TRUE
 ##D )
 ##D 
-##D # Inspect the estimated distribution over factor levels
-##D str(result_one_step$pi_star_point)
+##D # View optimal distribution
+##D print(result$pi_star_point)
 ##D 
-##D # Evaluate estimated performance
-##D print( result_one_step$Q_point )
+##D # View expected outcome under optimal strategy
+##D print(result$Q_point)
 ## End(Not run)
 
 
@@ -277,6 +422,33 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 
 base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
 base::cat("strategize_onestep", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("strategize_preset")
+### * strategize_preset
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: strategize_preset
+### Title: Get Recommended Parameter Settings
+### Aliases: strategize_preset
+
+### ** Examples
+
+## No test: 
+# Get standard settings
+params <- strategize_preset("standard")
+print(params)
+
+# Use with strategize (hypothetically)
+# result <- do.call(strategize, c(list(Y = Y, W = W, p_list = p_list), params))
+## End(No test)
+
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("strategize_preset", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
 ### * <FOOTER>
 ###
 cleanEx()

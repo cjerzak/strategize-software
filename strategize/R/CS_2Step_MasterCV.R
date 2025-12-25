@@ -156,29 +156,53 @@
 #'
 #' @examples
 #' \donttest{
-#' # A minimal example using hypothetical data
+#' # ================================================
+#' # Cross-validation to select regularization lambda
+#' # ================================================
 #' set.seed(123)
-#' # Suppose Y is a binary forced choice outcome, W has several attributes (factors)
-#' Y <- rbinom(200, size = 1, prob = 0.5)
+#' n <- 400  # profiles (200 pairs)
+#'
+#' # Generate factor matrix
 #' W <- data.frame(
-#'   Gender = sample(c("Male","Female"), 200, TRUE),
-#'   Age    = sample(c("35","50","65"),  200, TRUE),
-#'   Party  = sample(c("Dem","Rep"),     200, TRUE)
+#'   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+#'   Age = sample(c("35", "50", "65"), n, replace = TRUE),
+#'   Party = sample(c("Dem", "Rep"), n, replace = TRUE)
 #' )
 #'
-#' # Cross-validate over a range of lambda
-#' lam_seq <- c(0, 0.001, 0.01, 0.1)
-#' cv_fit <- cv_strategize(
-#'   Y = Y, 
-#'   W = W, 
-#'   lambda_seq = lam_seq, 
-#'   folds = 2
+#' # Simulate outcome with true effects
+#' latent <- 0.2 * (W$Gender == "Female") + 0.15 * (W$Age == "35")
+#' prob <- plogis(latent)
+#'
+#' # Create paired forced-choice structure
+#' pair_id <- rep(1:(n/2), each = 2)
+#' Y <- numeric(n)
+#' for (p in unique(pair_id)) {
+#'   idx <- which(pair_id == p)
+#'   winner <- sample(idx, 1, prob = prob[idx])
+#'   Y[idx] <- as.integer(seq_along(idx) == which(idx == winner))
+#' }
+#' profile_order <- rep(1:2, n/2)
+#'
+#' # Cross-validate over lambda values
+#' # Lower lambda = less regularization = further from baseline
+#' cv_result <- cv_strategize(
+#'   Y = Y,
+#'   W = W,
+#'   lambda_seq = c(0.01, 0.1, 0.5, 1.0),
+#'   folds = 2,
+#'   pair_id = pair_id,
+#'   respondent_id = pair_id,
+#'   profile_order = profile_order,
+#'   diff = TRUE,
+#'   nSGD = 50,
+#'   compute_se = FALSE
 #' )
 #'
-#' # Extract optimal lambda and final fit
-#' print(cv_fit$lambda)
-#' print(cv_fit$CVInfo)
-#' print(names(cv_fit$pi_star_point))
+#' # View CV results and selected lambda
+#' print(cv_result$lambda)       # Optimal lambda
+#' print(cv_result$CVInfo)       # Performance at each lambda
+#' print(cv_result$pi_star_point) # Optimal distribution
+#' print(cv_result$Q_point)       # Expected outcome
 #' }
 #'
 #' @export

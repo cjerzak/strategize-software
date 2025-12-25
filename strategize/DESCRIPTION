@@ -31,7 +31,8 @@ Suggests:
     ggplot2,
     gridExtra,
     rlang,
-    rrapply
+    rrapply,
+    tgp
 VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

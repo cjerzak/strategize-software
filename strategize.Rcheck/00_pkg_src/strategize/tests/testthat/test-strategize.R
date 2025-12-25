@@ -24,6 +24,7 @@ test_that("strategize returns valid result with GLM outcome model", {
 test_that("strategize handles K > 1 (multi-cluster)", {
   skip_on_cran()
   skip_if_no_jax()
+  skip_if_no_tgp()
 
   data <- generate_test_data(n = 500, seed = 42)
   data <- add_respondent_covariates(data)

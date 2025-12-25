@@ -35,7 +35,7 @@ get_se <- function(){
                     ModelList_ = ModelList_object,
                     Y_  = strenv$jnp$array(as.matrix(Y[i_])),
                     X_  = strenv$jnp$array(t(X[i_,])),
-                    factorMat_  = strenv$jnp$array(t(FactorsMat_numeric_0Indexed[i_,])),
+                    factorMat_  = strenv$jnp$array(t(FactorsMat_numeric_0Indexed[i_, , drop=FALSE])),
                     logProb_ = strenv$jnp$array(as.matrix(log_PrW[i_])),
                     REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(LAMBDA_selected))
                   )
@@ -87,7 +87,7 @@ get_se <- function(){
 
               Y__i <- strenv$jnp$array(as.matrix(Y[i_]))
               X__i <- strenv$jnp$array(t(X[i_,]))
-              factorMat__i <- strenv$jnp$array(t(FactorsMat_numeric_0Indexed[i_,]))
+              factorMat__i <- strenv$jnp$array(t(FactorsMat_numeric_0Indexed[i_, , drop=FALSE]))
               logProb__i <- strenv$jnp$array(as.matrix(log_PrW[i_]))
               REGULARIZATION_LAMBDA__ <- strenv$jnp$array(returnWeightsFxn(LAMBDA_selected))
               Qhat__ <-  Qhat_tf
