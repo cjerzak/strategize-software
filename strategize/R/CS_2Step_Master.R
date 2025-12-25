@@ -1180,11 +1180,44 @@ strategize       <-          function(
                   "DagProp" = strenv$DagProp,   
                   "strenv" = strenv,
                   "Y_models" = list(
-                    "my_model_ast_jnp"  = my_model_ast_jnp, 
+                    "my_model_ast_jnp"  = my_model_ast_jnp,
                     "my_model_ast0_jnp" = my_model_ast0_jnp,
                     "my_model_dag_jnp"  = my_model_dag_jnp,
-                    "my_model_dag0_jnp" = my_model_dag0_jnp 
+                    "my_model_dag0_jnp" = my_model_dag0_jnp
+                    ),
+
+                  # Convergence history for diagnostics
+                  "convergence_history" = tryCatch({
+                    # Helper to safely convert JAX/Python objects to numeric
+                    safe_to_numeric <- function(x) {
+                      tryCatch({
+                        strenv$np$array(x)
+                      }, error = function(e) NA_real_)
+                    }
+
+                    list(
+                      "grad_ast" = unlist(lapply(strenv$grad_mag_ast_vec, safe_to_numeric)),
+                      "grad_dag" = unlist(lapply(strenv$grad_mag_dag_vec, safe_to_numeric)),
+                      "loss_ast" = unlist(lapply(strenv$loss_ast_vec, safe_to_numeric)),
+                      "loss_dag" = unlist(lapply(strenv$loss_dag_vec, safe_to_numeric)),
+                      "inv_lr_ast" = unlist(lapply(strenv$inv_learning_rate_ast_vec, safe_to_numeric)),
+                      "inv_lr_dag" = unlist(lapply(strenv$inv_learning_rate_dag_vec, safe_to_numeric)),
+                      "nSGD" = nSGD,
+                      "adversarial" = adversarial
                     )
+                  }, error = function(e) {
+                    # Fallback if conversion fails entirely
+                    list(
+                      "grad_ast" = rep(NA_real_, nSGD),
+                      "grad_dag" = rep(NA_real_, nSGD),
+                      "loss_ast" = rep(NA_real_, nSGD),
+                      "loss_dag" = rep(NA_real_, nSGD),
+                      "inv_lr_ast" = rep(NA_real_, nSGD),
+                      "inv_lr_dag" = rep(NA_real_, nSGD),
+                      "nSGD" = nSGD,
+                      "adversarial" = adversarial
+                    )
+                  })
                   )  # end outout list 
           )
 }
