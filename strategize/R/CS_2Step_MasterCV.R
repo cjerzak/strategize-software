@@ -421,6 +421,6 @@ cv_strategize       <-          function(
   return(  c( Qoptimized_,
             "lambda" = lambda__,
             "qStar_lambda" = qStar_lambda,
-            "CVInfo" = list(outsamp_results )) )
+            "CVInfo" = outsamp_results ) )
 }
 
