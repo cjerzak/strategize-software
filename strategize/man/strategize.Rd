@@ -185,7 +185,7 @@ disk for reuse. Useful for large models or repeated runs. Defaults to \code{FALS
 \item{presaved_outcome_model}{Logical indicating whether to use a previously saved outcome
 model instead of re-fitting. Defaults to \code{FALSE}.}
 
-\item{use_optax}{Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
+\item{use_optax}{Logical indicating whether to use the \href{https://github.com/google-deepmind/optax}{\code{optax}}
 library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 Defaults to \code{FALSE}.}
 
