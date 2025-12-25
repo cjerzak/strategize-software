@@ -28,7 +28,7 @@ Default is \code{"grid"}.}
 Default is 50.}
 
 \item{tolerance}{Numeric. Maximum BR error to consider as equilibrium.
-Default is 0.01.}
+Default is 0.01 (i.e., neither player can improve vote share by more than 1\%).}
 
 \item{nMonte}{Integer. Number of Monte Carlo samples for Q evaluation.
 Default is 100.}
@@ -56,16 +56,62 @@ A list containing:
 Validate Nash Equilibrium Quality
 }
 \details{
-The best-response error for player p is defined as:
+\strong{What is a Nash Equilibrium?}
+
+In the adversarial setting, two parties (AST and DAG) simultaneously choose
+probability distributions over candidate attributes (e.g., gender, age, policy
+positions). Each party wants to maximize their expected vote share given the
+opponent's strategy. A Nash equilibrium is a pair of strategies where:
+\itemize{
+  \item AST's strategy is optimal given DAG's strategy
+  \item DAG's strategy is optimal given AST's strategy
+}
+At equilibrium, neither party can improve by unilaterally changing their strategy.
+
+\strong{What is Best-Response Error?}
+
+The best-response error measures how far a player's current strategy is from
+being optimal. For player p, it is defined as:
 \deqn{BR\_error_p = \max_{\pi_p} Q(\pi_p, \pi^*_{-p}) - Q(\pi^*_p, \pi^*_{-p})}
 
-At a Nash equilibrium, BR_error should be zero (or very small due to
-numerical approximation) for both players. A positive BR error indicates
-the player could improve by deviating from the current strategy.
+In words: if we fix the opponent's strategy and search for the best possible
+response, how much better could we do compared to our current strategy?
 
-For the grid method, we search over a discretized probability simplex.
-For the gradient method, we run additional gradient ascent iterations
-starting from the current solution.
+\itemize{
+  \item \strong{BR error = 0}: The player is already playing optimally (true equilibrium)
+  \item \strong{BR error > 0}: The player could improve by switching strategies
+  \item \strong{BR error = 0.05}: The player could gain 5 percentage points in vote share
+}
+
+\strong{How Validation Works}
+
+This function performs the following steps:
+\enumerate{
+  \item Evaluates Q (expected vote share) at the current solution
+  \item For AST: fixes DAG's strategy and searches for AST's best response
+  \item For DAG: fixes AST's strategy and searches for DAG's best response
+  \item Computes the improvement each player could achieve (BR error)
+  \item If both BR errors are below tolerance, declares it a valid equilibrium
+}
+
+\strong{Interpretation}
+
+\itemize{
+  \item \code{is_equilibrium = TRUE}: The solution is a valid Nash equilibrium
+    (within numerical tolerance). Both parties are playing optimally.
+  \item \code{is_equilibrium = FALSE}: At least one party could improve by
+    changing strategy. This may indicate insufficient SGD iterations, a local
+    minimum, or numerical issues.
+}
+
+\strong{Search Methods}
+
+\itemize{
+  \item \code{"grid"}: Searches over a discretized grid of strategies around
+    the current solution. More thorough but slower. Recommended for validation.
+  \item \code{"gradient"}: Runs additional gradient ascent steps from the
+    current solution. Faster but may miss improvements in other directions.
+}
 }
 \examples{
 \dontrun{
@@ -77,6 +123,12 @@ validation <- validate_equilibrium(result)
 print(validation$is_equilibrium)
 print(validation$br_error_ast)
 print(validation$br_error_dag)
+
+# If validation fails, try more SGD iterations
+if (!validation$is_equilibrium) {
+  result2 <- strategize(Y = y, W = w, adversarial = TRUE, nSGD = 2000)
+  validation2 <- validate_equilibrium(result2)
+}
 }
 
 }
