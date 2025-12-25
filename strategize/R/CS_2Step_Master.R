@@ -197,7 +197,7 @@
 #' @param presaved_outcome_model Logical indicating whether to use a previously saved outcome
 #'   model instead of re-fitting. Defaults to \code{FALSE}.
 #'
-#' @param use_optax Logical indicating whether to use the \href{https://github.com/deepmind/optax}{\code{optax}}
+#' @param use_optax Logical indicating whether to use the \href{https://github.com/google-deepmind/optax}{\code{optax}}
 #'   library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 #'   Defaults to \code{FALSE}.
 #'
@@ -515,7 +515,7 @@ strategize       <-          function(
     # run models with inputs: W_; Y_; varcov_cluster_variable_;
     if(outcome_model_type == "glm"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n") } # linear w interactions
     if(outcome_model_type == "neural"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n")}  
-    initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replace="")
+    initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replacement="")
     eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
     
     # define combined parameter vector & fxn for reextracting intercept & coefficient 
@@ -604,7 +604,7 @@ strategize       <-          function(
 
   if(optim_type != "gd"){
     initialize_ExactSol <- paste(deparse(generate_ExactSol), collapse="\n")
-    initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replace="")
+    initialize_ExactSol <- gsub(initialize_ExactSol,pattern="function \\(\\)", replacement="")
     eval( parse( text = initialize_ExactSol ), envir = evaluation_environment )
     if(strenv$ParameterizationType == "Implicit"){ getPiStar_exact <- generate_ExactSolImplicit }
     if(strenv$ParameterizationType == "Full"){ getPiStar_exact <- generate_ExactSolExplicit }
@@ -677,8 +677,8 @@ strategize       <-          function(
   for(DisaggreateQ in ifelse(adversarial, yes = list(c(F,T)), no = list(F))[[1]]){
     # general specifications
     getQStar_diff_ <- paste(deparse(getQStar_diff_BASE),collapse="\n")
-    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", 
-                           replace = sprintf("T == %s", DisaggreateQ))
+    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE",
+                           replacement = sprintf("T == %s", DisaggreateQ))
     getQStar_diff_ <- eval( parse( text = getQStar_diff_ ), envir = evaluation_environment )
 
     # specifications for case (getQStar_diff_MultiGroup getQStar_diff_SingleGroup)
@@ -877,7 +877,7 @@ strategize       <-          function(
 
     # initialize QMonte fxns 
     InitializeQMonteFxns_ <- paste(deparse(InitializeQMonteFxns),collapse="\n")
-    InitializeQMonteFxns_ <- gsub(InitializeQMonteFxns_, pattern = "function \\(\\)", replace = "")
+    InitializeQMonteFxns_ <- gsub(InitializeQMonteFxns_, pattern = "function \\(\\)", replacement = "")
     InitializeQMonteFxns_ <- eval( parse( text = InitializeQMonteFxns_ ), envir = evaluation_environment )
 
     # setup gd functions dparams

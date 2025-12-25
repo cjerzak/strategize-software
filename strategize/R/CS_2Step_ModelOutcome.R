@@ -258,7 +258,7 @@ generate_ModelOutcome <- function(){
             point_est_predict_clust <- my_model$parameters$phi
 
             vcov_OutcomeModel <- as.matrix(  my_model$vcov$vcov )
-            phi_drop <- which(  gsub(row.names(vcov_OutcomeModel),pattern="phi[1-9]_",replace="") %in%
+            phi_drop <- which(  gsub(row.names(vcov_OutcomeModel),pattern="phi[1-9]_",replacement="") %in%
                 colnames( point_est_predict_clust ) )
             vcov_full <- matrix(0,nrow = length(my_mean)+1, ncol = length(my_mean)+1)# plus 1 for intercept
             vcov_OutcomeModel <- vcov_OutcomeModel[-phi_drop,-phi_drop]

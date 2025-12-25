@@ -41,8 +41,8 @@ get_se <- function(){
                   )
 
                   # do some renaming
-                  eval(parse(text = sprintf("%s <- jax_fxn", gsub(fn_, pattern="_tf",replace="_jax"))))
-                  eval(parse(text = sprintf("grad_%s <- grad_jax_fxn", gsub(fn_,pattern="_tf",replace="_jax"))))
+                  eval(parse(text = sprintf("%s <- jax_fxn", gsub(fn_, pattern="_tf",replacement="_jax"))))
+                  eval(parse(text = sprintf("grad_%s <- grad_jax_fxn", gsub(fn_,pattern="_tf",replacement="_jax"))))
                   #eval(parse(text = sprintf("param_set_%s <- ModelList_object", gsub(fn_,pattern="_tf",replace="_jax"))))
                   #eval(parse(text = sprintf("param_set_names_%s <- param_set_names", gsub(fn_,pattern="_tf",replace="_jax"))))
                   rm(jax_fxn, grad_jax_fxn)

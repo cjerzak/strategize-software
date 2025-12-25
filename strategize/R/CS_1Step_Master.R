@@ -409,7 +409,7 @@ strategize_onestep <- function(
     # INITIALIZE M ESTIMATION
     message("Initialize M-Estimation...")
     initialMtext <- paste(deparse(initialize_m),collapse="\n")
-    initialMtext <- gsub(initialMtext,pattern="function \\(\\)",replace="")
+    initialMtext <- gsub(initialMtext,pattern="function \\(\\)",replacement="")
     eval(parse( text = initialMtext ),envir = evaluation_environment)
 
     # get initial pi values
@@ -492,13 +492,13 @@ strategize_onestep <- function(
         # Build Model
         message("Building...")
         buildText <- paste(deparse(ml_build),collapse="\n")
-        buildText <- gsub(buildText,pattern="function \\(\\)",replace="")
+        buildText <- gsub(buildText,pattern="function \\(\\)",replacement="")
         eval(parse( text = buildText ),envir = evaluation_environment)
 
         # Train Model + Perform CV
         message("Training...")
         trainText <- paste(deparse(ml_train),collapse="\n")
-        trainText <- gsub(trainText,pattern="function \\(\\)",replace="")
+        trainText <- gsub(trainText,pattern="function \\(\\)",replacement="")
         eval(parse( text = trainText ),envir = evaluation_environment)
 
         # obtain the pi's
@@ -556,7 +556,7 @@ strategize_onestep <- function(
 
     # get SEs
     seText <- paste(deparse(get_se),collapse="\n")
-    seText <- gsub(seText,pattern="function \\(\\)",replace="")
+    seText <- gsub(seText,pattern="function \\(\\)",replacement="")
     eval(parse( text = seText ),evaluation_environment)
 
     #plot(unlist(seList_manual),unlist(seList_automatic));abline(a=0,b=1)

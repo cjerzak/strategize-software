@@ -245,7 +245,7 @@ plot_best_response_curves  <- function(
                              no = list(F))[[1]]){
     # general specifications
     getQStar_diff_ <- paste(deparse(getQStar_diff_BASE),collapse="\n")
-    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", replace = sprintf("T == %s", DisaggreateQ))
+    getQStar_diff_ <- gsub(getQStar_diff_, pattern = "Q_DISAGGREGATE", replacement = sprintf("T == %s", DisaggreateQ))
     getQStar_diff_ <- eval( parse( text = getQStar_diff_ ), envir = package_environment )
     
     # specifications for case (getQStar_diff_MultiGroup getQStar_diff_SingleGroup)
