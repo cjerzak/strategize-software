@@ -418,9 +418,9 @@ cv_strategize       <-          function(
                               conda_env = conda_env,
                               conda_env_required = conda_env_required)
   message("Done with strategic analysis!")
-  return(  c( Qoptimized_,
-            "lambda" = lambda__,
-            "qStar_lambda" = qStar_lambda,
-            "CVInfo" = outsamp_results ) )
+  return(c(Qoptimized_,
+           list(lambda = lambda__,
+                qStar_lambda = qStar_lambda,
+                CVInfo = outsamp_results)))
 }
 

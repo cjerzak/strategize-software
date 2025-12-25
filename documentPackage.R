@@ -1,6 +1,7 @@
 {
   rm(list = ls())
   options(error = NULL)
+  # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
 
   # Package configuration (change these for different packages)
   package_name <- "strategize"
