@@ -197,30 +197,55 @@
 #'
 #' @examples
 #' \dontrun{
-#' # Suppose we have a forced-choice conjoint dataset (W, Y) and baseline probabilities p_list.
-#' # We want to estimate an optimal distribution that maximizes average Y.
+#' # ================================================
+#' # One-step M-estimation approach
+#' # ================================================
+#' # This approach simultaneously estimates the outcome model and
+#' # optimal distribution, rather than the two-step approach
 #'
 #' set.seed(123)
-#' # X could be respondent covariates, if any
-#' X <- matrix(rnorm(nrow(W)*2), nrow(W), 2)
+#' n <- 400
 #'
-#' result_one_step <- strategize_onestep(
+#' # Generate factor matrix
+#' W <- data.frame(
+#'   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+#'   Age = sample(c("Young", "Middle", "Old"), n, replace = TRUE),
+#'   Party = sample(c("Dem", "Rep"), n, replace = TRUE)
+#' )
+#'
+#' # Simulate outcome (Female and Young preferred)
+#' latent <- 0.3 * (W$Gender == "Female") + 0.2 * (W$Age == "Young")
+#' Y <- rbinom(n, 1, plogis(latent))
+#'
+#' # Baseline probabilities (uniform)
+#' p_list <- list(
+#'   Gender = c(Male = 0.5, Female = 0.5),
+#'   Age = c(Young = 1/3, Middle = 1/3, Old = 1/3),
+#'   Party = c(Dem = 0.5, Rep = 0.5)
+#' )
+#'
+#' # Optional respondent covariates
+#' X <- matrix(rnorm(n * 2), n, 2)
+#' colnames(X) <- c("Income", "Education")
+#'
+#' # Run one-step estimation
+#' result <- strategize_onestep(
 #'   W = W,
 #'   Y = Y,
 #'   X = X,
 #'   p_list = p_list,
-#'   nSGD = 400,
-#'   use_hajek = TRUE,
+#'   nSGD = 100,
 #'   penalty_type = "LogMaxProb",
 #'   lambda_seq = c(0.01, 0.1),
-#'   test_fraction = 0.3
+#'   test_fraction = 0.3,
+#'   quiet = TRUE
 #' )
 #'
-#' # Inspect the estimated distribution over factor levels
-#' str(result_one_step$pi_star_point)
+#' # View optimal distribution
+#' print(result$pi_star_point)
 #'
-#' # Evaluate estimated performance
-#' print( result_one_step$Q_point )
+#' # View expected outcome under optimal strategy
+#' print(result$Q_point)
 #' }
 #'
 #' @export
@@ -297,6 +322,10 @@ strategize_onestep <- function(
   }
 
   FactorsMat_numeric <- sapply(1:ncol(W),function(ze){ match(W[,ze], names(p_list[[ze]]))  })
+  # Ensure FactorsMat_numeric is a matrix even for single-column W
+  if(!is.matrix(FactorsMat_numeric)) {
+    FactorsMat_numeric <- matrix(FactorsMat_numeric, ncol = 1)
+  }
   }
 
   ### case 1 - the new multinomial probabilities ARE specified
@@ -356,9 +385,9 @@ strategize_onestep <- function(
     }
     print(c(length(split1_indices),length(split2_indices)))
 
-    # execute splits
-    FactorsMat1 <- W[split1_indices,];FactorsMat1_numeric <- FactorsMat_numeric[split1_indices,]
-    FactorsMat2 <- W[split2_indices,];FactorsMat2_numeric <- FactorsMat_numeric[split2_indices,]
+    # execute splits (drop=FALSE preserves matrix structure for single-column W)
+    FactorsMat1 <- W[split1_indices, , drop=FALSE]; FactorsMat1_numeric <- FactorsMat_numeric[split1_indices, , drop=FALSE]
+    FactorsMat2 <- W[split2_indices, , drop=FALSE]; FactorsMat2_numeric <- FactorsMat_numeric[split2_indices, , drop=FALSE]
 
     Yobs_split1 <- Y[split1_indices]
     log_pr_w_split1 <- log_PrW[split1_indices]
@@ -412,8 +441,9 @@ strategize_onestep <- function(
           attr(return_value,"random_") <- rep(b_,length(return_value))
           attr(return_value,"sys_") <- systemit_init
           return(return_value)
-        })))
-        pi_init_vec <- unlist(  pi_init_list[,1,1]  )
+        }), simplify = FALSE), simplify = FALSE)
+        # Handle dimension-safe extraction (replicate simplifies differently when K=1)
+        pi_init_vec <- unlist(pi_init_list[[1]][[1]])
       }
       names(pi_init_vec) <- NULL
     }
@@ -446,6 +476,10 @@ strategize_onestep <- function(
         if(is.null(X)){X<-matrix(rnorm(length(Y)*max(2,K)),nrow=length(Y),ncol=max(2,K))}
         FactorsMat_numeric <- sapply(1:ncol(FactorsMat_numeric <- W),function(zer){
           match(FactorsMat_numeric[,zer], names(p_list[[zer]])) })
+        # Ensure FactorsMat_numeric is a matrix even for single-column W
+        if(!is.matrix(FactorsMat_numeric)) {
+          FactorsMat_numeric <- matrix(FactorsMat_numeric, ncol = 1)
+        }
         FactorsMat_numeric_0Indexed <- FactorsMat_numeric - 1L
 
         performance_matrix_out <- performance_matrix_in <- matrix(NA, ncol = length(lambda_seq), nrow = n_folds)

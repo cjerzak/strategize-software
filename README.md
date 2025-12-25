@@ -6,16 +6,24 @@ Software for implementing optimal stochastic intervention analysis. Current impl
 
 # Installation
 
-The most recent version of `strategize` can be installed directly from the repository using the `devtools` package
-```
+The most recent version of `strategize` can be installed directly from the repository using the `devtools` package:
+```r
 devtools::install_github("cjerzak/strategize-software/strategize")
 ```
 
-The package can then be loaded into your R session like so:
-```
+The package can then be loaded into your R session:
+```r
 library(strategize)
 ```
 Package functions can also be accessed as `strategize::function_name`.
+
+## Python Backend Setup
+
+The package uses JAX for automatic differentiation. Set up the Python backend with:
+```r
+strategize::build_backend(conda_env = "strategize_env")
+```
+This creates a conda environment with JAX, numpy, optax, equinox, and numpyro. On Linux with NVIDIA GPUs, it auto-detects the driver version and installs appropriate CUDA wheels.
 
 # Tutorial
 
@@ -59,6 +67,19 @@ fit$Q_point_mEst
 This script simulates a two-factor forced-choice design, fits the model, and
 returns `PiStar_point`, the recommended distribution over factor levels, along
 with the expected outcome `Q_point_mEst` under that distribution.
+
+# Key Features
+
+- **Adversarial Mode**: Set `adversarial = TRUE` to find Nash equilibrium strategies in two-player zero-sum games (e.g., competing candidates)
+- **Cross-Validation**: Use `cv_strategize()` to automatically select the regularization parameter lambda
+- **One-Step Estimation**: Use `strategize_onestep()` for simultaneous outcome modeling and distribution optimization
+- **Helper Functions**: Use `create_p_list()` to easily create probability lists from your data, and `strategize_preset()` for quick analysis with sensible defaults
+
+# Documentation
+
+- [Main Vignette](https://connorjerzak.com/wp-content/uploads/2025/02/MainVignette.html) - Comprehensive tutorial and methodology overview
+- QuickStart vignette (`vignettes/QuickStart.Rmd`) - Getting started guide
+- Troubleshooting vignette (`vignettes/Troubleshooting.Rmd`) - Common issues and solutions
 
 # License
 

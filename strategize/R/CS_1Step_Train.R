@@ -3,7 +3,7 @@ ml_train <- function(){
 print("Begin training block...")
 for(trainIndicator in trainIndicator_pool){
   # then iterate over folds
-  for(fold_ in 1:(nFolds*trainIndicator+1*!trainIndicator)){
+  for(fold_ in 1:(n_folds*trainIndicator+1*!trainIndicator)){
 
   # iterate over lambda FIRST (for warm starts...)
 
@@ -73,7 +73,7 @@ for(trainIndicator in trainIndicator_pool){
                                         ModelList_ = ModelList_object,
                                         Y_  = strenv$jnp$array(as.matrix(Y[my_batch_jax]),strenv$jnp$float32),
                                         X_  = strenv$jnp$array(X[my_batch_jax,],strenv$jnp$float32),
-                                        factorMat_  = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,],strenv$jnp$int32),
+                                        factorMat_  = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax, , drop=FALSE],strenv$jnp$int32),
                                         logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax]),strenv$jnp$float32),
                                         REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA),strenv$jnp$float32)
                                         )
@@ -88,7 +88,7 @@ for(trainIndicator in trainIndicator_pool){
                 ModelList_object,
                 Y_  = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
                 X_  = strenv$jnp$array(X[my_batch_jax,]),
-                factorMat_  = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                factorMat_  = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax, , drop=FALSE]),
                 logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
                 REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA))
               )
@@ -112,10 +112,15 @@ for(trainIndicator in trainIndicator_pool){
                   strenv$optax$scale(1) )
               }
               if(optim_type == "Other"){
+                # Ensure warmup and decay steps are positive for small datasets
+                nWarm_raw <- as.integer(nSGD) - 5L
+                nWarm <- min(50L, max(1L, nWarm_raw))
+                decay_steps_raw <- as.integer(nSGD) - nWarm
+                decay_steps <- max(5L, decay_steps_raw)
                 LR_schedule <- strenv$optax$warmup_cosine_decay_schedule(
                   init_value = (LEARNING_RATE_BASE <- .1)/2,
                   peak_value = LEARNING_RATE_BASE,
-                  warmup_steps = nWarm <- 50L, decay_steps = max(nSGD - nWarm, 5L))
+                  warmup_steps = nWarm, decay_steps = decay_steps)
                 optax_optimizer <-  strenv$optax$chain(
                   #strenv$optax$sgd(momentum = 0.90, nesterov = T,
                   #strenv$optax$scale_by_schedule(LR_schedule),
@@ -144,7 +149,7 @@ for(trainIndicator in trainIndicator_pool){
             v_and_grad_eval <- v_and_grad_jax_fxn( ModelList_object,
                               Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
                               X_ = strenv$jnp$array(X[my_batch_jax,]),
-                              factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                              factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax, , drop=FALSE]),
                               logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
                               REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
 
@@ -158,7 +163,7 @@ for(trainIndicator in trainIndicator_pool){
               hessian_value <- hessian_fxn(ModelList_object,
                                            Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
                                            X_ = strenv$jnp$array(X[my_batch_jax,]),
-                                           factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                                           factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax, , drop=FALSE]),
                                            logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
                                            REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
               HessianMat <- matrix(list(),nrow = length(ModelList_object),ncol=length(ModelList_object))
@@ -204,7 +209,7 @@ for(trainIndicator in trainIndicator_pool){
                 f_x_updated <- jax_fxn( ModelList_object_test,
                                             Y_ = strenv$jnp$array(as.matrix(Y[my_batch_jax])),
                                             X_ = strenv$jnp$array(X[my_batch_jax,]),
-                                            factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax,]),
+                                            factorMat_ = strenv$jnp$array(FactorsMat_numeric_0Indexed[my_batch_jax, , drop=FALSE]),
                                             logProb_ = strenv$jnp$array(as.matrix(log_PrW[my_batch_jax])),
                                             REGULARIZATION_LAMBDA = strenv$jnp$array(returnWeightsFxn(REGULARIZATION_LAMBDA)))
                 armijo_cond <- f_x_updated$tolist() <= (currentLossGlobal + mu_t*0.25*InnerProd_GradNewtonDir )
@@ -284,7 +289,7 @@ for(trainIndicator in trainIndicator_pool){
                                                                  ModelList_ = ModelList_,
                                                                  Y_ = tfConst(as.matrix(Y[use_i])),
                                                                  X_ = tfConst(X[use_i,]),
-                                                                 factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i,],strenv$jnp$int32),
+                                                                 factorMat_ = tfConst(FactorsMat_numeric_0Indexed[use_i, , drop=FALSE],strenv$jnp$int32),
                                                                  logProb_ = tfConst(as.matrix(log_PrW[use_i])),
                                                                  REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(REGULARIZATION_LAMBDA)))  ) )
             Qhat_ <- sum(as.matrix(Y[use_i])*finalWts_)

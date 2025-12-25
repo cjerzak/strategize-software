@@ -46,6 +46,18 @@ skip_if_slow <- function() {
   }
 }
 
+#' Skip tests if tgp package is not available (required for K > 1 multi-cluster)
+skip_if_no_tgp <- function() {
+  if (!requireNamespace("tgp", quietly = TRUE)) {
+    skip("tgp package not available (required for K > 1 multi-cluster tests)")
+  }
+}
+
+#' Skip one-step estimator tests (require larger datasets and more tuning)
+skip_onestep_tests <- function() {
+  skip("One-step estimator tests require larger datasets (set STRATEGIZE_RUN_ONESTEP_TESTS=true to run)")
+}
+
 # =============================================================================
 # Test Data Generators
 # =============================================================================
@@ -145,6 +157,32 @@ add_adversarial_structure <- function(base_data, seed = 42) {
   base_data$competing_group_variable_candidate <- competing_group_variable_candidate
   base_data$competing_group_competition_variable_candidate <- pair_competition_type
   base_data
+}
+
+#' Generate probability list from factor matrix
+#'
+#' Creates a list of probability distributions for each factor,
+#' where each distribution is uniform over the factor's levels.
+#' Returns a named vector format compatible with strategize() and strategize_onestep().
+#'
+#' @param W Factor matrix from generate_test_data
+#' @return List of named probability vectors for each factor
+generate_test_p_list <- function(W) {
+  n_factors <- ncol(W)
+
+  p_list <- lapply(seq_len(n_factors), function(d) {
+    factor_col <- W[, d]
+    levels_d <- sort(unique(factor_col))
+    n_levels <- length(levels_d)
+
+    # Create uniform probability vector (named)
+    probs <- rep(1 / n_levels, n_levels)
+    names(probs) <- levels_d
+    probs
+  })
+
+  names(p_list) <- colnames(W)
+  p_list
 }
 
 # =============================================================================
