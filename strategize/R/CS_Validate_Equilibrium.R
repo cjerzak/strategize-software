@@ -1,10 +1,10 @@
 #' Validate Nash Equilibrium Quality
 #'
-#' @importFrom graphics barplot text
-#'
 #' Computes best-response error to verify that the optimized strategies
 #' form a Nash equilibrium. At a true Nash equilibrium, neither player
 #' can improve their payoff by unilaterally changing strategy.
+#'
+#' @importFrom graphics barplot text
 #'
 #' @param result Output from \code{\link{strategize}} with \code{adversarial = TRUE}
 #' @param method Character string specifying the search method:

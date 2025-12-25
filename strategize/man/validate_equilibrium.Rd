@@ -53,7 +53,9 @@ A list containing:
   }
 }
 \description{
-Validate Nash Equilibrium Quality
+Computes best-response error to verify that the optimized strategies
+form a Nash equilibrium. At a true Nash equilibrium, neither player
+can improve their payoff by unilaterally changing strategy.
 }
 \details{
 \strong{What is a Nash Equilibrium?}

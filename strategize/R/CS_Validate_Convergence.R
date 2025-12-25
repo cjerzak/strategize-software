@@ -1,9 +1,9 @@
 #' Plot Convergence Diagnostics for Strategize Results
 #'
-#' @importFrom graphics grid
-#'
 #' Visualizes the optimization trajectory from gradient descent, showing
 #' gradient magnitudes, loss values, and learning rate adaptation over iterations.
+#'
+#' @importFrom graphics grid
 #'
 #' @param result Output from \code{\link{strategize}} with \code{adversarial = TRUE}
 #' @param metrics Character vector specifying which metrics to plot. Options are:

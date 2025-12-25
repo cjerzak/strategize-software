@@ -36,9 +36,20 @@ A list containing:
   }
 }
 \description{
-Plot Four-Quadrant Contribution Breakdown
+Decomposes the equilibrium vote share Q* into contributions from four
+distinct election scenarios, providing insight into which primary-to-general
+election pathways drive the Nash equilibrium outcome.
 }
 \details{
+In adversarial mode, two parties simultaneously optimize their candidate
+attribute distributions. Each party's "entrant" candidate (drawn from the
+optimized distribution) competes in a primary against a "field" candidate
+(drawn from the baseline distribution). The general election outcome
+depends on which candidates win their respective primaries, creating
+four possible scenarios. This function visualizes the relative importance
+of each scenario to the overall equilibrium.
+
+
 The four scenarios (quadrants) represent different primary election outcomes:
 \describe{
   \item{E1: Both Entrants}{Both parties' "entrant" candidates (sampled from

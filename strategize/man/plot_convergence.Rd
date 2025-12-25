@@ -34,7 +34,8 @@ If \code{use_ggplot = TRUE} and ggplot2 is available, returns a ggplot
   \code{invisible(NULL)}.
 }
 \description{
-Plot Convergence Diagnostics for Strategize Results
+Visualizes the optimization trajectory from gradient descent, showing
+gradient magnitudes, loss values, and learning rate adaptation over iterations.
 }
 \details{
 This function provides diagnostic plots to assess whether the gradient descent

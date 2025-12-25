@@ -1,10 +1,18 @@
 #' Plot Four-Quadrant Contribution Breakdown
 #'
-#' @importFrom graphics barplot legend pie plot.new text
+#' Decomposes the equilibrium vote share Q* into contributions from four
+#' distinct election scenarios, providing insight into which primary-to-general
+#' election pathways drive the Nash equilibrium outcome.
 #'
-#' Visualizes the contribution of each primary→general election scenario
-#' to the equilibrium vote share Q*. In adversarial mode, the outcome depends
-#' on four scenarios based on which candidates win their primaries.
+#' In adversarial mode, two parties simultaneously optimize their candidate
+#' attribute distributions. Each party's "entrant" candidate (drawn from the
+#' optimized distribution) competes in a primary against a "field" candidate
+#' (drawn from the baseline distribution). The general election outcome
+#' depends on which candidates win their respective primaries, creating
+#' four possible scenarios. This function visualizes the relative importance
+#' of each scenario to the overall equilibrium.
+#'
+#' @importFrom graphics barplot legend pie plot.new text
 #'
 #' @param result Output from \code{\link{strategize}} with \code{adversarial = TRUE}
 #' @param type Character string specifying the plot type:
