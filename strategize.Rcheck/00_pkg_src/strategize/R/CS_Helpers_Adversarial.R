@@ -6,6 +6,8 @@
 #' @param result Output from \code{\link{strategize}} with \code{adversarial = TRUE}
 #' @param validate Logical. Whether to run equilibrium validation. Default is \code{TRUE}.
 #'   Set to \code{FALSE} for faster output without validation.
+#' @param check_hessian Logical. Whether to include Hessian geometry analysis.
+#'   Default is \code{TRUE}. Only runs if Hessian functions are available in the result.
 #' @param verbose Logical. Whether to print the summary. Default is \code{TRUE}.
 #'
 #' @return Invisibly returns a list containing all summary statistics.
@@ -34,7 +36,7 @@
 #' }
 #'
 #' @export
-summarize_adversarial <- function(result, validate = TRUE, verbose = TRUE) {
+summarize_adversarial <- function(result, validate = TRUE, check_hessian = TRUE, verbose = TRUE) {
 
   # Validate input
   if (!isTRUE(result$convergence_history$adversarial)) {
@@ -101,6 +103,24 @@ summarize_adversarial <- function(result, validate = TRUE, verbose = TRUE) {
     list(weights = c(E1 = 0.25, E2 = 0.25, E3 = 0.25, E4 = 0.25))
   })
   summary_data$quadrant <- quadrant
+
+  # ---- Hessian geometry analysis ----
+  if (check_hessian && isTRUE(result$hessian_available)) {
+    hessian_result <- tryCatch({
+      check_hessian_geometry(result, verbose = FALSE)
+    }, error = function(e) {
+      NULL
+    })
+    summary_data$hessian_analysis <- hessian_result
+    summary_data$geometry_valid <- if (!is.null(hessian_result)) hessian_result$valid_saddle else NA
+  } else if (check_hessian && !isTRUE(result$hessian_available)) {
+    summary_data$hessian_analysis <- NULL
+    summary_data$geometry_valid <- NA
+    summary_data$hessian_skipped_reason <- result$hessian_skipped_reason
+  } else {
+    summary_data$hessian_analysis <- NULL
+    summary_data$geometry_valid <- NA
+  }
 
   # ---- Print summary ----
   if (verbose) {
@@ -212,6 +232,24 @@ print_adversarial_summary <- function(summary_data, pi_ast, pi_dag) {
   cat(sprintf("  AST voters: %.1f%%\n", summary_data$voter_props$AST * 100))
   cat(sprintf("  DAG voters: %.1f%%\n", summary_data$voter_props$DAG * 100))
   cat("\n")
+
+  # Hessian geometry analysis
+  if (!is.null(summary_data$hessian_analysis)) {
+    hess <- summary_data$hessian_analysis
+    cat("Hessian Geometry:\n")
+    cat("-----------------\n")
+    cat(sprintf("  Status: %s\n", hess$status))
+    cat(sprintf("  Valid saddle point: %s\n", ifelse(hess$valid_saddle, "YES", "NO")))
+    if (!is.na(hess$condition_number_ast)) {
+      cat(sprintf("  Condition numbers: AST=%.1f, DAG=%.1f\n",
+                  hess$condition_number_ast, hess$condition_number_dag))
+    }
+    cat("\n")
+  } else if (!is.null(summary_data$hessian_skipped_reason)) {
+    cat("Hessian Geometry:\n")
+    cat("-----------------\n")
+    cat(sprintf("  (skipped: %s)\n\n", summary_data$hessian_skipped_reason))
+  }
 
   cat("==============================================\n")
 }

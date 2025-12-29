@@ -4,13 +4,21 @@
 \alias{summarize_adversarial}
 \title{Summarize Adversarial Strategize Results}
 \usage{
-summarize_adversarial(result, validate = TRUE, verbose = TRUE)
+summarize_adversarial(
+  result,
+  validate = TRUE,
+  check_hessian = TRUE,
+  verbose = TRUE
+)
 }
 \arguments{
 \item{result}{Output from \code{\link{strategize}} with \code{adversarial = TRUE}}
 
 \item{validate}{Logical. Whether to run equilibrium validation. Default is \code{TRUE}.
 Set to \code{FALSE} for faster output without validation.}
+
+\item{check_hessian}{Logical. Whether to include Hessian geometry analysis.
+Default is \code{TRUE}. Only runs if Hessian functions are available in the result.}
 
 \item{verbose}{Logical. Whether to print the summary. Default is \code{TRUE}.}
 }

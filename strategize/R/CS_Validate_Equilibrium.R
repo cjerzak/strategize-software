@@ -540,3 +540,351 @@ plot_equilibrium_validation <- function(br_error_ast, br_error_dag, tolerance) {
 
   invisible(NULL)
 }
+
+
+#' Internal: Evaluate Hessian at equilibrium
+#' @keywords internal
+#' @noRd
+eval_hessian <- function(result, player = c("ast", "dag")) {
+  player <- match.arg(player)
+  strenv <- result$strenv
+
+  # Get Q evaluation parameters (same as validate_equilibrium)
+  gather_fxn <- result$gather_fxn
+  if (is.null(gather_fxn)) {
+    gather_fxn <- function(x) x
+  }
+
+  params_ast <- gather_fxn(result$REGRESSION_PARAMETERS_ast)
+  params_dag <- gather_fxn(result$REGRESSION_PARAMETERS_dag)
+  params_ast0 <- gather_fxn(result$REGRESSION_PARAMETERS_ast0)
+  params_dag0 <- gather_fxn(result$REGRESSION_PARAMETERS_dag0)
+
+  INTERCEPT_ast <- params_ast[[1]]
+  COEFFICIENTS_ast <- params_ast[[2]]
+  INTERCEPT_dag <- params_dag[[1]]
+  COEFFICIENTS_dag <- params_dag[[2]]
+  INTERCEPT_ast0 <- params_ast0[[1]]
+  COEFFICIENTS_ast0 <- params_ast0[[2]]
+  INTERCEPT_dag0 <- params_dag0[[1]]
+  COEFFICIENTS_dag0 <- params_dag0[[2]]
+
+  # Select Hessian function and sign
+  hess_fn <- if (player == "ast") result$d2Q_da2_ast else result$d2Q_da2_dag
+  Q_SIGN <- if (player == "ast") 1.0 else -1.0
+
+  # Evaluate Hessian
+  SEED <- strenv$jax$random$PRNGKey(42L)
+  H <- hess_fn(
+    result$a_i_ast, result$a_i_dag,
+    INTERCEPT_ast, COEFFICIENTS_ast,
+    INTERCEPT_dag, COEFFICIENTS_dag,
+    INTERCEPT_ast0, COEFFICIENTS_ast0,
+    INTERCEPT_dag0, COEFFICIENTS_dag0,
+    result$P_VEC_FULL_ast, result$P_VEC_FULL_dag,
+    result$SLATE_VEC_ast, result$SLATE_VEC_dag,
+    strenv$jnp$array(result$lambda),
+    strenv$jnp$array(Q_SIGN),
+    SEED
+  )
+
+  return(H)
+}
+
+
+#' Check Hessian Geometry at Nash Equilibrium
+#'
+#' Computes Hessian eigenvalues to verify proper saddle point structure
+#' at the Nash equilibrium. For a valid Nash equilibrium in a zero-sum game:
+#' \itemize{
+#'   \item AST (maximizer) Hessian should be negative semi-definite (all eigenvalues <= 0)
+#'   \item DAG (minimizer) Hessian should be positive semi-definite (all eigenvalues >= 0)
+#' }
+#'
+#' @param result Output from \code{\link{strategize}} with \code{adversarial = TRUE}
+#' @param tol Numeric. Tolerance for near-zero eigenvalues (default 1e-6)
+#' @param verbose Logical. Whether to print progress messages. Default is TRUE.
+#'
+#' @return A list of class \code{"hessian_analysis"} containing:
+#'   \describe{
+#'     \item{status}{Character: "PASS", "WARNING", or "FAIL"}
+#'     \item{valid_saddle}{Logical. TRUE if both Hessians have correct definiteness}
+#'     \item{eigenvalues_ast}{Eigenvalues of AST player's Hessian}
+#'     \item{eigenvalues_dag}{Eigenvalues of DAG player's Hessian}
+#'     \item{is_negative_semidefinite_ast}{Logical. TRUE if AST Hessian is negative semi-definite}
+#'     \item{is_positive_semidefinite_dag}{Logical. TRUE if DAG Hessian is positive semi-definite}
+#'     \item{condition_number_ast}{Condition number of AST Hessian (stability indicator)}
+#'     \item{condition_number_dag}{Condition number of DAG Hessian}
+#'     \item{flat_directions_ast}{Number of near-zero eigenvalues (weak identification)}
+#'     \item{flat_directions_dag}{Number of near-zero eigenvalues}
+#'     \item{interpretation}{Character string with human-readable interpretation}
+#'   }
+#'   Returns NULL with a warning if Hessian functions are not available.
+#'
+#' @details
+#' \strong{Mathematical Foundation}
+#'
+#' At a Nash equilibrium in a zero-sum game, the Hessian matrices encode local
+#' curvature information:
+#' \itemize{
+#'   \item \strong{AST (maximizes Q)}: The Hessian should be negative semi-definite,
+#'     meaning all eigenvalues are <= 0. This confirms AST is at a local maximum.
+#'   \item \strong{DAG (minimizes Q)}: The Hessian should be positive semi-definite,
+#'     meaning all eigenvalues are >= 0. This confirms DAG is at a local minimum.
+#' }
+#'
+#' The condition number (ratio of largest to smallest eigenvalue magnitude)
+#' indicates equilibrium robustness. High condition numbers suggest the
+#' equilibrium is sensitive to small perturbations.
+#'
+#' \strong{Interpretation}
+#'
+#' \itemize{
+#'   \item \code{status = "PASS"}: Valid saddle point with no flat directions
+#'   \item \code{status = "WARNING"}: Valid saddle point but has flat directions
+#'     (weak identification). Consider increasing regularization.
+#'   \item \code{status = "FAIL"}: Not a proper saddle point. The solution may
+#'     not have converged to a true Nash equilibrium.
+#' }
+#'
+#' @examples
+#' \dontrun{
+#' # Run adversarial strategize
+#' result <- strategize(Y = y, W = w, adversarial = TRUE, nSGD = 500)
+#'
+#' # Check Hessian geometry
+#' hess <- check_hessian_geometry(result)
+#' print(hess)
+#'
+#' # Check if it's a valid saddle point
+#' if (hess$valid_saddle) {
+#'   message("Valid Nash equilibrium geometry!")
+#' }
+#' }
+#'
+#' @seealso \code{\link{validate_equilibrium}} for best-response validation
+#'
+#' @export
+check_hessian_geometry <- function(result, tol = 1e-6, verbose = TRUE) {
+
+  # Check if this is an adversarial result
+  if (!isTRUE(result$convergence_history$adversarial)) {
+    stop("Hessian analysis requires adversarial=TRUE result. ",
+         "Set adversarial = TRUE in strategize().")
+  }
+
+  # Check if Hessian was computed
+  if (!isTRUE(result$hessian_available)) {
+    reason <- result$hessian_skipped_reason
+    if (is.null(reason)) reason <- "unknown"
+    warning(sprintf("Hessian not available (reason: %s). ", reason),
+            "Re-run strategize() with compute_hessian=TRUE or adjust hessian_max_dim.")
+    return(NULL)
+  }
+
+  strenv <- result$strenv
+  if (is.null(strenv) || is.null(strenv$jnp)) {
+    stop("JAX environment not available in result.")
+  }
+
+  if (verbose) message("Computing Hessian eigenvalue analysis...")
+
+  # Compute Hessians
+  H_ast <- eval_hessian(result, player = "ast")
+  H_dag <- eval_hessian(result, player = "dag")
+
+  # Convert to R matrices
+  H_ast_r <- as.matrix(strenv$np$array(H_ast))
+  H_dag_r <- as.matrix(strenv$np$array(H_dag))
+
+  # Eigendecomposition (symmetric Hessian)
+  eig_ast <- eigen(H_ast_r, symmetric = TRUE)
+  eig_dag <- eigen(H_dag_r, symmetric = TRUE)
+
+  # Check definiteness
+  # AST maximizes: needs negative semi-definite (lambda <= 0)
+  is_neg_def_ast <- all(eig_ast$values < -tol)
+  is_neg_semidef_ast <- all(eig_ast$values <= tol)
+
+  # DAG minimizes Q (equivalently maximizes -Q): needs positive semi-definite (lambda >= 0)
+  is_pos_def_dag <- all(eig_dag$values > tol)
+  is_pos_semidef_dag <- all(eig_dag$values >= -tol)
+
+  # Condition numbers (stability indicator)
+  nonzero_ast <- abs(eig_ast$values) > tol
+  nonzero_dag <- abs(eig_dag$values) > tol
+
+  cond_ast <- if (sum(nonzero_ast) >= 2) {
+    max(abs(eig_ast$values[nonzero_ast])) / min(abs(eig_ast$values[nonzero_ast]))
+  } else {
+    NA_real_
+  }
+
+  cond_dag <- if (sum(nonzero_dag) >= 2) {
+    max(abs(eig_dag$values[nonzero_dag])) / min(abs(eig_dag$values[nonzero_dag]))
+  } else {
+    NA_real_
+  }
+
+  # Count flat directions
+  flat_ast <- sum(abs(eig_ast$values) < tol)
+  flat_dag <- sum(abs(eig_dag$values) < tol)
+
+  # Overall validity
+  valid_saddle <- is_neg_semidef_ast && is_pos_semidef_dag
+
+  # Status determination
+  if (valid_saddle && flat_ast == 0 && flat_dag == 0) {
+    status <- "PASS"
+  } else if (valid_saddle) {
+    status <- "WARNING"  # Valid but has flat directions
+  } else {
+    status <- "FAIL"
+  }
+
+  # Generate interpretation
+  interpretation <- interpret_hessian_result(
+    status, valid_saddle,
+    is_neg_semidef_ast, is_pos_semidef_dag,
+    flat_ast, flat_dag,
+    cond_ast, cond_dag,
+    eig_ast$values, eig_dag$values
+  )
+
+  if (verbose) {
+    message(sprintf("  Status: %s", status))
+    message(sprintf("  AST: %s (eigenvalues: [%.4f, %.4f])",
+                    ifelse(is_neg_semidef_ast, "negative semi-def", "NOT negative semi-def"),
+                    min(eig_ast$values), max(eig_ast$values)))
+    message(sprintf("  DAG: %s (eigenvalues: [%.4f, %.4f])",
+                    ifelse(is_pos_semidef_dag, "positive semi-def", "NOT positive semi-def"),
+                    min(eig_dag$values), max(eig_dag$values)))
+  }
+
+  result_obj <- list(
+    status = status,
+    valid_saddle = valid_saddle,
+
+    # AST (maximizer) analysis
+    eigenvalues_ast = eig_ast$values,
+    eigenvectors_ast = eig_ast$vectors,
+    is_negative_definite_ast = is_neg_def_ast,
+    is_negative_semidefinite_ast = is_neg_semidef_ast,
+    condition_number_ast = cond_ast,
+    flat_directions_ast = flat_ast,
+
+    # DAG (minimizer) analysis
+    eigenvalues_dag = eig_dag$values,
+    eigenvectors_dag = eig_dag$vectors,
+    is_positive_definite_dag = is_pos_def_dag,
+    is_positive_semidefinite_dag = is_pos_semidef_dag,
+    condition_number_dag = cond_dag,
+    flat_directions_dag = flat_dag,
+
+    # Interpretation
+    interpretation = interpretation,
+    tolerance = tol
+  )
+
+  class(result_obj) <- c("hessian_analysis", "list")
+  return(result_obj)
+}
+
+
+#' Internal: Generate interpretation text for Hessian analysis
+#' @keywords internal
+#' @noRd
+interpret_hessian_result <- function(status, valid_saddle,
+                                      is_neg_semidef_ast, is_pos_semidef_dag,
+                                      flat_ast, flat_dag,
+                                      cond_ast, cond_dag,
+                                      eigenvalues_ast, eigenvalues_dag) {
+  lines <- character()
+
+  if (status == "PASS") {
+    lines <- c(lines,
+      "The solution is a valid Nash equilibrium (proper saddle point).",
+      "- AST is at a local maximum (Hessian negative definite)",
+      "- DAG is at a local minimum (Hessian positive definite)",
+      "Neither player can improve by small local deviations."
+    )
+  } else if (status == "WARNING") {
+    lines <- c(lines,
+      "The solution has correct saddle point structure but with flat directions.",
+      sprintf("- AST has %d near-zero eigenvalue(s)", flat_ast),
+      sprintf("- DAG has %d near-zero eigenvalue(s)", flat_dag),
+      "This indicates weak identification on some parameters.",
+      "Consider increasing regularization (lambda) to sharpen the equilibrium."
+    )
+  } else {
+    lines <- c(lines, "The solution is NOT a valid saddle point!")
+    if (!is_neg_semidef_ast) {
+      pos_eigs <- sum(eigenvalues_ast > 0)
+      lines <- c(lines,
+        sprintf("- AST has %d positive eigenvalue(s): not at a local maximum", pos_eigs),
+        "  AST could improve by moving in these directions."
+      )
+    }
+    if (!is_pos_semidef_dag) {
+      neg_eigs <- sum(eigenvalues_dag < 0)
+      lines <- c(lines,
+        sprintf("- DAG has %d negative eigenvalue(s): not at a local minimum", neg_eigs),
+        "  DAG could improve by moving in these directions."
+      )
+    }
+    lines <- c(lines,
+      "",
+      "Recommendations:",
+      "- Increase nSGD iterations to allow better convergence",
+      "- Check learning rate (may be too high causing oscillation)",
+      "- Verify the problem is well-posed"
+    )
+  }
+
+  # Add condition number warnings
+  if (!is.na(cond_ast) && cond_ast > 100) {
+    lines <- c(lines, "",
+      sprintf("Warning: AST condition number is high (%.1f), equilibrium may be fragile.", cond_ast))
+  }
+  if (!is.na(cond_dag) && cond_dag > 100) {
+    lines <- c(lines,
+      sprintf("Warning: DAG condition number is high (%.1f), equilibrium may be fragile.", cond_dag))
+  }
+
+  paste(lines, collapse = "\n")
+}
+
+
+#' Print method for hessian_analysis objects
+#'
+#' @param x A hessian_analysis object from \code{\link{check_hessian_geometry}}
+#' @param ... Additional arguments (ignored)
+#'
+#' @export
+print.hessian_analysis <- function(x, ...) {
+  cat("\n=== Hessian Geometry Analysis ===\n")
+  cat(sprintf("Status: %s\n\n", x$status))
+
+  cat("AST Player (Maximizer):\n")
+  cat(sprintf("  Negative semi-definite: %s\n", x$is_negative_semidefinite_ast))
+  cat(sprintf("  Eigenvalue range: [%.6f, %.6f]\n",
+              min(x$eigenvalues_ast), max(x$eigenvalues_ast)))
+  if (!is.na(x$condition_number_ast)) {
+    cat(sprintf("  Condition number: %.2f\n", x$condition_number_ast))
+  }
+  cat(sprintf("  Flat directions: %d\n\n", x$flat_directions_ast))
+
+  cat("DAG Player (Minimizer):\n")
+  cat(sprintf("  Positive semi-definite: %s\n", x$is_positive_semidefinite_dag))
+  cat(sprintf("  Eigenvalue range: [%.6f, %.6f]\n",
+              min(x$eigenvalues_dag), max(x$eigenvalues_dag)))
+  if (!is.na(x$condition_number_dag)) {
+    cat(sprintf("  Condition number: %.2f\n", x$condition_number_dag))
+  }
+  cat(sprintf("  Flat directions: %d\n\n", x$flat_directions_dag))
+
+  cat("Interpretation:\n")
+  cat(x$interpretation, "\n")
+
+  invisible(x)
+}

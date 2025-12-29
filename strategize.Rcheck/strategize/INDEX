@@ -2,6 +2,8 @@ build_backend           Build the environment for 'strategize'. Creates
                         a conda environment in which JAX and NumPy are
                         installed. Users may also create such an
                         environment themselves.
+check_hessian_geometry
+                        Check Hessian Geometry at Nash Equilibrium
 create_p_list           Create Baseline Probability List from Data
 cv_strategize           Cross-validation for Optimal Stochastic
                         Interventions in Conjoint Analysis
@@ -15,6 +17,8 @@ plot_convergence        Plot Convergence Diagnostics for Strategize
                         Results
 plot_quadrant_breakdown
                         Plot Four-Quadrant Contribution Breakdown
+print.hessian_analysis
+                        Print method for hessian_analysis objects
 print.strategize_result
                         Print Method for strategize Results
 strategize              Estimate Optimal (or Adversarial) Stochastic

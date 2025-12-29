@@ -55,7 +55,9 @@
 #'   save_outcome_model = FALSE,
 #'   presaved_outcome_model = FALSE,
 #'   use_optax = FALSE,
-#'   optim_type = "gd"
+#'   optim_type = "gd",
+#'   compute_hessian = TRUE,
+#'   hessian_max_dim = 50L
 #' )
 #'
 #' @param Y A numeric or binary vector of observed outcomes, typically in \code{\{0,1\}} for forced-choice
@@ -203,6 +205,14 @@
 #'
 #' @param optim_type A character string for choosing which optimizer or approach is used internally
 #'   (e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.
+#' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
+#'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
+#'   are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
+#'   \code{FALSE} to skip Hessian computation for faster execution.
+#' @param hessian_max_dim Integer. Maximum number of parameters per player before
+#'   automatically skipping Hessian computation. Defaults to \code{50L}. For problems
+#'   with more parameters, Hessian computation is skipped to avoid memory/time overhead.
+#'   The result will have \code{hessian_skipped_reason = "high_dimension"} in this case.
 #'
 #' @return A named \code{list} containing:
 #' \describe{
@@ -363,8 +373,10 @@ strategize       <-          function(
                                             temperature = 0.5, 
                                             save_outcome_model = FALSE,
                                             presaved_outcome_model = FALSE, 
-                                            use_optax = FALSE, 
-                                            optim_type = "gd"){
+                                            use_optax = FALSE,
+                                            optim_type = "gd",
+                                            compute_hessian = TRUE,
+                                            hessian_max_dim = 50L){
   # [1.] ast then dag 
   #   ast is 1, based on sort(unique(competing_group_variable_candidate))[1]
   #   dag is 2, based on sort(unique(competing_group_variable_candidate))[2]
@@ -382,6 +394,13 @@ strategize       <-          function(
     outcome_model_type = outcome_model_type,
     penalty_type = penalty_type, diff = diff
   )
+
+  # Initialize Hessian-related variables with defaults (may be overwritten in adversarial mode)
+  d2Q_da2_ast <- NULL
+  d2Q_da2_dag <- NULL
+  hessian_available <- FALSE
+  hessian_skipped_reason <- if (!adversarial) "not_adversarial" else NULL
+  n_params_per_player <- NA_integer_
 
   # define evaluation environment
   evaluation_environment <- environment()
@@ -884,11 +903,40 @@ strategize       <-          function(
     environment(FullGetQStar_) <- evaluation_environment # keep to avoid having to pass all subparameters like nMonte 
     #FullGetQStar_ <- compile_fxn(FullGetQStar_, static_argnums = (static_q <- c(18L:19L) - 1L))
     FullGetQStar_ <- compile_fxn(FullGetQStar_, static_argnums = (static_q <- NULL))
-    dQ_da_ast <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 0L), 
+    dQ_da_ast <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 0L),
                              static_argnums = static_q)
-    dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L), 
+    dQ_da_dag <- compile_fxn(strenv$jax$value_and_grad(FullGetQStar_, argnums = 1L),
                              static_argnums = static_q)
-    
+
+    # Create Hessian functions for equilibrium geometry analysis (conditionally)
+    # Only for adversarial mode - Hessians verify Nash equilibrium saddle point geometry
+    n_params_per_player <- as.integer(strenv$np$array(a_vec_init_ast$shape[[1]]))
+
+    if (adversarial) {
+      should_compute_hessian <- compute_hessian && (n_params_per_player <= hessian_max_dim)
+
+      if (should_compute_hessian) {
+        message(sprintf("Creating Hessian functions (D=%d parameters per player)", n_params_per_player))
+        d2Q_da2_ast <- compile_fxn(strenv$jax$hessian(FullGetQStar_, argnums = 0L),
+                                   static_argnums = static_q)
+        d2Q_da2_dag <- compile_fxn(strenv$jax$hessian(FullGetQStar_, argnums = 1L),
+                                   static_argnums = static_q)
+        hessian_available <- TRUE
+        hessian_skipped_reason <- NULL
+      } else if (!compute_hessian) {
+        message("Skipping Hessian computation (compute_hessian=FALSE)")
+        hessian_available <- FALSE
+        hessian_skipped_reason <- "user_disabled"
+      } else {
+        message(sprintf("Skipping Hessian computation (D=%d > hessian_max_dim=%d)",
+                        n_params_per_player, hessian_max_dim))
+        hessian_available <- FALSE
+        hessian_skipped_reason <- "high_dimension"
+      }
+    }
+    # For non-adversarial mode, defaults set at initialization are used:
+    # hessian_available = FALSE, hessian_skipped_reason = "not_adversarial"
+
     # perform GD 
     q_with_pi_star_full <- getQPiStar_gd(
       REGRESSION_PARAMETERS_ast   = REGRESSION_PARAMS_jax_ast_jnp,   #  1
@@ -1185,6 +1233,13 @@ strategize       <-          function(
                     "my_model_dag_jnp"  = my_model_dag_jnp,
                     "my_model_dag0_jnp" = my_model_dag0_jnp
                     ),
+
+                  # Hessian functions for equilibrium geometry analysis
+                  "d2Q_da2_ast" = d2Q_da2_ast,
+                  "d2Q_da2_dag" = d2Q_da2_dag,
+                  "hessian_available" = hessian_available,
+                  "hessian_skipped_reason" = hessian_skipped_reason,
+                  "n_params_per_player" = n_params_per_player,
 
                   # Convergence history for diagnostics
                   "convergence_history" = tryCatch({

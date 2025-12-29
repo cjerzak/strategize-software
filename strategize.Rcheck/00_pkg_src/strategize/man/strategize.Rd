@@ -42,7 +42,9 @@ strategize(
   save_outcome_model = FALSE,
   presaved_outcome_model = FALSE,
   use_optax = FALSE,
-  optim_type = "gd"
+  optim_type = "gd",
+  compute_hessian = TRUE,
+  hessian_max_dim = 50L
 )
 }
 \arguments{
@@ -191,6 +193,16 @@ Defaults to \code{FALSE}.}
 
 \item{optim_type}{A character string for choosing which optimizer or approach is used internally
 (e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.}
+
+\item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
+geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
+are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
+\code{FALSE} to skip Hessian computation for faster execution.}
+
+\item{hessian_max_dim}{Integer. Maximum number of parameters per player before
+automatically skipping Hessian computation. Defaults to \code{50L}. For problems
+with more parameters, Hessian computation is skipped to avoid memory/time overhead.
+The result will have \code{hessian_skipped_reason = "high_dimension"} in this case.}
 }
 \value{
 A named \code{list} containing:

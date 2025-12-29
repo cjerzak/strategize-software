@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.4.5)  25 DEC 2025 13:18
+This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.4.5)  28 DEC 2025 20:33
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -347,8 +347,8 @@ File: l3backend-pdftex.def 2024-02-20 L3 backend support: PDF output (pdfTeX)
 \l__color_backend_stack_int=\count294
 \l__pdf_internal_box=\box58
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp6x8Zxz/Rd2pdf9d6d
-2acc7b0b/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpaZ26ee/Rd2pdf4c34
+cf166bf/Rd2.aux)
 \openout1 = `Rd2.aux'.
 
 LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 8.
@@ -386,23 +386,21 @@ LaTeX Font Info:    ... okay on input line 8.
 )
 Package hyperref Info: Link coloring ON on input line 8.
 
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp6x8Zxz/Rd2pdf9d6d
-2acc7b0b/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp6x8Zxz/Rd2pdf9d6d
-2acc7b0b/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpaZ26ee/Rd2pdf4c34
+cf166bf/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpaZ26ee/Rd2pdf4c34
+cf166bf/Rd2.out)
 \@outlinefile=\write4
 \openout4 = `Rd2.out'.
 
 LaTeX Font Info:    Trying to load font information for TS1+ptm on input line 2
 3.
-
-(/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd
+ (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd
 File: ts1ptm.fd 2001/06/04 font definitions for TS1/ptm.
 )
 LaTeX Font Info:    Trying to load font information for T1+zi4 on input line 24
 .
-
-(/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd
+ (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd
 File: t1zi4.fd 2018/01/14 T1/zi4 (Inconsolata)
 )
 LaTeX Font Info:    Font shape `T1/zi4/m/n' will be
@@ -425,8 +423,8 @@ LaTeX Font Info:    Trying to load font information for U+rsfs on input line 24
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd
 File: ursfs.fd 1998/03/24 rsfs font definition file (jk)
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp6x8Zxz/Rd2pdf9d6d
-2acc7b0b/Rd2.toc [1
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpaZ26ee/Rd2pdf4c34
+cf166bf/Rd2.toc [1
 
 
 {/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/loc
@@ -439,136 +437,135 @@ al/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr/local/texlive/2024
 [2]
 LaTeX Font Info:    Font shape `T1/zi4/m/n' will be
 (Font)              scaled to size 9.0pt on input line 109.
- [3] [4] [5]
-Overfull \hbox (7.43814pt too wide) in paragraph at lines 273--277
+ [3] [4]
+LaTeX Font Info:    Trying to load font information for TS1+zi4 on input line 2
+20.
+ (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
+File: ts1zi4.fd 2018/01/14 TS1/zi4 (Inconsolata)
+)
+LaTeX Font Info:    Font shape `TS1/zi4/m/n' will be
+(Font)              scaled to size 9.0pt on input line 220.
+ [5{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-ts1.enc}]
+ [6] [7]
+Overfull \hbox (7.43814pt too wide) in paragraph at lines 380--384
 []\T1/ptm/m/n/10 is also []\T1/zi4/m/n/10 NULL[]\T1/ptm/m/n/10 , a se-quence of
  val-ues is au-to-mat-i-cally gen-er-ated (e.g., via []\T1/zi4/m/n/10 10^seq(-4
 ,
  []
 
 
-Overfull \hbox (4.05756pt too wide) in paragraph at lines 282--284
+Overfull \hbox (4.05756pt too wide) in paragraph at lines 389--391
 []\T1/ptm/m/n/10 An in-te-ger or user-specified par-ti-tion-ing in-di-cat-ing t
 he num-ber of cross-validation
  []
 
-[6]
-Overfull \hbox (0.43765pt too wide) in paragraph at lines 299--302
+
+Overfull \hbox (0.43765pt too wide) in paragraph at lines 406--409
 []\T1/ptm/m/n/10 An op-tional vari-able for spec-i-fy-ing which can-di-date is 
 in com-pe-ti-tion with which
  []
 
-[7] [8] [9] [10]
-Overfull \hbox (21.33908pt too wide) in paragraph at lines 564--568
+[8] [9] [10] [11]
+Overfull \hbox (21.33908pt too wide) in paragraph at lines 671--675
 []\T1/zi4/m/n/10 plot_best_response_curves []\T1/ptm/m/n/10 takes the re-sult o
 f an ad-ver-sar-ial [][][]\T1/zi4/m/n/10 strategize[][][] []\T1/ptm/m/n/10 run 
 (i.e., with []\T1/zi4/m/n/10 adversarial
  []
 
-[11] [12]
-LaTeX Font Info:    Trying to load font information for TS1+zi4 on input line 7
-21.
- (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
-File: ts1zi4.fd 2018/01/14 TS1/zi4 (Inconsolata)
-)
-LaTeX Font Info:    Font shape `TS1/zi4/m/n' will be
-(Font)              scaled to size 9.0pt on input line 721.
-
-[13{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-ts1.enc}]
-
-Overfull \hbox (1.81654pt too wide) in paragraph at lines 791--793
+[12] [13] [14] [15]
+Overfull \hbox (1.81654pt too wide) in paragraph at lines 898--900
 []\T1/ptm/m/n/10 In ad-ver-sar-ial (two-player) mode, both AST and DAG play-ers
 ' met-rics are shown. In non-adversarial
  []
 
-[14] [15] [16]
+[16] [17]
 LaTeX Font Info:    Font shape `TS1/zi4/m/n' will be
-(Font)              scaled to size 10.0pt on input line 933.
- [17] [18] [19]
-Overfull \hbox (11.55678pt too wide) in paragraph at lines 1086--1089
+(Font)              scaled to size 10.0pt on input line 1040.
+ [18] [19] [20] [21]
+Overfull \hbox (11.55678pt too wide) in paragraph at lines 1215--1218
 []\T1/ptm/m/n/10 Logical in-di-cat-ing whether the out-come []\T1/zi4/m/n/10 Y 
 []\T1/ptm/m/n/10 rep-re-sents a first-difference or difference-
  []
 
 
-Overfull \hbox (17.64828pt too wide) in paragraph at lines 1111--1114
+Overfull \hbox (17.64828pt too wide) in paragraph at lines 1240--1243
 []\T1/ptm/m/n/10 A char-ac-ter string spec-i-fy-ing the type of penalty (e.g., 
 []\T1/zi4/m/n/10 "KL"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "L2"[]\T1/ptm/m/n/10 ,
  or []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 )
  []
 
 
-Overfull \hbox (4.58041pt too wide) in paragraph at lines 1126--1128
+Overfull \hbox (4.58041pt too wide) in paragraph at lines 1255--1257
 []\T1/ptm/m/n/10 Numeric in $\OT1/cmr/m/n/10 (0\OML/cmm/m/it/10 ; \OT1/cmr/m/n/
 10 1)$\T1/ptm/m/n/10 , spec-i-fy-ing the con-fi-dence level for in-ter-vals or 
 cred-i-ble bounds.
  []
 
-[20]
-Overfull \hbox (3.3386pt too wide) in paragraph at lines 1210--1211
+[22] [23]
+Overfull \hbox (3.3386pt too wide) in paragraph at lines 1349--1350
 []\T1/ptm/m/n/10 Standard er-rors for en-tries in []\T1/zi4/m/n/10 pi_star_poin
 t[]\T1/ptm/m/n/10 . Mir-rors the struc-ture of []\T1/zi4/m/n/10 pi_star_point
  []
 
-[21]
-Overfull \hbox (15.05844pt too wide) in paragraph at lines 1229--1232
+
+Overfull \hbox (15.05844pt too wide) in paragraph at lines 1368--1371
 [][][]\T1/zi4/m/n/10 cv_strategize[][][] []\T1/ptm/m/n/10 for cross-validation 
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
  []
 
-[22] [23]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1371--1374
+[24] [25]
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1510--1513
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
  []
 
-[24] [25] [26]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 1522--1525
+[26] [27] [28]
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 1661--1664
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
  []
 
 
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 1559--1562
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 1698--1701
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
  []
 
-[27]
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 1591--1593
+[29]
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 1730--1732
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
  []
 
-[28]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 1690--1692
+[30]
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 1829--1831
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
  []
 
-[29] [30] [31] [32] [33] [34] [35] [36]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp6x8Zxz/Rd2pdf9d6d
-2acc7b0b/Rd2.ind [37] [38
+[31] [32] [33] [34] [35] [36] [37] [38]
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpaZ26ee/Rd2pdf4c34
+cf166bf/Rd2.ind [39] [40
 
 
 ])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp6x8Zxz/Rd2pdf9d6d
-2acc7b0b/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpaZ26ee/Rd2pdf4c34
+cf166bf/Rd2.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-02-20>
  ***********
 Package rerunfilecheck Info: File `Rd2.out' has not changed.
-(rerunfilecheck)             Checksum: 45748C7396EA79B01745834C0992F00A;3554.
+(rerunfilecheck)             Checksum: 9AA532DD5C0D72C4D7A345DC5625BB84;3921.
  ) 
 Here is how much of TeX's memory you used:
- 10762 strings out of 474116
- 163474 string characters out of 5743683
+ 10780 strings out of 474116
+ 163799 string characters out of 5743683
  1942187 words of memory out of 5000000
- 32735 multiletter control sequences out of 15000+600000
+ 32737 multiletter control sequences out of 15000+600000
  595802 words of font info for 83 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  92i,7n,95p,1046b,737s stack positions out of 10000i,1000n,20000p,200000b,200000s
@@ -586,10 +583,10 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/t
 exlive/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/202
 4/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-di
 st/fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (38 pages, 260811 bytes).
+Output written on Rd2.pdf (40 pages, 267726 bytes).
 PDF statistics:
- 624 PDF objects out of 1000 (max. 8388607)
- 549 compressed objects within 6 object streams
- 204 named destinations out of 1000 (max. 500000)
- 185 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 672 PDF objects out of 1000 (max. 8388607)
+ 595 compressed objects within 6 object streams
+ 220 named destinations out of 1000 (max. 500000)
+ 201 words of extra memory for PDF output out of 10000 (max. 10000000)
 

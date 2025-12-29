@@ -47,6 +47,38 @@ base::assign(".ptime", proc.time(), pos = "CheckExEnv")
 base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
 base::cat("build_backend", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
 cleanEx()
+nameEx("check_hessian_geometry")
+### * check_hessian_geometry
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: check_hessian_geometry
+### Title: Check Hessian Geometry at Nash Equilibrium
+### Aliases: check_hessian_geometry
+
+### ** Examples
+
+## Not run: 
+##D # Run adversarial strategize
+##D result <- strategize(Y = y, W = w, adversarial = TRUE, nSGD = 500)
+##D 
+##D # Check Hessian geometry
+##D hess <- check_hessian_geometry(result)
+##D print(hess)
+##D 
+##D # Check if it's a valid saddle point
+##D if (hess$valid_saddle) {
+##D   message("Valid Nash equilibrium geometry!")
+##D }
+## End(Not run)
+
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("check_hessian_geometry", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
 nameEx("create_p_list")
 ### * create_p_list
 

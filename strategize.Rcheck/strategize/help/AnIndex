@@ -1,5 +1,6 @@
 strategize-package	strategize-package
 build_backend	build_backend
+check_hessian_geometry	check_hessian_geometry
 check_jax_available	check_jax_available
 create_p_list	create_p_list
 cv_strategize	cv_strategize
@@ -10,6 +11,7 @@ is_adversarial	is_adversarial
 plot_best_response_curves	plot_best_response_curves
 plot_convergence	plot_convergence
 plot_quadrant_breakdown	plot_quadrant_breakdown
+print.hessian_analysis	print.hessian_analysis
 print.strategize_result	print.strategize_result
 strategize	strategize
 strategize.plot	strategize.plot

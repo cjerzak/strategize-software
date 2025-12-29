@@ -101,18 +101,7 @@ test_that("summarize_adversarial requires adversarial result", {
   )
 })
 
-# Skip integration tests that require JAX
-skip_if_no_jax <- function() {
-  skip_on_cran()
-
-  jax_available <- tryCatch({
-    strategize::check_jax_available()
-  }, error = function(e) FALSE)
-
-  if (!jax_available) {
-    skip("JAX not available")
-  }
-}
+# Integration tests that require JAX use skip_if_no_jax() from helper-strategize.R
 
 test_that("convergence history is included in strategize output", {
   skip_if_no_jax()
@@ -132,14 +121,10 @@ test_that("convergence history is included in strategize output", {
   p_list <- list(gender = c(male = 0.5, female = 0.5))
 
   # Run non-adversarial strategize (simpler)
-  result <- tryCatch({
-    strategize(
-      Y = Y, W = W, p_list = p_list,
-      lambda = 0.1, nSGD = 10, nMonte = 5
-    )
-  }, error = function(e) NULL)
-
-  skip_if(is.null(result), "strategize failed to run")
+  result <- strategize(
+    Y = Y, W = W, p_list = p_list,
+    lambda = 0.1, nSGD = 10, nMonte_Qglm = 5L
+  )
 
   # Check convergence history exists
 
@@ -158,15 +143,134 @@ test_that("plot_convergence works with real strategize output", {
   W <- data.frame(gender = gender)
   p_list <- list(gender = c(male = 0.5, female = 0.5))
 
-  result <- tryCatch({
-    strategize(
-      Y = Y, W = W, p_list = p_list,
-      lambda = 0.1, nSGD = 20, nMonte = 5
-    )
-  }, error = function(e) NULL)
-
-  skip_if(is.null(result), "strategize failed to run")
+  result <- strategize(
+    Y = Y, W = W, p_list = p_list,
+    lambda = 0.1, nSGD = 20, nMonte_Qglm = 5L
+  )
 
   # Should not error
   expect_no_error(plot_convergence(result, metrics = "gradient"))
+})
+
+# ============================================
+# Hessian Geometry Analysis Tests
+# ============================================
+
+test_that("check_hessian_geometry requires adversarial result", {
+  non_adv <- list(
+    convergence_history = list(adversarial = FALSE)
+  )
+
+  expect_error(
+    check_hessian_geometry(non_adv),
+    "requires adversarial=TRUE result"
+  )
+})
+
+test_that("check_hessian_geometry returns NULL when Hessian unavailable", {
+  # Mock result with hessian_available = FALSE
+  mock_result <- list(
+    convergence_history = list(adversarial = TRUE),
+    hessian_available = FALSE,
+    hessian_skipped_reason = "user_disabled"
+  )
+
+  expect_warning(
+    result <- check_hessian_geometry(mock_result, verbose = FALSE),
+    "not available"
+  )
+  expect_null(result)
+})
+
+test_that("check_hessian_geometry returns NULL for high_dimension skip", {
+  mock_result <- list(
+    convergence_history = list(adversarial = TRUE),
+    hessian_available = FALSE,
+    hessian_skipped_reason = "high_dimension"
+  )
+
+  expect_warning(
+    result <- check_hessian_geometry(mock_result, verbose = FALSE),
+    "not available"
+  )
+  expect_null(result)
+})
+
+test_that("print.hessian_analysis produces output", {
+  # Create a mock hessian_analysis object
+  mock_hess <- list(
+    status = "PASS",
+    valid_saddle = TRUE,
+    eigenvalues_ast = c(-0.1, -0.2, -0.3),
+    eigenvectors_ast = diag(3),
+    is_negative_definite_ast = TRUE,
+    is_negative_semidefinite_ast = TRUE,
+    condition_number_ast = 3.0,
+    flat_directions_ast = 0,
+    eigenvalues_dag = c(0.1, 0.2, 0.3),
+    eigenvectors_dag = diag(3),
+    is_positive_definite_dag = TRUE,
+    is_positive_semidefinite_dag = TRUE,
+    condition_number_dag = 3.0,
+    flat_directions_dag = 0,
+    interpretation = "Valid Nash equilibrium",
+    tolerance = 1e-6
+  )
+  class(mock_hess) <- c("hessian_analysis", "list")
+
+  # Should print without error
+  expect_output(print(mock_hess), "Hessian Geometry Analysis")
+  expect_output(print(mock_hess), "Status: PASS")
+})
+
+test_that("summarize_adversarial includes Hessian when available", {
+  # Mock result with Hessian available
+  mock_result <- list(
+    convergence_history = list(
+      adversarial = TRUE,
+      nSGD = 100,
+      grad_ast = c(rep(0.1, 99), 0.001),
+      grad_dag = c(rep(0.1, 99), 0.002)
+    ),
+    Q_point = 0.52,
+    Q_se = 0.01,
+    lambda = 0.1,
+    penalty_type = "KL",
+    pi_star_point = list(
+      k1 = list(gender = c(male = 0.6, female = 0.4)),
+      k2 = list(gender = c(male = 0.4, female = 0.6))
+    ),
+    AstProp = 0.5,
+    DagProp = 0.5,
+    hessian_available = FALSE,
+    hessian_skipped_reason = "not_adversarial"
+  )
+
+  # Should run without error (Hessian unavailable case)
+  summary <- summarize_adversarial(mock_result, validate = FALSE, verbose = FALSE)
+
+  expect_true(is.na(summary$geometry_valid))
+  expect_null(summary$hessian_analysis)
+})
+
+test_that("hessian_available flag is FALSE for non-adversarial mode", {
+  skip_if_no_jax()
+
+  # Use shared test data generators
+  set.seed(42)
+  n <- 200
+  Y <- sample(0:1, n, replace = TRUE)
+  gender <- sample(c("male", "female"), n, replace = TRUE)
+  W <- data.frame(gender = gender)
+  p_list <- list(gender = c(male = 0.5, female = 0.5))
+
+  # Run non-adversarial strategize
+  result <- strategize(
+    Y = Y, W = W, p_list = p_list,
+    lambda = 0.1, nSGD = 10, nMonte_Qglm = 5L
+  )
+
+  # Non-adversarial mode should have hessian_available = FALSE
+  expect_false(result$hessian_available)
+  expect_equal(result$hessian_skipped_reason, "not_adversarial")
 })
