@@ -26,10 +26,95 @@ Type 'q()' to quit R.
 strategize() call has begun...
 Initializing computational environment...
 Initializing outcome models...
-[1] 0 1
-[ FAIL 0 | WARN 0 | SKIP 70 | PASS 45 ]
+[1] 1 1
+ok_counter = 0
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 10
+SGD Iteration: 2 of 10
+SGD Iteration: 3 of 10
+SGD Iteration: 4 of 10
+SGD Iteration: 5 of 10
+SGD Iteration: 8 of 10
+SGD Iteration: 10 of 10
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 10
+SGD Iteration: 2 of 10
+SGD Iteration: 3 of 10
+SGD Iteration: 4 of 10
+SGD Iteration: 5 of 10
+SGD Iteration: 8 of 10
+SGD Iteration: 10 of 10
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 1 1
+ok_counter = 0
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 20
+SGD Iteration: 2 of 20
+SGD Iteration: 3 of 20
+SGD Iteration: 4 of 20
+SGD Iteration: 5 of 20
+SGD Iteration: 10 of 20
+SGD Iteration: 15 of 20
+SGD Iteration: 20 of 20
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 20
+SGD Iteration: 2 of 20
+SGD Iteration: 3 of 20
+SGD Iteration: 4 of 20
+SGD Iteration: 5 of 20
+SGD Iteration: 10 of 20
+SGD Iteration: 15 of 20
+SGD Iteration: 20 of 20
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 1 1
+ok_counter = 0
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 10
+SGD Iteration: 2 of 10
+SGD Iteration: 3 of 10
+SGD Iteration: 4 of 10
+SGD Iteration: 5 of 10
+SGD Iteration: 8 of 10
+SGD Iteration: 10 of 10
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 10
+SGD Iteration: 2 of 10
+SGD Iteration: 3 of 10
+SGD Iteration: 4 of 10
+SGD Iteration: 5 of 10
+SGD Iteration: 8 of 10
+SGD Iteration: 10 of 10
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+[ FAIL 0 | WARN 0 | SKIP 67 | PASS 51 ]
 
-══ Skipped tests (70) ══════════════════════════════════════════════════════════
+══ Skipped tests (67) ══════════════════════════════════════════════════════════
 • On CRAN (66): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
   'test-cv-strategize.R:9:3', 'test-cv-strategize.R:29:3',
@@ -60,14 +145,11 @@ Initializing outcome models...
   'test-visualization.R:131:3', 'test-visualization.R:152:3',
   'test-visualization.R:176:3', 'test-visualization.R:209:3',
   'test-visualization.R:225:3', 'test-visualization.R:250:3'
-• adversarial strategize failed (1): 'test-adversarial-validation.R:290:3'
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
-• strategize failed to run (2): 'test-adversarial-validation.R:131:3',
-  'test-adversarial-validation.R:157:3'
 
-[ FAIL 0 | WARN 0 | SKIP 70 | PASS 45 ]
+[ FAIL 0 | WARN 0 | SKIP 67 | PASS 51 ]
 > 
 > proc.time()
    user  system elapsed 
-  9.714   2.137  11.888 
+ 12.234   2.230  13.685 

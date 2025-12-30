@@ -230,7 +230,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -265,7 +264,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -287,7 +285,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -322,7 +319,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -345,7 +341,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -380,7 +375,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -402,7 +396,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -437,7 +430,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -460,7 +452,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -495,7 +486,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -517,7 +507,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -552,7 +541,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -575,7 +563,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -610,7 +597,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -632,7 +618,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -667,7 +652,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 1
 Saving output from gd [getQPiStar_gd]...
 SGD Iteration: 1 of 1
@@ -689,7 +673,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -963,7 +946,6 @@ Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-Creating Hessian functions (D=4 parameters per player)
 SGD Iteration: 1 of 50
 SGD Iteration: 2 of 50
 SGD Iteration: 3 of 50
@@ -1268,7 +1250,7 @@ $conf_level
 > cleanEx()
 > options(digits = 7L)
 > base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
-Time elapsed:  35.161 1.801 20.341 1.208 0.387 
+Time elapsed:  35.877 1.885 21.102 1.455 0.413 
 > grDevices::dev.off()
 null device 
           1 

@@ -60,12 +60,12 @@ fit <- cv_strategize(
 )
 
 # Optimized factor-level probabilities and predicted outcome
-fit$PiStar_point
+fit$pi_star_point
 fit$Q_point_mEst
 ```
 
 This script simulates a two-factor forced-choice design, fits the model, and
-returns `PiStar_point`, the recommended distribution over factor levels, along
+returns `pi_star_point`, the recommended distribution over factor levels, along
 with the expected outcome `Q_point_mEst` under that distribution.
 
 # Key Features
@@ -74,6 +74,7 @@ with the expected outcome `Q_point_mEst` under that distribution.
 - **Cross-Validation**: Use `cv_strategize()` to automatically select the regularization parameter lambda
 - **One-Step Estimation**: Use `strategize_onestep()` for simultaneous outcome modeling and distribution optimization
 - **Helper Functions**: Use `create_p_list()` to easily create probability lists from your data, and `strategize_preset()` for quick analysis with sensible defaults
+- **Validation & Diagnostics**: Use `validate_equilibrium()` to verify Nash equilibrium quality, `plot_convergence()` to visualize optimization, `plot_quadrant_breakdown()` for scenario analysis, and `summarize_adversarial()` for comprehensive summaries
 
 # Documentation
 

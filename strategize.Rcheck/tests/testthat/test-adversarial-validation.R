@@ -121,14 +121,10 @@ test_that("convergence history is included in strategize output", {
   p_list <- list(gender = c(male = 0.5, female = 0.5))
 
   # Run non-adversarial strategize (simpler)
-  result <- tryCatch({
-    strategize(
-      Y = Y, W = W, p_list = p_list,
-      lambda = 0.1, nSGD = 10, nMonte = 5
-    )
-  }, error = function(e) NULL)
-
-  skip_if(is.null(result), "strategize failed to run")
+  result <- strategize(
+    Y = Y, W = W, p_list = p_list,
+    lambda = 0.1, nSGD = 10, nMonte_Qglm = 5L
+  )
 
   # Check convergence history exists
 
@@ -147,14 +143,10 @@ test_that("plot_convergence works with real strategize output", {
   W <- data.frame(gender = gender)
   p_list <- list(gender = c(male = 0.5, female = 0.5))
 
-  result <- tryCatch({
-    strategize(
-      Y = Y, W = W, p_list = p_list,
-      lambda = 0.1, nSGD = 20, nMonte = 5
-    )
-  }, error = function(e) NULL)
-
-  skip_if(is.null(result), "strategize failed to run")
+  result <- strategize(
+    Y = Y, W = W, p_list = p_list,
+    lambda = 0.1, nSGD = 20, nMonte_Qglm = 5L
+  )
 
   # Should not error
   expect_no_error(plot_convergence(result, metrics = "gradient"))
@@ -261,34 +253,24 @@ test_that("summarize_adversarial includes Hessian when available", {
   expect_null(summary$hessian_analysis)
 })
 
-test_that("hessian_available flag is properly stored in result", {
+test_that("hessian_available flag is FALSE for non-adversarial mode", {
   skip_if_no_jax()
 
+  # Use shared test data generators
   set.seed(42)
   n <- 200
   Y <- sample(0:1, n, replace = TRUE)
   gender <- sample(c("male", "female"), n, replace = TRUE)
-  party <- sample(c("R", "D"), n, replace = TRUE)
-  W <- data.frame(gender = gender, party = party)
-  p_list <- list(
-    gender = c(male = 0.5, female = 0.5),
-    party = c(R = 0.5, D = 0.5)
+  W <- data.frame(gender = gender)
+  p_list <- list(gender = c(male = 0.5, female = 0.5))
+
+  # Run non-adversarial strategize
+  result <- strategize(
+    Y = Y, W = W, p_list = p_list,
+    lambda = 0.1, nSGD = 10, nMonte_Qglm = 5L
   )
 
-  # Run with compute_hessian = FALSE
-  result_no_hess <- tryCatch({
-    strategize(
-      Y = Y, W = W, p_list = p_list,
-      lambda = 0.1, nSGD = 10,
-      adversarial = TRUE,
-      competing_group_variable_respondent = party,
-      competing_group_variable_candidate = party,
-      compute_hessian = FALSE
-    )
-  }, error = function(e) NULL)
-
-  skip_if(is.null(result_no_hess), "adversarial strategize failed")
-
-  expect_false(result_no_hess$hessian_available)
-  expect_equal(result_no_hess$hessian_skipped_reason, "user_disabled")
+  # Non-adversarial mode should have hessian_available = FALSE
+  expect_false(result$hessian_available)
+  expect_equal(result$hessian_skipped_reason, "not_adversarial")
 })

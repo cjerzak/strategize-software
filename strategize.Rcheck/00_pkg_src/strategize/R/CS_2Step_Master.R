@@ -909,31 +909,33 @@ strategize       <-          function(
                              static_argnums = static_q)
 
     # Create Hessian functions for equilibrium geometry analysis (conditionally)
+    # Only for adversarial mode - Hessians verify Nash equilibrium saddle point geometry
     n_params_per_player <- as.integer(strenv$np$array(a_vec_init_ast$shape[[1]]))
-    should_compute_hessian <- compute_hessian && (n_params_per_player <= hessian_max_dim)
 
-    if (should_compute_hessian) {
-      message(sprintf("Creating Hessian functions (D=%d parameters per player)", n_params_per_player))
-      d2Q_da2_ast <- compile_fxn(strenv$jax$hessian(FullGetQStar_, argnums = 0L),
-                                 static_argnums = static_q)
-      d2Q_da2_dag <- compile_fxn(strenv$jax$hessian(FullGetQStar_, argnums = 1L),
-                                 static_argnums = static_q)
-      hessian_available <- TRUE
-      hessian_skipped_reason <- NULL
-    } else if (!compute_hessian) {
-      message("Skipping Hessian computation (compute_hessian=FALSE)")
-      d2Q_da2_ast <- NULL
-      d2Q_da2_dag <- NULL
-      hessian_available <- FALSE
-      hessian_skipped_reason <- "user_disabled"
-    } else {
-      message(sprintf("Skipping Hessian computation (D=%d > hessian_max_dim=%d)",
-                      n_params_per_player, hessian_max_dim))
-      d2Q_da2_ast <- NULL
-      d2Q_da2_dag <- NULL
-      hessian_available <- FALSE
-      hessian_skipped_reason <- "high_dimension"
+    if (adversarial) {
+      should_compute_hessian <- compute_hessian && (n_params_per_player <= hessian_max_dim)
+
+      if (should_compute_hessian) {
+        message(sprintf("Creating Hessian functions (D=%d parameters per player)", n_params_per_player))
+        d2Q_da2_ast <- compile_fxn(strenv$jax$hessian(FullGetQStar_, argnums = 0L),
+                                   static_argnums = static_q)
+        d2Q_da2_dag <- compile_fxn(strenv$jax$hessian(FullGetQStar_, argnums = 1L),
+                                   static_argnums = static_q)
+        hessian_available <- TRUE
+        hessian_skipped_reason <- NULL
+      } else if (!compute_hessian) {
+        message("Skipping Hessian computation (compute_hessian=FALSE)")
+        hessian_available <- FALSE
+        hessian_skipped_reason <- "user_disabled"
+      } else {
+        message(sprintf("Skipping Hessian computation (D=%d > hessian_max_dim=%d)",
+                        n_params_per_player, hessian_max_dim))
+        hessian_available <- FALSE
+        hessian_skipped_reason <- "high_dimension"
+      }
     }
+    # For non-adversarial mode, defaults set at initialization are used:
+    # hessian_available = FALSE, hessian_skipped_reason = "not_adversarial"
 
     # perform GD 
     q_with_pi_star_full <- getQPiStar_gd(
