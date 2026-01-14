@@ -17,7 +17,8 @@ validate_strategize_inputs(
   competing_group_variable_candidate = NULL,
   outcome_model_type = "glm",
   penalty_type = "KL",
-  diff = FALSE
+  diff = FALSE,
+  primary_pushforward = "mc"
 )
 }
 \arguments{
@@ -46,6 +47,8 @@ validate_strategize_inputs(
 \item{penalty_type}{Penalty type}
 
 \item{diff}{Difference mode flag}
+
+\item{primary_pushforward}{Primary-stage push-forward estimator}
 }
 \value{
 TRUE invisibly if validation passes; stops with error otherwise

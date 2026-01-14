@@ -71,6 +71,7 @@ with the expected outcome `Q_point_mEst` under that distribution.
 # Key Features
 
 - **Adversarial Mode**: Set `adversarial = TRUE` to find Nash equilibrium strategies in two-player zero-sum games (e.g., competing candidates)
+- **Optimistic Updates**: Toggle `optimism = "ogda"` or `optimism = "none"`; default is `optimism = "extragrad"` (extra-gradient look-ahead) for more stable min-max training
 - **Cross-Validation**: Use `cv_strategize()` to automatically select the regularization parameter lambda
 - **One-Step Estimation**: Use `strategize_onestep()` for simultaneous outcome modeling and distribution optimization
 - **Helper Functions**: Use `create_p_list()` to easily create probability lists from your data, and `strategize_preset()` for quick analysis with sensible defaults
@@ -101,5 +102,3 @@ Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2025. "Selecting Optimal 
       url={https://arxiv.org/abs/2504.19043}, 
 }
 ```
-
-

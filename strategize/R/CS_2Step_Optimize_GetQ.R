@@ -123,12 +123,33 @@ FullGetQStar_ <- function(a_i_ast,                                #1
   
   # Average-case path
   if(!adversarial){
-    q_vec <- QFXN(pi_star_ast =  pi_star_i_ast,
-                  pi_star_dag =  pi_star_i_dag,
-                  EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
-                  EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
-                  EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
-                  EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
+    use_mc_q <- (glm_family != "gaussian") && (nMonte_Qglm > 1L)
+    if(use_mc_q){
+      TSAMP_ast_all <- strenv$jax$vmap(function(s_){
+        strenv$getMultinomialSamp(pi_star_i_ast, MNtemp,
+                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
+      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_Qglm))
+      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+
+      TSAMP_dag_all <- strenv$jax$vmap(function(s_){
+        strenv$getMultinomialSamp(pi_star_i_dag, MNtemp,
+                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
+      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_Qglm))
+      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+
+      q_vec <- strenv$Vectorized_QMonteIter(
+        TSAMP_ast_all,  TSAMP_dag_all,
+        INTERCEPT_ast_, COEFFICIENTS_ast_,
+        INTERCEPT_dag_, COEFFICIENTS_dag_
+      )$mean(0L)
+    } else {
+      q_vec <- QFXN(pi_star_ast =  pi_star_i_ast,
+                    pi_star_dag =  pi_star_i_dag,
+                    EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
+                    EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
+                    EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
+                    EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
+    }
     q_max <- strenv$jnp$take(q_vec, 0L)
     # In non-adversarial mode, we always optimize the "ast" player
     indicator_UseAst <- 1.0
@@ -217,4 +238,3 @@ FullGetQStar_ <- function(a_i_ast,                                #1
   
   return( myMaximize )
 }
-

@@ -49,13 +49,15 @@
 #'   nFolds_glm = 3L,
 #'   folds = NULL,
 #'   nMonte_adversarial = 5L,
+#'   primary_pushforward = "mc",
 #'   nMonte_Qglm = 100L,
 #'   learning_rate_max = 0.001,
-#'   temperature = 0.5,
+#'   temperature = 0.5, 
 #'   save_outcome_model = FALSE,
 #'   presaved_outcome_model = FALSE,
 #'   use_optax = FALSE,
 #'   optim_type = "gd",
+#'   optimism = "extragrad",
 #'   compute_hessian = TRUE,
 #'   hessian_max_dim = 50L
 #' )
@@ -182,6 +184,10 @@
 #'   or max-min steps, e.g., sampling from the opposing candidate’s distribution to approximate
 #'   expected payoffs. Defaults to \code{5L}.
 #'
+#' @param primary_pushforward Character string controlling the primary-stage push-forward estimator.
+#'   Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
+#'   \code{"linearized"} for the faster averaged-weight approximation.
+#' 
 #' @param nMonte_Qglm Integer specifying the number of Monte Carlo samples for evaluating or
 #'   approximating the quantity of interest under certain outcomes or distributions. Defaults to
 #'   \code{100L}.
@@ -205,6 +211,10 @@
 #'
 #' @param optim_type A character string for choosing which optimizer or approach is used internally
 #'   (e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.
+#' @param optimism Character string controlling optimistic / extra-gradient updates for the gradient
+#'   optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
+#'   \code{"ogda"} (optimistic gradient), or \code{"none"} (standard updates). Only supported when
+#'   \code{use_optax = FALSE}.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
 #'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
 #'   are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
@@ -368,6 +378,7 @@ strategize       <-          function(
                                             nFolds_glm = 3L,
                                             folds = NULL, 
                                             nMonte_adversarial = 5L,
+                                            primary_pushforward = "mc",
                                             nMonte_Qglm = 100L,
                                             learning_rate_max = 0.001, 
                                             temperature = 0.5, 
@@ -375,6 +386,7 @@ strategize       <-          function(
                                             presaved_outcome_model = FALSE, 
                                             use_optax = FALSE,
                                             optim_type = "gd",
+                                            optimism = "extragrad",
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
   # [1.] ast then dag 
@@ -392,8 +404,14 @@ strategize       <-          function(
     competing_group_variable_respondent = competing_group_variable_respondent,
     competing_group_variable_candidate = competing_group_variable_candidate,
     outcome_model_type = outcome_model_type,
-    penalty_type = penalty_type, diff = diff
+    penalty_type = penalty_type, diff = diff,
+    primary_pushforward = primary_pushforward
   )
+  primary_pushforward <- tolower(primary_pushforward)
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad"))
+  if (use_optax && optimism != "none") {
+    stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
+  }
 
   # Initialize Hessian-related variables with defaults (may be overwritten in adversarial mode)
   d2Q_da2_ast <- NULL
@@ -895,7 +913,12 @@ strategize       <-          function(
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full_jnp
 
     # initialize QMonte fxns 
-    InitializeQMonteFxns_ <- paste(deparse(InitializeQMonteFxns),collapse="\n")
+    InitializeQMonteFxns_impl <- if (adversarial && primary_pushforward == "mc") {
+      InitializeQMonteFxns_MCSampling
+    } else {
+      InitializeQMonteFxns
+    }
+    InitializeQMonteFxns_ <- paste(deparse(InitializeQMonteFxns_impl),collapse="\n")
     InitializeQMonteFxns_ <- gsub(InitializeQMonteFxns_, pattern = "function \\(\\)", replacement = "")
     InitializeQMonteFxns_ <- eval( parse( text = InitializeQMonteFxns_ ), envir = evaluation_environment )
 
@@ -957,7 +980,8 @@ strategize       <-          function(
       
       functionReturn              = TRUE,                             # 14
       gd_full_simplex             = TRUE,                             # 15
-      quiet                       = FALSE                             # 16
+      quiet                       = FALSE,                            # 16
+      optimism                    = optimism                          # 17
     )
     dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
     dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
@@ -1007,7 +1031,8 @@ strategize       <-          function(
                         a_i_dag = a_vec_init_dag, 
                         functionReturn  = FALSE,
                         gd_full_simplex = FALSE, 
-                        quiet           = FALSE                             # 
+                        quiet           = FALSE,
+                        optimism        = optimism                             # 
                         )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -1198,6 +1223,7 @@ strategize       <-          function(
                   "vcov_outcome_model_concat" = vcov_OutcomeModel_concat, 
                   "jacobian_mat" = jacobian_mat, 
                   "optim_type" = optim_type,
+                  "optimism" = optimism,
                   "force_gaussian" = force_gaussian,
                   "used_regularization" = UsedRegularization,
                   "estimation_type" = "TwoStep",
@@ -1258,7 +1284,9 @@ strategize       <-          function(
                       "inv_lr_ast" = unlist(lapply(strenv$inv_learning_rate_ast_vec, safe_to_numeric)),
                       "inv_lr_dag" = unlist(lapply(strenv$inv_learning_rate_dag_vec, safe_to_numeric)),
                       "nSGD" = nSGD,
-                      "adversarial" = adversarial
+                      "adversarial" = adversarial,
+                      "primary_pushforward" = primary_pushforward,
+                      "optimism" = optimism
                     )
                   }, error = function(e) {
                     # Fallback if conversion fails entirely
@@ -1270,10 +1298,11 @@ strategize       <-          function(
                       "inv_lr_ast" = rep(NA_real_, nSGD),
                       "inv_lr_dag" = rep(NA_real_, nSGD),
                       "nSGD" = nSGD,
-                      "adversarial" = adversarial
+                      "adversarial" = adversarial,
+                      "primary_pushforward" = primary_pushforward,
+                      "optimism" = optimism
                     )
                   })
                   )  # end outout list 
           )
 }
-
