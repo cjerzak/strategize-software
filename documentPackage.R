@@ -2,6 +2,7 @@
   rm(list = ls())
   options(error = NULL)
   # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
+  # strategize::build_backend()
 
   # Package configuration (change these for different packages)
   package_name <- "strategize"
@@ -64,5 +65,7 @@
 
   # Install from local source
   install.packages(package_path, repos = NULL, type = "source", force = FALSE)
+  # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
+  # strategize::build_backend()
   # devtools::install_github("cjerzak/strategize-software/strategize") # install from github
 }

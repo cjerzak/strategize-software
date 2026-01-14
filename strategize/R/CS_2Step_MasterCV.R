@@ -109,12 +109,18 @@
 #' @param nMonte_adversarial A positive integer specifying the number of Monte Carlo 
 #'   draws for the min-max (adversarial) stage, if \code{adversarial = TRUE}. Defaults 
 #'   to 5.
+#' @param primary_pushforward Character string controlling the primary-stage push-forward estimator.
+#'   Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
+#'   \code{"linearized"} for the faster averaged-weight approximation.
 #' @param nMonte_Qglm An integer specifying the number of Monte Carlo draws 
 #'   for evaluating certain integrals in \code{glm}-based approximations, default 100.
 #' @param optim_type A character describing the optimization routine. Typically 
 #'   \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
 #'   or \code{"SecondOrder"} for testing or advanced routines.
-#'
+#' @param optimism Character string controlling optimistic / extra-gradient updates for the
+#'   gradient optimizer. Options: \code{"extragrad"} (default), \code{"ogda"}, or \code{"none"}.
+#'   Only supported when \code{use_optax = FALSE}.
+#' 
 #' @details
 #' \code{cv_strategize} implements a cross-validation routine for
 #' \code{\link{strategize}}. First, the data is split into \code{folds} parts. 
@@ -241,8 +247,14 @@ cv_strategize       <-          function(
                                             conf_level = 0.90,
                                             nFolds_glm = 3L,
                                             nMonte_adversarial = 5L,
+                                            primary_pushforward = "mc",
                                             nMonte_Qglm = 100L,
-                                            optim_type = "gd"){
+                                            optim_type = "gd",
+                                            optimism = "extragrad"){
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad"))
+  if (use_optax && optimism != "none") {
+    stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
+  }
   # initialize environment
   if(!"jnp" %in% ls(envir = strenv)) {
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
@@ -341,9 +353,11 @@ cv_strategize       <-          function(
             force_gaussian = force_gaussian,
             use_regularization = use_regularization,
             optim_type = optim_type,
+            optimism = optimism,
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             nMonte_adversarial = nMonte_adversarial,
+            primary_pushforward = primary_pushforward,
             diff = diff,
             adversarial = adversarial,
             conda_env = conda_env,
@@ -406,12 +420,14 @@ cv_strategize       <-          function(
                               outcome_model_type = outcome_model_type,
                               temperature = temperature, 
                               optim_type = optim_type,
+                              optimism = optimism,
                               force_gaussian = force_gaussian,
                               use_regularization = use_regularization,
                               a_init_sd = a_init_sd,
                               compute_se = compute_se,
                               K = K,
                               nMonte_adversarial = nMonte_adversarial,
+                              primary_pushforward = primary_pushforward,
                               nFolds_glm = nFolds_glm,
                               diff = diff,
                               adversarial = adversarial,
@@ -423,4 +439,3 @@ cv_strategize       <-          function(
                 qStar_lambda = qStar_lambda,
                 CVInfo = outsamp_results)))
 }
-

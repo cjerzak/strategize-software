@@ -24,6 +24,7 @@ NULL
 #' @param outcome_model_type Outcome model type
 #' @param penalty_type Penalty type
 #' @param diff Difference mode flag
+#' @param primary_pushforward Primary-stage push-forward estimator
 #' @return TRUE invisibly if validation passes; stops with error otherwise
 #' @keywords internal
 validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
@@ -34,7 +35,8 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        competing_group_variable_candidate = NULL,
                                        outcome_model_type = "glm",
                                        penalty_type = "KL",
-                                       diff = FALSE) {
+                                       diff = FALSE,
+                                       primary_pushforward = "mc") {
 
   # ---- Y validation ----
   if (missing(Y) || is.null(Y)) {
@@ -272,6 +274,24 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       "  KL = Kullback-Leibler divergence (default)\n",
       "  L2 = Euclidean distance\n",
       "  LogMaxProb = Log maximum probability",
+      call. = FALSE
+    )
+  }
+
+  # ---- primary_pushforward validation ----
+  valid_pushforward <- c("mc", "linearized")
+  if (!is.character(primary_pushforward) || length(primary_pushforward) != 1) {
+    stop(
+      "'primary_pushforward' must be a single character string.\n",
+      "  Valid options: ", paste(valid_pushforward, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (!tolower(primary_pushforward) %in% valid_pushforward) {
+    stop(
+      sprintf("'primary_pushforward' must be one of: %s.\n",
+              paste(valid_pushforward, collapse = ", ")),
+      sprintf("  Got: '%s'", primary_pushforward),
       call. = FALSE
     )
   }

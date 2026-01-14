@@ -39,8 +39,10 @@ cv_strategize(
   conf_level = 0.9,
   nFolds_glm = 3L,
   nMonte_adversarial = 5L,
+  primary_pushforward = "mc",
   nMonte_Qglm = 100L,
-  optim_type = "gd"
+  optim_type = "gd",
+  optimism = "extragrad"
 )
 }
 \arguments{
@@ -180,12 +182,20 @@ Defaults to 3.}
 draws for the min-max (adversarial) stage, if \code{adversarial = TRUE}. Defaults 
 to 5.}
 
+\item{primary_pushforward}{Character string controlling the primary-stage push-forward estimator.
+Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
+\code{"linearized"} for the faster averaged-weight approximation.}
+
 \item{nMonte_Qglm}{An integer specifying the number of Monte Carlo draws 
 for evaluating certain integrals in \code{glm}-based approximations, default 100.}
 
 \item{optim_type}{A character describing the optimization routine. Typically 
 \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
 or \code{"SecondOrder"} for testing or advanced routines.}
+
+\item{optimism}{Character string controlling optimistic / extra-gradient updates for the
+gradient optimizer. Options: \code{"extragrad"} (default), \code{"ogda"}, or \code{"none"}.
+Only supported when \code{use_optax = FALSE}.}
 }
 \value{
 A named list with components:

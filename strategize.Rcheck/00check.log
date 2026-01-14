@@ -11,7 +11,7 @@
 * checking extension type ... Package
 * this is package ‘strategize’ version ‘0.0.1’
 * package encoding: UTF-8
-* checking CRAN incoming feasibility ... [2s/12s] NOTE
+* checking CRAN incoming feasibility ... [2s/11s] NOTE
 Maintainer: ‘Connor T. Jerzak <connor.jerzak@austin.utexas.edu>’
 
 New submission
@@ -23,11 +23,11 @@ New submission
 * checking for hidden files and directories ... OK
 * checking for portable file names ... OK
 * checking for sufficient/correct file permissions ... OK
-* checking serialization versions ... OK
 * checking whether package ‘strategize’ can be installed ... OK
 * checking installed package size ... OK
 * checking package directory ... OK
-* checking for future file timestamps ... OK
+* checking for future file timestamps ... NOTE
+unable to verify current time
 * checking ‘build’ directory ... OK
 * checking DESCRIPTION meta-information ... OK
 * checking top-level files ... OK
@@ -46,7 +46,10 @@ New submission
 * checking S3 generic/method consistency ... OK
 * checking replacement functions ... OK
 * checking foreign function calls ... OK
-* checking R code for possible problems ... OK
+* checking R code for possible problems ... NOTE
+InitializeQMonteFxns: no visible binding for global variable ‘p_vec_tf’
+Undefined global functions or variables:
+  p_vec_tf
 * checking Rd files ... OK
 * checking Rd metadata ... OK
 * checking Rd line widths ... OK
@@ -59,10 +62,10 @@ New submission
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [40s/21s] OK
+* checking examples with --run-donttest ... [43s/18s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... [15s/14s] OK
-  Running ‘testthat.R’ [15s/14s]
+* checking tests ... OK
+  Running ‘testthat.R’
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK
@@ -71,4 +74,4 @@ New submission
 * checking for non-standard things in the check directory ... OK
 * checking for detritus in the temp directory ... OK
 * DONE
-Status: 1 NOTE
+Status: 3 NOTEs

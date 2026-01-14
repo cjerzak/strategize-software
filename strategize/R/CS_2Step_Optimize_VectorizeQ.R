@@ -110,31 +110,31 @@ InitializeQMonteFxns <- function(){
     }, in_axes = 0L)(TSAMP_ast_PrimaryComp)   # [nA', nB']
     }
     
-    # ---- Push-forward mixture weights ----
-    # Fix: Use consistent scalar mixture probabilities to ensure proper normalization
-    # Previously used different marginals (kA_mean_over_field vs kA_mean_over_entrant)
-    # which created inconsistent weights that don't sum to 1
+    # ---- Push-forward mixture weights (profile-specific) ----
+    # Eq. (PrimaryPushforward) implies weights depend on each profile's primary win rate.
     one <- strenv$OneTf_flat
     {
-      # Compute scalar mixture probabilities (averaged over all samples)
-      # P(A entrant wins primary) = E_{entrant, field}[kappa_A(entrant, field)]
-      P_A_entrant_wins <- kA$mean()  # scalar: overall prob A's entrant wins
-      P_B_entrant_wins <- kB$mean()  # scalar: overall prob B's entrant wins
-      P_A_field_wins <- one - P_A_entrant_wins
-      P_B_field_wins <- one - P_B_entrant_wins
+      nA <- strenv$jnp$array(kA$shape[[1L]])
+      nA_field <- strenv$jnp$array(kA$shape[[2L]])
+      nB <- strenv$jnp$array(kB$shape[[1L]])
+      nB_field <- strenv$jnp$array(kB$shape[[2L]])
 
-      # Scalar mixture weights for the four quadrants (sum to 1)
-      w1 <- P_A_entrant_wins * P_B_entrant_wins      # A entrant vs B entrant
-      w2 <- P_A_entrant_wins * P_B_field_wins        # A entrant vs B field
-      w3 <- P_A_field_wins * P_B_entrant_wins        # A field   vs B entrant
-      w4 <- P_A_field_wins * P_B_field_wins          # A field   vs B field
+      # Per-sample nominee weights (entrant vs field)
+      wA_e <- kA_mean_over_field / nA
+      wA_f <- (one - kA_mean_over_entrant) / nA_field
+      wB_e <- kB_mean_over_field / nB
+      wB_f <- (one - kB_mean_over_entrant) / nB_field
 
-      # ---- Expected general-election vote share for A ----
-      # Each block uses unweighted mean of C values, then weighted by mixture probability
-      E1 <- C_tu$mean()          * w1   # A entrant vs B entrant
-      E2 <- C_tu_field$mean()    * w2   # A entrant vs B field
-      E3 <- C_field_u$mean()     * w3   # A field   vs B entrant
-      E4 <- C_field_field$mean() * w4   # A field   vs B field
+      # Broadcast weights over the four primary outcome blocks
+      wA_e_col <- strenv$jnp$expand_dims(wA_e, 1L)
+      wA_f_col <- strenv$jnp$expand_dims(wA_f, 1L)
+      wB_e_row <- strenv$jnp$expand_dims(wB_e, 0L)
+      wB_f_row <- strenv$jnp$expand_dims(wB_f, 0L)
+
+      E1 <- strenv$jnp$sum(C_tu * wA_e_col * wB_e_row)            # A entrant vs B entrant
+      E2 <- strenv$jnp$sum(C_tu_field * wA_e_col * wB_f_row)      # A entrant vs B field
+      E3 <- strenv$jnp$sum(C_field_u * wA_f_col * wB_e_row)       # A field   vs B entrant
+      E4 <- strenv$jnp$sum(C_field_field * wA_f_col * wB_f_row)   # A field   vs B field
     }
 
     # Exploit linearity of expectation and the mixture structure:
@@ -143,10 +143,143 @@ InitializeQMonteFxns <- function(){
     # Weights w1+w2+w3+w4 = 1 by construction, ensuring proper normalization
     q_ast <- E1 + E2 + E3 + E4
     q_dag <- one - q_ast  # zero-sum
-    
-    return(list("q_ast" = q_ast, 
-                "q_dag" = q_dag))
+
+    # Wrap scalars in expand_dims for consistency with MC mode's array return
+    # This ensures q_ast.mean(0) works correctly in getQPiStar_gd
+    return(list("q_ast" = strenv$jnp$expand_dims(q_ast, 0L),
+                "q_dag" = strenv$jnp$expand_dims(q_dag, 0L)))
   })
+
+  # Optional pushforward self-test (runs once when enabled)
+  if (isTRUE(strenv$UNIT_TEST_PUSHFORWARD) && !isTRUE(strenv$UNIT_TEST_PUSHFORWARD_DONE)) {
+    strenv$UNIT_TEST_PUSHFORWARD_DONE <- TRUE
+
+    dim_pi <- if (exists("p_vec_tf", inherits = TRUE)) {
+      as.integer(strenv$jnp$shape(p_vec_tf)[[1]])
+    } else {
+      as.integer(main_indices_i0$size)
+    }
+
+    if (dim_pi >= 1L) {
+      nA_samp <- 2L
+      nB_samp <- 2L
+      nA_field_samp <- 2L
+      nB_field_samp <- 2L
+
+      make_mat <- function(offset, n_rows) {
+        vals <- seq(0.05 + offset, 0.85 + offset, length.out = n_rows * dim_pi)
+        strenv$jnp$array(matrix(vals, nrow = n_rows, byrow = TRUE), dtype = strenv$dtj)
+      }
+
+      TSAMP_ast <- make_mat(0.00, nA_samp)
+      TSAMP_dag <- make_mat(0.02, nB_samp)
+      TSAMP_ast_PrimaryComp <- make_mat(0.04, nA_field_samp)
+      TSAMP_dag_PrimaryComp <- make_mat(0.06, nB_field_samp)
+
+      coef_len <- if (exists("EST_COEFFICIENTS_tf_ast_jnp", inherits = TRUE)) {
+        as.integer(EST_COEFFICIENTS_tf_ast_jnp$size)
+      } else {
+        as.integer(strenv$np$array(strenv$jnp$max(main_indices_i0))) + 1L
+      }
+      coef_len <- max(1L, coef_len)
+
+      COEF <- strenv$jnp$reshape(strenv$jnp$linspace(-0.2, 0.2, coef_len),
+                                 list(coef_len, 1L))
+      INT <- strenv$jnp$array(0.1, dtype = strenv$dtj)
+
+      res <- strenv$QMonteIter_MaxMin(
+        TSAMP_ast, TSAMP_dag, TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
+        INT, INT,
+        INT, COEF, INT, COEF,
+        INT, COEF, INT, COEF,
+        INT, INT, INT, 1.0, INT
+      )
+
+      # Rebuild kA/kB and the four C blocks
+      kA <- strenv$jax$vmap(function(t_i){
+        strenv$jax$vmap(function(tp_j){
+          kappa_pair(t_i, tp_j, INT, COEF)
+        }, in_axes = 0L)(TSAMP_ast_PrimaryComp)
+      }, in_axes = 0L)(TSAMP_ast)
+
+      kB <- strenv$jax$vmap(function(u_s){
+        strenv$jax$vmap(function(up_r){
+          kappa_pair(u_s, up_r, INT, COEF)
+        }, in_axes = 0L)(TSAMP_dag_PrimaryComp)
+      }, in_axes = 0L)(TSAMP_dag)
+
+      C_tu <- strenv$jax$vmap(function(t_i){
+        strenv$jax$vmap(function(u_s){
+          Qpop_pair(t_i, u_s, INT, COEF, INT, COEF)
+        }, in_axes = 0L)(TSAMP_dag)
+      }, in_axes = 0L)(TSAMP_ast)
+
+      C_tu_field <- strenv$jax$vmap(function(t_i){
+        strenv$jax$vmap(function(up_r){
+          Qpop_pair(t_i, up_r, INT, COEF, INT, COEF)
+        }, in_axes = 0L)(TSAMP_dag_PrimaryComp)
+      }, in_axes = 0L)(TSAMP_ast)
+
+      C_field_u <- strenv$jax$vmap(function(tp_j){
+        strenv$jax$vmap(function(u_s){
+          Qpop_pair(tp_j, u_s, INT, COEF, INT, COEF)
+        }, in_axes = 0L)(TSAMP_dag)
+      }, in_axes = 0L)(TSAMP_ast_PrimaryComp)
+
+      C_field_field <- strenv$jax$vmap(function(tp_j){
+        strenv$jax$vmap(function(up_r){
+          Qpop_pair(tp_j, up_r, INT, COEF, INT, COEF)
+        }, in_axes = 0L)(TSAMP_dag_PrimaryComp)
+      }, in_axes = 0L)(TSAMP_ast_PrimaryComp)
+
+      kA_mean_over_field <- kA$mean(axis=1L)
+      kB_mean_over_field <- kB$mean(axis=1L)
+      kA_mean_over_entrant <- kA$mean(axis=0L)
+      kB_mean_over_entrant <- kB$mean(axis=0L)
+
+      nA <- strenv$jnp$array(kA$shape[[1L]])
+      nA_field <- strenv$jnp$array(kA$shape[[2L]])
+      nB <- strenv$jnp$array(kB$shape[[1L]])
+      nB_field <- strenv$jnp$array(kB$shape[[2L]])
+
+      wA_e <- kA_mean_over_field / nA
+      wA_f <- (strenv$OneTf_flat - kA_mean_over_entrant) / nA_field
+      wB_e <- kB_mean_over_field / nB
+      wB_f <- (strenv$OneTf_flat - kB_mean_over_entrant) / nB_field
+
+      # Explicit 4D expectation over primaries (no aggregation)
+      inv_norm <- 1.0 / (nA * nB * nA_field * nB_field)
+      kA_4 <- strenv$jnp$reshape(kA, list(nA, 1L, nA_field, 1L))
+      kB_4 <- strenv$jnp$reshape(kB, list(1L, nB, 1L, nB_field))
+      C_tu_4 <- strenv$jnp$reshape(C_tu, list(nA, nB, 1L, 1L))
+      C_tu_field_4 <- strenv$jnp$reshape(C_tu_field, list(nA, 1L, 1L, nB_field))
+      C_field_u_4 <- strenv$jnp$reshape(C_field_u, list(1L, nB, nA_field, 1L))
+      C_field_field_4 <- strenv$jnp$reshape(C_field_field, list(1L, 1L, nA_field, nB_field))
+
+      q_direct <- inv_norm * strenv$jnp$sum(
+        kA_4 * kB_4 * C_tu_4 +
+        kA_4 * (strenv$OneTf_flat - kB_4) * C_tu_field_4 +
+        (strenv$OneTf_flat - kA_4) * kB_4 * C_field_u_4 +
+        (strenv$OneTf_flat - kA_4) * (strenv$OneTf_flat - kB_4) * C_field_field_4
+      )
+
+      tol <- 1e-5
+      if (!strenv$np$allclose(strenv$np$array(res$q_ast), strenv$np$array(q_direct),
+                              rtol = tol, atol = tol)) {
+        stop("Pushforward test failed: explicit expectation mismatch")
+      }
+      if (!strenv$np$allclose(strenv$np$array(strenv$jnp$sum(wA_e) + strenv$jnp$sum(wA_f)),
+                              strenv$np$array(strenv$OneTf_flat), rtol = tol, atol = tol) ||
+          !strenv$np$allclose(strenv$np$array(strenv$jnp$sum(wB_e) + strenv$jnp$sum(wB_f)),
+                              strenv$np$array(strenv$OneTf_flat), rtol = tol, atol = tol)) {
+        stop("Pushforward test failed: weight normalization")
+      }
+      if (!strenv$np$allclose(strenv$np$array(res$q_ast + res$q_dag),
+                              strenv$np$array(strenv$OneTf_flat), rtol = tol, atol = tol)) {
+        stop("Pushforward test failed: zero-sum")
+      }
+    }
+  }
   
   # Batch wrapper 
   strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn(function(
@@ -194,10 +327,47 @@ InitializeQMonteFxns <- function(){
 }
 
 InitializeQMonteFxns_MCSampling <- function(){
-  #The default version uses:                                                                                                                                 
-  #  1. Monte Carlo integration with soft indicators                                                                                                           
-  # 2. Conditional expectations computed on-the-fly                                                                                                           
-  # 3. Gumbel-softmax for differentiable sampling                                                                                                             
+  #The default version uses:
+  #  1. Monte Carlo integration over profile draws
+  #  2. Exact inner expectations over primary outcomes
+  
+  RelaxedBernoulli <- compile_fxn(function(p, seed, temp){
+    eps <- 1e-6
+    p <- strenv$jnp$clip(p, eps, 1.0 - eps)
+    logit_p <- strenv$jnp$log(p) - strenv$jnp$log1p(-p)
+    g1 <- strenv$jax$random$gumbel(seed)
+    seed <- strenv$jax$random$split(seed)[[1L]]
+    g2 <- strenv$jax$random$gumbel(seed)
+    seed <- strenv$jax$random$split(seed)[[1L]]
+    z <- strenv$jax$nn$sigmoid((logit_p + g1 - g2) / temp)
+    list(z, seed)
+  })
+  
+  Qpop_pair <- compile_fxn(function(t, u,
+                                    INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                    INTERCEPT_dag_, COEFFICIENTS_dag_){
+    strenv$jnp$take(
+      getQStar_diff_MultiGroup(
+        t, u,
+        INTERCEPT_ast_, COEFFICIENTS_ast_,
+        INTERCEPT_dag_, COEFFICIENTS_dag_
+      ),
+      0L
+    )
+  })
+  
+  kappa_pair <- compile_fxn(function(v, v_prime,
+                                    INTERCEPT_0_, COEFFICIENTS_0_){
+    strenv$jnp$take(
+      getQStar_diff_SingleGroup(
+        v,
+        v_prime,
+        INTERCEPT_0_, COEFFICIENTS_0_,
+        INTERCEPT_0_, COEFFICIENTS_0_
+      ),
+      0L
+    )
+  })
   
   strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn( strenv$jax$vmap(
     (strenv$QMonteIter_MaxMin <- compile_fxn(function(
@@ -214,174 +384,30 @@ InitializeQMonteFxns_MCSampling <- function(){
     LAMBDA_,
     Q_SIGN,
     SEED_IN_LOOP){
-      GVShareResults_AstReferenced <- getQStar_diff_MultiGroup(
-        TSAMP_ast, #pi_star_ast
-        TSAMP_dag, # pi_star_dag
-        INTERCEPT_ast_, # EST_INTERCEPT_tf_ast
-        COEFFICIENTS_ast_, # EST_COEFFICIENTS_tf_ast
-        INTERCEPT_dag_, # EST_INTERCEPT_tf_dag
-        COEFFICIENTS_dag_) #EST_COEFFICIENTS_tf_dag
-      GVShareAstAmongAst <- strenv$jnp$take(GVShareResults_AstReferenced,1L)
-      GVShareAstAmongDag <- strenv$jnp$take(GVShareResults_AstReferenced,2L)
-       
-      # primary stage analysis
-      {
-        PrimaryVoteShareAstAmongAst <- strenv$jnp$take(getQStar_diff_SingleGroup(
-          pi_star_ast =  TSAMP_ast,
-          pi_star_dag = TSAMP_ast_PrimaryComp,
-          EST_INTERCEPT_tf_ast = INTERCEPT_ast0_,
-          EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast0_,
-          EST_INTERCEPT_tf_dag = INTERCEPT_ast0_,
-          EST_COEFFICIENTS_tf_dag = COEFFICIENTS_ast0_),0L)
-        #plot(strenv$np$array( TSAMP_ast$val ) - strenv$np$array( TSAMP_ast_PrimaryComp$val ) ,
-        #strenv$np$array( PrimaryVoteShareAstAmongAst$val ) )
-        
-        PrimaryVoteShareDagAmongDag <- strenv$jnp$take(getQStar_diff_SingleGroup(
-          pi_star_ast = TSAMP_dag,
-          pi_star_dag = TSAMP_dag_PrimaryComp,
-          EST_INTERCEPT_tf_ast = INTERCEPT_dag0_,
-          EST_COEFFICIENTS_tf_ast = COEFFICIENTS_dag0_,
-          EST_INTERCEPT_tf_dag = INTERCEPT_dag0_,
-          EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag0_),0L)
+      kA <- kappa_pair(TSAMP_ast, TSAMP_ast_PrimaryComp, INTERCEPT_ast0_, COEFFICIENTS_ast0_)
+      kB <- kappa_pair(TSAMP_dag, TSAMP_dag_PrimaryComp, INTERCEPT_dag0_, COEFFICIENTS_dag0_)
+      
+      one <- strenv$OneTf_flat
 
-        # win based on relaxed sample from bernoulli using base JAX
-        Indicator_AstWinsPrimary <- strenv$jax$nn$sigmoid(
-          (strenv$jnp$log(PrimaryVoteShareAstAmongAst / (1 - PrimaryVoteShareAstAmongAst)) +
-             strenv$jax$random$gumbel(SEED_IN_LOOP)) / MNtemp)
-        SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
-        Indicator_DagWinsPrimary <- strenv$jax$nn$sigmoid(
-          (strenv$jnp$log(PrimaryVoteShareDagAmongDag / (1 - PrimaryVoteShareDagAmongDag)) +
-             strenv$jax$random$gumbel(SEED_IN_LOOP)) / MNtemp)
-        SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
-      }
-      
-      # primaries 
-      PrAstWinsAstPrimary <- PrimaryVoteShareAstAmongAst$mean()
-      PrAstLosesAstPrimary <- 1-PrAstWinsAstPrimary
-      PrDagWinsDagPrimary <- PrimaryVoteShareDagAmongDag$mean()
-      PrDagLosesDagPrimary <- 1-PrDagWinsDagPrimary
-      
-      # generals 
-      # Compute  average vote shares in the subset of simulations where candidate wins its primary.
-      # Specifically, sum of votes in that subset divided by (sum of total votes in that subset + epsilon)
-      
-      # among ast 
-      Indicator_AstWinsPrimary <- Indicator_AstWinsPrimary # soft or hard 
-      GVShareAstAmongAst_Given_AstWinsAstPrimary <- 
-        ( GVShareAstAmongAst*Indicator_AstWinsPrimary )$sum()/ 
-        ( (ep_<-0.01) + Indicator_AstWinsPrimary$sum() )
-      GVShareDagAmongAst_Given_AstWinsAstPrimary <-  1 - GVShareAstAmongAst_Given_AstWinsAstPrimary
-      
-      # among dag 
-      Indicator_DagWinsPrimary <- Indicator_DagWinsPrimary
-      GVShareAstAmongDag_Given_DagWinsDagPrimary <- 
-        (  GVShareAstAmongDag*Indicator_DagWinsPrimary )$sum() / 
-        ( ep_ + Indicator_DagWinsPrimary$sum() )
-      GVShareDagAmongDag_Given_DagWinsDagPrimary <- 1 - GVShareAstAmongDag_Given_DagWinsDagPrimary
-      
-      if(T == T){
-        # compute expected value 
-        GVShareDagAmongAst <- 1-GVShareAstAmongAst
-        GVShareDagAmongDag <- 1-GVShareAstAmongDag
-        
-        Indicator_DagLosesPrimary <- 1-Indicator_DagWinsPrimary
-        Indicator_AstLosesPrimary <- 1-Indicator_AstWinsPrimary
-        
-        # 2 by 2 AMONG AST 
-        {
-          # 1 ast 
-          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary <-
-            ((GVShareAstAmongAst)*
-               (event_ <- (Indicator_AstWinsPrimary*Indicator_DagWinsPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          
-          # 2 ast 
-          E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary <-
-            ((GVShareAstAmongAst)*
-               ( event_ <- (Indicator_AstLosesPrimary*Indicator_DagLosesPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          
-          # 3 ast
-          E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary <-
-            ((GVShareAstAmongAst)*
-               (event_ <- (Indicator_AstLosesPrimary*Indicator_DagWinsPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          
-          # 4 ast
-          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary <-
-            ((GVShareAstAmongAst)*
-               (event_ <- (Indicator_AstWinsPrimary*Indicator_DagLosesPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary
-          E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary
-          E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary
-          E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary
-        }
-        
-        # 2 by 2 among dag 
-        {
-          # 1 
-          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary <-
-            ((GVShareAstAmongDag)*
-               (event_ <- (Indicator_AstWinsPrimary*Indicator_DagWinsPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          
-          # 2
-          E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary <-
-            ((GVShareAstAmongDag)*
-               ( event_ <- (Indicator_AstLosesPrimary*Indicator_DagLosesPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          
-          # 3 - 
-          E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary <-
-            ((GVShareAstAmongDag)*
-               (event_ <- (Indicator_AstLosesPrimary*Indicator_DagWinsPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          
-          # 4
-          E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary <-
-            ( (GVShareAstAmongDag) * (event_ <- (Indicator_AstWinsPrimary*Indicator_DagLosesPrimary) ))$sum() / 
-            (0.001+(event_))$sum()
-          E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary
-          E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary
-          E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagWinsPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary
-          E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagLosesPrimary <- 1-E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary
-        }
-        
-        # Full push-forward: include all four primary outcome scenarios
-        # Previously some terms were zeroed with 0* which ignored scenarios where entrants lose
-        E_VoteShare_Ast <- (
-          # Among Ast voters (weighted by AstProp)
-          E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
-            E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
-            E_VoteShare_Ast_AmongAst_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
-            E_VoteShare_Ast_AmongAst_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
+      C_tt <- Qpop_pair(TSAMP_ast, TSAMP_dag,
+                        INTERCEPT_ast_, COEFFICIENTS_ast_,
+                        INTERCEPT_dag_, COEFFICIENTS_dag_)
+      C_tf <- Qpop_pair(TSAMP_ast, TSAMP_dag_PrimaryComp,
+                        INTERCEPT_ast_, COEFFICIENTS_ast_,
+                        INTERCEPT_dag_, COEFFICIENTS_dag_)
+      C_ft <- Qpop_pair(TSAMP_ast_PrimaryComp, TSAMP_dag,
+                        INTERCEPT_ast_, COEFFICIENTS_ast_,
+                        INTERCEPT_dag_, COEFFICIENTS_dag_)
+      C_ff <- Qpop_pair(TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
+                        INTERCEPT_ast_, COEFFICIENTS_ast_,
+                        INTERCEPT_dag_, COEFFICIENTS_dag_)
 
-          # Among Dag voters (weighted by DagProp)
-            E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$DagProp +
-            E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
-            E_VoteShare_Ast_AmongDag_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
-            E_VoteShare_Ast_AmongDag_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$DagProp
-        )
-
-        E_VoteShare_Dag <- (
-          # Among Ast voters (weighted by AstProp)
-          E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
-            E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
-            E_VoteShare_Dag_AmongAst_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$AstProp +
-            E_VoteShare_Dag_AmongAst_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$AstProp +
-
-          # Among Dag voters (weighted by DagProp)
-            E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagWinsPrimary * PrAstWinsAstPrimary * PrDagWinsDagPrimary * strenv$DagProp +
-            E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagLosesPrimary * PrAstLosesAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
-            E_VoteShare_Dag_AmongDag_Given_AstWinsPrimary_DagLosesPrimary * PrAstWinsAstPrimary * PrDagLosesDagPrimary * strenv$DagProp +
-            E_VoteShare_Dag_AmongDag_Given_AstLosesPrimary_DagWinsPrimary * PrAstLosesAstPrimary * PrDagWinsDagPrimary * strenv$DagProp
-        )
-      }
-      
-      # quantity to maximize for ast and dag respectively 
-      return(list("q_ast" = E_VoteShare_Ast, 
-                  "q_dag" = E_VoteShare_Dag))
+      q_ast <- kA * kB * C_tt +
+               kA * (one - kB) * C_tf +
+               (one - kA) * kB * C_ft +
+               (one - kA) * (one - kB) * C_ff
+      list("q_ast" = q_ast,
+           "q_dag" = one - q_ast)
       })), 
     in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,", # vectorize over TSAMPs and SEED
                                       paste(rep("NULL,",times = 15-1), collapse=""), "0L",  ")",sep = "") ))))

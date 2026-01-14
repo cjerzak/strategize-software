@@ -112,10 +112,14 @@ SGD Iteration: 10 of 10
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
-[ FAIL 0 | WARN 0 | SKIP 67 | PASS 51 ]
+-------------
+strategize() call has begun...
+-------------
+strategize() call has begun...
+[ FAIL 0 | WARN 0 | SKIP 68 | PASS 56 ]
 
-══ Skipped tests (67) ══════════════════════════════════════════════════════════
-• On CRAN (66): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+══ Skipped tests (68) ══════════════════════════════════════════════════════════
+• On CRAN (67): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
   'test-cv-strategize.R:9:3', 'test-cv-strategize.R:29:3',
   'test-cv-strategize.R:48:3', 'test-cv-strategize.R:70:3',
@@ -137,8 +141,9 @@ strategize() call has finished...
   'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
   'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
   'test-penalty-types.R:25:3', 'test-penalty-types.R:42:3',
-  'test-strategize.R:9:3', 'test-strategize.R:25:3', 'test-strategize.R:46:3',
-  'test-strategize.R:63:3', 'test-strategize.R:79:3', 'test-strategize.R:98:3',
+  'test-primary-pushforward.R:6:3', 'test-strategize.R:9:3',
+  'test-strategize.R:25:3', 'test-strategize.R:46:3', 'test-strategize.R:63:3',
+  'test-strategize.R:79:3', 'test-strategize.R:98:3',
   'test-strategize.R:117:3', 'test-strategize.R:144:3',
   'test-visualization.R:14:3', 'test-visualization.R:44:3',
   'test-visualization.R:70:3', 'test-visualization.R:105:3',
@@ -148,8 +153,8 @@ strategize() call has finished...
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 0 | SKIP 67 | PASS 51 ]
+[ FAIL 0 | WARN 0 | SKIP 68 | PASS 56 ]
 > 
 > proc.time()
    user  system elapsed 
- 12.234   2.230  13.685 
+  8.522   1.443   9.067 

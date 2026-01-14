@@ -700,23 +700,23 @@ Done with strategic analysis!
 [1] 0.01
 > print(cv_result$CVInfo)       # Performance at each lambda
   lambda      Qhat        Qse selected   l_bound   u_bound
-1   0.01 0.4724364 0.01537481        1 0.4471471 0.4977257
-2   0.10 0.4531305 0.02661768        0 0.4093484 0.4969127
-3   0.50 0.4424934 0.02789141        0 0.3966161 0.4883707
-4   1.00 0.4408389 0.02790317        0 0.3949423 0.4867355
+1   0.01 0.4706720 0.01640800        1 0.4436832 0.4976607
+2   0.10 0.4519872 0.02697638        0 0.4076150 0.4963594
+3   0.50 0.4422226 0.02787694        0 0.3963691 0.4880761
+4   1.00 0.4395569 0.02937795        0 0.3912344 0.4878793
 > print(cv_result$pi_star_point) # Optimal distribution
 $k1
 $k1$Gender
    Female      Male 
-0.6871953 0.3128047 
+0.6492804 0.3507196 
 
 $k1$Age
         35         50         65 
-0.82722658 0.04500442 0.12776899 
+0.81358325 0.04785672 0.13856000 
 
 $k1$Party
       Dem       Rep 
-0.3441378 0.6558622 
+0.3805093 0.6194907 
 
 
 $k2
@@ -735,7 +735,7 @@ $k2$Party
 
 > print(cv_result$Q_point)       # Expected outcome
           [,1]
-[1,] 0.4906887
+[1,] 0.4898889
 > ## End(No test)
 > 
 > 
@@ -972,15 +972,15 @@ strategize() call has finished...
 $k1
 $k1$Gender
      Male    Female 
-0.2891612 0.7108388 
+0.3130197 0.6869802 
 
 $k1$Age
     Young    Middle       Old 
-0.3336758 0.3336726 0.3326516 
+0.3336938 0.3336885 0.3326177 
 
 $k1$Party
-     Dem      Rep 
-0.726452 0.273548 
+      Dem       Rep 
+0.7099242 0.2900758 
 
 
 $k2
@@ -1001,7 +1001,7 @@ $k2$Party
 > # View expected outcome under optimal strategy
 > print(result$Q_point)
           [,1]
-[1,] 0.5076208
+[1,] 0.4979096
 > ## End(No test)
 > 
 > 
@@ -1250,7 +1250,7 @@ $conf_level
 > cleanEx()
 > options(digits = 7L)
 > base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
-Time elapsed:  35.877 1.885 21.102 1.455 0.413 
+Time elapsed:  40.01 1.884 17.549 0.877 0.252 
 > grDevices::dev.off()
 null device 
           1 

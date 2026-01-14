@@ -36,13 +36,15 @@ strategize(
   nFolds_glm = 3L,
   folds = NULL,
   nMonte_adversarial = 5L,
+  primary_pushforward = "mc",
   nMonte_Qglm = 100L,
   learning_rate_max = 0.001,
-  temperature = 0.5,
+  temperature = 0.5, 
   save_outcome_model = FALSE,
   presaved_outcome_model = FALSE,
   use_optax = FALSE,
   optim_type = "gd",
+  optimism = "extragrad",
   compute_hessian = TRUE,
   hessian_max_dim = 50L
 )
@@ -170,6 +172,10 @@ Defaults to \code{NULL}.}
 or max-min steps, e.g., sampling from the opposing candidate’s distribution to approximate
 expected payoffs. Defaults to \code{5L}.}
 
+\item{primary_pushforward}{Character string controlling the primary-stage push-forward estimator.
+Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
+\code{"linearized"} for the faster averaged-weight approximation.}
+
 \item{nMonte_Qglm}{Integer specifying the number of Monte Carlo samples for evaluating or
 approximating the quantity of interest under certain outcomes or distributions. Defaults to
 \code{100L}.}
@@ -193,6 +199,11 @@ Defaults to \code{FALSE}.}
 
 \item{optim_type}{A character string for choosing which optimizer or approach is used internally
 (e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.}
+
+\item{optimism}{Character string controlling optimistic / extra-gradient updates for the gradient
+optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
+\code{"ogda"} (optimistic gradient), or \code{"none"} (standard updates). Only supported when
+\code{use_optax = FALSE}.}
 
 \item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
 geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions

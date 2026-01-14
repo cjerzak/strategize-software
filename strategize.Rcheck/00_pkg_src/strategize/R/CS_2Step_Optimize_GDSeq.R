@@ -13,8 +13,15 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           a_i_dag,  # initial value, dag 
                           functionReturn = T,
                           gd_full_simplex, 
-                          quiet = TRUE
+                          quiet = TRUE,
+                          optimism = c("none", "ogda", "extragrad"),
+                          optimism_coef = 1
                           ){
+  optimism <- match.arg(optimism)
+  optimism_coef <- as.numeric(optimism_coef)
+  if (optimism != "none" && use_optax) {
+    stop("optimism/extra-gradient not supported with optax; set use_optax = FALSE.")
+  }
   # throw fxns into env 
   dQ_da_ast <- functionList[[1]]
   dQ_da_dag <- functionList[[2]]
@@ -46,6 +53,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   strenv$grad_mag_ast_vec <- strenv$grad_mag_dag_vec <- rep(NA, times = nSGD)
   strenv$loss_ast_vec <- strenv$loss_dag_vec <- rep(NA, times = nSGD)
   strenv$inv_learning_rate_ast_vec <- strenv$inv_learning_rate_dag_vec <- rep(NA, times = nSGD)
+  grad_prev_ast <- grad_prev_dag <- NULL
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
   while(goOn == F){
@@ -53,7 +61,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
     }
 
-    # do dag updates ("min" step)
+    # do dag updates ("min" step - only do in adversarial mode)
     if( i %% 1 == 0 & adversarial ){
       # note: dQ_da_dag built off FullGetQStar_
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
@@ -69,6 +77,14 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 SEED                                 #17
                                 )
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
+
+      # choose gradient to apply (OGDA / Extra-Gradient)
+      grad_step_dag <- grad_i_dag
+      if (!is.null(grad_prev_dag) && optimism == "ogda") {
+        grad_step_dag <- strenv$jnp$add(grad_i_dag,
+                                        strenv$jnp$multiply(strenv$jnp$array(optimism_coef, strenv$dtj),
+                                                            strenv$jnp$subtract(grad_i_dag, grad_prev_dag)))
+      }
 
       if(FALSE){ # sanity view of utilities (debug code) 
         TSAMP1 <- strenv$jax$vmap(function(s_){
@@ -101,9 +117,31 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
             )
         }
         inv_learning_rate_da_dag <-  strenv$jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
+        lr_dag_i <- strenv$jnp$sqrt(inv_learning_rate_da_dag)
+
+        if (optimism == "extragrad") {
+          # look-ahead step, then recompute gradient
+          a_pred_dag <- GetUpdatedParameters(a_vec = a_i_dag,
+                                             grad_i = grad_i_dag,
+                                             inv_learning_rate_i = lr_dag_i)
+          SEED   <- strenv$jax$random$split(SEED)[[1L]]
+          grad_pred_dag <- dQ_da_dag(  a_i_ast, a_pred_dag,                 #1,2
+                                       INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
+                                       INTERCEPT_dag_,  COEFFICIENTS_dag_,  #5,6
+                                       INTERCEPT_ast0_, COEFFICIENTS_ast0_, #7,8
+                                       INTERCEPT_dag0_, COEFFICIENTS_dag0_, #9,10
+                                       P_VEC_FULL_ast, P_VEC_FULL_dag,      #11,12
+                                       SLATE_VEC_ast, SLATE_VEC_dag,        #13,14
+                                       LAMBDA,                              #15
+                                       Q_SIGN_ <- strenv$jnp$array(-1.),    #16
+                                       SEED                                 #17
+                                       )
+          grad_step_dag <- grad_pred_dag[[2]]
+        }
+
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, 
-                                        grad_i = grad_i_dag,
-                                        inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_dag))
+                                        grad_i = grad_step_dag,
+                                        inv_learning_rate_i = lr_dag_i)
       }
       if(use_optax){
         updates_and_opt_state_dag <- jit_update_dag( updates = grad_i_dag, 
@@ -114,7 +152,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                          updates = updates_and_opt_state_dag[[1]])
       }
 
-      strenv$grad_mag_dag_vec[i] <- list(strenv$jnp$linalg$norm( grad_i_dag ))
+      strenv$grad_mag_dag_vec[i] <- list(strenv$jnp$linalg$norm( grad_step_dag ))
+      grad_prev_dag <- grad_i_dag
       if(!use_optax){ strenv$inv_learning_rate_dag_vec[i] <- list( inv_learning_rate_da_dag ) }
     }
 
@@ -133,6 +172,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                SEED
                                )
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
+      grad_step_ast <- grad_i_ast
+      if (!is.null(grad_prev_ast) && optimism == "ogda") {
+        grad_step_ast <- strenv$jnp$add(grad_i_ast,
+                                        strenv$jnp$multiply(strenv$jnp$array(optimism_coef, strenv$dtj),
+                                                            strenv$jnp$subtract(grad_i_ast, grad_prev_ast)))
+      }
       
       if(!use_optax){
         if(i==1){ 
@@ -141,9 +186,30 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
             )
         }
         inv_learning_rate_da_ast <-  strenv$jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
+        lr_ast_i <- strenv$jnp$sqrt(inv_learning_rate_da_ast)
+
+        if (optimism == "extragrad") {
+          a_pred_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
+                                             grad_i = grad_i_ast,
+                                             inv_learning_rate_i = lr_ast_i)
+          SEED   <- strenv$jax$random$split(SEED)[[1L]] 
+          grad_pred_ast <- dQ_da_ast( a_pred_ast, a_i_dag,
+                                      INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                      INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                      P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                      SLATE_VEC_ast, SLATE_VEC_dag,
+                                      LAMBDA, 
+                                      Q_SIGN_ <- strenv$jnp$array(1.),
+                                      SEED
+                                      )
+          grad_step_ast <- grad_pred_ast[[2]]
+        }
+
         a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
-                                        grad_i = grad_i_ast,
-                                        inv_learning_rate_i = strenv$jnp$sqrt(inv_learning_rate_da_ast))
+                                        grad_i = grad_step_ast,
+                                        inv_learning_rate_i = lr_ast_i)
       }
 
       if(use_optax){
@@ -155,7 +221,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                          updates = updates_and_opt_state_ast[[1]])
       }
 
-      strenv$grad_mag_ast_vec[i] <- list( strenv$jnp$linalg$norm( grad_i_ast ) )
+      strenv$grad_mag_ast_vec[i] <- list( strenv$jnp$linalg$norm( grad_step_ast ) )
+      grad_prev_ast <- grad_i_ast
       if(!use_optax){ strenv$inv_learning_rate_ast_vec[i] <- list( inv_learning_rate_da_ast ) }
     }
     if(i >= nSGD){goOn <- TRUE}
@@ -208,17 +275,17 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                          INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
     }
     if(adversarial){ 
-      if(FALSE){
-      # Push-forward (two-round) MC for adversarial case; return 3-vector like avg case
+      n_q_samp <- as.integer(pi_star_ast_f_all$shape[[1L]])
       TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){
         strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
+      }, in_axes = list(0L))(strenv$jax$random$split(SEED, n_q_samp))
       SEED <- strenv$jax$random$split(SEED)[[1L]]
       
       TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){
         strenv$getMultinomialSamp(SLATE_VEC_dag, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED, nMonte_Qglm))
+      }, in_axes = list(0L))(strenv$jax$random$split(SEED, n_q_samp))
       SEED <- strenv$jax$random$split(SEED)[[1L]]
+
       Qres <- strenv$Vectorized_QMonteIter_MaxMin(
         pi_star_ast_f_all, pi_star_dag_f_all,
         TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
@@ -229,19 +296,16 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         INTERCEPT_dag0_, COEFFICIENTS_dag0_,
         P_VEC_FULL_ast, P_VEC_FULL_dag,
         LAMBDA, strenv$jnp$array(1.), 
-        strenv$jax$random$split(SEED, TSAMP_ast_PrimaryComp_all$shape[[1]])
-        #SEED
+        strenv$jax$random$split(SEED, n_q_samp)
       )
-      # Package as [Q_pop, Q_ast|Ast, Q_ast|Dag] to match avg-case shape
-      # (we repeat the population value to keep dimensions consistent)
-      q_star_f <- strenv$jnp$expand_dims(strenv$jnp$stack(list(Qres$q_ast, 
-                                                               Qres$q_ast, 
-                                                               Qres$q_ast), 0L),1L)
+      q_star_val <- Qres$q_ast$mean(0L)
+      q_star_dims <- if (length(pi_star_ast_full_simplex_$shape) >= 2L) {
+        list(1L, 1L)
+      } else {
+        list(1L)
       }
-      q_star_f <- strenv$Vectorized_QMonteIter(
-        pi_star_ast_f_all,  pi_star_dag_f_all,
-        INTERCEPT_ast_, COEFFICIENTS_ast_,
-        INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
+      q_star_val <- strenv$jnp$reshape(q_star_val, q_star_dims)
+      q_star_f <- strenv$jnp$concatenate(list(q_star_val, q_star_val, q_star_val), 0L)
     }
 
     # setup results for returning
