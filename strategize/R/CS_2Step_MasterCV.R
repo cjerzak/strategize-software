@@ -73,6 +73,17 @@
 #'   \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
 #'   (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 #'   or average-case optimization).
+#' @param adversarial_model_strategy Character string indicating whether to estimate
+#'   \code{"four"} outcome models (primary + general for each group), \code{"two"} outcome models
+#'   (one per group reused for both primary and general), or \code{"neural"} (Bayesian Transformer
+#'   models with party tokens; defaults to a single pooled model across groups and stages. Set
+#'   \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models) in adversarial
+#'   mode.
+#' @param partial_pooling Logical indicating whether to partially pool (shrink) group-specific
+#'   outcome model coefficients toward a shared average when using the "two" strategy. When
+#'   \code{NULL}, defaults to \code{TRUE} in the two-strategy adversarial case.
+#' @param partial_pooling_strength Numeric scalar controlling the amount of shrinkage used for
+#'   partial pooling in the two-strategy adversarial case.
 #' @param use_regularization Logical; if \code{TRUE}, penalty-based regularization
 #'   is used for the outcome model. Usually set to \code{TRUE} for large designs.
 #'   Defaults to \code{TRUE}.
@@ -94,6 +105,12 @@
 #' @param outcome_model_type Character string indicating the outcome model to
 #'   use, such as \code{"glm"} for generalized linear models or \code{"neural"}
 #'   for a neural-network approximation. Defaults to \code{"glm"}.
+#' @param neural_mcmc_control Optional list overriding default MCMC settings used when
+#'   \code{outcome_model_type = "neural"}. Use
+#'   \code{neural_mcmc_control$uncertainty_scope = "output"} to restrict delta-method
+#'   uncertainty to output-layer parameters. In adversarial neural mode, set
+#'   \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models
+#'   (default is 1 for a single differential model).
 #' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors
 #'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
 #' @param conda_env A character specifying the name of a Conda environment for
@@ -111,15 +128,19 @@
 #'   to 5.
 #' @param primary_pushforward Character string controlling the primary-stage push-forward estimator.
 #'   Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
-#'   \code{"linearized"} for the faster averaged-weight approximation.
+#'   \code{"linearized"} for the faster averaged-weight approximation, or
+#'   \code{"multi"} for multi-candidate primaries.
+#' @param primary_strength Numeric scalar controlling primary decisiveness (see \code{\link{strategize}}).
+#' @param primary_n_entrants Integer number of entrant candidates per party in multi-candidate primaries.
+#' @param primary_n_field Integer number of field candidates per party in multi-candidate primaries.
 #' @param nMonte_Qglm An integer specifying the number of Monte Carlo draws 
 #'   for evaluating certain integrals in \code{glm}-based approximations, default 100.
 #' @param optim_type A character describing the optimization routine. Typically 
 #'   \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
 #'   or \code{"SecondOrder"} for testing or advanced routines.
 #' @param optimism Character string controlling optimistic / extra-gradient updates for the
-#'   gradient optimizer. Options: \code{"extragrad"} (default), \code{"ogda"}, or \code{"none"}.
-#'   Only supported when \code{use_optax = FALSE}.
+#'   gradient optimizer. Options: \code{"extragrad"} (default), \code{"smp"} (stochastic mirror-prox),
+#'   \code{"ogda"}, or \code{"none"}. Only supported when \code{use_optax = FALSE}.
 #' 
 #' @details
 #' \code{cv_strategize} implements a cross-validation routine for
@@ -233,7 +254,11 @@ cv_strategize       <-          function(
                                             use_optax = F,
                                             K = 1,
                                             nSGD = 100,
-                                            diff = F, adversarial = F,
+                                            diff = F,
+                                            adversarial = F,
+                                            adversarial_model_strategy = "four",
+                                            partial_pooling = NULL,
+                                            partial_pooling_strength = 50,
                                             use_regularization = TRUE,
                                             force_gaussian = F,
                                             temperature = 0.5,
@@ -241,6 +266,7 @@ cv_strategize       <-          function(
                                             learning_rate_max = 0.001, 
                                             penalty_type = "KL",
                                             outcome_model_type = "glm",
+                                            neural_mcmc_control = NULL,
                                             compute_se = T,
                                             conda_env = "strategize_env",
                                             conda_env_required = F,
@@ -248,10 +274,13 @@ cv_strategize       <-          function(
                                             nFolds_glm = 3L,
                                             nMonte_adversarial = 5L,
                                             primary_pushforward = "mc",
+                                            primary_strength = 1.0,
+                                            primary_n_entrants = 1L,
+                                            primary_n_field = 1L,
                                             nMonte_Qglm = 100L,
                                             optim_type = "gd",
                                             optimism = "extragrad"){
-  optimism <- match.arg(optimism, c("none", "ogda", "extragrad"))
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
   }
@@ -267,6 +296,7 @@ cv_strategize       <-          function(
   if(is.null(lambda_seq) & !is.null(lambda)){ lambda_seq <- lambda }
 
   if(is.null(respondent_id)){ respondent_id <- 1:length(Y) }
+  if(is.null(respondent_task_id)){ respondent_task_id <- rep(1L, length(Y)) }
 
   # Ensure p_list is computed from full data for consistent dimensions across folds
   # This prevents dimension mismatches when different CV folds see different factor levels
@@ -345,6 +375,7 @@ cv_strategize       <-          function(
 
             # hyperparameters
             outcome_model_type = outcome_model_type,
+            neural_mcmc_control = neural_mcmc_control,
             temperature = temperature,
             compute_se = F,
             nSGD = nSGD_use,
@@ -358,6 +389,12 @@ cv_strategize       <-          function(
             nFolds_glm = nFolds_glm,
             nMonte_adversarial = nMonte_adversarial,
             primary_pushforward = primary_pushforward,
+            primary_strength = primary_strength,
+            primary_n_entrants = primary_n_entrants,
+            primary_n_field = primary_n_field,
+            adversarial_model_strategy = adversarial_model_strategy,
+            partial_pooling = partial_pooling,
+            partial_pooling_strength = partial_pooling_strength,
             diff = diff,
             adversarial = adversarial,
             conda_env = conda_env,
@@ -418,6 +455,7 @@ cv_strategize       <-          function(
 
                               # hyperparameters
                               outcome_model_type = outcome_model_type,
+                              neural_mcmc_control = neural_mcmc_control,
                               temperature = temperature, 
                               optim_type = optim_type,
                               optimism = optimism,
@@ -428,6 +466,12 @@ cv_strategize       <-          function(
                               K = K,
                               nMonte_adversarial = nMonte_adversarial,
                               primary_pushforward = primary_pushforward,
+                              primary_strength = primary_strength,
+                              primary_n_entrants = primary_n_entrants,
+                              primary_n_field = primary_n_field,
+                              adversarial_model_strategy = adversarial_model_strategy,
+                              partial_pooling = partial_pooling,
+                              partial_pooling_strength = partial_pooling_strength,
                               nFolds_glm = nFolds_glm,
                               diff = diff,
                               adversarial = adversarial,

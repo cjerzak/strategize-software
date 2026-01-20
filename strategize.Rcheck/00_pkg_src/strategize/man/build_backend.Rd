@@ -13,7 +13,8 @@ build_backend(conda_env = "strategize_env", conda = "auto")
 Defaults to \code{"strategize_env"}.}
 
 \item{conda}{The path to a conda executable. Using \code{"auto"} allows reticulate
-to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.}
+to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.
+If creation fails and a conda binary is found on PATH, the function retries with it.}
 }
 \value{
 Invisibly returns \code{NULL}. This function is called for its side effects

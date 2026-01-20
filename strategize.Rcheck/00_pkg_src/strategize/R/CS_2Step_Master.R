@@ -37,12 +37,18 @@
 #'   nSGD = 100,
 #'   diff = FALSE,
 #'   adversarial = FALSE,
+#'   adversarial_model_strategy = "four",
+#'   include_stage_interactions = NULL,
+#'   partial_pooling = NULL,
+#'   partial_pooling_strength = 50,
 #'   use_regularization = TRUE,
 #'   force_gaussian = FALSE,
 #'   a_init_sd = 0.001,
 #'   outcome_model_type = "glm",
+#'   neural_mcmc_control = NULL,
 #'   penalty_type = "KL",
 #'   compute_se = FALSE,
+#'   se_method = c("full", "implicit"),
 #'   conda_env = "strategize_env",
 #'   conda_env_required = FALSE,
 #'   conf_level = 0.90,
@@ -50,11 +56,15 @@
 #'   folds = NULL,
 #'   nMonte_adversarial = 5L,
 #'   primary_pushforward = "mc",
+#'   primary_strength = 1.0,
+#'   primary_n_entrants = 1L,
+#'   primary_n_field = 1L,
 #'   nMonte_Qglm = 100L,
 #'   learning_rate_max = 0.001,
 #'   temperature = 0.5, 
 #'   save_outcome_model = FALSE,
 #'   presaved_outcome_model = FALSE,
+#'   outcome_model_key = NULL,
 #'   use_optax = FALSE,
 #'   optim_type = "gd",
 #'   optimism = "extragrad",
@@ -120,7 +130,7 @@
 #'   distribution. If \code{NULL}, the function may assume uniform or attempt to estimate the
 #'   distribution from \code{W}.
 #'
-#' @param slate_list An optional list (or lists) providing custom “slates” of candidate features
+#' @param slate_list An optional list (or lists) providing custom slates of candidate features
 #'   (and their associated probabilities). Used in more advanced or adversarial setups where
 #'   certain combinations must be included or excluded. If \code{NULL}, no special constraints
 #'   beyond the usual factor-level distributions are applied.
@@ -137,8 +147,32 @@
 #'
 #' @param adversarial Logical controlling whether to enable the max-min adversarial scenario. When
 #'   \code{TRUE}, the function searches for a pair of distributions (one for each competing party
-#'   or group) such that each party’s distribution is optimal given the other party’s distribution.
+#'   or group) such that each party's distribution is optimal given the other party's distribution.
 #'   Defaults to \code{FALSE}.
+#'
+#' @param adversarial_model_strategy Character string indicating whether to estimate
+#'   \code{"four"} outcome models (primary + general for each group), \code{"two"} outcome models
+#'   (one per group reused for both primary and general), or \code{"neural"} (Bayesian Transformer
+#'   models with party tokens; defaults to a single pooled model across groups and stages. Set
+#'   \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models). Defaults to
+#'   \code{"four"}.
+#'
+#' @param include_stage_interactions Logical indicating whether to include stage (primary vs
+#'   general) indicator and stage-by-factor interactions in the outcome model. When \code{NULL}
+#'   (default), automatically set to \code{TRUE} when \code{adversarial_model_strategy = "two"}
+#'   and \code{FALSE} otherwise. Including stage interactions allows a single pooled model to
+#'   learn different response patterns for primary vs general election scenarios, which helps
+#'   prevent pattern-matching equilibria where both parties converge to identical strategies.
+#'
+#' @param partial_pooling Logical indicating whether to partially pool (shrink) group-specific
+#'   outcome model coefficients toward a shared average when
+#'   \code{adversarial_model_strategy = "two"}. When \code{NULL} (default), automatically set to
+#'   \code{TRUE} for the two-strategy adversarial case and \code{FALSE} otherwise.
+#'
+#' @param partial_pooling_strength Numeric scalar controlling the amount of shrinkage used for
+#'   partial pooling in the two-strategy adversarial case. Interpreted as a pseudo-sample size:
+#'   larger values increase pooling, smaller values preserve group differentiation. Defaults to
+#'   \code{50}.
 #'
 #' @param use_regularization Logical indicating whether to regularize the outcome model (in addition
 #'   to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
@@ -156,12 +190,24 @@
 #'   supports \code{"glm"} for generalized linear models or \code{"neural"} for a neural-network
 #'   approximation. Defaults to \code{"glm"}.
 #'
+#' @param neural_mcmc_control Optional list overriding default MCMC settings used when
+#'   \code{outcome_model_type = "neural"}. Named entries override the defaults in
+#'   \code{CS_2Step_ModelOutcome_neural.R}. Set
+#'   \code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
+#'   uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
+#'   neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
+#'   models (default is 1 for a single differential model).
+#'
 #' @param penalty_type A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 #'   or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
 #'   away from the baseline \code{p_list}. Defaults to \code{"KL"}.
 #'
 #' @param compute_se Logical indicating whether standard errors should be computed for the final
 #'   estimates (via the delta method or related expansions). Defaults to \code{FALSE}.
+#'
+#' @param se_method Character string specifying the SE computation method when \code{compute_se = TRUE}.
+#'   \code{"full"} differentiates through the full optimization trace (default). \code{"implicit"}
+#'   uses implicit differentiation at the solution (adversarial equilibrium or non-adversarial optimum).
 #'
 #' @param conda_env A character string naming a Python conda environment that includes \pkg{jax},
 #'   \pkg{optax}, and other dependencies. If not \code{NULL}, the function attempts to activate
@@ -181,12 +227,20 @@
 #'   Defaults to \code{NULL}.
 #'
 #' @param nMonte_adversarial Integer specifying the number of Monte Carlo samples used in adversarial
-#'   or max-min steps, e.g., sampling from the opposing candidate’s distribution to approximate
+#'   or max-min steps, e.g., sampling from the opposing candidate's distribution to approximate
 #'   expected payoffs. Defaults to \code{5L}.
 #'
 #' @param primary_pushforward Character string controlling the primary-stage push-forward estimator.
 #'   Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
-#'   \code{"linearized"} for the faster averaged-weight approximation.
+#'   \code{"linearized"} for the faster averaged-weight approximation, or
+#'   \code{"multi"} for multi-candidate primaries.
+#' @param primary_strength Numeric scalar controlling primary decisiveness. Values > 1 make
+#'   primary outcomes more deterministic; values in (0, 1) make primaries more noisy. Defaults
+#'   to 1.0 (neutral scaling).
+#' @param primary_n_entrants Integer number of entrant candidates sampled per party in
+#'   multi-candidate primaries (\code{primary_pushforward = "multi"}). Defaults to 1.
+#' @param primary_n_field Integer number of field candidates sampled per party in
+#'   multi-candidate primaries (\code{primary_pushforward = "multi"}). Defaults to 1.
 #' 
 #' @param nMonte_Qglm Integer specifying the number of Monte Carlo samples for evaluating or
 #'   approximating the quantity of interest under certain outcomes or distributions. Defaults to
@@ -205,6 +259,11 @@
 #' @param presaved_outcome_model Logical indicating whether to use a previously saved outcome
 #'   model instead of re-fitting. Defaults to \code{FALSE}.
 #'
+#' @param outcome_model_key Optional character string to append to saved outcome model
+#'   filenames. Useful for distinguishing between different model configurations or
+#'   experimental runs. When provided, files are saved as
+#'   \code{main_{group}_{round}_{key}.csv}. Defaults to \code{NULL}.
+#'
 #' @param use_optax Logical indicating whether to use the \href{https://github.com/google-deepmind/optax}{\code{optax}}
 #'   library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 #'   Defaults to \code{FALSE}.
@@ -213,6 +272,7 @@
 #'   (e.g., \code{"gd"} for gradient descent). Defaults to \code{"gd"}.
 #' @param optimism Character string controlling optimistic / extra-gradient updates for the gradient
 #'   optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
+#'   \code{"smp"} (stochastic mirror-prox: extra-gradient with weighted averaging of look-ahead points),
 #'   \code{"ogda"} (optimistic gradient), or \code{"none"} (standard updates). Only supported when
 #'   \code{use_optax = FALSE}.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
@@ -242,6 +302,9 @@
 #'
 #' \item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
 #'
+#' \item{\code{outcome_model_view}}{Interpretable summaries of the fitted outcome models (by player and stage).
+#' Includes main-effect tables and top interactions for AST/DAG primary/general submodels when available.}
+#'
 #' \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
 #'
 #' \item{\code{estimationType}}{String indicating the approach used (e.g., \code{"TwoStep"} or \code{"OneStep"}).}
@@ -260,7 +323,7 @@
 #' \strong{Adversarial or strategic design:} When \code{adversarial = TRUE}, the function attempts to
 #' solve a zero-sum game in which one agent (say, \dQuote{A}) chooses its distribution to maximize
 #' vote share, while the other (\dQuote{B}) simultaneously chooses its distribution to minimize
-#' \dQuote{A}’s vote share. In many settings, \code{competing_group_variable_respondent} and related
+#' \dQuote{A}'s vote share. In many settings, \code{competing_group_variable_respondent} and related
 #' arguments help define which respondents belong to the \dQuote{A} or \dQuote{B} sub-electorate
 #' (e.g., a primary). The final solution is a mixed-strategy Nash equilibrium, if it exists, for
 #' the forced-choice environment. This can be used to compare or interpret real-world candidate
@@ -364,14 +427,20 @@ strategize       <-          function(
                                             slate_list = NULL,
                                             K = 1,
                                             nSGD = 100,
-                                            diff = FALSE, 
+                                            diff = FALSE,
                                             adversarial = FALSE,
+                                            adversarial_model_strategy = "four",
+                                            include_stage_interactions = NULL,
+                                            partial_pooling = NULL,
+                                            partial_pooling_strength = 50,
                                             use_regularization = TRUE,
                                             force_gaussian = FALSE,
                                             a_init_sd = 0.001,
                                             outcome_model_type = "glm",
+                                            neural_mcmc_control = NULL,
                                             penalty_type = "KL",
                                             compute_se = FALSE,
+                                            se_method = c("full", "implicit"),
                                             conda_env = "strategize_env",
                                             conda_env_required = FALSE,
                                             conf_level = 0.90,
@@ -379,13 +448,17 @@ strategize       <-          function(
                                             folds = NULL, 
                                             nMonte_adversarial = 5L,
                                             primary_pushforward = "mc",
+                                            primary_strength = 1.0,
+                                            primary_n_entrants = 1L,
+                                            primary_n_field = 1L,
                                             nMonte_Qglm = 100L,
                                             learning_rate_max = 0.001, 
                                             temperature = 0.5, 
                                             save_outcome_model = FALSE,
-                                            presaved_outcome_model = FALSE, 
+                                            presaved_outcome_model = FALSE,
+                                            outcome_model_key = NULL,
                                             use_optax = FALSE,
-                                            optim_type = "gd",
+  optim_type = "gd",
                                             optimism = "extragrad",
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
@@ -400,18 +473,70 @@ strategize       <-          function(
   validate_strategize_inputs(
     Y = Y, W = W, X = X, lambda = lambda,
     p_list = p_list, K = K, pair_id = pair_id,
+    profile_order = profile_order,
     adversarial = adversarial,
+    adversarial_model_strategy = adversarial_model_strategy,
+    partial_pooling = partial_pooling,
+    partial_pooling_strength = partial_pooling_strength,
     competing_group_variable_respondent = competing_group_variable_respondent,
     competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_competition_variable_candidate = competing_group_competition_variable_candidate,
     outcome_model_type = outcome_model_type,
+    neural_mcmc_control = neural_mcmc_control,
     penalty_type = penalty_type, diff = diff,
-    primary_pushforward = primary_pushforward
+    primary_pushforward = primary_pushforward,
+    primary_strength = primary_strength,
+    primary_n_entrants = primary_n_entrants,
+    primary_n_field = primary_n_field
   )
+  if (isTRUE(adversarial) && is.null(competing_group_competition_variable_candidate)) {
+    respondent_groups <- as.character(competing_group_variable_respondent)
+    candidate_groups <- as.character(competing_group_variable_candidate)
+    competing_group_competition_variable_candidate <- ifelse(
+      candidate_groups == respondent_groups,
+      "Same",
+      "Different"
+    )
+  }
   primary_pushforward <- tolower(primary_pushforward)
-  optimism <- match.arg(optimism, c("none", "ogda", "extragrad"))
+  primary_strength <- as.numeric(primary_strength)
+  primary_n_entrants <- ai(primary_n_entrants)
+  primary_n_field <- ai(primary_n_field)
+  adversarial_model_strategy <- match.arg(tolower(adversarial_model_strategy), c("two", "four", "neural"))
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp"))
+  se_method <- match.arg(se_method, c("full", "implicit"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
   }
+  if (outcome_model_type == "neural" && optim_type != "gd") {
+    warning("Neural outcome models require gradient-based optimization; setting optim_type = \"gd\".")
+    optim_type <- "gd"
+  }
+
+  n_bayesian_models <- 1L
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$n_bayesian_models)) {
+    n_bayesian_models <- as.integer(neural_mcmc_control$n_bayesian_models)
+  }
+  use_single_neural_model <- isTRUE(adversarial) &&
+    outcome_model_type == "neural" &&
+    adversarial_model_strategy == "neural" &&
+    n_bayesian_models == 1L
+
+  # Set default for include_stage_interactions: TRUE when adversarial_model_strategy == "two"
+  if (is.null(include_stage_interactions)) {
+    include_stage_interactions <- isTRUE(adversarial) && adversarial_model_strategy == "two"
+  }
+  if (is.null(partial_pooling)) {
+    partial_pooling <- isTRUE(adversarial) && adversarial_model_strategy == "two"
+  }
+  partial_pooling_strength <- as.numeric(partial_pooling_strength)
+  if (!is.finite(partial_pooling_strength) || partial_pooling_strength < 0) {
+    stop("'partial_pooling_strength' must be a finite, non-negative numeric value.")
+  }
+  use_stage_models <- isTRUE(adversarial) &&
+    (adversarial_model_strategy == "four" ||
+       (adversarial_model_strategy == "two" && isTRUE(include_stage_interactions)))
 
   # Initialize Hessian-related variables with defaults (may be overwritten in adversarial mode)
   d2Q_da2_ast <- NULL
@@ -466,11 +591,14 @@ strategize       <-          function(
   main_comp_mat <- shadow_comp_mat <- NULL
   dQ_da_ast <- dQ_da_dag <- NULL
   a_i_ast_optimized <- a_i_dag_optimized <- NULL
+  pi_star_red_ast <- pi_star_red_dag <- NULL
   SLATE_VEC_dag_jnp <- SLATE_VEC_ast_jnp <- NULL
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
   MNtemp <- strenv$jnp$array( ifelse(!is.null(temperature), yes = temperature, no = 0.5)  ) 
+  strenv$primary_strength <- strenv$jnp$array(primary_strength, strenv$dtj)
+  strenv$adversarial_model_strategy <- adversarial_model_strategy
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
   if(!force_gaussian){ 
     if(mean(unique(Y) %in% c(0,1)) == 1){ 
@@ -485,6 +613,16 @@ strategize       <-          function(
     names_list <- lapply(p_list,function(zer){ list(names(zer)) })
   }
   W <- sapply(1:ncol(W),function(zer){ match(W[,zer],names_list[[zer]][[1]]) })
+  W <- as.matrix(W)
+  if(is.null(colnames(w_orig))){
+    if(!is.null(p_list) && !is.null(names(p_list))){
+      colnames(W) <- names(p_list)
+    } else {
+      colnames(W) <- paste0("V", seq_len(ncol(W)))
+    }
+  } else {
+    colnames(W) <- colnames(w_orig)
+  }
 
   # get info about # of levels per factor
   # When p_list is provided, use its structure to ensure consistent dimensions across CV folds
@@ -502,32 +640,61 @@ strategize       <-          function(
 
   RoundsPool <- nRounds <- GroupsPool <- 1
   if(adversarial){
-    nRounds <- length( RoundsPool <- c(0,1) ) 
     GroupsPool <- sort(unique(competing_group_variable_candidate))
+    if (adversarial_model_strategy == "four") {
+      RoundsPool <- c(0, 1)
+    } else {
+      RoundsPool <- 1
+    }
+    nRounds <- length(RoundsPool)
   }
+  group_sample_sizes <- NULL
+  if (isTRUE(adversarial) && adversarial_model_strategy == "two") {
+    group_sample_sizes <- rep(NA_real_, length(GroupsPool))
+  }
+
+  model_chunks <- c("vcov_OutcomeModel", "main_info", "interaction_info",
+                    "interaction_info_PreRegularization", "REGRESSION_PARAMS_jax",
+                    "regularization_adjust_hash", "main_dat", "my_mean",
+                    "EST_INTERCEPT_tf", "my_model", "EST_COEFFICIENTS_tf",
+                    "neural_model_info")
 
   for(Round_ in RoundsPool){
   for(GroupCounter in 1:length(GroupsPool)){
+    if (use_single_neural_model && GroupCounter > 1L) {
+      next
+    }
     print(c(Round_, GroupCounter))
     use_regularization <- use_regularization_ORIG
     if(adversarial == F){ indi_ <- 1:length( Y )  }
     if(adversarial == T){
-      if(Round_ == 0){
-        indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
-                    ( competing_group_competition_variable_candidate == "Same" &
-                        competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
-        # cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
-      }
-      if(Round_ == 1){
-        indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
-                          ( competing_group_competition_variable_candidate == "Different" &
-                              competing_group_variable_candidate %in% GroupsPool) )
-        # this group comes first 
-        indi_which_CandidateThisGroup <- 
-                                which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
-                                 ( competing_group_competition_variable_candidate == "Different" &
-                                     competing_group_variable_candidate == GroupsPool[GroupCounter]) )
-        #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
+      if (adversarial_model_strategy %in% c("two", "neural")) {
+        if (use_single_neural_model) {
+          # Pooled Bayesian model across groups (single differential fit).
+          indi_ <- which(competing_group_variable_candidate %in% GroupsPool)
+        } else {
+          # Pool primary + general tasks for each respondent group.
+          indi_ <- which(competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                           competing_group_variable_candidate %in% GroupsPool)
+        }
+      } else {
+        if(Round_ == 0){
+          indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                      ( competing_group_competition_variable_candidate == "Same" &
+                          competing_group_variable_candidate == GroupsPool[GroupCounter] ) )
+          # cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
+        }
+        if(Round_ == 1){
+          indi_ <- which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                            ( competing_group_competition_variable_candidate == "Different" &
+                                competing_group_variable_candidate %in% GroupsPool) )
+          # this group comes first
+          indi_which_CandidateThisGroup <-
+                                  which( competing_group_variable_respondent == GroupsPool[GroupCounter] &
+                                   ( competing_group_competition_variable_candidate == "Different" &
+                                       competing_group_variable_candidate == GroupsPool[GroupCounter]) )
+          #cbind(competing_group_variable_respondent,competing_group_variable_candidate)[indi_,]
+        }
       }
       if(is.null(competing_group_variable_respondent_proportions)){ 
         strenv$AstProp <- prop.table(table(competing_group_variable_respondent[
@@ -545,9 +712,17 @@ strategize       <-          function(
     W_ <- as.matrix(W[indi_,]); Y_ <- Y[indi_];
     varcov_cluster_variable_ <- varcov_cluster_variable[indi_]
     pair_id_ <- pair_id[ indi_ ]
+    profile_order_ <- if (!is.null(profile_order)) profile_order[indi_] else NULL
     competing_group_competition_variable_candidate_ <- competing_group_competition_variable_candidate[ indi_ ]
     competing_group_variable_respondent_ <- competing_group_variable_respondent[ indi_ ]
     competing_group_variable_candidate_ <- competing_group_variable_candidate[ indi_ ]
+    if (isTRUE(adversarial) && adversarial_model_strategy == "two") {
+      if (isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0) {
+        group_sample_sizes[GroupCounter] <- length(unique(pair_id_))
+      } else {
+        group_sample_sizes[GroupCounter] <- length(indi_)
+      }
+    }
 
     # run models with inputs: W_; Y_; varcov_cluster_variable_;
     if(outcome_model_type == "glm"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n") } # linear w interactions
@@ -555,9 +730,26 @@ strategize       <-          function(
     initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replacement="")
     eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
     
-    # define combined parameter vector & fxn for reextracting intercept & coefficient 
-    REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf, 
+    # define combined parameter vector & fxn for reextracting intercept & coefficient
+    REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf,
                                                          EST_COEFFICIENTS_tf), 0L)
+
+    # Create general coefficients version (with stage adjustments) if available
+    # This is used when include_stage_interactions = TRUE with "two" strategy
+    if (exists("EST_INTERCEPT_tf_general", inherits = TRUE) &&
+        exists("EST_COEFFICIENTS_tf_general", inherits = TRUE)) {
+      REGRESSION_PARAMS_jax_general <- strenv$jnp$concatenate(
+        list(EST_INTERCEPT_tf_general, EST_COEFFICIENTS_tf_general), 0L
+      )
+      EST_INTERCEPT_tf_general_store <- EST_INTERCEPT_tf_general
+      EST_COEFFICIENTS_tf_general_store <- EST_COEFFICIENTS_tf_general
+    } else {
+      # No stage interactions - general is same as base
+      REGRESSION_PARAMS_jax_general <- REGRESSION_PARAMS_jax
+      EST_INTERCEPT_tf_general_store <- EST_INTERCEPT_tf
+      EST_COEFFICIENTS_tf_general_store <- EST_COEFFICIENTS_tf
+    }
+
     gather_fxn <- compile_fxn(function(x){
       INTERCEPT_ <- strenv$jnp$expand_dims(strenv$jnp$take(x,0L),0L)
       COEFFS_ <- strenv$jnp$take(x, strenv$jnp$array( 1L:(strenv$jnp$shape(x)[[1]]-1L) ) )
@@ -567,33 +759,272 @@ strategize       <-          function(
       return( list(INTERCEPT_, COEFFS_)) } ) 
 
     # rename as appropriate
-    ret_chunks <- c("vcov_OutcomeModel", "main_info","interaction_info",
-                    "interaction_info_PreRegularization", "REGRESSION_PARAMS_jax",
-                    "regularization_adjust_hash","main_dat", "my_mean",
-                    "EST_INTERCEPT_tf","my_model", "EST_COEFFICIENTS_tf")
     round_text <- ifelse( Round_==0, yes="0", no="")
     if( (doAst <- (GroupCounter == 1)  ) ){ # do ast
-        tmp <- sapply(ret_chunks,function(chunk_){ 
+        tmp <- sapply(model_chunks,function(chunk_){ 
           eval(parse(text = sprintf("%s_ast%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment)
         })
     }
     if( !doAst ){ # do dag
-        tmp <- sapply(ret_chunks,function(chunk_){
+        tmp <- sapply(model_chunks,function(chunk_){
           eval(parse(text = sprintf("%s_dag%s_jnp <- %s",chunk_,round_text,chunk_)),envir = evaluation_environment) 
         })
      }
+    if (isTRUE(adversarial) && adversarial_model_strategy == "two" && isTRUE(include_stage_interactions)) {
+      if (doAst) {
+        REGRESSION_PARAMS_jax_general_ast_jnp <- REGRESSION_PARAMS_jax_general
+        EST_INTERCEPT_tf_general_ast_jnp <- EST_INTERCEPT_tf_general_store
+        EST_COEFFICIENTS_tf_general_ast_jnp <- EST_COEFFICIENTS_tf_general_store
+        if (exists("vcov_OutcomeModel_general", inherits = TRUE)) {
+          vcov_OutcomeModel_general_ast_jnp <- vcov_OutcomeModel_general
+        }
+      } else {
+        REGRESSION_PARAMS_jax_general_dag_jnp <- REGRESSION_PARAMS_jax_general
+        EST_INTERCEPT_tf_general_dag_jnp <- EST_INTERCEPT_tf_general_store
+        EST_COEFFICIENTS_tf_general_dag_jnp <- EST_COEFFICIENTS_tf_general_store
+        if (exists("vcov_OutcomeModel_general", inherits = TRUE)) {
+          vcov_OutcomeModel_general_dag_jnp <- vcov_OutcomeModel_general
+        }
+      }
+    }
     # rm( tmp )
   }
   }
 
-  #for(suffix in c("ast0", "dag0", "dag")) {
-  for( suffix in c("ast0", "dag0", "ast", "dag") ) {
-    if( !paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp") %in% ls() ){
-      assign(paste0("EST_INTERCEPT_tf_", suffix, "_jnp"), EST_INTERCEPT_tf_ast_jnp)
-      assign(paste0("EST_COEFFICIENTS_tf_", suffix, "_jnp"), EST_COEFFICIENTS_tf_ast_jnp)
-      assign(paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp"), REGRESSION_PARAMS_jax_ast_jnp)
-      assign(paste0("vcov_OutcomeModel_", suffix, "_jnp"), vcov_OutcomeModel_ast_jnp)
-  } }
+  has_model <- function(suffix) {
+    params_name <- paste0("REGRESSION_PARAMS_jax_", suffix, "_jnp")
+    if (!exists(params_name, inherits = TRUE)) {
+      return(FALSE)
+    }
+    !is.null(get(params_name, inherits = TRUE))
+  }
+
+  copy_model_chunks <- function(source_suffix, target_suffix) {
+    for (chunk in model_chunks) {
+      src_name <- paste0(chunk, "_", source_suffix, "_jnp")
+      dest_name <- paste0(chunk, "_", target_suffix, "_jnp")
+      if (!exists(src_name, inherits = TRUE)) {
+        next
+      }
+      if (exists(dest_name, inherits = TRUE)) {
+        dest_val <- get(dest_name, inherits = TRUE)
+        if (!is.null(dest_val)) {
+          next
+        }
+      }
+      assign(dest_name, get(src_name, inherits = TRUE), envir = evaluation_environment)
+    }
+  }
+
+  if (isTRUE(adversarial) && adversarial_model_strategy %in% c("two", "neural")) {
+    copy_model_chunks("ast", "ast0")
+    copy_model_chunks("dag", "dag0")
+  }
+
+  for (suffix in c("ast0", "dag0", "ast", "dag")) {
+    source_suffix <- if (suffix %in% c("dag", "dag0") && has_model("dag")) "dag" else "ast"
+    copy_model_chunks(source_suffix, suffix)
+  }
+
+  # When using stage interactions with "two" strategy:
+  # - ast0/dag0 (primary) use base coefficients (already set)
+  # - ast/dag (general) use stage-adjusted coefficients
+  if (isTRUE(adversarial) && adversarial_model_strategy == "two" && isTRUE(include_stage_interactions)) {
+    message("Applying stage-adjusted coefficients for general election models (ast/dag)...")
+
+    # Update ast model with general coefficients
+    if (exists("REGRESSION_PARAMS_jax_general_ast_jnp", inherits = TRUE)) {
+      REGRESSION_PARAMS_jax_ast_jnp <- REGRESSION_PARAMS_jax_general_ast_jnp
+      EST_INTERCEPT_tf_ast_jnp <- EST_INTERCEPT_tf_general_ast_jnp
+      EST_COEFFICIENTS_tf_ast_jnp <- EST_COEFFICIENTS_tf_general_ast_jnp
+    }
+    if (exists("vcov_OutcomeModel_general_ast_jnp", inherits = TRUE)) {
+      vcov_OutcomeModel_ast_jnp <- vcov_OutcomeModel_general_ast_jnp
+    }
+
+    # Update dag model with general coefficients
+    if (exists("REGRESSION_PARAMS_jax_general_dag_jnp", inherits = TRUE)) {
+      REGRESSION_PARAMS_jax_dag_jnp <- REGRESSION_PARAMS_jax_general_dag_jnp
+      EST_INTERCEPT_tf_dag_jnp <- EST_INTERCEPT_tf_general_dag_jnp
+      EST_COEFFICIENTS_tf_dag_jnp <- EST_COEFFICIENTS_tf_general_dag_jnp
+    }
+    if (exists("vcov_OutcomeModel_general_dag_jnp", inherits = TRUE)) {
+      vcov_OutcomeModel_dag_jnp <- vcov_OutcomeModel_general_dag_jnp
+    }
+  }
+  if (isTRUE(adversarial) && adversarial_model_strategy == "two" && isTRUE(partial_pooling)) {
+    pooled_loaded <- FALSE
+    get_two_suffix <- function(group) {
+      base <- if (!is.null(outcome_model_key)) {
+        sprintf("%s_%s_%s", group, 1, outcome_model_key)
+      } else {
+        sprintf("%s_%s", group, 1)
+      }
+      sprintf("%s_two", base)
+    }
+    pooled_file_ast <- sprintf("./StrategizeInternals/coef_pooled_%s.rds",
+                               get_two_suffix(GroupsPool[1]))
+    pooled_file_dag <- sprintf("./StrategizeInternals/coef_pooled_%s.rds",
+                               get_two_suffix(GroupsPool[2]))
+
+    if (isTRUE(presaved_outcome_model) &&
+        file.exists(pooled_file_ast) && file.exists(pooled_file_dag)) {
+      pooled_ast <- readRDS(pooled_file_ast)
+      pooled_dag <- readRDS(pooled_file_dag)
+      if (!is.null(pooled_ast$regression_params_primary) &&
+          !is.null(pooled_dag$regression_params_primary)) {
+        message("Loading pooled outcome coefficients for two-strategy model...")
+        REGRESSION_PARAMS_jax_ast0_jnp <- strenv$jnp$array(
+          as.numeric(pooled_ast$regression_params_primary),
+          dtype = strenv$dtj
+        )
+        REGRESSION_PARAMS_jax_dag0_jnp <- strenv$jnp$array(
+          as.numeric(pooled_dag$regression_params_primary),
+          dtype = strenv$dtj
+        )
+        if (isTRUE(include_stage_interactions) &&
+            !is.null(pooled_ast$regression_params_general) &&
+            !is.null(pooled_dag$regression_params_general)) {
+          REGRESSION_PARAMS_jax_ast_jnp <- strenv$jnp$array(
+            as.numeric(pooled_ast$regression_params_general),
+            dtype = strenv$dtj
+          )
+          REGRESSION_PARAMS_jax_dag_jnp <- strenv$jnp$array(
+            as.numeric(pooled_dag$regression_params_general),
+            dtype = strenv$dtj
+          )
+        } else {
+          REGRESSION_PARAMS_jax_ast_jnp <- REGRESSION_PARAMS_jax_ast0_jnp
+          REGRESSION_PARAMS_jax_dag_jnp <- REGRESSION_PARAMS_jax_dag0_jnp
+        }
+
+        # Keep intercept/coeff vectors in sync after loading.
+        parts_ast0 <- gather_fxn(REGRESSION_PARAMS_jax_ast0_jnp)
+        EST_INTERCEPT_tf_ast0_jnp <- parts_ast0[[1]]
+        EST_COEFFICIENTS_tf_ast0_jnp <- parts_ast0[[2]]
+
+        parts_dag0 <- gather_fxn(REGRESSION_PARAMS_jax_dag0_jnp)
+        EST_INTERCEPT_tf_dag0_jnp <- parts_dag0[[1]]
+        EST_COEFFICIENTS_tf_dag0_jnp <- parts_dag0[[2]]
+
+        parts_ast <- gather_fxn(REGRESSION_PARAMS_jax_ast_jnp)
+        EST_INTERCEPT_tf_ast_jnp <- parts_ast[[1]]
+        EST_COEFFICIENTS_tf_ast_jnp <- parts_ast[[2]]
+
+        parts_dag <- gather_fxn(REGRESSION_PARAMS_jax_dag_jnp)
+        EST_INTERCEPT_tf_dag_jnp <- parts_dag[[1]]
+        EST_COEFFICIENTS_tf_dag_jnp <- parts_dag[[2]]
+
+        pooled_loaded <- TRUE
+      }
+    }
+
+    if (!pooled_loaded) {
+      if (any(!is.finite(group_sample_sizes))) {
+        group_sample_sizes <- vapply(GroupsPool, function(grp) {
+          indi_pool <- which(competing_group_variable_respondent == grp &
+                               competing_group_variable_candidate %in% GroupsPool)
+          if (isTRUE(diff) && !is.null(pair_id) && length(indi_pool) > 0) {
+            length(unique(pair_id[indi_pool]))
+          } else {
+            length(indi_pool)
+          }
+        }, numeric(1))
+      }
+      if (length(group_sample_sizes) == 2 && all(is.finite(group_sample_sizes))) {
+        n_ast <- group_sample_sizes[1]
+        n_dag <- group_sample_sizes[2]
+        denom <- n_ast + n_dag
+
+        pool_weight <- function(n) {
+          if (!is.finite(n) || n <= 0) {
+            return(0)
+          }
+          w <- partial_pooling_strength / (partial_pooling_strength + n)
+          max(0, min(1, w))
+        }
+
+        if (denom > 0) {
+          pool_params <- function(params_ast, params_dag) {
+            params_ast_np <- strenv$np$array(params_ast)
+            params_dag_np <- strenv$np$array(params_dag)
+            strenv$np$divide(
+              strenv$np$add(strenv$np$multiply(n_ast, params_ast_np),
+                            strenv$np$multiply(n_dag, params_dag_np)),
+              denom
+            )
+          }
+          shrink_params <- function(params, pool_np, weight) {
+            params_np <- strenv$np$array(params)
+            strenv$np$add(strenv$np$multiply(1 - weight, params_np),
+                          strenv$np$multiply(weight, pool_np))
+          }
+
+          message("Applying partial pooling to two-strategy outcome models...")
+          pool_base_np <- pool_params(REGRESSION_PARAMS_jax_ast0_jnp,
+                                      REGRESSION_PARAMS_jax_dag0_jnp)
+          w_ast <- pool_weight(n_ast)
+          w_dag <- pool_weight(n_dag)
+
+          REGRESSION_PARAMS_jax_ast0_jnp <- strenv$jnp$array(
+            shrink_params(REGRESSION_PARAMS_jax_ast0_jnp, pool_base_np, w_ast),
+            dtype = strenv$dtj
+          )
+          REGRESSION_PARAMS_jax_dag0_jnp <- strenv$jnp$array(
+            shrink_params(REGRESSION_PARAMS_jax_dag0_jnp, pool_base_np, w_dag),
+            dtype = strenv$dtj
+          )
+
+          if (isTRUE(include_stage_interactions)) {
+            pool_gen_np <- pool_params(REGRESSION_PARAMS_jax_ast_jnp,
+                                       REGRESSION_PARAMS_jax_dag_jnp)
+            REGRESSION_PARAMS_jax_ast_jnp <- strenv$jnp$array(
+              shrink_params(REGRESSION_PARAMS_jax_ast_jnp, pool_gen_np, w_ast),
+              dtype = strenv$dtj
+            )
+            REGRESSION_PARAMS_jax_dag_jnp <- strenv$jnp$array(
+              shrink_params(REGRESSION_PARAMS_jax_dag_jnp, pool_gen_np, w_dag),
+              dtype = strenv$dtj
+            )
+          } else {
+            REGRESSION_PARAMS_jax_ast_jnp <- REGRESSION_PARAMS_jax_ast0_jnp
+            REGRESSION_PARAMS_jax_dag_jnp <- REGRESSION_PARAMS_jax_dag0_jnp
+          }
+
+          # Keep intercept/coeff vectors in sync after pooling.
+          parts_ast0 <- gather_fxn(REGRESSION_PARAMS_jax_ast0_jnp)
+          EST_INTERCEPT_tf_ast0_jnp <- parts_ast0[[1]]
+          EST_COEFFICIENTS_tf_ast0_jnp <- parts_ast0[[2]]
+
+          parts_dag0 <- gather_fxn(REGRESSION_PARAMS_jax_dag0_jnp)
+          EST_INTERCEPT_tf_dag0_jnp <- parts_dag0[[1]]
+          EST_COEFFICIENTS_tf_dag0_jnp <- parts_dag0[[2]]
+
+          parts_ast <- gather_fxn(REGRESSION_PARAMS_jax_ast_jnp)
+          EST_INTERCEPT_tf_ast_jnp <- parts_ast[[1]]
+          EST_COEFFICIENTS_tf_ast_jnp <- parts_ast[[2]]
+
+          parts_dag <- gather_fxn(REGRESSION_PARAMS_jax_dag_jnp)
+          EST_INTERCEPT_tf_dag_jnp <- parts_dag[[1]]
+          EST_COEFFICIENTS_tf_dag_jnp <- parts_dag[[2]]
+
+          if (isTRUE(save_outcome_model)) {
+            dir.create('./StrategizeInternals',showWarnings=FALSE)
+            pooled_ast <- list(
+              regression_params_primary = as.numeric(strenv$np$array(REGRESSION_PARAMS_jax_ast0_jnp)),
+              regression_params_general = as.numeric(strenv$np$array(REGRESSION_PARAMS_jax_ast_jnp))
+            )
+            pooled_dag <- list(
+              regression_params_primary = as.numeric(strenv$np$array(REGRESSION_PARAMS_jax_dag0_jnp)),
+              regression_params_general = as.numeric(strenv$np$array(REGRESSION_PARAMS_jax_dag_jnp))
+            )
+            saveRDS(pooled_ast, file = pooled_file_ast)
+            saveRDS(pooled_dag, file = pooled_file_dag)
+          }
+        }
+      }
+    }
+  }
   message("Done initializing outcome models & starting optimization sequence...")
 
   n_main_params <- nrow( main_info )
@@ -838,7 +1269,11 @@ strategize       <-          function(
 
   message("Defining gd function...")
   # bring functions into env and compile as needed
-  strenv$getMultinomialSamp <- compile_fxn( getMultinomialSamp_R, static_argnum = 4L-1L)
+  strenv$getMultinomialSamp <- strenv$jax$jit(
+    getMultinomialSamp_R,
+    static_argnums = 3L,
+    static_argnames = c("ParameterizationType")
+  )
   environment(getQPiStar_gd) <- evaluation_environment
   }
 
@@ -899,6 +1334,9 @@ strategize       <-          function(
     q_star_exact <- q_star <- strenv$np$array( strenv$jnp$take(results_vec, 0L) )
     pi_star_full <- strenv$np$array( strenv$jnp$take(results_vec,
                                                      strenv$jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
+    pi_star_reduced_exact <- getPiStar_exact(EST_COEFFICIENTS_tf)
+    pi_star_red_ast <- strenv$jnp$array(as.matrix(strenv$np$array(pi_star_reduced_exact)))
+    pi_star_red_dag <- pi_star_red_ast
   }
 
   # define main Q function in different cases
@@ -913,8 +1351,16 @@ strategize       <-          function(
     p_vec_full_ast_jnp <- p_vec_full_dag_jnp <- p_vec_full_jnp
 
     # initialize QMonte fxns 
-    InitializeQMonteFxns_impl <- if (adversarial && primary_pushforward == "mc") {
+    InitializeQMonteFxns_impl <- if (outcome_model_type == "neural") {
+      if (adversarial && primary_pushforward == "multi") {
+        InitializeQMonteFxns_MultiCandidate
+      } else {
+        InitializeQMonteFxns_MCSampling
+      }
+    } else if (adversarial && primary_pushforward == "mc") {
       InitializeQMonteFxns_MCSampling
+    } else if (adversarial && primary_pushforward == "multi") {
+      InitializeQMonteFxns_MultiCandidate
     } else {
       InitializeQMonteFxns
     }
@@ -1047,51 +1493,372 @@ strategize       <-          function(
     jacobian_mat_gd <- jacobian_mat <- matrix(0, ncol = 4*REGRESSION_PARAMS_jax_ast_jnp$shape[[1]],
                                                  nrow = q_with_pi_star_full$shape[[1]])
     diag(jacobian_mat_gd) <- diag(jacobian_mat) <- 1
-    vcov_OutcomeModel_concat <- matrix(0, nrow = nrow(vcov_OutcomeModel_ast_jnp)*4,
-                                          ncol = nrow(vcov_OutcomeModel_ast_jnp)*4)
+    if (is.null(dim(vcov_OutcomeModel_ast_jnp))) {
+      vcov_OutcomeModel_concat <- rep(0, length(vcov_OutcomeModel_ast_jnp) * 4L)
+    } else {
+      vcov_OutcomeModel_concat <- matrix(0, nrow = nrow(vcov_OutcomeModel_ast_jnp) * 4L,
+                                            ncol = nrow(vcov_OutcomeModel_ast_jnp) * 4L)
+    }
     if(compute_se){
       message("Computing SEs...")
+      # Preserve convergence history before jacrev re-runs getQPiStar_gd.
+      convergence_cache <- list(
+        grad_mag_ast_vec = strenv$grad_mag_ast_vec,
+        grad_mag_dag_vec = strenv$grad_mag_dag_vec,
+        loss_ast_vec = strenv$loss_ast_vec,
+        loss_dag_vec = strenv$loss_dag_vec,
+        inv_learning_rate_ast_vec = strenv$inv_learning_rate_ast_vec,
+        inv_learning_rate_dag_vec = strenv$inv_learning_rate_dag_vec
+      )
       # first, compute vcov
-      vcov_OutcomeModel_concat <- as.matrix( Matrix::bdiag( list(
-                                          vcov_OutcomeModel_ast_jnp,
-                                          vcov_OutcomeModel_dag_jnp,
-                                          vcov_OutcomeModel_ast0_jnp,
-                                          vcov_OutcomeModel_dag0_jnp  )  ) ) 
+      if (is.null(dim(vcov_OutcomeModel_ast_jnp))) {
+        vcov_OutcomeModel_concat <- c(vcov_OutcomeModel_ast_jnp,
+                                      vcov_OutcomeModel_dag_jnp,
+                                      vcov_OutcomeModel_ast0_jnp,
+                                      vcov_OutcomeModel_dag0_jnp)
+      } else {
+        vcov_OutcomeModel_concat <- as.matrix( Matrix::bdiag( list(
+                                            vcov_OutcomeModel_ast_jnp,
+                                            vcov_OutcomeModel_dag_jnp,
+                                            vcov_OutcomeModel_ast0_jnp,
+                                            vcov_OutcomeModel_dag0_jnp  )  ) )
+      }
 
-      # jacfwd uses forward-mode automatic differentiation, which is more efficient for “tall” Jacobian matrices
-      # jacrev uses reverse-mode, which is more efficient for “wide” Jacobian matrices.
-      # For near-square matrices, jacfwd probably has an edge over jacrev.
-      # note: do not jit compile as computation only used once (compilation induces overhead)
-      jacobian_mat <- strenv$jax$jacrev(getQPiStar_gd, 0L:3L)(
-                                  REGRESSION_PARAMS_jax_ast_jnp,
-                                  REGRESSION_PARAMS_jax_dag_jnp,
-                                  REGRESSION_PARAMS_jax_ast0_jnp,
-                                  REGRESSION_PARAMS_jax_dag0_jnp,
-                                  p_vec_full_ast_jnp,
-                                  p_vec_full_dag_jnp,
-                                  SLATE_VEC_ast_jnp, 
-                                  SLATE_VEC_dag_jnp,
+      se_method_effective <- se_method
+      if (se_method_effective == "full") {
+        # jacfwd uses forward-mode automatic differentiation, which is more efficient for "tall" Jacobian matrices
+        # jacrev uses reverse-mode, which is more efficient for "wide" Jacobian matrices.
+        # For near-square matrices, jacfwd probably has an edge over jacrev.
+        # note: do not jit compile as computation only used once (compilation induces overhead)
+        jacobian_mat <- strenv$jax$jacrev(getQPiStar_gd, 0L:3L)(
+                                    REGRESSION_PARAMS_jax_ast_jnp,
+                                    REGRESSION_PARAMS_jax_dag_jnp,
+                                    REGRESSION_PARAMS_jax_ast0_jnp,
+                                    REGRESSION_PARAMS_jax_dag0_jnp,
+                                    p_vec_full_ast_jnp,
+                                    p_vec_full_dag_jnp,
+                                    SLATE_VEC_ast_jnp, 
+                                    SLATE_VEC_dag_jnp,
+                                    strenv$jnp$array(  lambda  ),
+                                    jax_seed,
+                                    functionList = list(dQ_da_ast,
+                                                        dQ_da_dag,
+                                                        QFXN),
+                                    functionReturn = F,
+                                    a_i_ast = a_vec_init_ast, 
+                                    a_i_dag = a_vec_init_dag, 
+                                    gd_full_simplex = T,
+                                    quiet = F
+                                    )
+        jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
+          strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })
+        jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
+      } else {
+        message("Computing SEs via implicit differentiation...")
+        reshape_jac <- function(jac){
+          strenv$jnp$reshape(jac, list(jac$shape[[1L]], -1L))
+        }
+        as_jac_list <- function(jac_list){
+          if (is.list(jac_list)) {
+            return(jac_list)
+          }
+          list(jac_list)
+        }
+        concat_jac <- function(jac_list){
+          jac_list <- as_jac_list(jac_list)
+          strenv$jnp$concatenate(lapply(jac_list, reshape_jac), axis = 1L)
+        }
+
+        StationarityFxn <- function(a_i_ast, a_i_dag,
+                                    REGRESSION_PARAMETERS_ast,
+                                    REGRESSION_PARAMETERS_dag,
+                                    REGRESSION_PARAMETERS_ast0,
+                                    REGRESSION_PARAMETERS_dag0,
+                                    SEED_IN_LOOP){
+          SEED_IN_LOOP <- strenv$jax$lax$stop_gradient(SEED_IN_LOOP)
+          REGRESSION_PARAMETERS_ast <- gather_fxn(REGRESSION_PARAMETERS_ast)
+          INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
+          COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
+
+          INTERCEPT_dag0_ <- INTERCEPT_ast0_ <- INTERCEPT_dag_ <- INTERCEPT_ast_
+          COEFFICIENTS_dag0_ <- COEFFICIENTS_ast0_ <- COEFFICIENTS_dag_ <- COEFFICIENTS_ast_
+          if(adversarial){
+            REGRESSION_PARAMETERS_dag <- gather_fxn(REGRESSION_PARAMETERS_dag)
+            INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag[[1]]
+            COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag[[2]]
+          }
+          if(adversarial && isTRUE(use_stage_models)){
+            REGRESSION_PARAMETERS_ast0 <- gather_fxn(REGRESSION_PARAMETERS_ast0)
+            INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0[[1]]
+            COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0[[2]]
+
+            REGRESSION_PARAMETERS_dag0 <- gather_fxn(REGRESSION_PARAMETERS_dag0)
+            INTERCEPT_dag0_ <- REGRESSION_PARAMETERS_dag0[[1]]
+            COEFFICIENTS_dag0_ <- REGRESSION_PARAMETERS_dag0[[2]]
+          }
+
+          grad_ast <- dQ_da_ast(  a_i_ast, a_i_dag,
+                                  INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                  INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                  p_vec_full_ast_jnp, p_vec_full_dag_jnp,
+                                  SLATE_VEC_ast_jnp, SLATE_VEC_dag_jnp,
                                   strenv$jnp$array(  lambda  ),
-                                  jax_seed,
-                                  functionList = list(dQ_da_ast,
-                                                      dQ_da_dag,
-                                                      QFXN),
-                                  functionReturn = F,
-                                  a_i_ast = a_vec_init_ast, 
-                                  a_i_dag = a_vec_init_dag, 
-                                  gd_full_simplex = T,
-                                  quiet = F
-                                  )
-      jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
-        strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })
-      jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
+                                  Q_SIGN_ <- strenv$jnp$array(1.),
+                                  SEED_IN_LOOP
+                                  )[[2]]
+          grad_ast <- strenv$jnp$reshape(grad_ast, list(-1L))
+          if(!adversarial){
+            return(grad_ast)
+          }
+          grad_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
+                                  INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                  INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                  p_vec_full_ast_jnp, p_vec_full_dag_jnp,
+                                  SLATE_VEC_ast_jnp, SLATE_VEC_dag_jnp,
+                                  strenv$jnp$array(  lambda  ),
+                                  Q_SIGN_ <- strenv$jnp$array(-1.),
+                                  SEED_IN_LOOP
+                                  )[[2]]
+          grad_dag <- strenv$jnp$reshape(grad_dag, list(-1L))
+          strenv$jnp$concatenate(list(grad_ast, grad_dag), 0L)
+        }
+
+        OutputFxn <- function(a_i_ast, a_i_dag,
+                              REGRESSION_PARAMETERS_ast,
+                              REGRESSION_PARAMETERS_dag,
+                              REGRESSION_PARAMETERS_ast0,
+                              REGRESSION_PARAMETERS_dag0,
+                              SEED_IN_LOOP){
+          SEED_IN_LOOP <- strenv$jax$lax$stop_gradient(SEED_IN_LOOP)
+          REGRESSION_PARAMETERS_ast <- gather_fxn(REGRESSION_PARAMETERS_ast)
+          INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast[[1]]
+          COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast[[2]]
+
+          INTERCEPT_dag0_ <- INTERCEPT_ast0_ <- INTERCEPT_dag_ <- INTERCEPT_ast_
+          COEFFICIENTS_dag0_ <- COEFFICIENTS_ast0_ <- COEFFICIENTS_dag_ <- COEFFICIENTS_ast_
+          if(adversarial){
+            REGRESSION_PARAMETERS_dag <- gather_fxn(REGRESSION_PARAMETERS_dag)
+            INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag[[1]]
+            COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag[[2]]
+          }
+          if(adversarial && isTRUE(use_stage_models)){
+            REGRESSION_PARAMETERS_ast0 <- gather_fxn(REGRESSION_PARAMETERS_ast0)
+            INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0[[1]]
+            COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0[[2]]
+
+            REGRESSION_PARAMETERS_dag0 <- gather_fxn(REGRESSION_PARAMETERS_dag0)
+            INTERCEPT_dag0_ <- REGRESSION_PARAMETERS_dag0[[1]]
+            COEFFICIENTS_dag0_ <- REGRESSION_PARAMETERS_dag0[[2]]
+          }
+
+          pi_star_ast_full_simplex_ <- getPrettyPi( pi_star_ast_<-strenv$a2Simplex_diff_use(a_i_ast),
+                                                    strenv$ParameterizationType,
+                                                    strenv$d_locator_use,
+                                                    strenv$main_comp_mat,
+                                                    strenv$shadow_comp_mat)
+          pi_star_dag_full_simplex_ <- getPrettyPi( pi_star_dag_<-strenv$a2Simplex_diff_use(a_i_dag),
+                                                    strenv$ParameterizationType,
+                                                    strenv$d_locator_use,
+                                                    strenv$main_comp_mat,
+                                                    strenv$shadow_comp_mat)
+
+          if(glm_family=="gaussian"){
+            pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
+            pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
+          }
+          if(glm_family != "gaussian"){
+            pi_star_ast_f_all <- strenv$jax$vmap(function(s_){
+              strenv$getMultinomialSamp(pi_star_ast_,
+                                        MNtemp,
+                                        s_,
+                                        strenv$ParameterizationType,
+                                        strenv$d_locator_use)
+            }, in_axes = list(0L))(strenv$jax$random$split( SEED_IN_LOOP,
+                                                           nMonte_Qglm) )
+            SEED_IN_LOOP <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+            pi_star_dag_f_all <- strenv$jax$vmap(function(s_){
+              strenv$getMultinomialSamp(pi_star_dag_,
+                                        MNtemp,
+                                        s_,
+                                        strenv$ParameterizationType,
+                                        strenv$d_locator_use)
+            }, in_axes = list(0L))( strenv$jax$random$split( SEED_IN_LOOP,
+                                                            nMonte_Qglm) )
+            SEED_IN_LOOP <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+          }
+
+          if(!adversarial){
+            q_star_f <- strenv$Vectorized_QMonteIter(
+                                          pi_star_ast_f_all,  pi_star_dag_f_all,
+                                          INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                          INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
+          }
+          if(adversarial){
+            n_q_samp <- as.integer(pi_star_ast_f_all$shape[[1L]])
+            if (primary_pushforward == "multi") {
+              sample_pool <- function(pi_vec, n_draws, n_pool, seed_in) {
+                n_total <- as.integer(n_draws * n_pool)
+                all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
+                seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
+                seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
+                seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
+                samples <- strenv$jax$vmap(function(seed_row){
+                  strenv$jax$vmap(function(seed_cell){
+                    strenv$getMultinomialSamp(pi_vec, MNtemp,
+                                              seed_cell, strenv$ParameterizationType, strenv$d_locator_use)
+                  }, in_axes = list(0L))(seed_row)
+                }, in_axes = list(0L))(seeds)
+                list(samples = samples, seed_next = seed_next)
+              }
+
+              samp_ast <- sample_pool(pi_star_ast_, n_q_samp, primary_n_entrants, SEED_IN_LOOP)
+              TSAMP_ast_all <- samp_ast$samples
+              SEED_IN_LOOP <- samp_ast$seed_next
+
+              samp_dag <- sample_pool(pi_star_dag_, n_q_samp, primary_n_entrants, SEED_IN_LOOP)
+              TSAMP_dag_all <- samp_dag$samples
+              SEED_IN_LOOP <- samp_dag$seed_next
+
+              samp_ast_field <- sample_pool(SLATE_VEC_ast_jnp, n_q_samp, primary_n_field, SEED_IN_LOOP)
+              TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
+              SEED_IN_LOOP <- samp_ast_field$seed_next
+
+              samp_dag_field <- sample_pool(SLATE_VEC_dag_jnp, n_q_samp, primary_n_field, SEED_IN_LOOP)
+              TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
+              SEED_IN_LOOP <- samp_dag_field$seed_next
+            } else {
+              TSAMP_ast_all <- pi_star_ast_f_all
+              TSAMP_dag_all <- pi_star_dag_f_all
+              TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){
+                strenv$getMultinomialSamp(SLATE_VEC_ast_jnp, MNtemp,
+                                          s_, strenv$ParameterizationType, strenv$d_locator_use)
+              }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, n_q_samp))
+              SEED_IN_LOOP <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+
+              TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){
+                strenv$getMultinomialSamp(SLATE_VEC_dag_jnp, MNtemp,
+                                          s_, strenv$ParameterizationType, strenv$d_locator_use)
+              }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, n_q_samp))
+              SEED_IN_LOOP <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+            }
+
+            Qres <- strenv$Vectorized_QMonteIter_MaxMin(
+              TSAMP_ast_all, TSAMP_dag_all,
+              TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+              a_i_ast, a_i_dag,
+              INTERCEPT_ast_, COEFFICIENTS_ast_,
+              INTERCEPT_dag_, COEFFICIENTS_dag_,
+              INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+              INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+              p_vec_full_ast_jnp, p_vec_full_dag_jnp,
+              strenv$jnp$array(  lambda  ), strenv$jnp$array(1.),
+              strenv$jax$random$split(SEED_IN_LOOP, n_q_samp)
+            )
+            q_star_val <- Qres$q_ast$mean(0L)
+            q_star_dims <- if (length(pi_star_ast_full_simplex_$shape) >= 2L) {
+              list(1L, 1L)
+            } else {
+              list(1L)
+            }
+            q_star_val <- strenv$jnp$reshape(q_star_val, q_star_dims)
+            q_star_f <- strenv$jnp$concatenate(list(q_star_val, q_star_val, q_star_val), 0L)
+          }
+
+          strenv$jnp$concatenate(list(q_star_f,
+                                      pi_star_ast_full_simplex_,
+                                      pi_star_dag_full_simplex_), 0L)
+        }
+
+        dF_da_list <- if (adversarial) {
+          strenv$jax$jacrev(StationarityFxn, 0L:1L)
+        } else {
+          strenv$jax$jacrev(StationarityFxn, 0L)
+        }
+        dF_da_list <- dF_da_list(
+          a_i_ast_optimized,
+          a_i_dag_optimized,
+          REGRESSION_PARAMS_jax_ast_jnp,
+          REGRESSION_PARAMS_jax_dag_jnp,
+          REGRESSION_PARAMS_jax_ast0_jnp,
+          REGRESSION_PARAMS_jax_dag0_jnp,
+          jax_seed
+        )
+        dF_dtheta_list <- strenv$jax$jacrev(StationarityFxn, 2L:5L)(
+          a_i_ast_optimized,
+          a_i_dag_optimized,
+          REGRESSION_PARAMS_jax_ast_jnp,
+          REGRESSION_PARAMS_jax_dag_jnp,
+          REGRESSION_PARAMS_jax_ast0_jnp,
+          REGRESSION_PARAMS_jax_dag0_jnp,
+          jax_seed
+        )
+        dF_da_mat <- concat_jac(dF_da_list)
+        dF_dtheta_mat <- concat_jac(dF_dtheta_list)
+
+        da_dtheta <- strenv$jnp$linalg$solve(
+          dF_da_mat,
+          strenv$jnp$negative(dF_dtheta_mat)
+        )
+
+        g_a_list <- if (adversarial) {
+          strenv$jax$jacrev(OutputFxn, 0L:1L)
+        } else {
+          strenv$jax$jacrev(OutputFxn, 0L)
+        }
+        g_a_list <- g_a_list(
+          a_i_ast_optimized,
+          a_i_dag_optimized,
+          REGRESSION_PARAMS_jax_ast_jnp,
+          REGRESSION_PARAMS_jax_dag_jnp,
+          REGRESSION_PARAMS_jax_ast0_jnp,
+          REGRESSION_PARAMS_jax_dag0_jnp,
+          jax_seed
+        )
+        g_theta_list <- strenv$jax$jacrev(OutputFxn, 2L:5L)(
+          a_i_ast_optimized,
+          a_i_dag_optimized,
+          REGRESSION_PARAMS_jax_ast_jnp,
+          REGRESSION_PARAMS_jax_dag_jnp,
+          REGRESSION_PARAMS_jax_ast0_jnp,
+          REGRESSION_PARAMS_jax_dag0_jnp,
+          jax_seed
+        )
+        g_a_mat <- concat_jac(g_a_list)
+        g_theta_mat <- concat_jac(g_theta_list)
+
+        jacobian_mat <- strenv$jnp$add(g_theta_mat, strenv$jnp$matmul(g_a_mat, da_dtheta))
+        jacobian_mat_gd <- jacobian_mat <- as.matrix(strenv$np$array(jacobian_mat))
+      }
       # plot(colMeans(abs(jacobian_mat_gd)))
+      strenv$grad_mag_ast_vec <- convergence_cache$grad_mag_ast_vec
+      strenv$grad_mag_dag_vec <- convergence_cache$grad_mag_dag_vec
+      strenv$loss_ast_vec <- convergence_cache$loss_ast_vec
+      strenv$loss_dag_vec <- convergence_cache$loss_dag_vec
+      strenv$inv_learning_rate_ast_vec <- convergence_cache$inv_learning_rate_ast_vec
+      strenv$inv_learning_rate_dag_vec <- convergence_cache$inv_learning_rate_dag_vec
     }
   }
 
   # the first three entries of output are:
   # Qhat_population, Qhat_ast, Qhat_dag
-  vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
+  if (is.null(dim(vcov_OutcomeModel_concat))) {
+    vcov_diag <- as.numeric(vcov_OutcomeModel_concat)
+    n_params <- ncol(jacobian_mat)
+    if (length(vcov_diag) < n_params) {
+      vcov_diag <- c(vcov_diag, rep(0, n_params - length(vcov_diag)))
+    }
+    if (length(vcov_diag) > n_params) {
+      vcov_diag <- vcov_diag[seq_len(n_params)]
+    }
+    vcov_diag_out <- as.numeric((jacobian_mat ^ 2) %*% vcov_diag)
+    vcov_PiStar <- diag(vcov_diag_out)
+  } else {
+    vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
+  }
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
   pi_star_numeric <- strenv$np$array( pi_star_full ) # - c(1:3) already extracted 
@@ -1179,6 +1946,227 @@ strategize       <-          function(
   strenv$dQ_da_dag          <- dQ_da_dag
   strenv$QFXN               <- QFXN
   strenv$getQPiStar_gd      <- getQPiStar_gd
+
+  # Build interpretable summaries for outcome models
+  outcome_model_view <- (function() {
+    to_scalar <- function(x) {
+      if (is.null(x)) return(NA_real_)
+      out <- tryCatch(as.numeric(x), error = function(e) NULL)
+      if (!is.null(out) && length(out) > 0 && is.finite(out[1])) return(out[1])
+      out <- tryCatch(as.numeric(strenv$np$array(x)), error = function(e) NA_real_)
+      if (length(out) == 0) return(NA_real_)
+      out[1]
+    }
+
+    to_numeric <- function(x) {
+      if (is.null(x)) return(numeric(0))
+      out <- tryCatch(as.numeric(x), error = function(e) NULL)
+      if (!is.null(out) && length(out) > 0) return(out)
+      out <- tryCatch(as.numeric(strenv$np$array(x)), error = function(e) numeric(0))
+      out
+    }
+
+    flatten_levels <- function(x) {
+      if (is.list(x) && length(x) == 1 && is.atomic(x[[1]])) return(as.character(x[[1]]))
+      if (is.atomic(x)) return(as.character(x))
+      as.character(unlist(x))
+    }
+
+    factor_names <- colnames(w_orig)
+    if (is.null(factor_names)) {
+      factor_names <- paste0("Factor", seq_len(ncol(w_orig)))
+    }
+    level_names <- lapply(names_list, flatten_levels)
+
+    linkinv <- if (glm_family == "binomial") stats::plogis else function(x) x
+
+    build_main_effects <- function(main_info, coef_vec, intercept, vcov) {
+      if (is.null(main_info) || nrow(main_info) == 0) return(NULL)
+      coef_vec <- to_numeric(coef_vec)
+      n_main <- nrow(main_info)
+      if (length(coef_vec) < n_main) return(NULL)
+      coef_main <- coef_vec[seq_len(n_main)]
+      base_pred <- if (is.na(intercept)) NA_real_ else linkinv(intercept)
+
+      rows <- vector("list", length = sum(factor_levels))
+      row_idx <- 1L
+      for (d in seq_len(length(factor_levels))) {
+        levels_d <- level_names[[d]]
+        if (is.null(levels_d) || length(levels_d) != factor_levels[d]) {
+          levels_d <- as.character(seq_len(factor_levels[d]))
+        }
+        for (l in seq_len(factor_levels[d])) {
+          coef <- 0
+          coef_se <- NA_real_
+          is_baseline <- TRUE
+          mi <- which(main_info$d == d & main_info$l == l)
+          if (length(mi) > 0) {
+            mi <- mi[1]
+            coef_idx <- main_info$d_index[mi]
+            if (!is.na(coef_idx) && coef_idx >= 1 && coef_idx <= length(coef_main)) {
+              coef <- coef_main[coef_idx]
+              is_baseline <- FALSE
+              vcov_idx <- 1 + coef_idx
+              if (!is.null(vcov) && length(dim(vcov)) == 2 &&
+                  vcov_idx <= nrow(vcov)) {
+                coef_se <- sqrt(vcov[vcov_idx, vcov_idx])
+              }
+            }
+          }
+
+          eta <- if (is.na(intercept)) NA_real_ else intercept + coef
+          pred <- if (is.na(eta)) NA_real_ else linkinv(eta)
+          delta <- if (is.na(pred) || is.na(base_pred)) NA_real_ else pred - base_pred
+          odds_ratio <- if (glm_family == "binomial") exp(coef) else NA_real_
+
+          rows[[row_idx]] <- data.frame(
+            Factor = factor_names[d],
+            Level = levels_d[l],
+            Coef = coef,
+            CoefSE = coef_se,
+            Pred = pred,
+            Delta = delta,
+            OddsRatio = odds_ratio,
+            IsBaseline = is_baseline,
+            stringsAsFactors = FALSE
+          )
+          row_idx <- row_idx + 1L
+        }
+      }
+      do.call(rbind, rows)
+    }
+
+    build_interactions <- function(interaction_info, coef_vec, n_main, top_n = 10L) {
+      if (is.null(interaction_info) || nrow(interaction_info) == 0) return(NULL)
+      coef_vec <- to_numeric(coef_vec)
+      if (length(coef_vec) <= n_main) return(NULL)
+      coef_inter <- coef_vec[(n_main + 1L):length(coef_vec)]
+      n_inter <- min(nrow(interaction_info), length(coef_inter))
+      if (n_inter <= 0) return(NULL)
+      interaction_info <- interaction_info[seq_len(n_inter), , drop = FALSE]
+      coef_inter <- coef_inter[seq_len(n_inter)]
+
+      labels <- vapply(seq_len(n_inter), function(i) {
+        d1 <- interaction_info$d[i]
+        d2 <- interaction_info$dp[i]
+        l1 <- interaction_info$l[i]
+        l2 <- interaction_info$lp[i]
+        f1 <- if (d1 <= length(factor_names)) factor_names[d1] else paste0("Factor", d1)
+        f2 <- if (d2 <= length(factor_names)) factor_names[d2] else paste0("Factor", d2)
+        lv1 <- if (!is.null(level_names[[d1]]) && length(level_names[[d1]]) >= l1) {
+          level_names[[d1]][l1]
+        } else {
+          as.character(l1)
+        }
+        lv2 <- if (!is.null(level_names[[d2]]) && length(level_names[[d2]]) >= l2) {
+          level_names[[d2]][l2]
+        } else {
+          as.character(l2)
+        }
+        sprintf("%s:%s x %s:%s", f1, lv1, f2, lv2)
+      }, character(1))
+
+      inter_df <- data.frame(
+        Interaction = labels,
+        Coef = coef_inter,
+        AbsCoef = abs(coef_inter),
+        stringsAsFactors = FALSE
+      )
+      inter_df <- inter_df[order(-inter_df$AbsCoef), , drop = FALSE]
+      if (!is.null(top_n) && nrow(inter_df) > top_n) {
+        inter_df <- inter_df[seq_len(top_n), , drop = FALSE]
+      }
+      inter_df$AbsCoef <- NULL
+      inter_df
+    }
+
+    build_model_view <- function(suffix, stage, player, group_value) {
+      mean_name <- paste0("my_mean_", suffix, "_jnp")
+      if (!exists(mean_name, inherits = TRUE)) return(NULL)
+      coef_vec <- get(mean_name, inherits = TRUE)
+      main_info_name <- paste0("main_info_", suffix, "_jnp")
+      inter_info_name <- paste0("interaction_info_", suffix, "_jnp")
+      vcov_name <- paste0("vcov_OutcomeModel_", suffix, "_jnp")
+      intercept_name <- paste0("EST_INTERCEPT_tf_", suffix, "_jnp")
+
+      main_info <- if (exists(main_info_name, inherits = TRUE)) {
+        get(main_info_name, inherits = TRUE)
+      } else {
+        NULL
+      }
+      interaction_info <- if (exists(inter_info_name, inherits = TRUE)) {
+        get(inter_info_name, inherits = TRUE)
+      } else {
+        NULL
+      }
+      vcov <- if (exists(vcov_name, inherits = TRUE)) {
+        get(vcov_name, inherits = TRUE)
+      } else {
+        NULL
+      }
+      intercept <- if (exists(intercept_name, inherits = TRUE)) {
+        to_scalar(get(intercept_name, inherits = TRUE))
+      } else {
+        NA_real_
+      }
+      baseline <- if (is.na(intercept)) NA_real_ else linkinv(intercept)
+      n_main <- if (!is.null(main_info)) nrow(main_info) else 0L
+
+      main_effects <- build_main_effects(main_info, coef_vec, intercept, vcov)
+      top_interactions <- build_interactions(interaction_info, coef_vec, n_main)
+      note <- NULL
+      if (outcome_model_type != "glm" && (is.null(main_effects) || nrow(main_effects) == 0)) {
+        note <- "Outcome model is non-linear; main-effect table not available."
+      }
+
+      list(
+        stage = stage,
+        player = player,
+        group = group_value,
+        outcome_model_type = outcome_model_type,
+        glm_family = glm_family,
+        link = ifelse(glm_family == "binomial", "logit", "identity"),
+        intercept = intercept,
+        baseline = baseline,
+        main_effects = main_effects,
+        top_interactions = top_interactions,
+        note = note
+      )
+    }
+
+    models <- list()
+    if (isTRUE(adversarial)) {
+      models[["ast_primary"]] <- build_model_view("ast0", "primary", "AST", GroupsPool[1])
+      models[["ast_general"]] <- build_model_view("ast", "general", "AST", GroupsPool[1])
+      models[["dag_primary"]] <- build_model_view("dag0", "primary", "DAG", GroupsPool[2])
+      models[["dag_general"]] <- build_model_view("dag", "general", "DAG", GroupsPool[2])
+    } else {
+      models[["overall"]] <- build_model_view("ast", "single", "overall", NA)
+    }
+    models <- models[!vapply(models, is.null, logical(1))]
+    list(
+      metadata = list(
+        outcome_model_type = outcome_model_type,
+        glm_family = glm_family,
+        holdout_level = ifelse(holdout_indicator == 1, "last_level", "none"),
+        adversarial_model_strategy = adversarial_model_strategy
+      ),
+      models = models
+    )
+  })()
+
+  get_neural_info <- function(name) {
+    if (exists(name, inherits = TRUE)) {
+      return(get(name, inherits = TRUE))
+    }
+    NULL
+  }
+  neural_model_info_out <- list(
+    ast = get_neural_info("neural_model_info_ast_jnp"),
+    ast0 = get_neural_info("neural_model_info_ast0_jnp"),
+    dag = get_neural_info("neural_model_info_dag_jnp"),
+    dag0 = get_neural_info("neural_model_info_dag0_jnp")
+  )
   
   message("strategize() call has finished...\n-------------")
   return( 
@@ -1250,6 +2238,10 @@ strategize       <-          function(
                   "SLATE_VEC_dag"  = SLATE_VEC_dag_jnp,
                   
                   "temperature" = temperature, 
+                  "primary_strength" = primary_strength,
+                  "primary_n_entrants" = primary_n_entrants,
+                  "primary_n_field" = primary_n_field,
+                  "adversarial_model_strategy" = adversarial_model_strategy,
                   "AstProp" = strenv$AstProp,   
                   "DagProp" = strenv$DagProp,   
                   "strenv" = strenv,
@@ -1259,6 +2251,9 @@ strategize       <-          function(
                     "my_model_dag_jnp"  = my_model_dag_jnp,
                     "my_model_dag0_jnp" = my_model_dag0_jnp
                     ),
+                  
+                  "outcome_model_view" = outcome_model_view,
+                  "neural_model_info" = neural_model_info_out,
 
                   # Hessian functions for equilibrium geometry analysis
                   "d2Q_da2_ast" = d2Q_da2_ast,
@@ -1286,6 +2281,10 @@ strategize       <-          function(
                       "nSGD" = nSGD,
                       "adversarial" = adversarial,
                       "primary_pushforward" = primary_pushforward,
+                      "primary_strength" = primary_strength,
+                      "primary_n_entrants" = primary_n_entrants,
+                      "primary_n_field" = primary_n_field,
+                      "adversarial_model_strategy" = adversarial_model_strategy,
                       "optimism" = optimism
                     )
                   }, error = function(e) {
@@ -1300,6 +2299,10 @@ strategize       <-          function(
                       "nSGD" = nSGD,
                       "adversarial" = adversarial,
                       "primary_pushforward" = primary_pushforward,
+                      "primary_strength" = primary_strength,
+                      "primary_n_entrants" = primary_n_entrants,
+                      "primary_n_field" = primary_n_field,
+                      "adversarial_model_strategy" = adversarial_model_strategy,
                       "optimism" = optimism
                     )
                   })

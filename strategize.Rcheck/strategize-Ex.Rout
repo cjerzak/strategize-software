@@ -716,7 +716,7 @@ $k1$Age
 
 $k1$Party
       Dem       Rep 
-0.3805093 0.6194907 
+0.3805093 0.6194906 
 
 
 $k2
@@ -1250,7 +1250,7 @@ $conf_level
 > cleanEx()
 > options(digits = 7L)
 > base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
-Time elapsed:  40.01 1.884 17.549 0.877 0.252 
+Time elapsed:  54.601 2.036 26.169 1.28 0.364 
 > grDevices::dev.off()
 null device 
           1 

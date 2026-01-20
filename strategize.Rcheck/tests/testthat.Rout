@@ -116,10 +116,68 @@ strategize() call has finished...
 strategize() call has begun...
 -------------
 strategize() call has begun...
-[ FAIL 0 | WARN 0 | SKIP 68 | PASS 56 ]
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 0 1
+ok_counter = 0
+Starting a glinternet fit...
+[1] 0 2
+ok_counter = 0
+[1] 1 1
+ok_counter = 0
+[1] 1 2
+ok_counter = 0
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+Creating Hessian functions (D=2 parameters per player)
+SGD Iteration: 1 of 3
+SGD Iteration: 2 of 3
+SGD Iteration: 3 of 3
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 3
+SGD Iteration: 2 of 3
+SGD Iteration: 3 of 3
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 0 1
+ok_counter = 0
+Starting a glinternet fit...
+[1] 0 2
+ok_counter = 0
+[1] 1 1
+ok_counter = 0
+[1] 1 2
+ok_counter = 0
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+Creating Hessian functions (D=2 parameters per player)
+SGD Iteration: 1 of 3
+SGD Iteration: 2 of 3
+SGD Iteration: 3 of 3
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 3
+SGD Iteration: 2 of 3
+SGD Iteration: 3 of 3
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+[ FAIL 0 | WARN 6 | SKIP 74 | PASS 68 ]
 
-══ Skipped tests (68) ══════════════════════════════════════════════════════════
-• On CRAN (67): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+══ Skipped tests (74) ══════════════════════════════════════════════════════════
+• On CRAN (73): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
   'test-cv-strategize.R:9:3', 'test-cv-strategize.R:29:3',
   'test-cv-strategize.R:48:3', 'test-cv-strategize.R:70:3',
@@ -134,14 +192,17 @@ strategize() call has begun...
   'test-input-validation.R:210:3', 'test-input-validation.R:227:3',
   'test-input-validation.R:248:3', 'test-input-validation.R:263:3',
   'test-input-validation.R:282:3', 'test-input-validation.R:304:3',
-  'test-input-validation.R:320:3', 'test-input-validation.R:336:3',
-  'test-input-validation.R:348:3', 'test-input-validation.R:360:3',
-  'test-input-validation.R:376:3', 'test-input-validation.R:390:3',
-  'test-onestep.R:13:3', 'test-onestep.R:40:3', 'test-onestep.R:75:3',
-  'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
-  'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
+  'test-input-validation.R:320:3', 'test-input-validation.R:332:3',
+  'test-input-validation.R:352:3', 'test-input-validation.R:364:3',
+  'test-input-validation.R:376:3', 'test-input-validation.R:392:3',
+  'test-input-validation.R:406:3', 'test-neural.R:6:3', 'test-onestep.R:13:3',
+  'test-onestep.R:40:3', 'test-onestep.R:75:3', 'test-onestep.R:99:3',
+  'test-onestep.R:122:3', 'test-onestep.R:152:3', 'test-onestep.R:181:3',
+  'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
   'test-penalty-types.R:25:3', 'test-penalty-types.R:42:3',
-  'test-primary-pushforward.R:6:3', 'test-strategize.R:9:3',
+  'test-primary-pushforward.R:10:3', 'test-primary-pushforward.R:109:3',
+  'test-primary-pushforward.R:145:3', 'test-primary-pushforward.R:174:3',
+  'test-primary-pushforward.R:207:3', 'test-strategize.R:9:3',
   'test-strategize.R:25:3', 'test-strategize.R:46:3', 'test-strategize.R:63:3',
   'test-strategize.R:79:3', 'test-strategize.R:98:3',
   'test-strategize.R:117:3', 'test-strategize.R:144:3',
@@ -153,8 +214,8 @@ strategize() call has begun...
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 0 | SKIP 68 | PASS 56 ]
+[ FAIL 0 | WARN 6 | SKIP 74 | PASS 68 ]
 > 
 > proc.time()
    user  system elapsed 
-  8.522   1.443   9.067 
+ 24.353   3.196  20.448 

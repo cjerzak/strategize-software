@@ -114,6 +114,23 @@ plot_quadrant_breakdown <- function(result,
 compute_quadrant_breakdown <- function(result, nMonte, verbose) {
 
   strenv <- result$strenv
+  simple_quadrant <- function(Q_star = as.numeric(result$Q_point)) {
+    P_A_entrant <- 0.5
+    P_B_entrant <- 0.5
+    weights <- c(
+      E1 = P_A_entrant * P_B_entrant,
+      E2 = P_A_entrant * (1 - P_B_entrant),
+      E3 = (1 - P_A_entrant) * P_B_entrant,
+      E4 = (1 - P_A_entrant) * (1 - P_B_entrant)
+    )
+    contributions <- weights * Q_star
+    list(
+      weights = weights,
+      contributions = contributions,
+      Q_star = sum(contributions),
+      primary_probs = list(P_A_entrant = P_A_entrant, P_B_entrant = P_B_entrant)
+    )
+  }
 
   # Get optimized parameters
   a_i_ast <- result$a_i_ast
@@ -160,33 +177,7 @@ compute_quadrant_breakdown <- function(result, nMonte, verbose) {
   } else {
     # Fallback: simple uniform sampling (less accurate but won't crash)
     if (verbose) message("  Note: Using simplified quadrant estimation")
-
-    # Use rough estimates based on voter proportions
-    AstProp <- as.numeric(result$AstProp)
-    DagProp <- as.numeric(result$DagProp)
-
-    # Assume roughly equal primary probabilities without detailed model
-    P_A_entrant <- 0.5
-    P_B_entrant <- 0.5
-
-    weights <- c(
-      E1 = P_A_entrant * P_B_entrant,
-      E2 = P_A_entrant * (1 - P_B_entrant),
-      E3 = (1 - P_A_entrant) * P_B_entrant,
-      E4 = (1 - P_A_entrant) * (1 - P_B_entrant)
-    )
-
-    # For contributions, assume roughly equal general election probabilities
-    # modulated by voter proportions
-    base_Q <- 0.5
-    contributions <- weights * base_Q
-
-    return(list(
-      weights = weights,
-      contributions = contributions,
-      Q_star = sum(contributions),
-      primary_probs = list(P_A_entrant = P_A_entrant, P_B_entrant = P_B_entrant)
-    ))
+    return(simple_quadrant())
   }
 
   # Sample from optimized (entrant) distributions
@@ -230,12 +221,201 @@ compute_quadrant_breakdown <- function(result, nMonte, verbose) {
   if (is.null(sample_entrant_A) || is.null(sample_entrant_B) ||
       is.null(sample_field_A) || is.null(sample_field_B)) {
     if (verbose) message("  Note: Sampling failed, using simplified estimation")
+    return(simple_quadrant())
+  }
 
-    # Fallback to simplified estimation
-    AstProp <- as.numeric(result$AstProp)
-    DagProp <- as.numeric(result$DagProp)
-    P_A_entrant <- 0.5
-    P_B_entrant <- 0.5
+  primary_pushforward <- if (!is.null(result$convergence_history$primary_pushforward)) {
+    tolower(result$convergence_history$primary_pushforward)
+  } else {
+    "mc"
+  }
+  primary_strength <- result$primary_strength
+  if (is.null(primary_strength)) {
+    primary_strength <- strenv$jnp$array(1.0, strenv$dtj)
+  } else if (is.numeric(primary_strength)) {
+    primary_strength <- strenv$jnp$array(as.numeric(primary_strength), strenv$dtj)
+  }
+
+  q_env <- NULL
+  if (!is.null(result$getQPiStar_gd)) {
+    q_env <- environment(result$getQPiStar_gd)
+  }
+  getQStar_diff_SingleGroup <- NULL
+  if (!is.null(q_env) && exists("getQStar_diff_SingleGroup", envir = q_env)) {
+    getQStar_diff_SingleGroup <- get("getQStar_diff_SingleGroup", envir = q_env)
+  }
+  QFXN <- result$QFXN
+  if (is.null(QFXN) && !is.null(q_env) && exists("getQStar_diff_MultiGroup", envir = q_env)) {
+    QFXN <- get("getQStar_diff_MultiGroup", envir = q_env)
+  }
+  if (is.null(getQStar_diff_SingleGroup) || is.null(QFXN)) {
+    if (verbose) message("  Note: Primary model unavailable, using simplified estimation")
+    return(simple_quadrant())
+  }
+
+  kappa_pair <- function(v, v_prime, intercept, coeffs) {
+    strenv$jnp$take(
+      getQStar_diff_SingleGroup(
+        v,
+        v_prime,
+        intercept * primary_strength, primary_strength * coeffs,
+        intercept * primary_strength, primary_strength * coeffs
+      ),
+      0L
+    )
+  }
+  Qpop_pair <- function(t, u) {
+    strenv$jnp$take(
+      QFXN(t, u,
+           INTERCEPT_ast, COEFFICIENTS_ast,
+           INTERCEPT_dag, COEFFICIENTS_dag),
+      0L
+    )
+  }
+
+  if (primary_pushforward == "multi") {
+    n_entrants <- if (is.null(result$primary_n_entrants)) 1L else as.integer(result$primary_n_entrants)
+    n_field <- if (is.null(result$primary_n_field)) 1L else as.integer(result$primary_n_field)
+    n_entrants <- max(1L, n_entrants)
+    n_field <- max(1L, n_field)
+
+    sample_pool <- function(pi_vec, n_draws, n_pool, seed_in) {
+      n_total <- as.integer(n_draws * n_pool)
+      # Split into n_total + 1 keys: n_total for sampling, 1 for advancing seed
+      all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
+      # Last key is seed_next (independent of keys used for sampling)
+      seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
+      # First n_total keys for sampling
+      seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
+      seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
+      samples <- strenv$jax$vmap(function(seed_row){
+        strenv$jax$vmap(function(seed_cell){
+          getMNSamp(pi_vec, MNtemp, seed_cell, ParameterizationType, d_locator_use)
+        }, in_axes = list(0L))(seed_row)
+      }, in_axes = list(0L))(seeds)
+      list(samples = samples, seed_next = seed_next)
+    }
+
+    samp_ast <- sample_pool(pi_star_ast, n_samples, n_entrants, SEED)
+    TSAMP_ast_all <- samp_ast$samples
+    SEED <- samp_ast$seed_next
+
+    samp_dag <- sample_pool(pi_star_dag, n_samples, n_entrants, SEED)
+    TSAMP_dag_all <- samp_dag$samples
+    SEED <- samp_dag$seed_next
+
+    samp_ast_field <- sample_pool(SLATE_VEC_ast, n_samples, n_field, SEED)
+    TSAMP_ast_field_all <- samp_ast_field$samples
+    SEED <- samp_ast_field$seed_next
+
+    samp_dag_field <- sample_pool(SLATE_VEC_dag, n_samples, n_field, SEED)
+    TSAMP_dag_field_all <- samp_dag_field$samples
+    SEED <- samp_dag_field$seed_next
+
+    draw_stats <- strenv$jax$vmap(function(tsamp_ast, tsamp_dag,
+                                          tsamp_ast_field, tsamp_dag_field) {
+      cand_ast <- strenv$jnp$concatenate(list(tsamp_ast, tsamp_ast_field), 0L)
+      cand_dag <- strenv$jnp$concatenate(list(tsamp_dag, tsamp_dag_field), 0L)
+      nA <- as.integer(n_entrants + n_field)
+      nB <- as.integer(n_entrants + n_field)
+
+      kA <- strenv$jax$vmap(function(t_i){
+        strenv$jax$vmap(function(t_j){
+          kappa_pair(t_i, t_j, INTERCEPT_ast0, COEFFICIENTS_ast0)
+        }, in_axes = 0L)(cand_ast)
+      }, in_axes = 0L)(cand_ast)
+      kB <- strenv$jax$vmap(function(u_i){
+        strenv$jax$vmap(function(u_j){
+          kappa_pair(u_i, u_j, INTERCEPT_dag0, COEFFICIENTS_dag0)
+        }, in_axes = 0L)(cand_dag)
+      }, in_axes = 0L)(cand_dag)
+
+      maskA <- strenv$jnp$ones(list(nA, nA), dtype = strenv$dtj) - strenv$jnp$eye(nA, dtype = strenv$dtj)
+      maskB <- strenv$jnp$ones(list(nB, nB), dtype = strenv$dtj) - strenv$jnp$eye(nB, dtype = strenv$dtj)
+      eps <- strenv$jnp$maximum(
+        strenv$jnp$array(1e-8, strenv$dtj),
+        strenv$jnp$array(strenv$jnp$finfo(strenv$dtj)$eps, strenv$dtj)
+      )
+      one_bt <- strenv$jnp$array(1.0, strenv$dtj)
+      kA_clip <- strenv$jnp$clip(kA, eps, one_bt - eps)
+      kB_clip <- strenv$jnp$clip(kB, eps, one_bt - eps)
+      logoddsA <- strenv$jnp$log(kA_clip) - strenv$jnp$log(one_bt - kA_clip)
+      logoddsB <- strenv$jnp$log(kB_clip) - strenv$jnp$log(one_bt - kB_clip)
+      denomA <- strenv$jnp$array(nA, strenv$dtj)
+      denomB <- strenv$jnp$array(nB, strenv$dtj)
+      utilityA <- (logoddsA * maskA)$sum(axis = 1L) / denomA
+      utilityB <- (logoddsB * maskB)$sum(axis = 1L) / denomB
+      pA <- strenv$jax$nn$softmax(utilityA)
+      pB <- strenv$jax$nn$softmax(utilityB)
+
+      idxA_e <- strenv$jnp$arange(as.integer(n_entrants))
+      idxA_f <- strenv$jnp$arange(as.integer(n_entrants), as.integer(nA))
+      idxB_e <- strenv$jnp$arange(as.integer(n_entrants))
+      idxB_f <- strenv$jnp$arange(as.integer(n_entrants), as.integer(nB))
+
+      pA_e <- strenv$jnp$take(pA, idxA_e)
+      pA_f <- strenv$jnp$take(pA, idxA_f)
+      pB_e <- strenv$jnp$take(pB, idxB_e)
+      pB_f <- strenv$jnp$take(pB, idxB_f)
+
+      C_ab <- strenv$jax$vmap(function(t_i){
+        strenv$jax$vmap(function(u_j){
+          Qpop_pair(t_i, u_j)
+        }, in_axes = 0L)(cand_dag)
+      }, in_axes = 0L)(cand_ast)
+
+      C_ee <- strenv$jnp$take(strenv$jnp$take(C_ab, idxA_e, axis = 0L), idxB_e, axis = 1L)
+      C_ef <- strenv$jnp$take(strenv$jnp$take(C_ab, idxA_e, axis = 0L), idxB_f, axis = 1L)
+      C_fe <- strenv$jnp$take(strenv$jnp$take(C_ab, idxA_f, axis = 0L), idxB_e, axis = 1L)
+      C_ff <- strenv$jnp$take(strenv$jnp$take(C_ab, idxA_f, axis = 0L), idxB_f, axis = 1L)
+
+      pA_e_col <- strenv$jnp$expand_dims(pA_e, 1L)
+      pA_f_col <- strenv$jnp$expand_dims(pA_f, 1L)
+      pB_e_row <- strenv$jnp$expand_dims(pB_e, 0L)
+      pB_f_row <- strenv$jnp$expand_dims(pB_f, 0L)
+
+      list(
+        E1 = strenv$jnp$sum(C_ee * pA_e_col * pB_e_row),
+        E2 = strenv$jnp$sum(C_ef * pA_e_col * pB_f_row),
+        E3 = strenv$jnp$sum(C_fe * pA_f_col * pB_e_row),
+        E4 = strenv$jnp$sum(C_ff * pA_f_col * pB_f_row),
+        P_A_entrant = strenv$jnp$sum(pA_e),
+        P_B_entrant = strenv$jnp$sum(pB_e)
+      )
+    }, in_axes = list(0L, 0L, 0L, 0L))(TSAMP_ast_all, TSAMP_dag_all,
+                                      TSAMP_ast_field_all, TSAMP_dag_field_all)
+
+    P_A_entrant <- as.numeric(strenv$np$array(draw_stats$P_A_entrant$mean()))
+    P_B_entrant <- as.numeric(strenv$np$array(draw_stats$P_B_entrant$mean()))
+    contributions <- c(
+      E1 = as.numeric(strenv$np$array(draw_stats$E1$mean())),
+      E2 = as.numeric(strenv$np$array(draw_stats$E2$mean())),
+      E3 = as.numeric(strenv$np$array(draw_stats$E3$mean())),
+      E4 = as.numeric(strenv$np$array(draw_stats$E4$mean()))
+    )
+  } else {
+    kA_vec <- strenv$jax$vmap(function(t_i, t_j) {
+      kappa_pair(t_i, t_j, INTERCEPT_ast0, COEFFICIENTS_ast0)
+    }, in_axes = list(0L, 0L))(sample_entrant_A, sample_field_A)
+    kB_vec <- strenv$jax$vmap(function(u_i, u_j) {
+      kappa_pair(u_i, u_j, INTERCEPT_dag0, COEFFICIENTS_dag0)
+    }, in_axes = list(0L, 0L))(sample_entrant_B, sample_field_B)
+
+    P_A_entrant <- as.numeric(strenv$np$array(kA_vec$mean()))
+    P_B_entrant <- as.numeric(strenv$np$array(kB_vec$mean()))
+
+    Q_tt <- strenv$jax$vmap(function(t_i, u_i) {
+      Qpop_pair(t_i, u_i)
+    }, in_axes = list(0L, 0L))(sample_entrant_A, sample_entrant_B)$mean()
+    Q_tf <- strenv$jax$vmap(function(t_i, u_i) {
+      Qpop_pair(t_i, u_i)
+    }, in_axes = list(0L, 0L))(sample_entrant_A, sample_field_B)$mean()
+    Q_ft <- strenv$jax$vmap(function(t_i, u_i) {
+      Qpop_pair(t_i, u_i)
+    }, in_axes = list(0L, 0L))(sample_field_A, sample_entrant_B)$mean()
+    Q_ff <- strenv$jax$vmap(function(t_i, u_i) {
+      Qpop_pair(t_i, u_i)
+    }, in_axes = list(0L, 0L))(sample_field_A, sample_field_B)$mean()
 
     weights <- c(
       E1 = P_A_entrant * P_B_entrant,
@@ -243,37 +423,12 @@ compute_quadrant_breakdown <- function(result, nMonte, verbose) {
       E3 = (1 - P_A_entrant) * P_B_entrant,
       E4 = (1 - P_A_entrant) * (1 - P_B_entrant)
     )
-
-    Q_star <- as.numeric(result$Q_point)
-    contributions <- weights * Q_star
-
-    return(list(
-      weights = weights,
-      contributions = contributions,
-      Q_star = Q_star,
-      primary_probs = list(P_A_entrant = P_A_entrant, P_B_entrant = P_B_entrant)
-    ))
-  }
-
-  # Compute primary win probabilities (kappa values)
-  # kappa_A = Pr(A entrant beats A field in A's primary)
-  # This requires evaluating the primary outcome model
-  if (!is.null(strenv$Vectorized_QMonteIter)) {
-    # Use voter proportions to estimate approximate primary probabilities
-    AstProp <- as.numeric(result$AstProp)
-    DagProp <- as.numeric(result$DagProp)
-
-    # Estimate from Q_point (rough approximation)
-    Q_star <- as.numeric(result$Q_point)
-
-    # Use simplified model: assume primary probabilities ≈ 0.5
-    # unless we have strong asymmetry
-    P_A_entrant <- 0.5
-    P_B_entrant <- 0.5
-  } else {
-    P_A_entrant <- 0.5
-    P_B_entrant <- 0.5
-    Q_star <- as.numeric(result$Q_point)
+    contributions <- weights * c(
+      E1 = as.numeric(strenv$np$array(Q_tt)),
+      E2 = as.numeric(strenv$np$array(Q_tf)),
+      E3 = as.numeric(strenv$np$array(Q_ft)),
+      E4 = as.numeric(strenv$np$array(Q_ff))
+    )
   }
 
   # Compute weights
@@ -283,11 +438,6 @@ compute_quadrant_breakdown <- function(result, nMonte, verbose) {
     E3 = (1 - P_A_entrant) * P_B_entrant,
     E4 = (1 - P_A_entrant) * (1 - P_B_entrant)
   )
-
-  # Compute contributions (weight × general election probability)
-  # For now, use Q_star distributed by weights as approximation
-  # A more accurate method would evaluate each scenario separately
-  contributions <- weights * Q_star
 
   if (verbose) {
     message(sprintf("  P(A entrant wins): %.3f", P_A_entrant))

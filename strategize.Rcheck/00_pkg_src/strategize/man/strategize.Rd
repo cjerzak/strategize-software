@@ -24,12 +24,18 @@ strategize(
   nSGD = 100,
   diff = FALSE,
   adversarial = FALSE,
+  adversarial_model_strategy = "four",
+  include_stage_interactions = NULL,
+  partial_pooling = NULL,
+  partial_pooling_strength = 50,
   use_regularization = TRUE,
   force_gaussian = FALSE,
   a_init_sd = 0.001,
   outcome_model_type = "glm",
+  neural_mcmc_control = NULL,
   penalty_type = "KL",
   compute_se = FALSE,
+  se_method = c("full", "implicit"),
   conda_env = "strategize_env",
   conda_env_required = FALSE,
   conf_level = 0.90,
@@ -37,11 +43,15 @@ strategize(
   folds = NULL,
   nMonte_adversarial = 5L,
   primary_pushforward = "mc",
+  primary_strength = 1.0,
+  primary_n_entrants = 1L,
+  primary_n_field = 1L,
   nMonte_Qglm = 100L,
   learning_rate_max = 0.001,
   temperature = 0.5, 
   save_outcome_model = FALSE,
   presaved_outcome_model = FALSE,
+  outcome_model_key = NULL,
   use_optax = FALSE,
   optim_type = "gd",
   optimism = "extragrad",
@@ -108,7 +118,7 @@ in \code{W}. Typically derived from the initial design distribution or uniform a
 distribution. If \code{NULL}, the function may assume uniform or attempt to estimate the
 distribution from \code{W}.}
 
-\item{slate_list}{An optional list (or lists) providing custom “slates” of candidate features
+\item{slate_list}{An optional list (or lists) providing custom slates of candidate features
 (and their associated probabilities). Used in more advanced or adversarial setups where
 certain combinations must be included or excluded. If \code{NULL}, no special constraints
 beyond the usual factor-level distributions are applied.}
@@ -125,8 +135,32 @@ to \code{FALSE}.}
 
 \item{adversarial}{Logical controlling whether to enable the max-min adversarial scenario. When
 \code{TRUE}, the function searches for a pair of distributions (one for each competing party
-or group) such that each party’s distribution is optimal given the other party’s distribution.
+or group) such that each party's distribution is optimal given the other party's distribution.
 Defaults to \code{FALSE}.}
+
+\item{adversarial_model_strategy}{Character string indicating whether to estimate
+\code{"four"} outcome models (primary + general for each group), \code{"two"} outcome models
+(one per group reused for both primary and general), or \code{"neural"} (Bayesian Transformer
+models with party tokens; defaults to a single pooled model across groups and stages. Set
+\code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models). Defaults to
+\code{"four"}.}
+
+\item{include_stage_interactions}{Logical indicating whether to include stage (primary vs
+general) indicator and stage-by-factor interactions in the outcome model. When \code{NULL}
+(default), automatically set to \code{TRUE} when \code{adversarial_model_strategy = "two"}
+and \code{FALSE} otherwise. Including stage interactions allows a single pooled model to
+learn different response patterns for primary vs general election scenarios, which helps
+prevent pattern-matching equilibria where both parties converge to identical strategies.}
+
+\item{partial_pooling}{Logical indicating whether to partially pool (shrink) group-specific
+outcome model coefficients toward a shared average when
+\code{adversarial_model_strategy = "two"}. When \code{NULL} (default), automatically set to
+\code{TRUE} for the two-strategy adversarial case and \code{FALSE} otherwise.}
+
+\item{partial_pooling_strength}{Numeric scalar controlling the amount of shrinkage used for
+partial pooling in the two-strategy adversarial case. Interpreted as a pseudo-sample size:
+larger values increase pooling, smaller values preserve group differentiation. Defaults to
+\code{50}.}
 
 \item{use_regularization}{Logical indicating whether to regularize the outcome model (in addition
 to any penalty \code{lambda} on the distribution shift). This can help avoid overfitting in
@@ -144,12 +178,24 @@ Defaults to \code{0.001}.}
 supports \code{"glm"} for generalized linear models or \code{"neural"} for a neural-network
 approximation. Defaults to \code{"glm"}.}
 
+\item{neural_mcmc_control}{Optional list overriding default MCMC settings used when
+\code{outcome_model_type = "neural"}. Named entries override the defaults in
+\code{CS_2Step_ModelOutcome_neural.R}. Set
+\code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
+uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
+neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
+models (default is 1 for a single differential model).}
+
 \item{penalty_type}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
 away from the baseline \code{p_list}. Defaults to \code{"KL"}.}
 
 \item{compute_se}{Logical indicating whether standard errors should be computed for the final
 estimates (via the delta method or related expansions). Defaults to \code{FALSE}.}
+
+\item{se_method}{Character string specifying the SE computation method when \code{compute_se = TRUE}.
+\code{"full"} differentiates through the full optimization trace (default). \code{"implicit"}
+uses implicit differentiation at the solution (adversarial equilibrium or non-adversarial optimum).}
 
 \item{conda_env}{A character string naming a Python conda environment that includes \pkg{jax},
 \pkg{optax}, and other dependencies. If not \code{NULL}, the function attempts to activate
@@ -169,12 +215,23 @@ cross-validation used in certain outcome model or regularization steps. Defaults
 Defaults to \code{NULL}.}
 
 \item{nMonte_adversarial}{Integer specifying the number of Monte Carlo samples used in adversarial
-or max-min steps, e.g., sampling from the opposing candidate’s distribution to approximate
+or max-min steps, e.g., sampling from the opposing candidate's distribution to approximate
 expected payoffs. Defaults to \code{5L}.}
 
 \item{primary_pushforward}{Character string controlling the primary-stage push-forward estimator.
 Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
-\code{"linearized"} for the faster averaged-weight approximation.}
+\code{"linearized"} for the faster averaged-weight approximation, or
+\code{"multi"} for multi-candidate primaries.}
+
+\item{primary_strength}{Numeric scalar controlling primary decisiveness. Values > 1 make
+primary outcomes more deterministic; values in (0, 1) make primaries more noisy. Defaults
+to 1.0 (neutral scaling).}
+
+\item{primary_n_entrants}{Integer number of entrant candidates sampled per party in
+multi-candidate primaries (\code{primary_pushforward = "multi"}). Defaults to 1.}
+
+\item{primary_n_field}{Integer number of field candidates sampled per party in
+multi-candidate primaries (\code{primary_pushforward = "multi"}). Defaults to 1.}
 
 \item{nMonte_Qglm}{Integer specifying the number of Monte Carlo samples for evaluating or
 approximating the quantity of interest under certain outcomes or distributions. Defaults to
@@ -193,6 +250,11 @@ disk for reuse. Useful for large models or repeated runs. Defaults to \code{FALS
 \item{presaved_outcome_model}{Logical indicating whether to use a previously saved outcome
 model instead of re-fitting. Defaults to \code{FALSE}.}
 
+\item{outcome_model_key}{Optional character string to append to saved outcome model
+filenames. Useful for distinguishing between different model configurations or
+experimental runs. When provided, files are saved as
+\code{main_{group}_{round}_{key}.csv}. Defaults to \code{NULL}.}
+
 \item{use_optax}{Logical indicating whether to use the \href{https://github.com/google-deepmind/optax}{\code{optax}}
 library for gradient-based optimization in JAX (\code{TRUE}) or a built-in method (\code{FALSE}).
 Defaults to \code{FALSE}.}
@@ -202,6 +264,7 @@ Defaults to \code{FALSE}.}
 
 \item{optimism}{Character string controlling optimistic / extra-gradient updates for the gradient
 optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
+\code{"smp"} (stochastic mirror-prox: extra-gradient with weighted averaging of look-ahead points),
 \code{"ogda"} (optimistic gradient), or \code{"none"} (standard updates). Only supported when
 \code{use_optax = FALSE}.}
 
@@ -235,6 +298,9 @@ Structure depends on parameters:
 \item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{compute_se = TRUE}.}
 
 \item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
+
+\item{\code{outcome_model_view}}{Interpretable summaries of the fitted outcome models (by player and stage).
+Includes main-effect tables and top interactions for AST/DAG primary/general submodels when available.}
 
 \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
 
@@ -270,7 +336,7 @@ distributions that maximize an expected outcome (or solve the max-min adversaria
 \strong{Adversarial or strategic design:} When \code{adversarial = TRUE}, the function attempts to
 solve a zero-sum game in which one agent (say, \dQuote{A}) chooses its distribution to maximize
 vote share, while the other (\dQuote{B}) simultaneously chooses its distribution to minimize
-\dQuote{A}’s vote share. In many settings, \code{competing_group_variable_respondent} and related
+\dQuote{A}'s vote share. In many settings, \code{competing_group_variable_respondent} and related
 arguments help define which respondents belong to the \dQuote{A} or \dQuote{B} sub-electorate
 (e.g., a primary). The final solution is a mixed-strategy Nash equilibrium, if it exists, for
 the forced-choice environment. This can be used to compare or interpret real-world candidate

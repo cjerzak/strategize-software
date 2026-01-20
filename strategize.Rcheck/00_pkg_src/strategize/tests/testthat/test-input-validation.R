@@ -328,6 +328,22 @@ test_that("validate_strategize_inputs warns about diff without pair_id", {
   )
 })
 
+test_that("validate_strategize_inputs warns about diff without profile_order", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+  pair_id <- c(1, 1, 2, 2)
+
+  expect_warning(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      diff = TRUE, pair_id = pair_id
+    ),
+    "profile_order"
+  )
+})
+
 # =============================================================================
 # CV Validation
 # =============================================================================

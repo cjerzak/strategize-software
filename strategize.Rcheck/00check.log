@@ -11,7 +11,7 @@
 * checking extension type ... Package
 * this is package ‘strategize’ version ‘0.0.1’
 * package encoding: UTF-8
-* checking CRAN incoming feasibility ... [2s/11s] NOTE
+* checking CRAN incoming feasibility ... [2s/13s] NOTE
 Maintainer: ‘Connor T. Jerzak <connor.jerzak@austin.utexas.edu>’
 
 New submission
@@ -26,11 +26,12 @@ New submission
 * checking whether package ‘strategize’ can be installed ... OK
 * checking installed package size ... OK
 * checking package directory ... OK
-* checking for future file timestamps ... NOTE
-unable to verify current time
+* checking for future file timestamps ... OK
 * checking ‘build’ directory ... OK
 * checking DESCRIPTION meta-information ... OK
-* checking top-level files ... OK
+* checking top-level files ... NOTE
+Non-standard file/directory found at top level:
+  ‘CLAUDE.md’
 * checking for left-over files ... OK
 * checking index information ... OK
 * checking package subdirectories ... OK
@@ -46,10 +47,7 @@ unable to verify current time
 * checking S3 generic/method consistency ... OK
 * checking replacement functions ... OK
 * checking foreign function calls ... OK
-* checking R code for possible problems ... NOTE
-InitializeQMonteFxns: no visible binding for global variable ‘p_vec_tf’
-Undefined global functions or variables:
-  p_vec_tf
+* checking R code for possible problems ... OK
 * checking Rd files ... OK
 * checking Rd metadata ... OK
 * checking Rd line widths ... OK
@@ -62,10 +60,10 @@ Undefined global functions or variables:
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [43s/18s] OK
+* checking examples with --run-donttest ... [58s/26s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... OK
-  Running ‘testthat.R’
+* checking tests ... [28s/21s] OK
+  Running ‘testthat.R’ [28s/21s]
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK
@@ -74,4 +72,4 @@ Undefined global functions or variables:
 * checking for non-standard things in the check directory ... OK
 * checking for detritus in the temp directory ... OK
 * DONE
-Status: 3 NOTEs
+Status: 2 NOTEs

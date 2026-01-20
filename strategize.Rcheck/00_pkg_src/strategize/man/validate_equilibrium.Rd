@@ -11,7 +11,8 @@ validate_equilibrium(
   tolerance = 0.01,
   nMonte = 100,
   plot = TRUE,
-  verbose = TRUE
+  verbose = TRUE,
+  seed = 1L
 )
 }
 \arguments{
@@ -19,7 +20,8 @@ validate_equilibrium(
 
 \item{method}{Character string specifying the search method:
 \itemize{
-  \item \code{"grid"}: Exhaustive grid search (more accurate, slower)
+  \item \code{"grid"}: Grid search around the current solution (deterministic
+    for 1-2 parameters; random sampling for higher dimensions)
   \item \code{"gradient"}: Gradient ascent from current solution (faster)
 }
 Default is \code{"grid"}.}
@@ -31,11 +33,16 @@ Default is 50.}
 Default is 0.01 (i.e., neither player can improve vote share by more than 1\%).}
 
 \item{nMonte}{Integer. Number of Monte Carlo samples for Q evaluation.
-Default is 100.}
+This overrides the Monte Carlo settings stored in \code{result} for
+the duration of this validation call. Default is 100.}
 
 \item{plot}{Logical. Whether to generate visualization. Default is \code{TRUE}.}
 
 \item{verbose}{Logical. Whether to print progress messages. Default is \code{TRUE}.}
+
+\item{seed}{Integer seed for reproducible Monte Carlo evaluation and
+deterministic search behavior. Use \code{NULL} for non-deterministic
+behavior. Default is 1.}
 }
 \value{
 A list containing:
@@ -49,6 +56,8 @@ A list containing:
     \item{Q_br_dag}{Objective value if DAG switched to best response}
     \item{br_strategy_ast}{The best response strategy for AST (for comparison)}
     \item{br_strategy_dag}{The best response strategy for DAG}
+    \item{nMonte}{Monte Carlo sample count used for validation}
+    \item{seed}{Seed used for deterministic evaluation (if provided)}
     \item{plot}{ggplot object if plot=TRUE and ggplot2 available, else NULL}
   }
 }

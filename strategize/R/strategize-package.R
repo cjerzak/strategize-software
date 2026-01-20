@@ -3,8 +3,9 @@
 
 # Base R imports ---------------------------------------------------------------
 #' @importFrom graphics hist image
-#' @importFrom stats as.formula coef glm lm lowess model.matrix na.omit predict qnorm rnorm runif sd var vcov
-#' @importFrom utils combn head read.csv write.csv
+#' @importFrom stats as.formula coef glm lm lowess model.matrix na.omit predict qnorm rnorm runif sd setNames var vcov
+#' @importFrom utils combn head modifyList read.csv write.csv
+#' @importFrom reticulate %as%
 NULL
 
 # Global variables -------------------------------------------------------------
@@ -18,10 +19,13 @@ utils::globalVariables(c(
   "lambda", "lambda_seq", "n_folds", "nSGD", "nRounds",
   "nMonte_Qglm", "nMonte_adversarial", "nFolds_glm",
   "penalty_type", "adversarial", "p_list", "pi_list",
+  "adversarial_model_strategy", "include_stage_interactions",
+  "neural_mcmc_control", "outcome_model_type",
 
   # Model objects
-  "ModelList_object", "presaved_outcome_model", "save_outcome_model",
-  "vcov_OutcomeModel", "vcov_OutcomeModel_by_k", "UsedRegularization",
+  "ModelList_object", "presaved_outcome_model", "save_outcome_model", "outcome_model_key",
+  "vcov_OutcomeModel", "vcov_OutcomeModel_by_k", "vcov_OutcomeModel_general",
+  "UsedRegularization",
 
   # Factor/treatment related
   "FactorsMat_numeric_0Indexed", "factor_levels", "treatment_combs",
@@ -37,6 +41,7 @@ utils::globalVariables(c(
 
   # JAX/TF compiled objects
   "EST_COEFFICIENTS_tf_ast_jnp", "EST_INTERCEPT_tf_ast_jnp",
+  "EST_COEFFICIENTS_tf_general", "EST_INTERCEPT_tf_general",
   "REGRESSION_PARAMS_jax_dag0_jnp",
   "grad_getLoss_jax_unnormalized", "getLoss_tf",
   "getProbRatio_jax", "getProbRatio_tf",
@@ -56,12 +61,14 @@ utils::globalVariables(c(
   "a_structure", "a_structure_leftoutLdminus1",
   "split1_indices", "split2_indices", "splitIndices", "split_vec_full",
   "holdout_indicator", "holdBasis_traintv",
-  "trainIndicator_pool", "GroupsPool", "GroupCounter",
+  "trainIndicator_pool", "GroupsPool", "GroupCounter", "indi_",
 
   # Adversarial mode
-  "competing_group_variable_candidate_",
+  "competing_group_competition_variable_candidate_",
+  "competing_group_variable_candidate_", "competing_group_variable_respondent_",
   "varcov_cluster_variable", "varcov_cluster_variable_",
-  "pair_id_", "respondent_id", "respondent_task_id", "profile_order",
+  "pair_id_", "respondent_id", "respondent_task_id",
+  "profile_order", "profile_order_",
 
   # M-estimation
   "ClassProbProj", "ClassProbProjCoefs", "ClassProbProjCoefs_se",
@@ -78,8 +85,12 @@ utils::globalVariables(c(
   "piSEtype", "confLevel", "sg_method",
   "glm_family", "glm_outcome_transform",
   "my_mean_full", "w_orig", "warm_start",
-  "use_optax", "tape", "tfConst",
+  "p_vec_tf", "use_stage_models", "use_optax", "tape", "tfConst",
   "evaluation_environment",
+
+  # Primary push-forward controls
+  "primary_pushforward", "primary_strength",
+  "primary_n_entrants", "primary_n_field",
 
   # Generated code functions
   "generate_ExactSolExplicit", "generate_ExactSolImplicit",

@@ -6,6 +6,7 @@
 #'   Defaults to \code{"strategize_env"}.
 #' @param conda The path to a conda executable. Using \code{"auto"} allows reticulate
 #'   to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.
+#'   If creation fails and a conda binary is found on PATH, the function retries with it.
 #'
 #' @return Invisibly returns \code{NULL}. This function is called for its side effects
 #'   of creating and configuring a conda environment for \code{strategize}.
@@ -26,7 +27,48 @@
 #' @md
 
 build_backend <- function(conda_env = "strategize_env", conda = "auto") {
-  reticulate::conda_create(envname = conda_env, conda = conda, python_version = "3.13")
+  env_exists <- function(conda_bin) {
+    tryCatch({
+      envs <- reticulate::conda_list(conda = conda_bin)
+      conda_env %in% envs$name
+    }, error = function(e) FALSE)
+  }
+
+  create_env <- function(conda_bin) {
+    reticulate::conda_create(envname = conda_env, conda = conda_bin, python_version = "3.13")
+    invisible(TRUE)
+  }
+
+  ok <- tryCatch({
+    create_env(conda)
+    TRUE
+  }, error = function(e) {
+    message(sprintf("conda_create failed using '%s': %s", conda, e$message))
+    FALSE
+  })
+
+  if (!ok || !env_exists(conda)) {
+    conda_fallback <- Sys.which("conda")
+    if (nzchar(conda_fallback) && conda_fallback != conda) {
+      message(sprintf("Retrying conda_create with: %s", conda_fallback))
+      tryCatch({
+        create_env(conda_fallback)
+      }, error = function(e) {
+        message(sprintf("conda_create failed using '%s': %s", conda_fallback, e$message))
+      })
+      if (env_exists(conda_fallback)) {
+        conda <- conda_fallback
+      }
+    }
+  }
+
+  if (!env_exists(conda)) {
+    stop(
+      sprintf("Failed to create conda environment '%s'.\n", conda_env),
+      "Try passing conda = '/path/to/conda' or setting RETICULATE_CONDA.\n",
+      call. = FALSE
+    )
+  }
   
   os <- Sys.info()[["sysname"]]
   msg <- function(...) message(sprintf(...))
@@ -78,5 +120,3 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   
   msg("Environment '%s' is ready.", conda_env)
 }
-
-

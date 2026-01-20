@@ -1,9 +1,10 @@
 {
   rm(list = ls())
   options(error = NULL)
-  # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
-  # strategize::build_backend()
 
+  install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
+  # strategize::build_backend()
+  
   # Package configuration (change these for different packages)
   package_name <- "strategize"
   base_path <- sprintf("~/Documents/%s-software", package_name)
