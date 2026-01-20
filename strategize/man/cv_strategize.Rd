@@ -26,6 +26,9 @@ cv_strategize(
   nSGD = 100,
   diff = F,
   adversarial = F,
+  adversarial_model_strategy = "four",
+  partial_pooling = NULL,
+  partial_pooling_strength = 50,
   use_regularization = TRUE,
   force_gaussian = F,
   temperature = 0.5,
@@ -33,6 +36,7 @@ cv_strategize(
   learning_rate_max = 0.001,
   penalty_type = "KL",
   outcome_model_type = "glm",
+  neural_mcmc_control = NULL,
   compute_se = T,
   conda_env = "strategize_env",
   conda_env_required = F,
@@ -40,6 +44,9 @@ cv_strategize(
   nFolds_glm = 3L,
   nMonte_adversarial = 5L,
   primary_pushforward = "mc",
+  primary_strength = 1,
+  primary_n_entrants = 1L,
+  primary_n_field = 1L,
   nMonte_Qglm = 100L,
   optim_type = "gd",
   optimism = "extragrad"
@@ -133,6 +140,20 @@ set \code{TRUE} in certain difference-of-utility designs.}
 (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
 or average-case optimization).}
 
+\item{adversarial_model_strategy}{Character string indicating whether to estimate
+\code{"four"} outcome models (primary + general for each group), \code{"two"} outcome models
+(one per group reused for both primary and general), or \code{"neural"} (Bayesian Transformer
+models with party tokens; defaults to a single pooled model across groups and stages. Set
+\code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models) in adversarial
+mode.}
+
+\item{partial_pooling}{Logical indicating whether to partially pool (shrink) group-specific
+outcome model coefficients toward a shared average when using the "two" strategy. When
+\code{NULL}, defaults to \code{TRUE} in the two-strategy adversarial case.}
+
+\item{partial_pooling_strength}{Numeric scalar controlling the amount of shrinkage used for
+partial pooling in the two-strategy adversarial case.}
+
 \item{use_regularization}{Logical; if \code{TRUE}, penalty-based regularization
 is used for the outcome model. Usually set to \code{TRUE} for large designs.
 Defaults to \code{TRUE}.}
@@ -161,6 +182,13 @@ or \code{"LogMaxProb"}. The default is \code{"KL"}.}
 use, such as \code{"glm"} for generalized linear models or \code{"neural"}
 for a neural-network approximation. Defaults to \code{"glm"}.}
 
+\item{neural_mcmc_control}{Optional list overriding default MCMC settings used when
+\code{outcome_model_type = "neural"}. Use
+\code{neural_mcmc_control$uncertainty_scope = "output"} to restrict delta-method
+uncertainty to output-layer parameters. In adversarial neural mode, set
+\code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models
+(default is 1 for a single differential model).}
+
 \item{compute_se}{Logical; if \code{TRUE}, attempts to compute standard errors
 using M-estimation or the Delta method. Defaults to \code{TRUE}.}
 
@@ -184,7 +212,14 @@ to 5.}
 
 \item{primary_pushforward}{Character string controlling the primary-stage push-forward estimator.
 Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
-\code{"linearized"} for the faster averaged-weight approximation.}
+\code{"linearized"} for the faster averaged-weight approximation, or
+\code{"multi"} for multi-candidate primaries.}
+
+\item{primary_strength}{Numeric scalar controlling primary decisiveness (see \code{\link{strategize}}).}
+
+\item{primary_n_entrants}{Integer number of entrant candidates per party in multi-candidate primaries.}
+
+\item{primary_n_field}{Integer number of field candidates per party in multi-candidate primaries.}
 
 \item{nMonte_Qglm}{An integer specifying the number of Monte Carlo draws 
 for evaluating certain integrals in \code{glm}-based approximations, default 100.}
@@ -194,8 +229,8 @@ for evaluating certain integrals in \code{glm}-based approximations, default 100
 or \code{"SecondOrder"} for testing or advanced routines.}
 
 \item{optimism}{Character string controlling optimistic / extra-gradient updates for the
-gradient optimizer. Options: \code{"extragrad"} (default), \code{"ogda"}, or \code{"none"}.
-Only supported when \code{use_optax = FALSE}.}
+gradient optimizer. Options: \code{"extragrad"} (default), \code{"smp"} (stochastic mirror-prox),
+\code{"ogda"}, or \code{"none"}. Only supported when \code{use_optax = FALSE}.}
 }
 \value{
 A named list with components:

@@ -12,13 +12,22 @@ validate_strategize_inputs(
   p_list = NULL,
   K = 1,
   pair_id = NULL,
+  profile_order = NULL,
   adversarial = FALSE,
+  adversarial_model_strategy = "four",
+  partial_pooling = NULL,
+  partial_pooling_strength = 50,
   competing_group_variable_respondent = NULL,
   competing_group_variable_candidate = NULL,
+  competing_group_competition_variable_candidate = NULL,
   outcome_model_type = "glm",
   penalty_type = "KL",
+  neural_mcmc_control = NULL,
   diff = FALSE,
-  primary_pushforward = "mc"
+  primary_pushforward = "mc",
+  primary_strength = 1,
+  primary_n_entrants = 1L,
+  primary_n_field = 1L
 )
 }
 \arguments{
@@ -36,19 +45,43 @@ validate_strategize_inputs(
 
 \item{pair_id}{Pair identifier}
 
+\item{profile_order}{Profile order indicator for paired choices}
+
 \item{adversarial}{Adversarial mode flag}
+
+\item{adversarial_model_strategy}{Character string indicating whether to use
+"four" models (primary + general for each group) or "two" models (one per group
+reused for primary and general) in adversarial mode.}
+
+\item{partial_pooling}{Logical indicating whether to partially pool (shrink) group-specific
+outcome model coefficients toward a shared average when using the "two" strategy.}
+
+\item{partial_pooling_strength}{Numeric scalar controlling the amount of shrinkage used for
+partial pooling in the two-strategy adversarial case.}
 
 \item{competing_group_variable_respondent}{Respondent group variable}
 
 \item{competing_group_variable_candidate}{Candidate group variable}
 
+\item{competing_group_competition_variable_candidate}{Candidate competition variable}
+
 \item{outcome_model_type}{Outcome model type}
 
 \item{penalty_type}{Penalty type}
 
+\item{neural_mcmc_control}{Optional list overriding neural MCMC defaults. In adversarial
+neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
+models (default is 1 for a single differential model).}
+
 \item{diff}{Difference mode flag}
 
 \item{primary_pushforward}{Primary-stage push-forward estimator}
+
+\item{primary_strength}{Scalar controlling the decisiveness of primaries}
+
+\item{primary_n_entrants}{Number of entrant candidates sampled per party in multi-candidate primaries}
+
+\item{primary_n_field}{Number of field candidates sampled per party in multi-candidate primaries}
 }
 \value{
 TRUE invisibly if validation passes; stops with error otherwise

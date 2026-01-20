@@ -18,25 +18,49 @@ NULL
 #' @param p_list Baseline probability list
 #' @param K Number of clusters
 #' @param pair_id Pair identifier
+#' @param profile_order Profile order indicator for paired choices
 #' @param adversarial Adversarial mode flag
+#' @param adversarial_model_strategy Character string indicating whether to use
+#'   "four" models (primary + general for each group) or "two" models (one per group
+#'   reused for primary and general) in adversarial mode.
+#' @param partial_pooling Logical indicating whether to partially pool (shrink) group-specific
+#'   outcome model coefficients toward a shared average when using the "two" strategy.
+#' @param partial_pooling_strength Numeric scalar controlling the amount of shrinkage used for
+#'   partial pooling in the two-strategy adversarial case.
 #' @param competing_group_variable_respondent Respondent group variable
 #' @param competing_group_variable_candidate Candidate group variable
+#' @param competing_group_competition_variable_candidate Candidate competition variable
 #' @param outcome_model_type Outcome model type
 #' @param penalty_type Penalty type
+#' @param neural_mcmc_control Optional list overriding neural MCMC defaults. In adversarial
+#'   neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
+#'   models (default is 1 for a single differential model).
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
+#' @param primary_strength Scalar controlling the decisiveness of primaries
+#' @param primary_n_entrants Number of entrant candidates sampled per party in multi-candidate primaries
+#' @param primary_n_field Number of field candidates sampled per party in multi-candidate primaries
 #' @return TRUE invisibly if validation passes; stops with error otherwise
 #' @keywords internal
 validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        p_list = NULL, K = 1,
                                        pair_id = NULL,
+                                       profile_order = NULL,
                                        adversarial = FALSE,
+                                       adversarial_model_strategy = "four",
+                                       partial_pooling = NULL,
+                                       partial_pooling_strength = 50,
                                        competing_group_variable_respondent = NULL,
                                        competing_group_variable_candidate = NULL,
+                                       competing_group_competition_variable_candidate = NULL,
                                        outcome_model_type = "glm",
                                        penalty_type = "KL",
+                                       neural_mcmc_control = NULL,
                                        diff = FALSE,
-                                       primary_pushforward = "mc") {
+                                       primary_pushforward = "mc",
+                                       primary_strength = 1.0,
+                                       primary_n_entrants = 1L,
+                                       primary_n_field = 1L) {
 
   # ---- Y validation ----
   if (missing(Y) || is.null(Y)) {
@@ -203,7 +227,6 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         call. = FALSE
       )
     }
-
     n_resp_groups <- length(unique(competing_group_variable_respondent))
     if (n_resp_groups != 2) {
       stop(
@@ -227,6 +250,78 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         call. = FALSE
       )
     }
+    if (length(competing_group_variable_candidate) != nrow(W)) {
+      stop(
+        sprintf(
+          "competing_group_variable_candidate has %d elements but W has %d rows.\n",
+          length(competing_group_variable_candidate), nrow(W)
+        ),
+        "  Lengths must match.",
+        call. = FALSE
+      )
+    }
+    if (!is.null(competing_group_competition_variable_candidate)) {
+      if (length(competing_group_competition_variable_candidate) != nrow(W)) {
+        stop(
+          sprintf(
+            "competing_group_competition_variable_candidate has %d elements but W has %d rows.\n",
+            length(competing_group_competition_variable_candidate), nrow(W)
+          ),
+          "  Lengths must match.",
+          call. = FALSE
+        )
+      }
+      if (any(is.na(competing_group_competition_variable_candidate))) {
+        stop(
+          "competing_group_competition_variable_candidate contains NA values.\n",
+          "  Use explicit \"Same\"/\"Different\" labels for all rows.",
+          call. = FALSE
+        )
+      }
+      valid_comp_labels <- c("Same", "Different")
+      if (!all(competing_group_competition_variable_candidate %in% valid_comp_labels)) {
+        stop(
+          "competing_group_competition_variable_candidate must contain only \"Same\" or \"Different\".\n",
+          "  Check for typos or unexpected labels.",
+          call. = FALSE
+        )
+      }
+    }
+  }
+
+  # ---- adversarial_model_strategy validation ----
+  valid_model_strategies <- c("two", "four", "neural")
+  if (!is.character(adversarial_model_strategy) || length(adversarial_model_strategy) != 1) {
+    stop(
+      "'adversarial_model_strategy' must be a single character string.\n",
+      "  Valid options: ", paste(valid_model_strategies, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (!tolower(adversarial_model_strategy) %in% valid_model_strategies) {
+    stop(
+      sprintf("'adversarial_model_strategy' must be one of: %s.\n",
+              paste(valid_model_strategies, collapse = ", ")),
+      sprintf("  Got: '%s'", adversarial_model_strategy),
+      call. = FALSE
+    )
+  }
+
+  # ---- partial_pooling validation ----
+  if (!is.null(partial_pooling)) {
+    if (!is.logical(partial_pooling) || length(partial_pooling) != 1) {
+      stop(
+        "'partial_pooling' must be a single logical value (TRUE/FALSE).\n",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.numeric(partial_pooling_strength) || length(partial_pooling_strength) != 1 ||
+      !is.finite(partial_pooling_strength) || partial_pooling_strength < 0) {
+    stop(
+      "'partial_pooling_strength' must be a single non-negative numeric value.\n",
+      call. = FALSE
+    )
   }
 
   # ---- diff mode validation ----
@@ -236,6 +331,48 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       "  Without pair_id, the function may not correctly identify paired profiles.",
       call. = FALSE
     )
+  }
+  if (isTRUE(diff) && !is.null(pair_id)) {
+    if (is.null(profile_order)) {
+      warning(
+        "diff=TRUE without 'profile_order'.\n",
+        "  Provide profile_order to ensure consistent within-pair ordering.\n",
+        "  If omitted, ordering will be inferred deterministically (e.g., by candidate group and hashed profiles).",
+        call. = FALSE
+      )
+    } else {
+      if (length(profile_order) != nrow(W)) {
+        stop(
+          sprintf("profile_order has %d elements but W has %d rows.\n",
+                  length(profile_order), nrow(W)),
+          "  Lengths must match.",
+          call. = FALSE
+        )
+      }
+      if (any(is.na(profile_order))) {
+        warning(
+          "profile_order contains NA values.\n",
+          "  Missing ordering can lead to ambiguous pair differences.",
+          call. = FALSE
+        )
+      }
+      pair_sizes <- table(pair_id)
+      if (any(pair_sizes != 2L)) {
+        warning(
+          "diff=TRUE expects exactly two rows per pair_id.\n",
+          "  Found pairs with sizes other than 2; ordering may be unreliable.",
+          call. = FALSE
+        )
+      }
+      order_ok <- tapply(profile_order, pair_id, function(x) length(unique(x)) == 2L)
+      if (any(!order_ok)) {
+        warning(
+          "profile_order is inconsistent within one or more pairs.\n",
+          "  Each pair_id should have two distinct order values (e.g., 1 and 2).",
+          call. = FALSE
+        )
+      }
+    }
   }
 
   # ---- K and X validation ----
@@ -263,6 +400,52 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       call. = FALSE
     )
   }
+  if (tolower(adversarial_model_strategy) == "neural" && outcome_model_type != "neural") {
+    stop(
+      "adversarial_model_strategy = \"neural\" requires outcome_model_type = \"neural\".\n",
+      "  Set outcome_model_type=\"neural\" to fit Bayesian Transformer models.",
+      call. = FALSE
+    )
+  }
+  if (!is.null(neural_mcmc_control) && !is.list(neural_mcmc_control)) {
+    stop(
+      "'neural_mcmc_control' must be a list when provided.",
+      call. = FALSE
+    )
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$uncertainty_scope)) {
+    scope_val <- tolower(as.character(neural_mcmc_control$uncertainty_scope))
+    if (!scope_val %in% c("all", "output")) {
+      stop(
+        "'neural_mcmc_control$uncertainty_scope' must be 'all' or 'output'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$n_bayesian_models)) {
+    n_models <- neural_mcmc_control$n_bayesian_models
+    if (!is.numeric(n_models) || length(n_models) != 1 || !is.finite(n_models)) {
+      stop(
+        "'neural_mcmc_control$n_bayesian_models' must be a single finite numeric value.",
+        call. = FALSE
+      )
+    }
+    if (n_models != round(n_models)) {
+      stop(
+        "'neural_mcmc_control$n_bayesian_models' must be an integer (1 or 2).",
+        call. = FALSE
+      )
+    }
+    n_models <- as.integer(n_models)
+    if (!n_models %in% c(1L, 2L)) {
+      stop(
+        "'neural_mcmc_control$n_bayesian_models' must be 1 or 2.",
+        call. = FALSE
+      )
+    }
+  }
 
   # ---- penalty_type validation ----
   valid_penalty_types <- c("KL", "L2", "LogMaxProb")
@@ -279,7 +462,7 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
   }
 
   # ---- primary_pushforward validation ----
-  valid_pushforward <- c("mc", "linearized")
+  valid_pushforward <- c("mc", "linearized", "multi")
   if (!is.character(primary_pushforward) || length(primary_pushforward) != 1) {
     stop(
       "'primary_pushforward' must be a single character string.\n",
@@ -292,6 +475,50 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       sprintf("'primary_pushforward' must be one of: %s.\n",
               paste(valid_pushforward, collapse = ", ")),
       sprintf("  Got: '%s'", primary_pushforward),
+      call. = FALSE
+    )
+  }
+
+  # ---- primary_strength validation ----
+  if (!is.numeric(primary_strength) || length(primary_strength) != 1 || is.na(primary_strength)) {
+    stop(
+      "'primary_strength' must be a single numeric value.\n",
+      "  Use 1.0 for neutral scaling, >1 for stronger primaries.",
+      call. = FALSE
+    )
+  }
+  if (primary_strength < 0) {
+    stop(
+      "'primary_strength' must be non-negative.\n",
+      "  Use 0 to neutralize primaries or >1 to strengthen them.",
+      call. = FALSE
+    )
+  }
+
+  # ---- multi-candidate primary validation ----
+  if (!is.numeric(primary_n_entrants) || length(primary_n_entrants) != 1 ||
+      primary_n_entrants < 1 || primary_n_entrants != round(primary_n_entrants)) {
+    stop(
+      "'primary_n_entrants' must be a positive integer.\n",
+      "  Example: primary_n_entrants = 3.",
+      call. = FALSE
+    )
+  }
+  if (!is.numeric(primary_n_field) || length(primary_n_field) != 1 ||
+      primary_n_field < 1 || primary_n_field != round(primary_n_field)) {
+    stop(
+      "'primary_n_field' must be a positive integer.\n",
+      "  Example: primary_n_field = 3.",
+      call. = FALSE
+    )
+  }
+  if ((primary_n_entrants > 1 || primary_n_field > 1) &&
+      tolower(primary_pushforward) != "multi") {
+    stop(
+      "'primary_pushforward' must be \"multi\" when primary_n_entrants > 1 ",
+      "or primary_n_field > 1.\n",
+      "  Set primary_pushforward = \"multi\" or use primary_n_entrants = 1 ",
+      "and primary_n_field = 1.",
       call. = FALSE
     )
   }

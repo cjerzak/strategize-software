@@ -138,12 +138,14 @@ add_adversarial_structure <- function(base_data, seed = 42) {
   n_pairs <- n / 2
   n_unique_respondents <- n_pairs
 
-  # Assign each unique respondent to a party (50/50 split)
-  respondent_party_base <- rep(c("PartyA", "PartyB"), each = n_unique_respondents / 2)
+  # Assign each unique respondent to a party (as close to 50/50 as possible)
+  n_party_a <- ceiling(n_unique_respondents / 2)
+  n_party_b <- floor(n_unique_respondents / 2)
+  respondent_party_base <- c(rep("PartyA", n_party_a), rep("PartyB", n_party_b))
   competing_group_variable_respondent <- respondent_party_base[base_data$respondent_id]
 
   # Determine competition type for each pair
-  competition_type_base <- sample(rep(c("Same", "Different"), each = n_unique_respondents / 2))
+  competition_type_base <- sample(c(rep("Same", n_party_a), rep("Different", n_party_b)))
   pair_competition_type <- competition_type_base[base_data$pair_id]
 
   # Assign candidate party based on competition type

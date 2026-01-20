@@ -1,0 +1,34 @@
+citHeader("To cite the strategize package in publications, please use the following:")
+
+bibentry(
+  bibtype = "Manual",
+  key = "strategize",
+  title = "strategize: Tools for Learning Optimal and Adversarial Distributions in High-Dimensional Conjoint Experiments",
+  author = c(
+    person("Connor T.", "Jerzak", role = c("aut", "cre"), comment = c(ORCID = "0000-0001-9858-2050")),
+    person("Priyanshi", "Chandra", role = "aut", comment = c(ORCID = "0009-0003-1625-8823")),
+    person("Rishi", "Hazra", role = "aut", comment = c(ORCID = "0000-0001-5018-4440"))
+  ),
+  year = "2025",
+  note = "R package version 0.0.1",
+  url = "https://github.com/cjerzak/strategize-software"
+)
+
+bibentry(
+  bibtype = "Misc",
+  key = "jerzak2025selectingoptimalcandidateprofiles",
+  title = "Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning",
+  author = c(
+    person("Connor T.", "Jerzak"),
+    person("Priyanshi", "Chandra"),
+    person("Rishi", "Hazra")
+  ),
+  year = "2025",
+  eprint = "2504.19043",
+  archivePrefix = "arXiv",
+  primaryClass = "stat.ME",
+  url = "https://arxiv.org/abs/2504.19043"
+)
+
+citFooter("If you use strategize, please cite it as above. For methodological details, see Jerzak, Chandra, and Hazra (2025).")
+

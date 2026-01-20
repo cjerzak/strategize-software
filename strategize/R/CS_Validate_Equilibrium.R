@@ -9,7 +9,8 @@
 #' @param result Output from \code{\link{strategize}} with \code{adversarial = TRUE}
 #' @param method Character string specifying the search method:
 #'   \itemize{
-#'     \item \code{"grid"}: Exhaustive grid search (more accurate, slower)
+#'     \item \code{"grid"}: Grid search around the current solution (deterministic
+#'       for 1-2 parameters; random sampling for higher dimensions)
 #'     \item \code{"gradient"}: Gradient ascent from current solution (faster)
 #'   }
 #'   Default is \code{"grid"}.
@@ -18,9 +19,13 @@
 #' @param tolerance Numeric. Maximum BR error to consider as equilibrium.
 #'   Default is 0.01 (i.e., neither player can improve vote share by more than 1\%).
 #' @param nMonte Integer. Number of Monte Carlo samples for Q evaluation.
-#'   Default is 100.
+#'   This overrides the Monte Carlo settings stored in \code{result} for
+#'   the duration of this validation call. Default is 100.
 #' @param plot Logical. Whether to generate visualization. Default is \code{TRUE}.
 #' @param verbose Logical. Whether to print progress messages. Default is \code{TRUE}.
+#' @param seed Integer seed for reproducible Monte Carlo evaluation and
+#'   deterministic search behavior. Use \code{NULL} for non-deterministic
+#'   behavior. Default is 1.
 #'
 #' @return A list containing:
 #'   \describe{
@@ -33,6 +38,8 @@
 #'     \item{Q_br_dag}{Objective value if DAG switched to best response}
 #'     \item{br_strategy_ast}{The best response strategy for AST (for comparison)}
 #'     \item{br_strategy_dag}{The best response strategy for DAG}
+#'     \item{nMonte}{Monte Carlo sample count used for validation}
+#'     \item{seed}{Seed used for deterministic evaluation (if provided)}
 #'     \item{plot}{ggplot object if plot=TRUE and ggplot2 available, else NULL}
 #'   }
 #'
@@ -120,9 +127,23 @@ validate_equilibrium <- function(result,
                                   tolerance = 0.01,
                                   nMonte = 100,
                                   plot = TRUE,
-                                  verbose = TRUE) {
+                                  verbose = TRUE,
+                                  seed = 1L) {
 
   method <- match.arg(method)
+
+  # Validate Monte Carlo settings
+  nMonte <- as.integer(nMonte)
+  if (is.na(nMonte) || nMonte < 1L) {
+    stop("nMonte must be a positive integer.")
+  }
+
+  if (!is.null(seed)) {
+    seed <- as.integer(seed)
+    if (is.na(seed) || seed < 0L) {
+      stop("seed must be a non-negative integer or NULL.")
+    }
+  }
 
   # Validate input
   if (!isTRUE(result$convergence_history$adversarial)) {
@@ -141,7 +162,120 @@ validate_equilibrium <- function(result,
          "Cannot evaluate Q function.")
   }
 
-  if (verbose) message("Validating Nash equilibrium...")
+  if (verbose) {
+    message("Validating Nash equilibrium...")
+    message(sprintf("  Using nMonte = %d", nMonte))
+  }
+
+  # Keep RNG deterministic for search sampling when requested
+  if (!is.null(seed)) {
+    old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      get(".Random.seed", envir = .GlobalEnv)
+    } else {
+      NULL
+    }
+    on.exit({
+      if (is.null(old_seed)) {
+        if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+          rm(".Random.seed", envir = .GlobalEnv)
+        }
+      } else {
+        assign(".Random.seed", old_seed, envir = .GlobalEnv)
+      }
+    }, add = TRUE)
+    set.seed(seed)
+  }
+
+  # Temporarily override Monte Carlo counts in the stored evaluation environment
+  eval_env <- tryCatch(environment(result$FullGetQStar_), error = function(e) NULL)
+  if (is.environment(eval_env)) {
+    if (!exists("strenv", envir = eval_env, inherits = TRUE)) {
+      assign("strenv", strenv, envir = eval_env)
+    }
+    set_if_missing <- function(name, value) {
+      if (!exists(name, envir = eval_env, inherits = TRUE)) {
+        assign(name, value, envir = eval_env)
+      }
+    }
+    set_if_missing("adversarial", isTRUE(result$convergence_history$adversarial))
+    primary_pushforward <- result$primary_pushforward
+    if (is.null(primary_pushforward)) {
+      primary_pushforward <- result$convergence_history$primary_pushforward
+    }
+    if (!is.null(primary_pushforward)) {
+      set_if_missing("primary_pushforward", tolower(primary_pushforward))
+    }
+    if (!is.null(result$primary_n_entrants)) {
+      set_if_missing("primary_n_entrants", as.integer(result$primary_n_entrants))
+    }
+    if (!is.null(result$primary_n_field)) {
+      set_if_missing("primary_n_field", as.integer(result$primary_n_field))
+    }
+    if (!is.null(result$penalty_type)) {
+      set_if_missing("penalty_type", result$penalty_type)
+    }
+    if (!exists("MNtemp", envir = eval_env, inherits = TRUE)) {
+      temp_val <- result$temperature
+      if (is.null(temp_val)) temp_val <- 0.5
+      assign("MNtemp", strenv$jnp$array(temp_val), envir = eval_env)
+    }
+    if (!exists("glm_family", envir = eval_env, inherits = TRUE)) {
+      glm_family <- "gaussian"
+      if (!is.null(result$outcome_model_view$metadata$glm_family)) {
+        glm_family <- result$outcome_model_view$metadata$glm_family
+      }
+      assign("glm_family", glm_family, envir = eval_env)
+      if (glm_family == "binomial") {
+        assign("glm_outcome_transform", strenv$jax$nn$sigmoid, envir = eval_env)
+      } else {
+        assign("glm_outcome_transform", function(x) x, envir = eval_env)
+      }
+    }
+    if (!is.null(result$QFXN)) {
+      set_if_missing("QFXN", result$QFXN)
+    }
+    if (identical(result$penalty_type, "LInfinity") &&
+        !exists("split_vec_full", envir = eval_env, inherits = TRUE) &&
+        !is.null(result$factor_levels)) {
+      split_vec_full <- unlist(lapply(seq_along(result$factor_levels), function(xz) {
+        rep(xz, times = result$factor_levels[[xz]])
+      }))
+      assign("split_vec_full", split_vec_full, envir = eval_env)
+    }
+    has_nMonte_adversarial <- exists("nMonte_adversarial", envir = eval_env, inherits = FALSE)
+    has_nMonte_Qglm <- exists("nMonte_Qglm", envir = eval_env, inherits = FALSE)
+    old_nMonte_adversarial <- if (has_nMonte_adversarial) get("nMonte_adversarial", envir = eval_env) else NULL
+    old_nMonte_Qglm <- if (has_nMonte_Qglm) get("nMonte_Qglm", envir = eval_env) else NULL
+
+    assign("nMonte_adversarial", nMonte, envir = eval_env)
+    assign("nMonte_Qglm", nMonte, envir = eval_env)
+
+    on.exit({
+      if (has_nMonte_adversarial) {
+        assign("nMonte_adversarial", old_nMonte_adversarial, envir = eval_env)
+      } else if (exists("nMonte_adversarial", envir = eval_env, inherits = FALSE)) {
+        rm("nMonte_adversarial", envir = eval_env)
+      }
+      if (has_nMonte_Qglm) {
+        assign("nMonte_Qglm", old_nMonte_Qglm, envir = eval_env)
+      } else if (exists("nMonte_Qglm", envir = eval_env, inherits = FALSE)) {
+        rm("nMonte_Qglm", envir = eval_env)
+      }
+    }, add = TRUE)
+  }
+
+  FullGetQStar_eval <- result$FullGetQStar_
+  if (is.environment(eval_env)) {
+    FullGetQStar_raw <- FullGetQStar_
+    fullgetqstar_env <- environment(FullGetQStar_raw)
+    environment(FullGetQStar_raw) <- eval_env
+    on.exit({
+      if (is.environment(fullgetqstar_env)) {
+        environment(FullGetQStar_raw) <- fullgetqstar_env
+      }
+    }, add = TRUE)
+    FullGetQStar_eval <- strenv$jax$jit(FullGetQStar_raw)
+  }
 
   # Extract current solution
   a_i_ast_current <- result$a_i_ast
@@ -182,10 +316,17 @@ validate_equilibrium <- function(result,
   COEFFICIENTS_dag0 <- params_dag0[[2]]
 
   # Function to evaluate Q at given strategies
+  seed_counter <- 0L
   eval_Q <- function(a_ast, a_dag, Q_SIGN = 1.0) {
-    SEED <- strenv$jax$random$PRNGKey(as.integer(Sys.time()))
+    if (is.null(seed)) {
+      seed_val <- as.integer(Sys.time())
+    } else {
+      seed_val <- as.integer(seed + seed_counter)
+      seed_counter <<- seed_counter + 1L
+    }
+    SEED <- strenv$jax$random$PRNGKey(seed_val)
 
-    Q_val <- result$FullGetQStar_(
+    Q_val <- FullGetQStar_eval(
       a_ast, a_dag,
       INTERCEPT_ast, COEFFICIENTS_ast,
       INTERCEPT_dag, COEFFICIENTS_dag,
@@ -262,6 +403,8 @@ validate_equilibrium <- function(result,
     br_strategy_dag = br_result$br_a_dag,
     tolerance = tolerance,
     method = method,
+    nMonte = nMonte,
+    seed = seed,
     plot = plot_obj
   ))
 }
@@ -303,11 +446,22 @@ find_best_response_grid <- function(result, a_i_ast_current, a_i_dag_current,
   best_Q_ast <- eval_Q(a_i_ast_current, a_i_dag_current, Q_SIGN = 1.0)
   best_a_ast <- a_i_ast_current
 
-  grid_ast <- seq(-search_range, search_range, length.out = resolution)
+  grid_offsets_1d <- seq(-search_range, search_range, length.out = resolution)
 
   if (n_params_ast == 1) {
-    for (offset in grid_ast) {
+    for (offset in grid_offsets_1d) {
       a_test <- strenv$jnp$array(current_ast + offset)
+      Q_test <- eval_Q(a_test, a_i_dag_current, Q_SIGN = 1.0)
+      if (Q_test > best_Q_ast) {
+        best_Q_ast <- Q_test
+        best_a_ast <- a_test
+      }
+    }
+  } else if (n_params_ast <= 2) {
+    grid_offsets <- as.matrix(expand.grid(rep(list(grid_offsets_1d), n_params_ast)))
+    for (i in seq_len(nrow(grid_offsets))) {
+      offsets <- grid_offsets[i, ]
+      a_test <- strenv$jnp$array(current_ast + offsets)
       Q_test <- eval_Q(a_test, a_i_dag_current, Q_SIGN = 1.0)
       if (Q_test > best_Q_ast) {
         best_Q_ast <- Q_test
@@ -333,8 +487,19 @@ find_best_response_grid <- function(result, a_i_ast_current, a_i_dag_current,
   best_a_dag <- a_i_dag_current
 
   if (n_params_dag == 1) {
-    for (offset in grid_ast) {
+    for (offset in grid_offsets_1d) {
       a_test <- strenv$jnp$array(current_dag + offset)
+      Q_test <- eval_Q(a_i_ast_current, a_test, Q_SIGN = -1.0)
+      if (Q_test > best_Q_dag) {
+        best_Q_dag <- Q_test
+        best_a_dag <- a_test
+      }
+    }
+  } else if (n_params_dag <= 2) {
+    grid_offsets <- as.matrix(expand.grid(rep(list(grid_offsets_1d), n_params_dag)))
+    for (i in seq_len(nrow(grid_offsets))) {
+      offsets <- grid_offsets[i, ]
+      a_test <- strenv$jnp$array(current_dag + offsets)
       Q_test <- eval_Q(a_i_ast_current, a_test, Q_SIGN = -1.0)
       if (Q_test > best_Q_dag) {
         best_Q_dag <- Q_test
