@@ -11,7 +11,7 @@
 * checking extension type ... Package
 * this is package ‘strategize’ version ‘0.0.1’
 * package encoding: UTF-8
-* checking CRAN incoming feasibility ... [3s/14s] NOTE
+* checking CRAN incoming feasibility ... [2s/13s] NOTE
 Maintainer: ‘Connor T. Jerzak <connor.jerzak@austin.utexas.edu>’
 
 New submission
@@ -47,7 +47,7 @@ Non-standard file/directory found at top level:
 * checking S3 generic/method consistency ... OK
 * checking replacement functions ... OK
 * checking foreign function calls ... OK
-* checking R code for possible problems ... [11s/11s] OK
+* checking R code for possible problems ... [10s/10s] OK
 * checking Rd files ... OK
 * checking Rd metadata ... OK
 * checking Rd line widths ... OK
@@ -60,10 +60,10 @@ Non-standard file/directory found at top level:
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [62s/30s] OK
+* checking examples with --run-donttest ... [57s/26s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... [32s/25s] OK
-  Running ‘testthat.R’ [32s/25s]
+* checking tests ... [27s/21s] OK
+  Running ‘testthat.R’ [27s/21s]
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK

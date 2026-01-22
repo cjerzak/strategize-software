@@ -19,6 +19,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
   )
+  RMS_scale = 0.2
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
@@ -161,8 +162,11 @@ generate_ModelOutcome_neural <- function(){
   factor_embed_sd_scale <- embed_sd_scale
   context_embed_sd_scale <- embed_sd_scale
   tau_b_scale <- 0.1
-  cross_weight_sd_scale <- weight_sd_scale
-  cross_out_sd_scale <- sqrt(2) / sqrt(as.numeric(ModelDims))
+  
+  # shrink M_cross more (initialize interactionto smaller than main temr)
+  # cross_out does NOT need to shrink with ModelDims (doesn't scale with that)
+  cross_weight_sd_scale <- weight_sd_scale / sqrt(as.numeric(ModelDims))
+  cross_out_sd_scale    <- 0.5  # or 0.25 if you want it more conservative
 
   # Pairwise mode for forced-choice
   pairwise_mode <- isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0
@@ -466,11 +470,11 @@ generate_ModelOutcome_neural <- function(){
                                        strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
       assign(paste0("RMS_attn_l", l_),
              strenv$numpyro$sample(paste0("RMS_attn_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., 0.1),
+                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                    sample_shape = reticulate::tuple(ModelDims)))
       assign(paste0("RMS_ff_l", l_),
              strenv$numpyro$sample(paste0("RMS_ff_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., 0.1),
+                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                    sample_shape = reticulate::tuple(ModelDims)))
       assign(paste0("W_q_l", l_),
              strenv$numpyro$sample(paste0("W_q_l", l_),
@@ -498,7 +502,7 @@ generate_ModelOutcome_neural <- function(){
                                   sample_shape = reticulate::tuple(FFDim, ModelDims)))
     }
     RMS_final <- strenv$numpyro$sample("RMS_final",
-                                       strenv$numpyro$distributions$LogNormal(0., 0.1),
+                                       strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                        sample_shape = reticulate::tuple(ModelDims))
 
     tau_w_out <- strenv$numpyro$sample("tau_w_out",
@@ -520,10 +524,8 @@ generate_ModelOutcome_neural <- function(){
                                            sample_shape = reticulate::tuple(ModelDims, ModelDims))
       M_cross <- 0.5 * (M_cross_raw - strenv$jnp$transpose(M_cross_raw))
       M_cross <- strenv$numpyro$deterministic("M_cross", M_cross)
-      tau_cross_out <- strenv$numpyro$sample("tau_cross_out",
-                                             strenv$numpyro$distributions$HalfNormal(as.numeric(cross_out_sd_scale)))
       W_cross_out <- strenv$numpyro$sample("W_cross_out",
-                                           strenv$numpyro$distributions$Normal(0., tau_cross_out),
+                                           strenv$numpyro$distributions$Normal(0., 0.25),
                                            sample_shape = reticulate::tuple(nOutcomes))
     }
     if (likelihood == "normal") {
@@ -777,11 +779,11 @@ generate_ModelOutcome_neural <- function(){
                                        strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
       assign(paste0("RMS_attn_l", l_),
              strenv$numpyro$sample(paste0("RMS_attn_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., 0.1),
+                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                    sample_shape = reticulate::tuple(ModelDims)))
       assign(paste0("RMS_ff_l", l_),
              strenv$numpyro$sample(paste0("RMS_ff_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., 0.1),
+                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                    sample_shape = reticulate::tuple(ModelDims)))
       assign(paste0("W_q_l", l_),
              strenv$numpyro$sample(paste0("W_q_l", l_),
@@ -809,7 +811,7 @@ generate_ModelOutcome_neural <- function(){
                                   sample_shape = reticulate::tuple(FFDim, ModelDims)))
     }
     RMS_final <- strenv$numpyro$sample("RMS_final",
-                                       strenv$numpyro$distributions$LogNormal(0., 0.1),
+                                       strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                        sample_shape = reticulate::tuple(ModelDims))
 
     tau_w_out <- strenv$numpyro$sample("tau_w_out",

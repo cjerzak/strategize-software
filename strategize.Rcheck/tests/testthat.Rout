@@ -234,4 +234,4 @@ strategize() call has finished...
 > 
 > proc.time()
    user  system elapsed 
- 28.126   3.811  25.036 
+ 23.916   3.284  20.614 
