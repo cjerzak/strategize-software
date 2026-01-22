@@ -34,7 +34,7 @@ generate_ModelOutcome <- function(){
     }
 
     if(holdout_indicator == 0){
-      a_structure_leftoutLdminus1 <- main_info[which(c(diff(main_info$d),1)==0),]
+      a_structure_leftoutLdminus1 <- main_info[which(c(base::diff(main_info$d),1)==0),]
       a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
     }
 

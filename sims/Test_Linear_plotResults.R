@@ -67,7 +67,7 @@ vals2gray <- function(x,start = 0, end = 0.9){
                            trueSE_Qhat_vec
                            ))[c(1,6)]
       axisLims_ = axisLims
-      axisLims_[1] <- axisLims_[1] - mean(diff(axisLims_))/5
+      axisLims_[1] <- axisLims_[1] - mean(base::diff(axisLims_))/5
       plot(trueSE_Qhat_vec,
            estSE_Qhat_MEst_vec,type = "b",
            cex.axis = 2, pch = "",xlab = "",ylab = "",yaxt = 'n',xaxt ="n",
@@ -120,7 +120,7 @@ vals2gray <- function(x,start = 0, end = 0.9){
                           function(zer){apply(do.call(rbind, zer),2,sd)}))
       pi_star_true_ <- tapply(( res_df[atValue,]$pi_star_true), unlist( res_df[atValue,]$nObs), c)[[1]][[1]]
       axisLims_ = axisLims <- summary(c(estSE_pi_[,-1], trueSE_pi_[,-1]))[c(1,6)]
-      axisLims_[1] <- axisLims_[1] - mean(diff(axisLims_))/5
+      axisLims_[1] <- axisLims_[1] - mean(base::diff(axisLims_))/5
       axisLims_[1] <- 0#max(0,axisLims_[1])
       plot(1,type = "b",
            cex.axis = 2, pch = "",xlab = "",ylab = "", xlim = axisLims_,

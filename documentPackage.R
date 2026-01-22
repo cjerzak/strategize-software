@@ -37,7 +37,7 @@
   if (any(as.data.frame(test_results)$failed > 0)) {
     stop("Tests failed! Stopping build process.")
   }
-  cat("\n\U2713 All tests passed!\n\n")
+  cat("\n\U2713 Done with tests...\n\n")
 
   # Show object sizes in environment (for debugging memory usage)
   log(sort(sapply(ls(), function(l_) { object.size(eval(parse(text = l_))) })))

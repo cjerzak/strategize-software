@@ -174,14 +174,22 @@ SGD Iteration: 3 of 3
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
-[ FAIL 0 | WARN 6 | SKIP 74 | PASS 68 ]
+[ FAIL 0 | WARN 6 | SKIP 103 | PASS 68 ]
 
-══ Skipped tests (74) ══════════════════════════════════════════════════════════
-• On CRAN (73): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+══ Skipped tests (103) ═════════════════════════════════════════════════════════
+• On CRAN (102): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
-  'test-cv-strategize.R:9:3', 'test-cv-strategize.R:29:3',
-  'test-cv-strategize.R:48:3', 'test-cv-strategize.R:70:3',
-  'test-edge-cases.R:8:3', 'test-edge-cases.R:54:3', 'test-edge-cases.R:103:3',
+  'test-build-backend.R:2:3', 'test-build-backend.R:36:3',
+  'test-build-backend.R:85:3', 'test-choice-token-gradient.R:6:3',
+  'test-context-head-interaction.R:6:3',
+  'test-context-head-interaction.R:116:3',
+  'test-context-head-interaction.R:222:3',
+  'test-context-head-interaction.R:332:3', 'test-create-p-list.R:2:3',
+  'test-create-p-list.R:21:3', 'test-create-p-list.R:31:3',
+  'test-create-p-list.R:38:3', 'test-cv-strategize.R:9:3',
+  'test-cv-strategize.R:29:3', 'test-cv-strategize.R:48:3',
+  'test-cv-strategize.R:70:3', 'test-edge-cases.R:8:3',
+  'test-edge-cases.R:54:3', 'test-edge-cases.R:103:3',
   'test-input-validation.R:13:3', 'test-input-validation.R:24:3',
   'test-input-validation.R:35:3', 'test-input-validation.R:47:3',
   'test-input-validation.R:59:3', 'test-input-validation.R:75:3',
@@ -193,29 +201,37 @@ strategize() call has finished...
   'test-input-validation.R:248:3', 'test-input-validation.R:263:3',
   'test-input-validation.R:282:3', 'test-input-validation.R:304:3',
   'test-input-validation.R:320:3', 'test-input-validation.R:332:3',
-  'test-input-validation.R:352:3', 'test-input-validation.R:364:3',
-  'test-input-validation.R:376:3', 'test-input-validation.R:392:3',
-  'test-input-validation.R:406:3', 'test-neural.R:6:3', 'test-onestep.R:13:3',
-  'test-onestep.R:40:3', 'test-onestep.R:75:3', 'test-onestep.R:99:3',
-  'test-onestep.R:122:3', 'test-onestep.R:152:3', 'test-onestep.R:181:3',
-  'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
+  'test-input-validation.R:352:3', 'test-input-validation.R:373:3',
+  'test-input-validation.R:388:3', 'test-input-validation.R:406:3',
+  'test-input-validation.R:421:3', 'test-input-validation.R:439:3',
+  'test-input-validation.R:458:3', 'test-input-validation.R:470:3',
+  'test-input-validation.R:482:3', 'test-input-validation.R:498:3',
+  'test-input-validation.R:512:3', 'test-neural.R:35:3', 'test-neural.R:61:3',
+  'test-onestep.R:13:3', 'test-onestep.R:40:3', 'test-onestep.R:75:3',
+  'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
+  'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
   'test-penalty-types.R:25:3', 'test-penalty-types.R:42:3',
+  'test-presets.R:2:3', 'test-presets.R:27:3',
   'test-primary-pushforward.R:10:3', 'test-primary-pushforward.R:109:3',
   'test-primary-pushforward.R:145:3', 'test-primary-pushforward.R:174:3',
-  'test-primary-pushforward.R:207:3', 'test-strategize.R:9:3',
-  'test-strategize.R:25:3', 'test-strategize.R:46:3', 'test-strategize.R:63:3',
-  'test-strategize.R:79:3', 'test-strategize.R:98:3',
-  'test-strategize.R:117:3', 'test-strategize.R:144:3',
-  'test-visualization.R:14:3', 'test-visualization.R:44:3',
-  'test-visualization.R:70:3', 'test-visualization.R:105:3',
-  'test-visualization.R:131:3', 'test-visualization.R:152:3',
-  'test-visualization.R:176:3', 'test-visualization.R:209:3',
-  'test-visualization.R:225:3', 'test-visualization.R:250:3'
+  'test-primary-pushforward.R:207:3', 'test-s3-methods.R:28:3',
+  'test-s3-methods.R:39:3', 'test-s3-methods.R:48:3', 'test-s3-methods.R:58:3',
+  'test-s3-methods.R:68:3', 'test-strategize.R:9:3', 'test-strategize.R:25:3',
+  'test-strategize.R:46:3', 'test-strategize.R:63:3', 'test-strategize.R:79:3',
+  'test-strategize.R:98:3', 'test-strategize.R:117:3',
+  'test-strategize.R:144:3', 'test-validate-equilibrium-guards.R:2:3',
+  'test-validate-equilibrium-guards.R:9:3',
+  'test-validate-equilibrium-guards.R:21:3', 'test-visualization.R:14:3',
+  'test-visualization.R:44:3', 'test-visualization.R:70:3',
+  'test-visualization.R:105:3', 'test-visualization.R:131:3',
+  'test-visualization.R:152:3', 'test-visualization.R:176:3',
+  'test-visualization.R:209:3', 'test-visualization.R:225:3',
+  'test-visualization.R:250:3'
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 6 | SKIP 74 | PASS 68 ]
+[ FAIL 0 | WARN 6 | SKIP 103 | PASS 68 ]
 > 
 > proc.time()
    user  system elapsed 
- 24.353   3.196  20.448 
+ 28.126   3.811  25.036 

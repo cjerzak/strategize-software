@@ -110,7 +110,18 @@
 #'   \code{neural_mcmc_control$uncertainty_scope = "output"} to restrict delta-method
 #'   uncertainty to output-layer parameters. In adversarial neural mode, set
 #'   \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models
-#'   (default is 1 for a single differential model).
+#'   (default is 1 for a single differential model). Use
+#'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth}
+#'   to override the Transformer hidden width and depth. Set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
+#'   the opponent-dependent cross-candidate term in pairwise mode, or set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
+#'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
+#'   For variational inference (subsample_method = "batch_vi"), set
+#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim) or
+#'   \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
+#'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
 #' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors
 #'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
 #' @param conda_env A character specifying the name of a Conda environment for
