@@ -34,7 +34,18 @@ NULL
 #' @param penalty_type Penalty type
 #' @param neural_mcmc_control Optional list overriding neural MCMC defaults. In adversarial
 #'   neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
-#'   models (default is 1 for a single differential model).
+#'   models (default is 1 for a single differential model). Set
+#'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override
+#'   the Transformer hidden width and depth. Set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
+#'   the opponent-dependent cross-candidate term in pairwise mode, or set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
+#'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
+#'   For variational inference (subsample_method = "batch_vi"), set
+#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim) or
+#'   \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
+#'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -442,6 +453,112 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
     if (!n_models %in% c(1L, 2L)) {
       stop(
         "'neural_mcmc_control$n_bayesian_models' must be 1 or 2.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$ModelDims)) {
+    model_dims <- neural_mcmc_control$ModelDims
+    if (!is.numeric(model_dims) || length(model_dims) != 1 || !is.finite(model_dims)) {
+      stop(
+        "'neural_mcmc_control$ModelDims' must be a single finite numeric value.",
+        call. = FALSE
+      )
+    }
+    if (model_dims != round(model_dims) || model_dims < 1) {
+      stop(
+        "'neural_mcmc_control$ModelDims' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$ModelDepth)) {
+    model_depth <- neural_mcmc_control$ModelDepth
+    if (!is.numeric(model_depth) || length(model_depth) != 1 || !is.finite(model_depth)) {
+      stop(
+        "'neural_mcmc_control$ModelDepth' must be a single finite numeric value.",
+        call. = FALSE
+      )
+    }
+    if (model_depth != round(model_depth) || model_depth < 1) {
+      stop(
+        "'neural_mcmc_control$ModelDepth' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$cross_candidate_encoder)) {
+    cross_encoder <- neural_mcmc_control$cross_candidate_encoder
+    if (is.logical(cross_encoder)) {
+      if (length(cross_encoder) != 1L || is.na(cross_encoder)) {
+        stop(
+          "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
+          "'none', 'term', or 'full'.",
+          call. = FALSE
+        )
+      }
+    } else if (is.character(cross_encoder)) {
+      mode <- tolower(as.character(cross_encoder))
+      if (length(mode) != 1L || is.na(mode) || !nzchar(mode) ||
+          !mode %in% c("none", "term", "full", "true", "false")) {
+        stop(
+          "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
+          "'none', 'term', or 'full'.",
+          call. = FALSE
+        )
+      }
+    } else {
+      stop(
+        "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
+        "'none', 'term', or 'full'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$optimizer)) {
+    optimizer_val <- tolower(as.character(neural_mcmc_control$optimizer))
+    if (length(optimizer_val) != 1L || is.na(optimizer_val) ||
+        !optimizer_val %in% c("adam", "adabelief")) {
+      stop(
+        "'neural_mcmc_control$optimizer' must be 'adam' or 'adabelief'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$svi_lr_schedule)) {
+    schedule_val <- tolower(as.character(neural_mcmc_control$svi_lr_schedule))
+    if (length(schedule_val) != 1L || is.na(schedule_val) ||
+        !schedule_val %in% c("none", "constant", "cosine", "warmup_cosine")) {
+      stop(
+        "'neural_mcmc_control$svi_lr_schedule' must be one of 'none', 'constant', ",
+        "'cosine', or 'warmup_cosine'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$svi_lr_warmup_frac)) {
+    warmup_frac <- neural_mcmc_control$svi_lr_warmup_frac
+    if (!is.numeric(warmup_frac) || length(warmup_frac) != 1L ||
+        !is.finite(warmup_frac) || warmup_frac < 0) {
+      stop(
+        "'neural_mcmc_control$svi_lr_warmup_frac' must be a single non-negative number.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$svi_lr_end_factor)) {
+    end_factor <- neural_mcmc_control$svi_lr_end_factor
+    if (!is.numeric(end_factor) || length(end_factor) != 1L ||
+        !is.finite(end_factor) || end_factor < 0) {
+      stop(
+        "'neural_mcmc_control$svi_lr_end_factor' must be a single non-negative number.",
         call. = FALSE
       )
     }

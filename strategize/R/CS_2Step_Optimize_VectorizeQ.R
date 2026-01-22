@@ -53,7 +53,6 @@ InitializeQMonteFxns <- function(){
     party_idx_dag <- neural_get_party_index(model_dag_primary, party_label_dag)
     resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
     resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
-
     kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
       params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
       logits <- neural_predict_pair_soft(
@@ -470,7 +469,6 @@ InitializeQMonteFxns_MCSampling <- function(){
     party_idx_dag <- neural_get_party_index(model_dag_primary, party_label_dag)
     resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
     resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
-
     kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
       params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
       logits <- neural_predict_pair_soft(
@@ -599,6 +597,7 @@ InitializeQMonteFxns_MultiCandidate <- function(){
   TEMP_PUSHF <- strenv$primary_strength
   use_neural <- outcome_model_type == "neural" &&
     exists("neural_model_info_ast_jnp", inherits = TRUE)
+  use_utilities <- FALSE
   if (use_neural) {
     model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
     model_dag <- if (exists("neural_model_info_dag_jnp", inherits = TRUE)) {
@@ -631,32 +630,86 @@ InitializeQMonteFxns_MultiCandidate <- function(){
     resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
     resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
 
-    kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
-      params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
-      logits <- neural_predict_pair_soft(
-        v, v_prime,
-        party_idx_ast, party_idx_ast,
-        resp_idx_ast, model_ast_primary,
-        params = params_ast0,
-        return_logits = TRUE
-      )
-      scaled <- logits * TEMP_PUSHF
-      prob <- neural_logits_to_q(scaled, model_ast_primary$likelihood)
-      strenv$jnp$squeeze(prob)
-    })
-    kappa_pair_dag <- compile_fxn(function(v, v_prime, theta_dag0){
-      params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
-      logits <- neural_predict_pair_soft(
-        v, v_prime,
-        party_idx_dag, party_idx_dag,
-        resp_idx_dag, model_dag_primary,
-        params = params_dag0,
-        return_logits = TRUE
-      )
-      scaled <- logits * TEMP_PUSHF
-      prob <- neural_logits_to_q(scaled, model_dag_primary$likelihood)
-      strenv$jnp$squeeze(prob)
-    })
+    mode_ast <- neural_cross_encoder_mode(model_ast_primary)
+    mode_dag <- neural_cross_encoder_mode(model_dag_primary)
+    use_utilities <- isTRUE(model_ast_primary$pairwise_mode) &&
+      isTRUE(model_dag_primary$pairwise_mode) &&
+      !is.null(model_ast_primary$params$W_out) &&
+      !is.null(model_dag_primary$params$W_out) &&
+      !identical(mode_ast, "full") &&
+      !identical(mode_dag, "full")
+
+    if (use_utilities) {
+      utility_from_logits_ast <- switch(model_ast_primary$likelihood,
+                                        categorical = function(logits) {
+                                          strenv$jnp$squeeze(strenv$jnp$take(logits, 1L, axis = 1L))
+                                        },
+                                        function(logits) {
+                                          strenv$jnp$squeeze(logits, axis = 1L)
+                                        })
+      utility_from_logits_dag <- switch(model_dag_primary$likelihood,
+                                        categorical = function(logits) {
+                                          strenv$jnp$squeeze(strenv$jnp$take(logits, 1L, axis = 1L))
+                                        },
+                                        function(logits) {
+                                          strenv$jnp$squeeze(logits, axis = 1L)
+                                        })
+      utility_ast <- compile_fxn(function(v, theta_ast0){
+        params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
+        matchup_idx <- neural_matchup_index(party_idx_ast, party_idx_ast, model_ast_primary)
+        logits <- neural_candidate_utility_soft(
+          v,
+          party_idx_ast,
+          resp_idx_ast,
+          1L,
+          model_ast_primary,
+          params = params_ast0,
+          matchup_idx = matchup_idx
+        )
+        utility_from_logits_ast(logits)
+      })
+      utility_dag <- compile_fxn(function(v, theta_dag0){
+        params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
+        matchup_idx <- neural_matchup_index(party_idx_dag, party_idx_dag, model_dag_primary)
+        logits <- neural_candidate_utility_soft(
+          v,
+          party_idx_dag,
+          resp_idx_dag,
+          1L,
+          model_dag_primary,
+          params = params_dag0,
+          matchup_idx = matchup_idx
+        )
+        utility_from_logits_dag(logits)
+      })
+    } else {
+      kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
+        params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
+        logits <- neural_predict_pair_soft(
+          v, v_prime,
+          party_idx_ast, party_idx_ast,
+          resp_idx_ast, model_ast_primary,
+          params = params_ast0,
+          return_logits = TRUE
+        )
+        scaled <- logits * TEMP_PUSHF
+        prob <- neural_logits_to_q(scaled, model_ast_primary$likelihood)
+        strenv$jnp$squeeze(prob)
+      })
+      kappa_pair_dag <- compile_fxn(function(v, v_prime, theta_dag0){
+        params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
+        logits <- neural_predict_pair_soft(
+          v, v_prime,
+          party_idx_dag, party_idx_dag,
+          resp_idx_dag, model_dag_primary,
+          params = params_dag0,
+          return_logits = TRUE
+        )
+        scaled <- logits * TEMP_PUSHF
+        prob <- neural_logits_to_q(scaled, model_dag_primary$likelihood)
+        strenv$jnp$squeeze(prob)
+      })
+    }
   } else {
     kappa_pair <- compile_fxn(function(v, v_prime,
                                       INTERCEPT_0_, COEFFICIENTS_0_){
@@ -696,62 +749,83 @@ InitializeQMonteFxns_MultiCandidate <- function(){
       cand_ast <- strenv$jnp$concatenate(list(TSAMP_ast, TSAMP_ast_PrimaryComp), 0L)
       cand_dag <- strenv$jnp$concatenate(list(TSAMP_dag, TSAMP_dag_PrimaryComp), 0L)
 
-      # Pairwise primary win probabilities within each party
-      if (use_neural) {
-        kA <- strenv$jax$vmap(function(t_i){
-          strenv$jax$vmap(function(t_j){
-            kappa_pair_ast(t_i, t_j, COEFFICIENTS_ast0_)
-          }, in_axes = 0L)(cand_ast)
+      if (use_neural && use_utilities) {
+        utilityA <- strenv$jax$vmap(function(t_i){
+          utility_ast(t_i, COEFFICIENTS_ast0_)
         }, in_axes = 0L)(cand_ast)
 
-        kB <- strenv$jax$vmap(function(u_i){
-          strenv$jax$vmap(function(u_j){
-            kappa_pair_dag(u_i, u_j, COEFFICIENTS_dag0_)
-          }, in_axes = 0L)(cand_dag)
+        utilityB <- strenv$jax$vmap(function(u_i){
+          utility_dag(u_i, COEFFICIENTS_dag0_)
         }, in_axes = 0L)(cand_dag)
+
+        utilityA <- utilityA * TEMP_PUSHF
+        utilityB <- utilityB * TEMP_PUSHF
+        pA <- strenv$jax$nn$softmax(utilityA)
+        pB <- strenv$jax$nn$softmax(utilityB)
       } else {
-        kA <- strenv$jax$vmap(function(t_i){
-          strenv$jax$vmap(function(t_j){
-            kappa_pair(t_i, t_j, INTERCEPT_ast0_, COEFFICIENTS_ast0_)
+        # Pairwise primary win probabilities within each party
+        if (use_neural) {
+          kA <- strenv$jax$vmap(function(t_i){
+            strenv$jax$vmap(function(t_j){
+              kappa_pair_ast(t_i, t_j, COEFFICIENTS_ast0_)
+            }, in_axes = 0L)(cand_ast)
           }, in_axes = 0L)(cand_ast)
-        }, in_axes = 0L)(cand_ast)
 
-        kB <- strenv$jax$vmap(function(u_i){
-          strenv$jax$vmap(function(u_j){
-            kappa_pair(u_i, u_j, INTERCEPT_dag0_, COEFFICIENTS_dag0_)
+          kB <- strenv$jax$vmap(function(u_i){
+            strenv$jax$vmap(function(u_j){
+              kappa_pair_dag(u_i, u_j, COEFFICIENTS_dag0_)
+            }, in_axes = 0L)(cand_dag)
           }, in_axes = 0L)(cand_dag)
-        }, in_axes = 0L)(cand_dag)
+        } else {
+          kA <- strenv$jax$vmap(function(t_i){
+            strenv$jax$vmap(function(t_j){
+              kappa_pair(t_i, t_j, INTERCEPT_ast0_, COEFFICIENTS_ast0_)
+            }, in_axes = 0L)(cand_ast)
+          }, in_axes = 0L)(cand_ast)
+
+          kB <- strenv$jax$vmap(function(u_i){
+            strenv$jax$vmap(function(u_j){
+              kappa_pair(u_i, u_j, INTERCEPT_dag0_, COEFFICIENTS_dag0_)
+            }, in_axes = 0L)(cand_dag)
+          }, in_axes = 0L)(cand_dag)
+        }
+
+        # Multinomial logit nomination probabilities based on Bradley-Terry utility
+        # Each candidate's utility is their average log-odds of beating other candidates
+        nA <- kA$shape[[1L]]
+        nB <- kB$shape[[1L]]
+        maskA <- strenv$jnp$ones(list(nA, nA), dtype = strenv$dtj) - strenv$jnp$eye(nA, dtype = strenv$dtj)
+        maskB <- strenv$jnp$ones(list(nB, nB), dtype = strenv$dtj) - strenv$jnp$eye(nB, dtype = strenv$dtj)
+
+        # Compute log-odds utility for each candidate pair (Bradley-Terry model)
+        # kA[i,j] = P(candidate i beats candidate j among same-party voters)
+        eps <- strenv$jnp$maximum(
+          strenv$jnp$array(1e-8, strenv$dtj),
+          strenv$jnp$array(strenv$jnp$finfo(strenv$dtj)$eps, strenv$dtj)
+        )
+        one_bt <- strenv$jnp$array(1.0, strenv$dtj)
+        # Clamp to keep log-odds finite under extreme or non-probability outputs.
+        kA_clip <- strenv$jnp$clip(kA, eps, one_bt - eps)
+        kB_clip <- strenv$jnp$clip(kB, eps, one_bt - eps)
+        logoddsA <- strenv$jnp$log(kA_clip) - strenv$jnp$log(one_bt - kA_clip)
+        logoddsB <- strenv$jnp$log(kB_clip) - strenv$jnp$log(one_bt - kB_clip)
+
+        # Mean utility for each candidate (average log-odds vs all candidates)
+        denomA <- strenv$jnp$maximum(
+          strenv$jnp$array(nA - 1L, strenv$dtj),
+          strenv$jnp$array(1L, strenv$dtj)
+        )
+        denomB <- strenv$jnp$maximum(
+          strenv$jnp$array(nB - 1L, strenv$dtj),
+          strenv$jnp$array(1L, strenv$dtj)
+        )
+        utilityA <- (logoddsA * maskA)$sum(axis = 1L) / denomA
+        utilityB <- (logoddsB * maskB)$sum(axis = 1L) / denomB
+
+        # Softmax over utilities; primary_strength is already applied in kappa_pair.
+        pA <- strenv$jax$nn$softmax(utilityA)
+        pB <- strenv$jax$nn$softmax(utilityB)
       }
-
-      # Multinomial logit nomination probabilities based on Bradley-Terry utility
-      # Each candidate's utility is their average log-odds of beating other candidates
-      nA <- kA$shape[[1L]]
-      nB <- kB$shape[[1L]]
-      maskA <- strenv$jnp$ones(list(nA, nA), dtype = strenv$dtj) - strenv$jnp$eye(nA, dtype = strenv$dtj)
-      maskB <- strenv$jnp$ones(list(nB, nB), dtype = strenv$dtj) - strenv$jnp$eye(nB, dtype = strenv$dtj)
-
-      # Compute log-odds utility for each candidate pair (Bradley-Terry model)
-      # kA[i,j] = P(candidate i beats candidate j among same-party voters)
-      eps <- strenv$jnp$maximum(
-        strenv$jnp$array(1e-8, strenv$dtj),
-        strenv$jnp$array(strenv$jnp$finfo(strenv$dtj)$eps, strenv$dtj)
-      )
-      one_bt <- strenv$jnp$array(1.0, strenv$dtj)
-      # Clamp to keep log-odds finite under extreme or non-probability outputs.
-      kA_clip <- strenv$jnp$clip(kA, eps, one_bt - eps)
-      kB_clip <- strenv$jnp$clip(kB, eps, one_bt - eps)
-      logoddsA <- strenv$jnp$log(kA_clip) - strenv$jnp$log(one_bt - kA_clip)
-      logoddsB <- strenv$jnp$log(kB_clip) - strenv$jnp$log(one_bt - kB_clip)
-
-      # Mean utility for each candidate (average log-odds vs all candidates)
-      denomA <- strenv$jnp$array(nA, strenv$dtj)
-      denomB <- strenv$jnp$array(nB, strenv$dtj)
-      utilityA <- (logoddsA * maskA)$sum(axis = 1L) / denomA
-      utilityB <- (logoddsB * maskB)$sum(axis = 1L) / denomB
-
-      # Softmax over utilities; primary_strength is already applied in kappa_pair.
-      pA <- strenv$jax$nn$softmax(utilityA)
-      pB <- strenv$jax$nn$softmax(utilityB)
 
       # General-election outcomes across all nominee pairs
       C_ab <- strenv$jax$vmap(function(t_i){

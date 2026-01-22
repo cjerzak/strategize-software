@@ -345,6 +345,112 @@ test_that("validate_strategize_inputs warns about diff without profile_order", {
 })
 
 # =============================================================================
+# Neural MCMC Control Validation
+# =============================================================================
+
+test_that("validate_strategize_inputs accepts cross_candidate_encoder options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+  allowed <- list(TRUE, FALSE, "none", "term", "full", "true", "false")
+
+  for (val in allowed) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(cross_candidate_encoder = val)
+      ),
+      info = sprintf(
+        "Expected cross_candidate_encoder=%s to be accepted",
+        as.character(val)
+      )
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid cross_candidate_encoder values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(cross_candidate_encoder = "bad_value")
+    ),
+    "cross_candidate_encoder"
+  )
+})
+
+test_that("validate_strategize_inputs accepts optimizer options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+  allowed <- c("adam", "adabelief")
+
+  for (val in allowed) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(optimizer = val)
+      ),
+      info = sprintf("Expected optimizer=%s to be accepted", val)
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid optimizer values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(optimizer = "bad_value")
+    ),
+    "optimizer"
+  )
+})
+
+test_that("validate_strategize_inputs accepts svi_lr_schedule options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+  allowed <- c("none", "constant", "cosine", "warmup_cosine")
+
+  for (val in allowed) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(svi_lr_schedule = val)
+      ),
+      info = sprintf("Expected svi_lr_schedule=%s to be accepted", val)
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid svi_lr_schedule values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(svi_lr_schedule = "bad_value")
+    ),
+    "svi_lr_schedule"
+  )
+})
+
+# =============================================================================
 # CV Validation
 # =============================================================================
 
