@@ -147,3 +147,45 @@ test_that("smp outputs averaged look-ahead points", {
   expect_true(length(gamma_ast) > 0)
   expect_true(length(gamma_dag) > 0)
 })
+
+test_that("rain uses a decaying anchor penalty", {
+  skip_if_no_jax()
+  withr::local_seed(789)
+
+  base <- generate_test_data(n = 50, n_factors = 2, n_levels = 2, seed = 321)
+  adv_data <- add_adversarial_structure(base, seed = 222)
+  p_list <- generate_test_p_list(adv_data$W)
+
+  result <- strategize(
+    Y = adv_data$Y,
+    W = adv_data$W,
+    p_list = p_list,
+    lambda = 0.1,
+    nSGD = 3,
+    nMonte_Qglm = 5L,
+    nMonte_adversarial = 3L,
+    diff = TRUE,
+    adversarial = TRUE,
+    compute_se = FALSE,
+    pair_id = adv_data$pair_id,
+    respondent_id = adv_data$respondent_id,
+    respondent_task_id = adv_data$respondent_task_id,
+    profile_order = adv_data$profile_order,
+    competing_group_variable_respondent = adv_data$competing_group_variable_respondent,
+    competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
+    competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
+    optimism = "rain",
+    optimism_coef = 0.5
+  )
+
+  expect_equal(result$convergence_history$optimism, "rain")
+  rain_lambda <- Filter(Negate(is.null), result$strenv$rain_lambda_vec)
+  expect_true(length(rain_lambda) > 0)
+
+  rain_vals <- vapply(rain_lambda, function(x) {
+    as.numeric(result$strenv$np$array(x))
+  }, numeric(1))
+  expect_equal(rain_vals[1], 0.5, tolerance = 1e-6)
+  expect_true(all(diff(rain_vals) <= 1e-8))
+  expect_true(rain_vals[length(rain_vals)] <= 1e-8)
+})

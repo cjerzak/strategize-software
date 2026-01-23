@@ -68,6 +68,7 @@
 #'   use_optax = FALSE,
 #'   optim_type = "gd",
 #'   optimism = "extragrad",
+#'   optimism_coef = 1,
 #'   compute_hessian = TRUE,
 #'   hessian_max_dim = 50L
 #' )
@@ -284,8 +285,12 @@
 #' @param optimism Character string controlling optimistic / extra-gradient updates for the gradient
 #'   optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
 #'   \code{"smp"} (stochastic mirror-prox: extra-gradient with weighted averaging of look-ahead points),
-#'   \code{"ogda"} (optimistic gradient), or \code{"none"} (standard updates). Only supported when
+#'   \code{"ogda"} (optimistic gradient), \code{"rain"} (anchored extra-gradient with a decaying
+#'   quadratic anchor penalty), or \code{"none"} (standard updates). Only supported when
 #'   \code{use_optax = FALSE}.
+#' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
+#'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
+#'   initial anchor penalty \eqn{\lambda_0} that decays linearly to zero over \code{nSGD} iterations.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
 #'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
 #'   are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
@@ -471,6 +476,7 @@ strategize       <-          function(
                                             use_optax = FALSE,
   optim_type = "gd",
                                             optimism = "extragrad",
+                                            optimism_coef = 1,
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
   # [1.] ast then dag 
@@ -514,7 +520,7 @@ strategize       <-          function(
   primary_n_entrants <- ai(primary_n_entrants)
   primary_n_field <- ai(primary_n_field)
   adversarial_model_strategy <- match.arg(tolower(adversarial_model_strategy), c("two", "four", "neural"))
-  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp"))
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   se_method <- match.arg(se_method, c("full", "implicit"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
@@ -1438,7 +1444,8 @@ strategize       <-          function(
       functionReturn              = TRUE,                             # 14
       gd_full_simplex             = TRUE,                             # 15
       quiet                       = FALSE,                            # 16
-      optimism                    = optimism                          # 17
+      optimism                    = optimism,                         # 17
+      optimism_coef               = optimism_coef                     # 18
     )
     dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
     dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
@@ -1489,7 +1496,8 @@ strategize       <-          function(
                         functionReturn  = FALSE,
                         gd_full_simplex = FALSE, 
                         quiet           = FALSE,
-                        optimism        = optimism                             # 
+                        optimism        = optimism,                            # 
+                        optimism_coef   = optimism_coef
                         )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -2223,6 +2231,7 @@ strategize       <-          function(
                   "jacobian_mat" = jacobian_mat, 
                   "optim_type" = optim_type,
                   "optimism" = optimism,
+                  "optimism_coef" = optimism_coef,
                   "force_gaussian" = force_gaussian,
                   "used_regularization" = UsedRegularization,
                   "estimation_type" = "TwoStep",
@@ -2296,7 +2305,13 @@ strategize       <-          function(
                       "primary_n_entrants" = primary_n_entrants,
                       "primary_n_field" = primary_n_field,
                       "adversarial_model_strategy" = adversarial_model_strategy,
-                      "optimism" = optimism
+                      "optimism" = optimism,
+                      "optimism_coef" = optimism_coef,
+                      "rain_lambda" = if (!is.null(strenv$rain_lambda_vec)) {
+                        unlist(lapply(strenv$rain_lambda_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      }
                     )
                   }, error = function(e) {
                     # Fallback if conversion fails entirely
@@ -2314,7 +2329,9 @@ strategize       <-          function(
                       "primary_n_entrants" = primary_n_entrants,
                       "primary_n_field" = primary_n_field,
                       "adversarial_model_strategy" = adversarial_model_strategy,
-                      "optimism" = optimism
+                      "optimism" = optimism,
+                      "optimism_coef" = optimism_coef,
+                      "rain_lambda" = rep(NA_real_, nSGD)
                     )
                   })
                   )  # end outout list 
