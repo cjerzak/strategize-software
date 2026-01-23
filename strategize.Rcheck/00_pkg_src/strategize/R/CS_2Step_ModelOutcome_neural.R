@@ -158,10 +158,13 @@ generate_ModelOutcome_neural <- function(){
   FFDim <- ai(ai(round(MD_int * WideMultiplicationFactor)))
   #weight_sd_scale <- sqrt(2) / sqrt(as.numeric(ModelDims))
   weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
+  # Depth-aware scaling for priors and ReZero-style residual gates.
+  depth_prior_scale <- 1 / sqrt(as.numeric(ModelDepth))
+  gate_sd_scale <- 0.1 * depth_prior_scale
   embed_sd_scale <- 4 * weight_sd_scale
   factor_embed_sd_scale <- embed_sd_scale
   context_embed_sd_scale <- embed_sd_scale
-  tau_b_scale <- 0.1
+  tau_b_scale <- 0.5
   
   # shrink M_cross more (initialize interactionto smaller than main temr)
   # cross_out does NOT need to shrink with ModelDims (doesn't scale with that)
@@ -467,7 +470,15 @@ generate_ModelOutcome_neural <- function(){
 
     for (l_ in 1L:ModelDepth) {
       tau_w_l <- strenv$numpyro$sample(paste0("tau_w_", l_),
-                                       strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
+                                       strenv$numpyro$distributions$HalfNormal(
+                                         as.numeric(weight_sd_scale * depth_prior_scale)
+                                       ))
+      assign(paste0("alpha_attn_l", l_),
+             strenv$numpyro$sample(paste0("alpha_attn_l", l_),
+                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
+      assign(paste0("alpha_ff_l", l_),
+             strenv$numpyro$sample(paste0("alpha_ff_l", l_),
+                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
       assign(paste0("RMS_attn_l", l_),
              strenv$numpyro$sample(paste0("RMS_attn_l", l_),
                                    strenv$numpyro$distributions$LogNormal(0., RMS_scale),
@@ -576,6 +587,8 @@ generate_ModelOutcome_neural <- function(){
         Wff2 <- get(paste0("W_ff2_l", l_))
         RMS_attn <- get(paste0("RMS_attn_l", l_))
         RMS_ff <- get(paste0("RMS_ff_l", l_))
+        alpha_attn <- get(paste0("alpha_attn_l", l_))
+        alpha_ff <- get(paste0("alpha_ff_l", l_))
 
         tokens_norm <- rms_norm(tokens, RMS_attn)
         Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
@@ -592,12 +605,12 @@ generate_ModelOutcome_neural <- function(){
         context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
         attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
 
-        h1 <- tokens + attn_out
+        h1 <- tokens + alpha_attn * attn_out
         h1_norm <- rms_norm(h1, RMS_ff)
         ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
         ff_act <- strenv$jax$nn$swish(ff_pre)
         ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + ff_out
+        tokens <- h1 + alpha_ff * ff_out
       }
       tokens <- rms_norm(tokens, RMS_final)
       tokens
@@ -776,7 +789,15 @@ generate_ModelOutcome_neural <- function(){
 
     for (l_ in 1L:ModelDepth) {
       tau_w_l <- strenv$numpyro$sample(paste0("tau_w_", l_),
-                                       strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
+                                       strenv$numpyro$distributions$HalfNormal(
+                                         as.numeric(weight_sd_scale * depth_prior_scale)
+                                       ))
+      assign(paste0("alpha_attn_l", l_),
+             strenv$numpyro$sample(paste0("alpha_attn_l", l_),
+                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
+      assign(paste0("alpha_ff_l", l_),
+             strenv$numpyro$sample(paste0("alpha_ff_l", l_),
+                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
       assign(paste0("RMS_attn_l", l_),
              strenv$numpyro$sample(paste0("RMS_attn_l", l_),
                                    strenv$numpyro$distributions$LogNormal(0., RMS_scale),
@@ -863,6 +884,8 @@ generate_ModelOutcome_neural <- function(){
         Wff2 <- get(paste0("W_ff2_l", l_))
         RMS_attn <- get(paste0("RMS_attn_l", l_))
         RMS_ff <- get(paste0("RMS_ff_l", l_))
+        alpha_attn <- get(paste0("alpha_attn_l", l_))
+        alpha_ff <- get(paste0("alpha_ff_l", l_))
 
         tokens_norm <- rms_norm(tokens, RMS_attn)
         Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
@@ -879,12 +902,12 @@ generate_ModelOutcome_neural <- function(){
         context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
         attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
 
-        h1 <- tokens + attn_out
+        h1 <- tokens + alpha_attn * attn_out
         h1_norm <- rms_norm(h1, RMS_ff)
         ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
         ff_act <- strenv$jax$nn$swish(ff_pre)
         ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + ff_out
+        tokens <- h1 + alpha_ff * ff_out
       }
       tokens <- rms_norm(tokens, RMS_final)
       tokens
@@ -1280,6 +1303,14 @@ generate_ModelOutcome_neural <- function(){
     }
   }
   for (l_ in 1L:ModelDepth) {
+    alpha_attn_name <- paste0("alpha_attn_l", l_)
+    alpha_ff_name <- paste0("alpha_ff_l", l_)
+    if (!is.null(PosteriorDraws[[alpha_attn_name]])) {
+      ParamsMean[[alpha_attn_name]] <- mean_param(PosteriorDraws[[alpha_attn_name]])
+    }
+    if (!is.null(PosteriorDraws[[alpha_ff_name]])) {
+      ParamsMean[[alpha_ff_name]] <- mean_param(PosteriorDraws[[alpha_ff_name]])
+    }
     ParamsMean[[paste0("RMS_attn_l", l_)]] <- mean_param(PosteriorDraws[[paste0("RMS_attn_l", l_)]])
     ParamsMean[[paste0("RMS_ff_l", l_)]] <- mean_param(PosteriorDraws[[paste0("RMS_ff_l", l_)]])
     ParamsMean[[paste0("W_q_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_q_l",  l_)]])
@@ -1361,6 +1392,14 @@ generate_ModelOutcome_neural <- function(){
         Wff2 <- params[[paste0("W_ff2_l", l_)]]
         RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
         RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
+        alpha_attn <- params[[paste0("alpha_attn_l", l_)]]
+        if (is.null(alpha_attn)) {
+          alpha_attn <- 1.0
+        }
+        alpha_ff <- params[[paste0("alpha_ff_l", l_)]]
+        if (is.null(alpha_ff)) {
+          alpha_ff <- 1.0
+        }
 
         tokens_norm <- rms_norm(tokens, RMS_attn)
         Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
@@ -1377,12 +1416,12 @@ generate_ModelOutcome_neural <- function(){
         context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
         attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
 
-        h1 <- tokens + attn_out
+        h1 <- tokens + alpha_attn * attn_out
         h1_norm <- rms_norm(h1, RMS_ff)
         ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
         ff_act <- strenv$jax$nn$swish(ff_pre)
         ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + ff_out
+        tokens <- h1 + alpha_ff * ff_out
       }
       if (!is.null(params$RMS_final)) {
         tokens <- rms_norm(tokens, params$RMS_final)
@@ -1585,6 +1624,14 @@ generate_ModelOutcome_neural <- function(){
         Wff2 <- params[[paste0("W_ff2_l", l_)]]
         RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
         RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
+        alpha_attn <- params[[paste0("alpha_attn_l", l_)]]
+        if (is.null(alpha_attn)) {
+          alpha_attn <- 1.0
+        }
+        alpha_ff <- params[[paste0("alpha_ff_l", l_)]]
+        if (is.null(alpha_ff)) {
+          alpha_ff <- 1.0
+        }
 
         tokens_norm <- rms_norm(tokens, RMS_attn)
         Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
@@ -1601,12 +1648,12 @@ generate_ModelOutcome_neural <- function(){
         context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
         attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
 
-        h1 <- tokens + attn_out
+        h1 <- tokens + alpha_attn * attn_out
         h1_norm <- rms_norm(h1, RMS_ff)
         ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
         ff_act <- strenv$jax$nn$swish(ff_pre)
         ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + ff_out
+        tokens <- h1 + alpha_ff * ff_out
       }
       if (!is.null(params$RMS_final)) {
         tokens <- rms_norm(tokens, params$RMS_final)
@@ -1797,6 +1844,8 @@ generate_ModelOutcome_neural <- function(){
   }
   for (l_ in 1L:ModelDepth) {
     param_names <- c(param_names,
+                     paste0("alpha_attn_l", l_),
+                     paste0("alpha_ff_l", l_),
                      paste0("RMS_attn_l", l_),
                      paste0("RMS_ff_l", l_),
                      paste0("W_q_l", l_),

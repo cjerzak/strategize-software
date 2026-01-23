@@ -19,11 +19,11 @@ VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
 NeedsCompilation: no
-Packaged: 2026-01-22 20:21:19 UTC; cjerzak
+Packaged: 2026-01-23 03:13:27 UTC; cjerzak
 Author: Connor T. Jerzak [aut, cre] (ORCID:
     <https://orcid.org/0000-0001-9858-2050>),
   Priyanshi Chandra [aut] (ORCID:
     <https://orcid.org/0009-0003-1625-8823>),
   Rishi Hazra [aut] (ORCID: <https://orcid.org/0000-0001-5018-4440>)
 Maintainer: Connor T. Jerzak <connor.jerzak@austin.utexas.edu>
-Built: R 4.5.2; ; 2026-01-22 20:21:34 UTC; unix
+Built: R 4.5.2; ; 2026-01-23 03:13:43 UTC; unix

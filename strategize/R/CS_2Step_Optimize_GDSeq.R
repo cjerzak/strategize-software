@@ -14,7 +14,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           functionReturn = T,
                           gd_full_simplex, 
                           quiet = TRUE,
-                          optimism = c("none", "ogda", "extragrad", "smp"),
+                          optimism = c("none", "ogda", "extragrad", "smp", "rain"),
                           optimism_coef = 1
                           ){
   optimism <- match.arg(optimism)
@@ -23,7 +23,9 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     stop("optimism/extra-gradient not supported with optax; set use_optax = FALSE.")
   }
   use_smp <- optimism == "smp"
-  use_joint_extragrad <- adversarial && optimism %in% c("extragrad", "smp") && !use_optax
+  use_rain <- optimism == "rain"
+  use_extragrad <- optimism %in% c("extragrad", "smp", "rain")
+  use_joint_extragrad <- adversarial && use_extragrad && !use_optax
   # throw fxns into env 
   dQ_da_ast <- functionList[[1]]
   dQ_da_dag <- functionList[[2]]
@@ -59,6 +61,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   if (use_joint_extragrad) {
     strenv$extragrad_eval_points <- vector("list", length = nSGD)
   }
+  if (use_rain) {
+    anchor_ast <- a_i_ast
+    anchor_dag <- a_i_dag
+    strenv$rain_lambda_vec <- rep(NA, times = nSGD)
+  }
   if (use_smp) {
     smp_sum_weighted_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
     smp_sum_gamma_ast <- strenv$jnp$array(0., strenv$dtj)
@@ -74,6 +81,16 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   while(goOn == F){
     if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
       message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
+    }
+
+    if (use_rain) {
+      rain_lambda_val <- if (nSGD <= 1) {
+        optimism_coef
+      } else {
+        max(0, optimism_coef * (1 - (i - 1) / (nSGD - 1)))
+      }
+      rain_lambda_t <- strenv$jnp$array(rain_lambda_val, strenv$dtj)
+      strenv$rain_lambda_vec[i] <- list(rain_lambda_t)
     }
 
     # do dag updates ("min" step - only do in adversarial mode)
@@ -92,6 +109,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 SEED                                 #17
                                 )
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
+      if (use_rain) {
+        grad_i_dag <- strenv$jnp$subtract(
+          grad_i_dag,
+          strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_i_dag, anchor_dag))
+        )
+      }
 
       # choose gradient to apply (OGDA / Extra-Gradient)
       grad_step_dag <- grad_i_dag
@@ -134,7 +157,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         inv_learning_rate_da_dag <-  strenv$jax$lax$stop_gradient(GetInvLR(inv_learning_rate_da_dag, grad_i_dag))
         lr_dag_i <- strenv$jnp$sqrt(inv_learning_rate_da_dag)
 
-        if (optimism %in% c("extragrad", "smp")) {
+        if (use_extragrad) {
           # look-ahead step, then recompute gradient
           a_pred_dag <- GetUpdatedParameters(a_vec = a_i_dag,
                                              grad_i = grad_i_dag,
@@ -159,6 +182,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                        SEED                                 #17
                                        )
           grad_step_dag <- grad_pred_dag[[2]]
+          if (use_rain) {
+            grad_step_dag <- strenv$jnp$subtract(
+              grad_step_dag,
+              strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_pred_dag, anchor_dag))
+            )
+          }
         }
 
         a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, 
@@ -194,6 +223,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                SEED
                                )
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
+      if (use_rain) {
+        grad_i_ast <- strenv$jnp$subtract(
+          grad_i_ast,
+          strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_i_ast, anchor_ast))
+        )
+      }
       grad_step_ast <- grad_i_ast
       if (!is.null(grad_prev_ast) && optimism == "ogda") {
         grad_step_ast <- strenv$jnp$add(grad_i_ast,
@@ -210,7 +245,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         inv_learning_rate_da_ast <-  strenv$jax$lax$stop_gradient( GetInvLR(inv_learning_rate_da_ast, grad_i_ast) )
         lr_ast_i <- strenv$jnp$sqrt(inv_learning_rate_da_ast)
 
-        if (optimism %in% c("extragrad", "smp")) {
+        if (use_extragrad) {
           a_pred_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
                                              grad_i = grad_i_ast,
                                              inv_learning_rate_i = lr_ast_i)
@@ -234,6 +269,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                       SEED
                                       )
           grad_step_ast <- grad_pred_ast[[2]]
+          if (use_rain) {
+            grad_step_ast <- strenv$jnp$subtract(
+              grad_step_ast,
+              strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_pred_ast, anchor_ast))
+            )
+          }
         }
 
         a_i_ast <- GetUpdatedParameters(a_vec = a_i_ast, 
@@ -273,6 +314,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                    SEED                                 #17
       )
       strenv$loss_dag_vec[i] <- list(base_grad_dag[[1]]); base_grad_dag <- base_grad_dag[[2]]
+      if (use_rain) {
+        base_grad_dag <- strenv$jnp$subtract(
+          base_grad_dag,
+          strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_i_dag, anchor_dag))
+        )
+      }
 
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
       base_grad_ast <- dQ_da_ast( a_i_ast, a_i_dag,
@@ -287,6 +334,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                   SEED
       )
       strenv$loss_ast_vec[i] <- list(base_grad_ast[[1]]); base_grad_ast <- base_grad_ast[[2]]
+      if (use_rain) {
+        base_grad_ast <- strenv$jnp$subtract(
+          base_grad_ast,
+          strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_i_ast, anchor_ast))
+        )
+      }
 
       if(i == 1){
         inv_learning_rate_da_dag <- 
@@ -334,6 +387,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                    Q_SIGN_ <- strenv$jnp$array(-1.),    #16
                                    SEED                                 #17
       )[[2]]
+      if (use_rain) {
+        grad_pred_dag <- strenv$jnp$subtract(
+          grad_pred_dag,
+          strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_pred_dag, anchor_dag))
+        )
+      }
 
       SEED   <- strenv$jax$random$split(SEED)[[1L]] 
       grad_pred_ast <- dQ_da_ast( a_pred_ast, a_pred_dag,
@@ -347,6 +406,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                   Q_SIGN_ <- strenv$jnp$array(1.),
                                   SEED
       )[[2]]
+      if (use_rain) {
+        grad_pred_ast <- strenv$jnp$subtract(
+          grad_pred_ast,
+          strenv$jnp$multiply(rain_lambda_t, strenv$jnp$subtract(a_pred_ast, anchor_ast))
+        )
+      }
 
       a_i_dag <- GetUpdatedParameters(a_vec = a_i_dag, 
                                       grad_i = grad_pred_dag,
@@ -368,6 +433,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       )
     }
     if(i >= nSGD){goOn <- TRUE}
+    if (use_rain) {
+      anchor_ast <- a_i_ast
+      anchor_dag <- a_i_dag
+    }
   }
 
   if (use_smp) {

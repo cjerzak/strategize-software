@@ -76,6 +76,24 @@ neural_params_from_theta <- function(theta_vec, model_info){
     return(model_info$params)
   }
   theta_vec <- strenv$jnp$reshape(theta_vec, list(-1L))
+  offsets_num <- as.integer(unlist(model_info$param_offsets))
+  sizes_num <- as.integer(unlist(model_info$param_sizes))
+  if (length(offsets_num) != length(sizes_num)) {
+    stop("param_offsets and param_sizes length mismatch in model_info.", call. = FALSE)
+  }
+  theta_len <- as.integer(theta_vec$shape[[1]])
+  max_end <- if (length(sizes_num) > 0L) max(offsets_num + sizes_num) else 0L
+  expected_total <- if (!is.null(model_info$n_params)) as.integer(model_info$n_params) else max_end
+  if (is.finite(theta_len) && is.finite(expected_total) && theta_len != expected_total) {
+    stop(sprintf("theta_vec length (%d) does not match expected parameter total (%d).",
+                 theta_len, expected_total),
+         call. = FALSE)
+  }
+  if (is.finite(theta_len) && is.finite(max_end) && theta_len < max_end) {
+    stop(sprintf("theta_vec length (%d) is shorter than required (%d).",
+                 theta_len, max_end),
+         call. = FALSE)
+  }
   params <- list()
   param_names <- model_info$param_names
   param_offsets <- model_info$param_offsets
@@ -84,11 +102,23 @@ neural_params_from_theta <- function(theta_vec, model_info){
   for (i_ in seq_along(param_names)) {
     start <- as.integer(param_offsets[[i_]])
     size <- as.integer(param_sizes[[i_]])
+    if (is.finite(theta_len) && is.finite(start) && is.finite(size) &&
+        (start < 0L || (start + size) > theta_len)) {
+      stop(sprintf("theta_vec slice for '%s' (%d..%d) exceeds length (%d).",
+                   param_names[[i_]], start, start + size - 1L, theta_len),
+           call. = FALSE)
+    }
     idx <- strenv$jnp$arange(ai(start), ai(start + size))
     slice <- strenv$jnp$take(theta_vec, idx, axis = 0L)
     shape_use <- param_shapes[[i_]]
     if (length(shape_use) == 0L) {
       shape_use <- c(1L)
+    }
+    shape_size <- as.integer(prod(shape_use))
+    if (is.finite(size) && is.finite(shape_size) && size != shape_size) {
+      stop(sprintf("Param '%s' size (%d) does not match shape product (%d).",
+                   param_names[[i_]], size, shape_size),
+           call. = FALSE)
     }
     params[[param_names[[i_]]]] <- strenv$jnp$reshape(slice, as.integer(shape_use))
   }
