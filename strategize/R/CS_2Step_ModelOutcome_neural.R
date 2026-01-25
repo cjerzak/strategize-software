@@ -19,7 +19,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
   )
-  RMS_scale = 0.2
+  RMS_scale = 0.35
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
@@ -411,6 +411,21 @@ generate_ModelOutcome_neural <- function(){
     g_use <- strenv$jnp$reshape(g, list(1L, 1L, ModelDims))
     x * inv_rms * g_use
   }
+  manual_noncentered_loc_scale <- FALSE
+  sample_loc_scale <- function(name, scale, shape_tuple) {
+    if (isTRUE(manual_noncentered_loc_scale)) {
+      z <- strenv$numpyro$sample(
+        paste0(name, "_z"),
+        strenv$numpyro$distributions$Normal(0., 1.)$expand(shape_tuple)
+      )
+      strenv$numpyro$deterministic(name, scale * z)
+    } else {
+      strenv$numpyro$sample(
+        name,
+        strenv$numpyro$distributions$Normal(0., scale)$expand(shape_tuple)
+      )
+    }
+  }
 
   BayesianPairTransformerModel <- function(X_left, X_right, party_left, party_right,
                                            resp_party, resp_cov, Y_obs) {
@@ -475,10 +490,10 @@ generate_ModelOutcome_neural <- function(){
                                        ))
       assign(paste0("alpha_attn_l", l_),
              strenv$numpyro$sample(paste0("alpha_attn_l", l_),
-                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
+                                   strenv$numpyro$distributions$HalfNormal(0., gate_sd_scale)))
       assign(paste0("alpha_ff_l", l_),
              strenv$numpyro$sample(paste0("alpha_ff_l", l_),
-                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
+                                   strenv$numpyro$distributions$HalfNormal(0., gate_sd_scale)))
       assign(paste0("RMS_attn_l", l_),
              strenv$numpyro$sample(paste0("RMS_attn_l", l_),
                                    strenv$numpyro$distributions$LogNormal(0., RMS_scale),
@@ -488,29 +503,23 @@ generate_ModelOutcome_neural <- function(){
                                    strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                    sample_shape = reticulate::tuple(ModelDims)))
       assign(paste0("W_q_l", l_),
-             strenv$numpyro$sample(paste0("W_q_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_q_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_k_l", l_),
-             strenv$numpyro$sample(paste0("W_k_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_k_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_v_l", l_),
-             strenv$numpyro$sample(paste0("W_v_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_v_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_o_l", l_),
-             strenv$numpyro$sample(paste0("W_o_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_o_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_ff1_l", l_),
-             strenv$numpyro$sample(paste0("W_ff1_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, FFDim)))
+             sample_loc_scale(paste0("W_ff1_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, FFDim)))
       assign(paste0("W_ff2_l", l_),
-             strenv$numpyro$sample(paste0("W_ff2_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(FFDim, ModelDims)))
+             sample_loc_scale(paste0("W_ff2_l", l_), tau_w_l,
+                              reticulate::tuple(FFDim, ModelDims)))
     }
     RMS_final <- strenv$numpyro$sample("RMS_final",
                                        strenv$numpyro$distributions$LogNormal(0., RMS_scale),
@@ -518,21 +527,18 @@ generate_ModelOutcome_neural <- function(){
 
     tau_w_out <- strenv$numpyro$sample("tau_w_out",
                                        strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
-    W_out <- strenv$numpyro$sample("W_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_w_out),
-                                  sample_shape = reticulate::tuple(ModelDims, nOutcomes))
+    W_out <- sample_loc_scale("W_out", tau_w_out,
+                              reticulate::tuple(ModelDims, nOutcomes))
     tau_b <- strenv$numpyro$sample("tau_b",
                                    strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale)))
-    b_out <- strenv$numpyro$sample("b_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_b),
-                                  sample_shape = reticulate::tuple(nOutcomes))
+    b_out <- sample_loc_scale("b_out", tau_b,
+                              reticulate::tuple(nOutcomes))
     if (isTRUE(use_cross_term)) {
       # Antisymmetric bilinear term enables opponent-dependent matchups.
       tau_cross <- strenv$numpyro$sample("tau_cross",
                                          strenv$numpyro$distributions$HalfNormal(as.numeric(cross_weight_sd_scale)))
-      M_cross_raw <- strenv$numpyro$sample("M_cross_raw",
-                                           strenv$numpyro$distributions$Normal(0., tau_cross),
-                                           sample_shape = reticulate::tuple(ModelDims, ModelDims))
+      M_cross_raw <- sample_loc_scale("M_cross_raw", tau_cross,
+                                      reticulate::tuple(ModelDims, ModelDims))
       M_cross <- 0.5 * (M_cross_raw - strenv$jnp$transpose(M_cross_raw))
       M_cross <- strenv$numpyro$deterministic("M_cross", M_cross)
       W_cross_out <- strenv$numpyro$sample("W_cross_out",
@@ -807,29 +813,23 @@ generate_ModelOutcome_neural <- function(){
                                    strenv$numpyro$distributions$LogNormal(0., RMS_scale),
                                    sample_shape = reticulate::tuple(ModelDims)))
       assign(paste0("W_q_l", l_),
-             strenv$numpyro$sample(paste0("W_q_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_q_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_k_l", l_),
-             strenv$numpyro$sample(paste0("W_k_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_k_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_v_l", l_),
-             strenv$numpyro$sample(paste0("W_v_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_v_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_o_l", l_),
-             strenv$numpyro$sample(paste0("W_o_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
+             sample_loc_scale(paste0("W_o_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, ModelDims)))
       assign(paste0("W_ff1_l", l_),
-             strenv$numpyro$sample(paste0("W_ff1_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, FFDim)))
+             sample_loc_scale(paste0("W_ff1_l", l_), tau_w_l,
+                              reticulate::tuple(ModelDims, FFDim)))
       assign(paste0("W_ff2_l", l_),
-             strenv$numpyro$sample(paste0("W_ff2_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(FFDim, ModelDims)))
+             sample_loc_scale(paste0("W_ff2_l", l_), tau_w_l,
+                              reticulate::tuple(FFDim, ModelDims)))
     }
     RMS_final <- strenv$numpyro$sample("RMS_final",
                                        strenv$numpyro$distributions$LogNormal(0., RMS_scale),
@@ -837,14 +837,12 @@ generate_ModelOutcome_neural <- function(){
 
     tau_w_out <- strenv$numpyro$sample("tau_w_out",
                                        strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
-    W_out <- strenv$numpyro$sample("W_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_w_out),
-                                  sample_shape = reticulate::tuple(ModelDims, nOutcomes))
+    W_out <- sample_loc_scale("W_out", tau_w_out,
+                              reticulate::tuple(ModelDims, nOutcomes))
     tau_b <- strenv$numpyro$sample("tau_b",
                                    strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale)))
-    b_out <- strenv$numpyro$sample("b_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_b),
-                                  sample_shape = reticulate::tuple(nOutcomes))
+    b_out <- sample_loc_scale("b_out", tau_b,
+                              reticulate::tuple(nOutcomes))
     if (likelihood == "normal") {
       sigma <- strenv$numpyro$sample("sigma",
                                      strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale)))
@@ -998,10 +996,53 @@ generate_ModelOutcome_neural <- function(){
     party_single_jnp <- strenv$jnp$array(as.integer(party_single))$astype(strenv$jnp$int32)
   }
 
+  model_fn_base <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
+  model_fn <- model_fn_base
+  locscale_reparam <- NULL
+  if (!is.null(strenv$numpyro$infer) &&
+      reticulate::py_has_attr(strenv$numpyro$infer, "reparam")) {
+    reparam_mod <- strenv$numpyro$infer$reparam
+    if (reticulate::py_has_attr(reparam_mod, "LocScaleReparam")) {
+      locscale_reparam <- reparam_mod$LocScaleReparam
+    }
+  }
+  if (is.null(locscale_reparam)) {
+    locscale_reparam <- tryCatch(
+      reticulate::import("numpyro.infer.reparam", delay_load = TRUE)$LocScaleReparam,
+      error = function(e) NULL
+    )
+  }
+  if (!is.null(locscale_reparam) &&
+      reticulate::py_has_attr(strenv$numpyro, "handlers")) {
+    reparam_config <- list()
+    for (l_ in 1L:ModelDepth) {
+      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+        site <- paste0(base, l_)
+        reparam_config[[site]] <- locscale_reparam(centered = 0)
+      }
+    }
+    reparam_config[["W_out"]] <- locscale_reparam(centered = 0)
+    reparam_config[["b_out"]] <- locscale_reparam(centered = 0)
+    if (isTRUE(use_cross_term)) {
+      reparam_config[["M_cross_raw"]] <- locscale_reparam(centered = 0)
+    }
+    model_fn <- tryCatch(
+      strenv$numpyro$handlers$reparam(fn = model_fn_base, config = reparam_config),
+      error = function(e) NULL
+    )
+    if (is.null(model_fn)) {
+      model_fn <- model_fn_base
+      manual_noncentered_loc_scale <- TRUE
+    } else {
+      manual_noncentered_loc_scale <- FALSE
+    }
+  } else {
+    manual_noncentered_loc_scale <- TRUE
+  }
+
   t0_ <- Sys.time()
   if (identical(subsample_method, "batch_vi")) {
     message("Enlisting SVI with autoguide for minibatched likelihood...")
-    model_fn <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
     guide_name <- if (!is.null(mcmc_control$vi_guide)) {
       tolower(as.character(mcmc_control$vi_guide))
     } else {
@@ -1164,13 +1205,13 @@ generate_ModelOutcome_neural <- function(){
     if (identical(subsample_method, "batch")) {
       message("Enlisting HMCECS kernels for subsampled likelihood...")
       kernel <- strenv$numpyro$infer$HMCECS(
-        strenv$numpyro$infer$NUTS(if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel),
+        strenv$numpyro$infer$NUTS(model_fn),
         num_blocks = if (!is.null(mcmc_control$num_blocks)) ai(mcmc_control$num_blocks) else ai(4L)
       )
     } else {
       message("Enlisting NUTS kernels for full-data likelihood...")
       kernel <- strenv$numpyro$infer$NUTS(
-        if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel,
+        model_fn,
         max_tree_depth = ai(8L),
         target_accept_prob = 0.85
       )
@@ -1240,6 +1281,46 @@ generate_ModelOutcome_neural <- function(){
     missing_draw <- strenv$jnp$expand_dims(missing_draw, axis = 2L)
     strenv$jnp$concatenate(list(centered_real, missing_draw), axis = 2L)
   }
+  get_loc_scale_draws <- function(name, scale_name) {
+    draws <- PosteriorDraws[[name]]
+    if (!is.null(draws)) {
+      return(draws)
+    }
+    base_names <- c(paste0(name, "_decentered"),
+                    paste0(name, "_base"),
+                    paste0(name, "_z"))
+    base_draws <- NULL
+    for (base_name in base_names) {
+      if (!is.null(PosteriorDraws[[base_name]])) {
+        base_draws <- PosteriorDraws[[base_name]]
+        break
+      }
+    }
+    if (is.null(base_draws)) {
+      return(NULL)
+    }
+    scale_draws <- PosteriorDraws[[scale_name]]
+    if (is.null(scale_draws)) {
+      return(NULL)
+    }
+    scale_shape <- tryCatch(
+      as.integer(reticulate::py_to_r(scale_draws$shape)),
+      error = function(e) NULL
+    )
+    base_shape <- tryCatch(
+      as.integer(reticulate::py_to_r(base_draws$shape)),
+      error = function(e) NULL
+    )
+    if (is.null(scale_shape) || is.null(base_shape)) {
+      return(scale_draws * base_draws)
+    }
+    extra_dims <- length(base_shape) - length(scale_shape)
+    if (extra_dims > 0L) {
+      reshape_dims <- c(scale_shape, rep(1L, extra_dims))
+      scale_draws <- strenv$jnp$reshape(scale_draws, as.list(reshape_dims))
+    }
+    scale_draws * base_draws
+  }
   get_cross_draws <- function() {
     draws <- PosteriorDraws$M_cross
     if (!is.null(draws)) {
@@ -1247,10 +1328,34 @@ generate_ModelOutcome_neural <- function(){
     }
     raw_draws <- PosteriorDraws$M_cross_raw
     if (is.null(raw_draws)) {
+      raw_draws <- get_loc_scale_draws("M_cross_raw", "tau_cross")
+    }
+    if (is.null(raw_draws)) {
       return(NULL)
     }
     trans_axes <- list(0L, 1L, 3L, 2L)
     0.5 * (raw_draws - strenv$jnp$transpose(raw_draws, trans_axes))
+  }
+  get_param_draws <- function(name) {
+    if (startsWith(name, "E_factor_")) {
+      return(get_centered_factor_draws(name))
+    }
+    if (identical(name, "M_cross")) {
+      return(get_cross_draws())
+    }
+    if (identical(name, "W_out")) {
+      return(get_loc_scale_draws("W_out", "tau_w_out"))
+    }
+    if (identical(name, "b_out")) {
+      return(get_loc_scale_draws("b_out", "tau_b"))
+    }
+    if (grepl("^W_(q|k|v|o)_l\\d+$", name) ||
+        grepl("^W_ff(1|2)_l\\d+$", name)) {
+      layer_id <- sub(".*_l", "", name)
+      tau_name <- paste0("tau_w_", layer_id)
+      return(get_loc_scale_draws(name, tau_name))
+    }
+    PosteriorDraws[[name]]
   }
 
   ParamsMean <- list(
@@ -1276,11 +1381,13 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(PosteriorDraws$E_matchup)) {
     ParamsMean$E_matchup <- mean_param(PosteriorDraws$E_matchup)
   }
-  if (!is.null(PosteriorDraws$W_out)) {
-    ParamsMean$W_out <- mean_param(PosteriorDraws$W_out)
+  W_out_draws <- get_loc_scale_draws("W_out", "tau_w_out")
+  if (!is.null(W_out_draws)) {
+    ParamsMean$W_out <- mean_param(W_out_draws)
   }
-  if (!is.null(PosteriorDraws$b_out)) {
-    ParamsMean$b_out <- mean_param(PosteriorDraws$b_out)
+  b_out_draws <- get_loc_scale_draws("b_out", "tau_b")
+  if (!is.null(b_out_draws)) {
+    ParamsMean$b_out <- mean_param(b_out_draws)
   }
   cross_draws <- get_cross_draws()
   if (!is.null(cross_draws)) {
@@ -1313,12 +1420,30 @@ generate_ModelOutcome_neural <- function(){
     }
     ParamsMean[[paste0("RMS_attn_l", l_)]] <- mean_param(PosteriorDraws[[paste0("RMS_attn_l", l_)]])
     ParamsMean[[paste0("RMS_ff_l", l_)]] <- mean_param(PosteriorDraws[[paste0("RMS_ff_l", l_)]])
-    ParamsMean[[paste0("W_q_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_q_l",  l_)]])
-    ParamsMean[[paste0("W_k_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_k_l",  l_)]])
-    ParamsMean[[paste0("W_v_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_v_l",  l_)]])
-    ParamsMean[[paste0("W_o_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_o_l",  l_)]])
-    ParamsMean[[paste0("W_ff1_l", l_)]]<- mean_param(PosteriorDraws[[paste0("W_ff1_l",l_)]])
-    ParamsMean[[paste0("W_ff2_l", l_)]]<- mean_param(PosteriorDraws[[paste0("W_ff2_l",l_)]])
+    W_q_draws <- get_loc_scale_draws(paste0("W_q_l", l_), paste0("tau_w_", l_))
+    if (!is.null(W_q_draws)) {
+      ParamsMean[[paste0("W_q_l", l_)]] <- mean_param(W_q_draws)
+    }
+    W_k_draws <- get_loc_scale_draws(paste0("W_k_l", l_), paste0("tau_w_", l_))
+    if (!is.null(W_k_draws)) {
+      ParamsMean[[paste0("W_k_l", l_)]] <- mean_param(W_k_draws)
+    }
+    W_v_draws <- get_loc_scale_draws(paste0("W_v_l", l_), paste0("tau_w_", l_))
+    if (!is.null(W_v_draws)) {
+      ParamsMean[[paste0("W_v_l", l_)]] <- mean_param(W_v_draws)
+    }
+    W_o_draws <- get_loc_scale_draws(paste0("W_o_l", l_), paste0("tau_w_", l_))
+    if (!is.null(W_o_draws)) {
+      ParamsMean[[paste0("W_o_l", l_)]] <- mean_param(W_o_draws)
+    }
+    W_ff1_draws <- get_loc_scale_draws(paste0("W_ff1_l", l_), paste0("tau_w_", l_))
+    if (!is.null(W_ff1_draws)) {
+      ParamsMean[[paste0("W_ff1_l", l_)]] <- mean_param(W_ff1_draws)
+    }
+    W_ff2_draws <- get_loc_scale_draws(paste0("W_ff2_l", l_), paste0("tau_w_", l_))
+    if (!is.null(W_ff2_draws)) {
+      ParamsMean[[paste0("W_ff2_l", l_)]] <- mean_param(W_ff2_draws)
+    }
   }
   if (!is.null(PosteriorDraws$RMS_final)) {
     ParamsMean$RMS_final <- mean_param(PosteriorDraws$RMS_final)
@@ -1889,13 +2014,7 @@ generate_ModelOutcome_neural <- function(){
 
   var_parts <- lapply(seq_along(param_names), function(i_) {
     name <- param_names[[i_]]
-    if (startsWith(name, "E_factor_")) {
-      draws <- get_centered_factor_draws(name)
-    } else if (identical(name, "M_cross")) {
-      draws <- get_cross_draws()
-    } else {
-      draws <- PosteriorDraws[[name]]
-    }
+    draws <- get_param_draws(name)
     if (is.null(draws)) {
       return(strenv$jnp$zeros(list(ai(param_sizes[[i_]])), dtype = ddtype_))
     }
