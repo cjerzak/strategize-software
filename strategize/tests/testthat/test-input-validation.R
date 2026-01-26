@@ -450,6 +450,47 @@ test_that("validate_strategize_inputs rejects invalid svi_lr_schedule values", {
   )
 })
 
+test_that("validate_strategize_inputs accepts svi_steps options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+  allowed <- list(1L, 200L, 1000, "optimal")
+
+  for (val in allowed) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(svi_steps = val)
+      ),
+      info = sprintf("Expected svi_steps=%s to be accepted", as.character(val))
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid svi_steps values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(svi_steps = 0)
+    ),
+    "svi_steps"
+  )
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(svi_steps = "bad_value")
+    ),
+    "svi_steps"
+  )
+})
+
 # =============================================================================
 # CV Validation
 # =============================================================================

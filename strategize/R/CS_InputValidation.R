@@ -530,6 +530,33 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
     }
   }
   if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$svi_steps)) {
+    steps_val <- neural_mcmc_control$svi_steps
+    if (is.character(steps_val)) {
+      steps_tag <- tolower(as.character(steps_val))
+      if (length(steps_tag) != 1L || is.na(steps_tag) || !nzchar(steps_tag) ||
+          !steps_tag %in% c("optimal")) {
+        stop(
+          "'neural_mcmc_control$svi_steps' must be a positive integer or 'optimal'.",
+          call. = FALSE
+        )
+      }
+    } else if (is.numeric(steps_val)) {
+      if (length(steps_val) != 1L || !is.finite(steps_val) ||
+          steps_val < 1 || steps_val != round(steps_val)) {
+        stop(
+          "'neural_mcmc_control$svi_steps' must be a positive integer or 'optimal'.",
+          call. = FALSE
+        )
+      }
+    } else {
+      stop(
+        "'neural_mcmc_control$svi_steps' must be a positive integer or 'optimal'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
       !is.null(neural_mcmc_control$svi_lr_schedule)) {
     schedule_val <- tolower(as.character(neural_mcmc_control$svi_lr_schedule))
     if (length(schedule_val) != 1L || is.na(schedule_val) ||
