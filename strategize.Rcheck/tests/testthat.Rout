@@ -28,6 +28,7 @@ Initializing computational environment...
 Initializing outcome models...
 [1] 1 1
 ok_counter = 0
+GLM OOS fit metrics (single, oos_3fold): AUC=0.4357, LogLoss=0.7035, Acc=0.510, Brier=0.2550
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -57,6 +58,7 @@ strategize() call has begun...
 Initializing outcome models...
 [1] 1 1
 ok_counter = 0
+GLM OOS fit metrics (single, oos_3fold): AUC=0.4357, LogLoss=0.7035, Acc=0.510, Brier=0.2550
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -88,6 +90,7 @@ strategize() call has begun...
 Initializing outcome models...
 [1] 1 1
 ok_counter = 0
+GLM OOS fit metrics (single, oos_3fold): AUC=0.4357, LogLoss=0.7035, Acc=0.510, Brier=0.2550
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -112,6 +115,11 @@ SGD Iteration: 10 of 10
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
+ok_counter = 0
+Starting a glinternet fit...
+Done with glinternet fit...
+ok_counter = 1
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9844, LogLoss=0.1364, Acc=0.900, Brier=0.0527
 -------------
 strategize() call has begun...
 -------------
@@ -122,12 +130,16 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=14.3018, Acc=0.400, Brier=0.6444
 [1] 0 2
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
 [1] 1 2
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -151,12 +163,16 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=14.3018, Acc=0.400, Brier=0.6444
 [1] 0 2
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
 [1] 1 2
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -180,12 +196,16 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=14.3018, Acc=0.400, Brier=0.6444
 [1] 0 2
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
 [1] 1 2
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -204,12 +224,18 @@ Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9948, LogLoss=0.0665, Acc=0.970, Brier=0.0235
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9933, LogLoss=0.0784, Acc=0.947, Brier=0.0283
 ok_counter = 0
+GLM OOS fit metrics (single, oos_3fold): AUC=0.7889, LogLoss=0.5426, Acc=0.743, Brier=0.1831
 ok_counter = 0
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9912, LogLoss=0.0851, Acc=0.955, Brier=0.0300
 ok_counter = 0
+GLM OOS fit metrics (single, oos_3fold): AUC=0.7933, LogLoss=0.5488, Acc=0.710, Brier=0.1835
 ok_counter = 0
-[ FAIL 0 | WARN 13 | SKIP 106 | PASS 95 ]
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905, Brier=0.0422
+[ FAIL 0 | WARN 41 | SKIP 106 | PASS 109 ]
 
 ══ Skipped tests (106) ═════════════════════════════════════════════════════════
 • JAX available; neural fit is slow and not exercised here (1):
@@ -268,8 +294,8 @@ ok_counter = 0
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 13 | SKIP 106 | PASS 95 ]
+[ FAIL 0 | WARN 41 | SKIP 106 | PASS 109 ]
 > 
 > proc.time()
    user  system elapsed 
- 33.709   4.524  28.649 
+ 24.000   3.185  18.719 

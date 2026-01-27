@@ -1011,7 +1011,7 @@ generate_ModelOutcome_neural <- function(){
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
-  eval_control <- list(enabled = TRUE, max_n = NULL, seed = 123L)
+  eval_control <- list(enabled = TRUE, max_n = NULL, seed = 123L, n_folds = NULL)
   model_dims <- 128L
   model_depth <- 2L
   cross_candidate_encoder_mode <- "none"
@@ -1066,6 +1066,11 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(neural_mcmc_control$eval_seed)) {
       eval_control$seed <- as.integer(neural_mcmc_control$eval_seed)
     }
+    if (!is.null(neural_mcmc_control$eval_n_folds)) {
+      eval_control$n_folds <- as.integer(neural_mcmc_control$eval_n_folds)
+    } else if (!is.null(neural_mcmc_control$eval_folds)) {
+      eval_control$n_folds <- as.integer(neural_mcmc_control$eval_folds)
+    }
     if (!is.null(neural_mcmc_control$ModelDims)) {
       model_dims <- neural_mcmc_control$ModelDims
     }
@@ -1116,6 +1121,21 @@ generate_ModelOutcome_neural <- function(){
   eval_max_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_NEURAL_EVAL_MAX")))
   if (!is.na(eval_max_env) && eval_max_env > 0L) {
     eval_control$max_n <- eval_max_env
+  }
+  eval_seed_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_NEURAL_EVAL_SEED")))
+  if (!is.na(eval_seed_env) && eval_seed_env > 0L) {
+    eval_control$seed <- eval_seed_env
+  }
+  eval_folds_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_NEURAL_EVAL_FOLDS")))
+  if (!is.na(eval_folds_env) && eval_folds_env > 0L) {
+    eval_control$n_folds <- eval_folds_env
+  }
+  if (is.null(eval_control$n_folds) &&
+      exists("nFolds_glm", inherits = TRUE) &&
+      is.numeric(nFolds_glm) &&
+      length(nFolds_glm) == 1L &&
+      is.finite(nFolds_glm)) {
+    eval_control$n_folds <- as.integer(nFolds_glm)
   }
   if (!uncertainty_scope %in% c("all", "output")) {
     stop("'neural_mcmc_control$uncertainty_scope' must be 'all' or 'output'.",
@@ -1221,7 +1241,13 @@ generate_ModelOutcome_neural <- function(){
   n_candidate_tokens <- ai(length(factor_levels) + 2L)
 
   # Party token mapping (candidates)
-  party_levels <- if (!is.null(competing_group_variable_candidate_)) {
+  party_levels_override <- NULL
+  if (exists("party_levels_fixed", inherits = TRUE)) {
+    party_levels_override <- get("party_levels_fixed", inherits = TRUE)
+  }
+  party_levels <- if (!is.null(party_levels_override)) {
+    as.character(party_levels_override)
+  } else if (!is.null(competing_group_variable_candidate_)) {
     sort(unique(as.character(competing_group_variable_candidate_)))
   } else {
     "NA"
@@ -1240,7 +1266,13 @@ generate_ModelOutcome_neural <- function(){
   party_index[is.na(party_index)] <- 0L
 
   # Respondent party mapping
-  resp_party_levels <- if (!is.null(competing_group_variable_respondent_)) {
+  resp_party_levels_override <- NULL
+  if (exists("resp_party_levels_fixed", inherits = TRUE)) {
+    resp_party_levels_override <- get("resp_party_levels_fixed", inherits = TRUE)
+  }
+  resp_party_levels <- if (!is.null(resp_party_levels_override)) {
+    as.character(resp_party_levels_override)
+  } else if (!is.null(competing_group_variable_respondent_)) {
     sort(unique(as.character(competing_group_variable_respondent_)))
   } else {
     "NA"
@@ -1403,13 +1435,36 @@ generate_ModelOutcome_neural <- function(){
   # Placeholder to keep model chunks consistent (no surrogate regression)
   main_dat <- matrix(0, nrow = 0L, ncol = 0L)
 
-  # Likelihood selection
+  # Likelihood selection (allow overrides for cross-fit evaluation runs).
+  likelihood_override <- NULL
+  nOutcomes_override <- NULL
+  if (exists("neural_likelihood_override", inherits = TRUE)) {
+    likelihood_override <- get("neural_likelihood_override", inherits = TRUE)
+  }
+  if (exists("neural_nOutcomes_override", inherits = TRUE)) {
+    nOutcomes_override <- get("neural_nOutcomes_override", inherits = TRUE)
+  }
+
   is_binary <- all(unique(na.omit(as.numeric(Y_use))) %in% c(0, 1)) &&
     length(unique(na.omit(Y_use))) <= 2
   is_intvec <- all(!is.na(Y_use)) && all(abs(Y_use - round(Y_use)) < 1e-8)
   K_classes <- if (is_intvec) length(unique(ai(Y_use))) else NA_integer_
 
-  if (is_binary) {
+  if (!is.null(likelihood_override)) {
+    likelihood <- tolower(as.character(likelihood_override))
+    if (!likelihood %in% c("bernoulli", "categorical", "normal")) {
+      stop("neural_likelihood_override must be one of 'bernoulli', 'categorical', or 'normal'.",
+           call. = FALSE)
+    }
+    if (!is.null(nOutcomes_override)) {
+      nOutcomes <- ai(nOutcomes_override)
+    } else if (likelihood == "categorical") {
+      stop("neural_nOutcomes_override must be provided when forcing categorical likelihood.",
+           call. = FALSE)
+    } else {
+      nOutcomes <- ai(1L)
+    }
+  } else if (is_binary) {
     likelihood <- "bernoulli"; nOutcomes <- ai(1L)
   } else if (!is.na(K_classes) && K_classes >= 2L && K_classes <= max(50L, ncol(W_) + 1L)) {
     likelihood <- "categorical"; nOutcomes <- ai(K_classes)
@@ -2235,9 +2290,531 @@ generate_ModelOutcome_neural <- function(){
     local_lik()
   }
 
+  # Cross-fitted out-of-sample fit metrics (computed before final full-data fit).
+  fit_metrics <- NULL
+  neural_skip_oos_eval <- FALSE
+  if (exists("neural_oos_eval_internal", inherits = TRUE)) {
+    neural_skip_oos_eval <- isTRUE(get("neural_oos_eval_internal", inherits = TRUE))
+  }
+  if (!isTRUE(neural_skip_oos_eval) && isTRUE(eval_control$enabled)) {
+    n_total <- length(Y_use)
+    if (n_total > 0L) {
+      eval_idx <- seq_len(n_total)
+      if (!is.null(eval_control$max_n) &&
+          is.finite(eval_control$max_n) &&
+          eval_control$max_n > 0L &&
+          eval_control$max_n < n_total) {
+        eval_seed <- eval_control$seed
+        if (is.null(eval_seed) || is.na(eval_seed)) {
+          eval_seed <- 123L
+        }
+        rng <- strenv$np$random$default_rng(as.integer(eval_seed))
+        idx_py <- rng$choice(as.integer(n_total),
+                             size = as.integer(eval_control$max_n),
+                             replace = FALSE)
+        eval_idx <- as.integer(reticulate::py_to_r(idx_py)) + 1L
+      }
+
+      y_all <- NULL
+      y_levels_full <- NULL
+      ok_rows <- rep(TRUE, n_total)
+      if (likelihood == "bernoulli") {
+        y_all <- as.numeric(Y_use)
+        ok_rows <- is.finite(y_all) & (y_all %in% c(0, 1))
+      } else if (likelihood == "categorical") {
+        y_levels_full <- levels(as.factor(Y_use))
+        y_all <- match(as.character(Y_use), y_levels_full) - 1L
+        ok_rows <- !is.na(y_all)
+      } else {
+        y_all <- as.numeric(Y_use)
+        ok_rows <- is.finite(y_all)
+      }
+      if (!all(ok_rows)) {
+        eval_idx <- eval_idx[ok_rows[eval_idx]]
+      }
+
+      n_eval_total <- length(eval_idx)
+      if (n_eval_total >= 2L) {
+        subset_note <- if (n_eval_total < n_total) {
+          sprintf("n=%d/%d", n_eval_total, n_total)
+        } else {
+          sprintf("n=%d", n_eval_total)
+        }
+
+        cluster_obs <- NULL
+        if (exists("varcov_cluster_variable_", inherits = TRUE)) {
+          cluster_raw <- get("varcov_cluster_variable_", inherits = TRUE)
+          if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
+            if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
+              cluster_obs <- cluster_raw[pair_mat[, 1]]
+            } else if (!pairwise_mode && length(cluster_raw) == n_total) {
+              cluster_obs <- cluster_raw
+            }
+          }
+        }
+        cluster_eval <- if (!is.null(cluster_obs) && length(cluster_obs) == n_total) {
+          cluster_obs[eval_idx]
+        } else {
+          NULL
+        }
+
+        make_folds <- function(n, n_folds, cluster = NULL, seed = 123L) {
+          n <- as.integer(n)
+          n_folds <- as.integer(n_folds)
+          if (n <= 1L || n_folds < 2L) {
+            return(NULL)
+          }
+
+          restore_rng <- function(old_seed) {
+            if (is.null(old_seed)) {
+              if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+                rm(".Random.seed", envir = .GlobalEnv)
+              }
+            } else {
+              assign(".Random.seed", old_seed, envir = .GlobalEnv)
+            }
+          }
+
+          old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+            get(".Random.seed", envir = .GlobalEnv)
+          } else {
+            NULL
+          }
+          set.seed(as.integer(seed))
+          on.exit(restore_rng(old_seed), add = TRUE)
+
+          if (!is.null(cluster) && length(cluster) == n) {
+            cluster <- as.character(cluster)
+            if (any(is.na(cluster))) {
+              na_idx <- which(is.na(cluster))
+              cluster[na_idx] <- paste0("__missing__", na_idx)
+            }
+            uniq <- unique(cluster)
+            k <- min(n_folds, length(uniq))
+            if (k >= 2L) {
+              uniq <- sample(uniq, length(uniq))
+              fold_map <- rep(seq_len(k), length.out = length(uniq))
+              names(fold_map) <- uniq
+              return(list(fold_id = as.integer(fold_map[cluster]), n_folds = k))
+            }
+          }
+
+          k <- min(n_folds, n)
+          if (k < 2L) {
+            return(NULL)
+          }
+          fold_id <- sample(rep(seq_len(k), length.out = n))
+          list(fold_id = as.integer(fold_id), n_folds = k)
+        }
+
+        n_folds <- eval_control$n_folds
+        if (is.null(n_folds) || !is.finite(n_folds)) {
+          n_folds <- 3L
+        }
+        n_folds <- as.integer(n_folds)
+        if (n_folds < 2L) {
+          n_folds <- 2L
+        }
+
+        folds_out <- make_folds(n_eval_total, n_folds, cluster = cluster_eval, seed = eval_control$seed)
+        if (!is.null(folds_out) && !is.null(folds_out$fold_id)) {
+          fold_id <- folds_out$fold_id
+          n_folds_use <- as.integer(folds_out$n_folds)
+
+          init_model <- paste(deparse(generate_ModelOutcome_neural), collapse = "\n")
+          init_model <- gsub(init_model, pattern = "function \\(\\)", replacement = "")
+
+          compute_auc <- function(y_true, y_score) {
+            y_true <- as.numeric(y_true)
+            y_score <- as.numeric(y_score)
+            ok <- is.finite(y_true) & is.finite(y_score)
+            y_true <- y_true[ok]
+            y_score <- y_score[ok]
+            if (!length(y_true)) return(NA_real_)
+            pos <- y_true == 1
+            neg <- y_true == 0
+            n_pos <- sum(pos)
+            n_neg <- sum(neg)
+            if (n_pos == 0L || n_neg == 0L) return(NA_real_)
+            ranks <- rank(y_score, ties.method = "average")
+            (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+          }
+          compute_log_loss <- function(y_true, y_score, eps = 1e-12) {
+            y_true <- as.numeric(y_true)
+            y_score <- as.numeric(y_score)
+            ok <- is.finite(y_true) & is.finite(y_score)
+            y_true <- y_true[ok]
+            y_score <- y_score[ok]
+            if (!length(y_true)) return(NA_real_)
+            p <- pmin(pmax(y_score, eps), 1 - eps)
+            -mean(y_true * log(p) + (1 - y_true) * log(1 - p))
+          }
+          compute_multiclass_log_loss <- function(y_true, prob_mat, eps = 1e-12) {
+            if (is.null(dim(prob_mat))) {
+              prob_mat <- matrix(prob_mat, nrow = length(y_true), byrow = TRUE)
+            }
+            n_eval <- nrow(prob_mat)
+            if (length(y_true) != n_eval) return(NA_real_)
+            ok <- !is.na(y_true)
+            y_true <- y_true[ok]
+            prob_mat <- prob_mat[ok, , drop = FALSE]
+            if (!length(y_true)) return(NA_real_)
+            idx <- cbind(seq_along(y_true), y_true + 1L)
+            p <- prob_mat[idx]
+            p <- pmin(pmax(p, eps), 1 - eps)
+            -mean(log(p))
+          }
+          format_metric <- function(label, value, digits = 4) {
+            if (is.null(value) || !is.finite(value)) return(NULL)
+            fmt <- paste0("%s=%.", digits, "f")
+            sprintf(fmt, label, value)
+          }
+
+          compute_metrics <- function(y_eval, pred_eval) {
+            if (likelihood == "bernoulli") {
+              y_eval <- as.numeric(y_eval)
+              keep <- is.finite(y_eval) & (y_eval %in% c(0, 1))
+              y_eval <- y_eval[keep]
+              p <- as.numeric(pred_eval)[keep]
+              auc <- compute_auc(y_eval, p)
+              log_loss <- compute_log_loss(y_eval, p)
+              accuracy <- if (length(y_eval)) mean((p >= 0.5) == y_eval) else NA_real_
+              brier <- if (length(y_eval)) mean((p - y_eval) ^ 2) else NA_real_
+              return(list(
+                likelihood = likelihood,
+                n_eval = length(y_eval),
+                auc = auc,
+                log_loss = log_loss,
+                accuracy = accuracy,
+                brier = brier
+              ))
+            }
+            if (likelihood == "categorical") {
+              y_eval <- as.integer(y_eval)
+              prob_mat <- as.matrix(pred_eval)
+              keep <- !is.na(y_eval)
+              y_eval <- y_eval[keep]
+              prob_mat <- prob_mat[keep, , drop = FALSE]
+              if (length(y_eval)) {
+                log_loss <- compute_multiclass_log_loss(y_eval, prob_mat)
+                pred_class <- max.col(prob_mat) - 1L
+                accuracy <- mean(pred_class == y_eval, na.rm = TRUE)
+              } else {
+                log_loss <- NA_real_
+                accuracy <- NA_real_
+              }
+              return(list(
+                likelihood = likelihood,
+                n_eval = length(y_eval),
+                log_loss = log_loss,
+                accuracy = accuracy
+              ))
+            }
+            y_eval <- as.numeric(y_eval)
+            pred_mu <- as.numeric(pred_eval$mu)
+            pred_sigma <- as.numeric(pred_eval$sigma)
+            keep <- is.finite(y_eval) & is.finite(pred_mu)
+            y_eval <- y_eval[keep]
+            pred_mu <- pred_mu[keep]
+            if (length(pred_sigma) == 1L && length(y_eval) > 1L) {
+              pred_sigma <- rep(pred_sigma, length(y_eval))
+            } else if (length(pred_sigma) == length(keep)) {
+              pred_sigma <- pred_sigma[keep]
+            } else if (length(pred_sigma) == length(y_eval)) {
+              pred_sigma <- pred_sigma
+            } else {
+              pred_sigma <- rep(NA_real_, length(y_eval))
+            }
+            rmse <- if (length(y_eval)) sqrt(mean((pred_mu - y_eval) ^ 2)) else NA_real_
+            mae <- if (length(y_eval)) mean(abs(pred_mu - y_eval)) else NA_real_
+            nll <- NA_real_
+            if (length(y_eval) &&
+                length(pred_sigma) == length(y_eval) &&
+                all(is.finite(pred_sigma)) &&
+                all(pred_sigma > 0)) {
+              nll <- mean(0.5 * log(2 * pi * pred_sigma ^ 2) + (y_eval - pred_mu) ^ 2 / (2 * pred_sigma ^ 2))
+            }
+            list(
+              likelihood = likelihood,
+              n_eval = length(y_eval),
+              rmse = rmse,
+              mae = mae,
+              nll = nll
+            )
+          }
+
+          pred_oos <- NULL
+          if (likelihood == "bernoulli") {
+            pred_oos <- rep(NA_real_, n_total)
+          } else if (likelihood == "categorical") {
+            pred_oos <- matrix(NA_real_, nrow = n_total, ncol = as.integer(nOutcomes))
+          } else {
+            pred_oos <- list(mu = rep(NA_real_, n_total),
+                             sigma = rep(NA_real_, n_total))
+          }
+
+          by_fold <- vector("list", n_folds_use)
+          for (fold in seq_len(n_folds_use)) {
+            test_pos <- which(fold_id == fold)
+            train_pos <- which(fold_id != fold)
+            if (!length(test_pos) || !length(train_pos)) {
+              next
+            }
+
+            test_idx <- eval_idx[test_pos]
+            train_idx <- eval_idx[train_pos]
+
+            fallback <- NULL
+            if (likelihood == "bernoulli") {
+              y_train <- y_all[train_idx]
+              fallback_val <- mean(y_train, na.rm = TRUE)
+              if (!is.finite(fallback_val)) fallback_val <- 0.5
+              fallback_val <- min(max(fallback_val, 0), 1)
+              fallback <- rep(fallback_val, length(test_idx))
+            } else if (likelihood == "categorical") {
+              y_train <- y_all[train_idx]
+              Kc <- as.integer(nOutcomes)
+              probs <- vapply(0:(Kc - 1L), function(k_) mean(y_train == k_, na.rm = TRUE), numeric(1))
+              if (!any(is.finite(probs)) || sum(probs, na.rm = TRUE) <= 0) {
+                probs <- rep(1 / Kc, Kc)
+              } else {
+                probs[!is.finite(probs)] <- 0
+                s <- sum(probs)
+                if (s <= 0) probs <- rep(1 / Kc, Kc) else probs <- probs / s
+              }
+              fallback <- matrix(rep(probs, each = length(test_idx)),
+                                 nrow = length(test_idx),
+                                 ncol = Kc)
+            } else {
+              y_train <- y_all[train_idx]
+              mu0 <- mean(y_train, na.rm = TRUE)
+              if (!is.finite(mu0)) mu0 <- 0
+              sigma0 <- suppressWarnings(stats::sd(y_train, na.rm = TRUE))
+              if (!is.finite(sigma0) || sigma0 <= 0) sigma0 <- 1
+              fallback <- list(mu = rep(mu0, length(test_idx)),
+                               sigma = rep(sigma0, length(test_idx)))
+            }
+
+            raw_train <- if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
+              as.integer(c(pair_mat[train_idx, 1], pair_mat[train_idx, 2]))
+            } else {
+              as.integer(train_idx)
+            }
+            raw_train <- sort(unique(raw_train))
+            if (!length(raw_train)) {
+              next
+            }
+
+            fold_env <- new.env(parent = environment())
+            fold_env$neural_oos_eval_internal <- TRUE
+            fold_env$neural_likelihood_override <- likelihood
+            fold_env$neural_nOutcomes_override <- nOutcomes
+            fold_env$party_levels_fixed <- party_levels
+            fold_env$resp_party_levels_fixed <- resp_party_levels
+            if (!is.null(y_levels_full)) {
+              fold_env$neural_y_levels_override <- y_levels_full
+            }
+
+            fold_env$W_ <- W_[raw_train, , drop = FALSE]
+            fold_env$Y_ <- Y_[raw_train]
+            fold_env$pair_id_ <- if (!is.null(pair_id_)) pair_id_[raw_train] else NULL
+            fold_env$profile_order_ <- if (!is.null(profile_order_)) profile_order_[raw_train] else NULL
+            fold_env$competing_group_competition_variable_candidate_ <- if (!is.null(competing_group_competition_variable_candidate_)) {
+              competing_group_competition_variable_candidate_[raw_train]
+            } else {
+              NULL
+            }
+            fold_env$competing_group_variable_respondent_ <- if (!is.null(competing_group_variable_respondent_)) {
+              competing_group_variable_respondent_[raw_train]
+            } else {
+              NULL
+            }
+            fold_env$competing_group_variable_candidate_ <- if (!is.null(competing_group_variable_candidate_)) {
+              competing_group_variable_candidate_[raw_train]
+            } else {
+              NULL
+            }
+            if (exists("varcov_cluster_variable_", inherits = TRUE)) {
+              cluster_full <- get("varcov_cluster_variable_", inherits = TRUE)
+              fold_env$varcov_cluster_variable_ <- if (!is.null(cluster_full)) cluster_full[raw_train] else NULL
+            } else {
+              fold_env$varcov_cluster_variable_ <- NULL
+            }
+            if (exists("indi_", inherits = TRUE)) {
+              indi_full <- get("indi_", inherits = TRUE)
+              fold_env$indi_ <- if (!is.null(indi_full)) indi_full[raw_train] else raw_train
+            } else {
+              fold_env$indi_ <- raw_train
+            }
+
+            fit_ok <- tryCatch({
+              eval(parse(text = init_model), envir = fold_env)
+              is.function(fold_env$my_model)
+            }, error = function(e) FALSE)
+
+            pred_fold <- NULL
+            if (isTRUE(fit_ok)) {
+              pred_fold <- tryCatch({
+                if (pairwise_mode) {
+                  X_left_test <- X_left[test_idx, , drop = FALSE]
+                  X_right_test <- X_right[test_idx, , drop = FALSE]
+                  party_left_test <- party_left[test_idx]
+                  party_right_test <- party_right[test_idx]
+                  resp_party_test <- resp_party_use[test_idx]
+                  resp_cov_test <- if (!is.null(X_use) && n_resp_covariates > 0L) {
+                    X_use[test_idx, , drop = FALSE]
+                  } else {
+                    NULL
+                  }
+                  fold_env$my_model(
+                    X_left_new = X_left_test,
+                    X_right_new = X_right_test,
+                    party_left_new = party_left_test,
+                    party_right_new = party_right_test,
+                    resp_party_new = resp_party_test,
+                    resp_cov_new = resp_cov_test
+                  )
+                } else {
+                  X_test <- X_single[test_idx, , drop = FALSE]
+                  party_test <- party_single[test_idx]
+                  resp_party_test <- resp_party_use[test_idx]
+                  resp_cov_test <- if (!is.null(X_use) && n_resp_covariates > 0L) {
+                    X_use[test_idx, , drop = FALSE]
+                  } else {
+                    NULL
+                  }
+                  fold_env$my_model(
+                    X_new = X_test,
+                    party_new = party_test,
+                    resp_party_new = resp_party_test,
+                    resp_cov_new = resp_cov_test
+                  )
+                }
+              }, error = function(e) NULL)
+            }
+
+            if (is.null(pred_fold)) {
+              pred_fold <- fallback
+            }
+
+            if (likelihood == "bernoulli") {
+              pred_oos[test_idx] <- as.numeric(pred_fold)
+              fold_metrics <- compute_metrics(y_all[test_idx], pred_fold)
+            } else if (likelihood == "categorical") {
+              pred_oos[test_idx, ] <- as.matrix(pred_fold)
+              fold_metrics <- compute_metrics(y_all[test_idx], pred_fold)
+            } else {
+              pred_oos$mu[test_idx] <- as.numeric(pred_fold$mu)
+              pred_oos$sigma[test_idx] <- as.numeric(pred_fold$sigma)
+              fold_metrics <- compute_metrics(y_all[test_idx], pred_fold)
+            }
+            fold_metrics$fold <- fold
+            fold_metrics$eval_note <- "oos"
+            fold_metrics$n_test <- length(test_idx)
+            fold_metrics$n_train <- length(train_idx)
+            by_fold[[fold]] <- fold_metrics
+          }
+
+          pred_eval <- NULL
+          if (likelihood == "bernoulli") {
+            pred_eval <- pred_oos[eval_idx]
+          } else if (likelihood == "categorical") {
+            pred_eval <- pred_oos[eval_idx, , drop = FALSE]
+          } else {
+            pred_eval <- list(mu = pred_oos$mu[eval_idx],
+                              sigma = pred_oos$sigma[eval_idx])
+          }
+
+          overall_metrics <- compute_metrics(y_all[eval_idx], pred_eval)
+          overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
+          overall_metrics$eval_subset <- subset_note
+          overall_metrics$n_folds <- n_folds_use
+          overall_metrics$seed <- eval_control$seed
+          overall_metrics$by_fold <- by_fold
+
+          if (pairwise_mode) {
+            stage_primary <- party_left == party_right
+              if (length(stage_primary) == n_total) {
+                stage_primary <- stage_primary[eval_idx]
+                by_stage <- list()
+                if (any(stage_primary, na.rm = TRUE)) {
+                  idx0 <- which(stage_primary)
+                  pred_stage <- if (likelihood == "bernoulli") {
+                    pred_eval[idx0]
+                  } else if (likelihood == "categorical") {
+                    pred_eval[idx0, , drop = FALSE]
+                  } else {
+                    list(mu = pred_eval$mu[idx0],
+                         sigma = pred_eval$sigma[idx0])
+                  }
+                  by_stage$primary <- compute_metrics(y_all[eval_idx][idx0], pred_stage)
+                }
+                if (any(!stage_primary, na.rm = TRUE)) {
+                  idx1 <- which(!stage_primary)
+                  pred_stage <- if (likelihood == "bernoulli") {
+                    pred_eval[idx1]
+                  } else if (likelihood == "categorical") {
+                    pred_eval[idx1, , drop = FALSE]
+                  } else {
+                    list(mu = pred_eval$mu[idx1],
+                         sigma = pred_eval$sigma[idx1])
+                  }
+                  by_stage$general <- compute_metrics(y_all[eval_idx][idx1], pred_stage)
+                }
+                if (length(by_stage) > 0L) {
+                  overall_metrics$by_stage <- by_stage
+                }
+              }
+          }
+
+          fit_metrics <- overall_metrics
+
+          metric_items <- if (likelihood == "bernoulli") {
+            Filter(Negate(is.null), list(
+              format_metric("AUC", fit_metrics$auc, 4),
+              format_metric("LogLoss", fit_metrics$log_loss, 4),
+              format_metric("Acc", fit_metrics$accuracy, 3),
+              format_metric("Brier", fit_metrics$brier, 4)
+            ))
+          } else if (likelihood == "categorical") {
+            Filter(Negate(is.null), list(
+              format_metric("LogLoss", fit_metrics$log_loss, 4),
+              format_metric("Acc", fit_metrics$accuracy, 3)
+            ))
+          } else {
+            Filter(Negate(is.null), list(
+              format_metric("RMSE", fit_metrics$rmse, 4),
+              format_metric("MAE", fit_metrics$mae, 4),
+              format_metric("NLL", fit_metrics$nll, 4)
+            ))
+          }
+          if (!is.null(fit_metrics) && length(metric_items) > 0L) {
+            message(sprintf("Neural OOS fit metrics (%s, %s, %s): %s",
+                            ifelse(pairwise_mode, "pairwise", "single"),
+                            fit_metrics$eval_note,
+                            subset_note,
+                            paste(metric_items, collapse = ", ")))
+          }
+        }
+      }
+    }
+  }
+
   if (likelihood == "categorical") {
-    y_fac <- ai(as.factor(Y_use)) - 1L
-    Y_jnp <- strenv$jnp$array(y_fac)$astype(strenv$jnp$int32)
+    y_levels_override <- NULL
+    if (exists("neural_y_levels_override", inherits = TRUE)) {
+      y_levels_override <- get("neural_y_levels_override", inherits = TRUE)
+    }
+    if (!is.null(y_levels_override)) {
+      y_fac <- match(as.character(Y_use), as.character(y_levels_override)) - 1L
+    } else {
+      y_fac <- ai(as.factor(Y_use)) - 1L
+    }
+    if (any(is.na(y_fac))) {
+      stop("Categorical outcome contains unseen/NA levels after applying neural_y_levels_override.",
+           call. = FALSE)
+    }
+    Y_jnp <- strenv$jnp$array(ai(y_fac))$astype(strenv$jnp$int32)
   } else {
     Y_jnp <- strenv$jnp$array(as.numeric(Y_use))$astype(ddtype_)
   }
@@ -3250,203 +3827,7 @@ generate_ModelOutcome_neural <- function(){
     }, integer(1)), GroupsPool)
   }
 
-  fit_metrics <- NULL
-  if (isTRUE(eval_control$enabled)) {
-    n_total <- length(Y_use)
-    if (n_total > 0L) {
-      eval_idx <- seq_len(n_total)
-      if (!is.null(eval_control$max_n) &&
-          is.finite(eval_control$max_n) &&
-          eval_control$max_n > 0L &&
-          eval_control$max_n < n_total) {
-        eval_seed <- eval_control$seed
-        if (is.null(eval_seed) || is.na(eval_seed)) {
-          eval_seed <- 123L
-        }
-        rng <- strenv$np$random$default_rng(as.integer(eval_seed))
-        idx_py <- rng$choice(as.integer(n_total),
-                             size = as.integer(eval_control$max_n),
-                             replace = FALSE)
-        eval_idx <- as.integer(reticulate::py_to_r(idx_py)) + 1L
-      }
-
-      to_numeric <- function(x) {
-        as.numeric(strenv$np$array(x))
-      }
-      compute_auc <- function(y_true, y_score) {
-        y_true <- as.numeric(y_true)
-        y_score <- as.numeric(y_score)
-        ok <- is.finite(y_true) & is.finite(y_score)
-        y_true <- y_true[ok]
-        y_score <- y_score[ok]
-        if (!length(y_true)) return(NA_real_)
-        pos <- y_true == 1
-        neg <- y_true == 0
-        n_pos <- sum(pos)
-        n_neg <- sum(neg)
-        if (n_pos == 0L || n_neg == 0L) return(NA_real_)
-        ranks <- rank(y_score, ties.method = "average")
-        (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-      }
-      compute_log_loss <- function(y_true, y_score, eps = 1e-12) {
-        y_true <- as.numeric(y_true)
-        y_score <- as.numeric(y_score)
-        ok <- is.finite(y_true) & is.finite(y_score)
-        y_true <- y_true[ok]
-        y_score <- y_score[ok]
-        if (!length(y_true)) return(NA_real_)
-        p <- pmin(pmax(y_score, eps), 1 - eps)
-        -mean(y_true * log(p) + (1 - y_true) * log(1 - p))
-      }
-      compute_multiclass_log_loss <- function(y_true, prob_mat, eps = 1e-12) {
-        if (is.null(dim(prob_mat))) {
-          prob_mat <- matrix(prob_mat, nrow = length(y_true), byrow = TRUE)
-        }
-        n_eval <- nrow(prob_mat)
-        if (length(y_true) != n_eval) return(NA_real_)
-        ok <- !is.na(y_true)
-        y_true <- y_true[ok]
-        prob_mat <- prob_mat[ok, , drop = FALSE]
-        if (!length(y_true)) return(NA_real_)
-        idx <- cbind(seq_along(y_true), y_true + 1L)
-        p <- prob_mat[idx]
-        p <- pmin(pmax(p, eps), 1 - eps)
-        -mean(log(p))
-      }
-      format_metric <- function(label, value, digits = 4) {
-        if (is.null(value) || !is.finite(value)) return(NULL)
-        fmt <- paste0("%s=%.", digits, "f")
-        sprintf(fmt, label, value)
-      }
-
-      if (pairwise_mode) {
-        X_left_eval <- X_left[eval_idx, , drop = FALSE]
-        X_right_eval <- X_right[eval_idx, , drop = FALSE]
-        party_left_eval <- party_left[eval_idx]
-        party_right_eval <- party_right[eval_idx]
-        resp_party_eval <- resp_party_use[eval_idx]
-        resp_cov_eval <- if (!is.null(X_use) && n_resp_covariates > 0L) {
-          X_use[eval_idx, , drop = FALSE]
-        } else {
-          NULL
-        }
-        pred <- TransformerPredict_pair(ParamsMean, X_left_eval, X_right_eval,
-                                        party_left_eval, party_right_eval,
-                                        resp_party_eval, resp_cov_eval)
-      } else {
-        X_eval <- X_single[eval_idx, , drop = FALSE]
-        party_eval <- party_single[eval_idx]
-        resp_party_eval <- resp_party_use[eval_idx]
-        resp_cov_eval <- if (!is.null(X_use) && n_resp_covariates > 0L) {
-          X_use[eval_idx, , drop = FALSE]
-        } else {
-          NULL
-        }
-        pred <- TransformerPredict_single(ParamsMean, X_eval, party_eval,
-                                          resp_party_eval, resp_cov_eval)
-      }
-
-      y_eval <- Y_use[eval_idx]
-      n_eval <- length(y_eval)
-      subset_note <- if (n_eval < n_total) {
-        sprintf("n=%d/%d", n_eval, n_total)
-      } else {
-        sprintf("n=%d", n_eval)
-      }
-
-      if (likelihood == "bernoulli") {
-        y_eval <- as.numeric(y_eval)
-        keep <- is.finite(y_eval) & (y_eval %in% c(0, 1))
-        y_eval <- y_eval[keep]
-        prob <- to_numeric(pred)
-        prob <- prob[keep]
-        auc <- compute_auc(y_eval, prob)
-        log_loss <- compute_log_loss(y_eval, prob)
-        accuracy <- if (length(y_eval)) mean((prob >= 0.5) == y_eval) else NA_real_
-        brier <- if (length(y_eval)) mean((prob - y_eval) ^ 2) else NA_real_
-        fit_metrics <- list(
-          likelihood = likelihood,
-          n_eval = length(y_eval),
-          auc = auc,
-          log_loss = log_loss,
-          accuracy = accuracy,
-          brier = brier,
-          eval_note = subset_note
-        )
-        metric_items <- Filter(Negate(is.null), list(
-          format_metric("AUC", auc, 4),
-          format_metric("LogLoss", log_loss, 4),
-          format_metric("Acc", accuracy, 3),
-          format_metric("Brier", brier, 4)
-        ))
-      } else if (likelihood == "categorical") {
-        y_eval <- as.integer(as.factor(y_eval)) - 1L
-        prob_mat <- reticulate::py_to_r(strenv$np$array(pred))
-        prob_mat <- as.matrix(prob_mat)
-        keep <- !is.na(y_eval)
-        y_eval <- y_eval[keep]
-        prob_mat <- prob_mat[keep, , drop = FALSE]
-        if (length(y_eval)) {
-          log_loss <- compute_multiclass_log_loss(y_eval, prob_mat)
-          pred_class <- max.col(prob_mat) - 1L
-          accuracy <- mean(pred_class == y_eval, na.rm = TRUE)
-        } else {
-          log_loss <- NA_real_
-          accuracy <- NA_real_
-        }
-        fit_metrics <- list(
-          likelihood = likelihood,
-          n_eval = length(y_eval),
-          log_loss = log_loss,
-          accuracy = accuracy,
-          eval_note = subset_note
-        )
-        metric_items <- Filter(Negate(is.null), list(
-          format_metric("LogLoss", log_loss, 4),
-          format_metric("Acc", accuracy, 3)
-        ))
-      } else {
-        y_eval <- as.numeric(y_eval)
-        keep <- is.finite(y_eval)
-        y_eval <- y_eval[keep]
-        mu <- to_numeric(pred$mu)
-        mu <- mu[keep]
-        sigma <- to_numeric(pred$sigma)
-        if (length(sigma) == 1L && length(y_eval) > 1L) {
-          sigma <- rep(sigma, length(y_eval))
-        } else {
-          sigma <- sigma[keep]
-        }
-        rmse <- if (length(y_eval)) sqrt(mean((mu - y_eval) ^ 2)) else NA_real_
-        mae <- if (length(y_eval)) mean(abs(mu - y_eval)) else NA_real_
-        nll <- NA_real_
-        if (length(y_eval) && length(sigma) == length(y_eval) && all(is.finite(sigma)) &&
-            all(sigma > 0)) {
-          nll <- mean(0.5 * log(2 * pi * sigma ^ 2) + (y_eval - mu) ^ 2 / (2 * sigma ^ 2))
-        }
-        fit_metrics <- list(
-          likelihood = likelihood,
-          n_eval = length(y_eval),
-          rmse = rmse,
-          mae = mae,
-          nll = nll,
-          eval_note = subset_note
-        )
-        metric_items <- Filter(Negate(is.null), list(
-          format_metric("RMSE", rmse, 4),
-          format_metric("MAE", mae, 4),
-          format_metric("NLL", nll, 4)
-        ))
-      }
-
-      if (!is.null(fit_metrics) && length(metric_items) > 0L) {
-        message(sprintf("Neural fit metrics (%s, %s): %s",
-                        ifelse(pairwise_mode, "pairwise", "single"),
-                        subset_note,
-                        paste(metric_items, collapse = ", ")))
-      }
-    }
-  }
+  # fit_metrics is computed above via cross-fitting (unless eval is disabled).
 
   if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L) {
     finite_losses <- svi_loss_curve[is.finite(svi_loss_curve)]

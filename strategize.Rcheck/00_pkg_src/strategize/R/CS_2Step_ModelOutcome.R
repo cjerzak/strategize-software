@@ -4,6 +4,7 @@ generate_ModelOutcome <- function(){
   vcov_OutcomeModel <- NULL
   vcov_OutcomeModel_by_k <- NULL
   neural_model_info <- NULL
+  fit_metrics <- NULL
   file_suffix <- if (!is.null(outcome_model_key)) {
     sprintf("%s_%s_%s", GroupsPool[GroupCounter], Round_, outcome_model_key)
   } else {
@@ -494,36 +495,305 @@ generate_ModelOutcome <- function(){
           !is.null(coeff_cache$vcov_OutcomeModel)) {
         use_coeff_cache <- TRUE
       }
-    }
+	    }
 
-    if (!use_coeff_cache) {
-      # fit outcome model, post regularization
-      {
-        # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
-        # solve(t(main_dat) %*% main_dat); solve(t(interacted_dat) %*% interacted_dat)
-        #  + 0 + 1 to get the glm to return the var-covar for the intercept
-        if(nrow(interacted_dat) == 0){ glm_input <- main_dat }
-        if(nrow(interacted_dat) > 0){
-          glm_input <- cbind(main_dat, interacted_dat )
-          if( ncol(glm_input) > 0.5*nrow(glm_input)){
-            stop("Too many possible interactions given data size. Set use_regularization = TRUE")
-          }
-        }
+	    # Build GLM design matrix (post-regularization) for both evaluation + final fit.
+	    if(nrow(interacted_dat) == 0){ glm_input <- main_dat }
+	    if(nrow(interacted_dat) > 0){
+	      glm_input <- cbind(main_dat, interacted_dat )
+	      if( ncol(glm_input) > 0.5*nrow(glm_input)){
+	        stop("Too many possible interactions given data size. Set use_regularization = TRUE")
+	      }
+	    }
 
-        # Add stage interactions to GLM input if available
-        # These are: stage main effect + stage x factor interactions
-        if (exists("stage_interaction_dat") && NROW(stage_interaction_dat) > 0) {
-          glm_input <- cbind(glm_input, stage_interaction_dat)
-          n_stage_cols <- ncol(stage_interaction_dat)
-          message(sprintf("Including %d stage-related columns in GLM", n_stage_cols))
-        } else {
-          n_stage_cols <- 0L
-        } 
-        glm_formula <- if (force_no_intercept) {
-          Y_glm ~ 0 + glm_input
-        } else {
-          Y_glm ~ glm_input
-        }
+	    # Add stage interactions to GLM input if available
+	    # These are: stage main effect + stage x factor interactions
+	    if (exists("stage_interaction_dat") && NROW(stage_interaction_dat) > 0) {
+	      glm_input <- cbind(glm_input, stage_interaction_dat)
+	      n_stage_cols <- ncol(stage_interaction_dat)
+	      message(sprintf("Including %d stage-related columns in GLM", n_stage_cols))
+	    } else {
+	      n_stage_cols <- 0L
+	    }
+
+	    # Cross-fitted out-of-sample fit metrics (computed before final full-data fit).
+	    fit_metrics <- NULL
+	    glm_eval_control <- list(enabled = TRUE, n_folds = NULL, seed = 123L)
+	    if (exists("nFolds_glm", inherits = TRUE) &&
+	        is.numeric(nFolds_glm) &&
+	        length(nFolds_glm) == 1L &&
+	        is.finite(nFolds_glm)) {
+	      glm_eval_control$n_folds <- as.integer(nFolds_glm)
+	    }
+	    skip_eval_flag <- tolower(Sys.getenv("STRATEGIZE_GLM_SKIP_EVAL")) %in% c("1", "true", "yes")
+	    if (isTRUE(skip_eval_flag)) {
+	      glm_eval_control$enabled <- FALSE
+	    }
+	    eval_seed_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_GLM_EVAL_SEED")))
+	    if (!is.na(eval_seed_env) && eval_seed_env > 0L) {
+	      glm_eval_control$seed <- eval_seed_env
+	    }
+	    eval_folds_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_GLM_EVAL_FOLDS")))
+	    if (!is.na(eval_folds_env) && eval_folds_env > 0L) {
+	      glm_eval_control$n_folds <- eval_folds_env
+	    }
+
+	    if (isTRUE(glm_eval_control$enabled)) {
+	      mode_note <- ifelse(isTRUE(diff), "pairwise", "single")
+	      y_full <- as.numeric(Y_glm)
+	      X_full <- as.matrix(glm_input)
+
+	      ok_rows <- is.finite(y_full)
+	      if (!all(ok_rows)) {
+	        y_full <- y_full[ok_rows]
+	        X_full <- X_full[ok_rows, , drop = FALSE]
+	      }
+	      cluster_full <- NULL
+	      if (!is.null(varcov_cluster_variable_glm) &&
+	          length(varcov_cluster_variable_glm) == length(Y_glm)) {
+	        cluster_full <- varcov_cluster_variable_glm
+	        if (!all(ok_rows)) {
+	          cluster_full <- cluster_full[ok_rows]
+	        }
+	      }
+	      stage_eval <- NULL
+	      if (exists("stage_vec", inherits = TRUE) &&
+	          length(stage_vec) == length(Y_glm)) {
+	        stage_eval <- stage_vec
+	        if (!all(ok_rows)) {
+	          stage_eval <- stage_eval[ok_rows]
+	        }
+	      }
+
+	      n_total <- length(y_full)
+	      n_folds <- glm_eval_control$n_folds
+	      if (is.null(n_folds) || !is.finite(n_folds)) {
+	        n_folds <- 3L
+	      }
+	      n_folds <- as.integer(n_folds)
+	      if (n_folds < 2L) {
+	        n_folds <- 2L
+	      }
+
+	      make_folds <- function(n, n_folds, cluster = NULL, seed = 123L) {
+	        n <- as.integer(n)
+	        n_folds <- as.integer(n_folds)
+	        if (n <= 1L || n_folds < 2L) {
+	          return(NULL)
+	        }
+
+	        restore_rng <- function(old_seed) {
+	          if (is.null(old_seed)) {
+	            if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+	              rm(".Random.seed", envir = .GlobalEnv)
+	            }
+	          } else {
+	            assign(".Random.seed", old_seed, envir = .GlobalEnv)
+	          }
+	        }
+
+	        old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+	          get(".Random.seed", envir = .GlobalEnv)
+	        } else {
+	          NULL
+	        }
+	        set.seed(as.integer(seed))
+	        on.exit(restore_rng(old_seed), add = TRUE)
+
+	        if (!is.null(cluster) && length(cluster) == n) {
+	          cluster <- as.character(cluster)
+	          if (any(is.na(cluster))) {
+	            na_idx <- which(is.na(cluster))
+	            cluster[na_idx] <- paste0("__missing__", na_idx)
+	          }
+	          uniq <- unique(cluster)
+	          k <- min(n_folds, length(uniq))
+	          if (k >= 2L) {
+	            uniq <- sample(uniq, length(uniq))
+	            fold_map <- rep(seq_len(k), length.out = length(uniq))
+	            names(fold_map) <- uniq
+	            return(list(fold_id = as.integer(fold_map[cluster]), n_folds = k))
+	          }
+	        }
+
+	        k <- min(n_folds, n)
+	        fold_id <- sample(rep(seq_len(k), length.out = n))
+	        list(fold_id = as.integer(fold_id), n_folds = k)
+	      }
+
+	      folds_out <- make_folds(n_total, n_folds, cluster_full, glm_eval_control$seed)
+
+	      compute_auc <- function(y_true, y_score) {
+	        y_true <- as.numeric(y_true)
+	        y_score <- as.numeric(y_score)
+	        ok <- is.finite(y_true) & is.finite(y_score)
+	        y_true <- y_true[ok]
+	        y_score <- y_score[ok]
+	        if (!length(y_true)) return(NA_real_)
+	        pos <- y_true == 1
+	        neg <- y_true == 0
+	        n_pos <- sum(pos)
+	        n_neg <- sum(neg)
+	        if (n_pos == 0L || n_neg == 0L) return(NA_real_)
+	        ranks <- rank(y_score, ties.method = "average")
+	        (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+	      }
+	      compute_log_loss <- function(y_true, y_score, eps = 1e-12) {
+	        y_true <- as.numeric(y_true)
+	        y_score <- as.numeric(y_score)
+	        ok <- is.finite(y_true) & is.finite(y_score)
+	        y_true <- y_true[ok]
+	        y_score <- y_score[ok]
+	        if (!length(y_true)) return(NA_real_)
+	        p <- pmin(pmax(y_score, eps), 1 - eps)
+	        -mean(y_true * log(p) + (1 - y_true) * log(1 - p))
+	      }
+	      format_metric <- function(label, value, digits = 4) {
+	        if (is.null(value) || !is.finite(value)) return(NULL)
+	        fmt <- paste0("%s=%.", digits, "f")
+	        sprintf(fmt, label, value)
+	      }
+
+	      compute_metrics <- function(y_eval, pred_eval) {
+	        ok <- is.finite(y_eval) & is.finite(pred_eval)
+	        y_eval <- as.numeric(y_eval)[ok]
+	        pred_eval <- as.numeric(pred_eval)[ok]
+	        if (glm_family == "binomial") {
+	          auc <- compute_auc(y_eval, pred_eval)
+	          log_loss <- compute_log_loss(y_eval, pred_eval)
+	          accuracy <- if (length(y_eval)) mean((pred_eval >= 0.5) == y_eval) else NA_real_
+	          brier <- if (length(y_eval)) mean((pred_eval - y_eval) ^ 2) else NA_real_
+	          list(
+	            likelihood = "binomial",
+	            n_eval = length(y_eval),
+	            auc = auc,
+	            log_loss = log_loss,
+	            accuracy = accuracy,
+	            brier = brier
+	          )
+	        } else {
+	          rmse <- if (length(y_eval)) sqrt(mean((pred_eval - y_eval) ^ 2)) else NA_real_
+	          mae <- if (length(y_eval)) mean(abs(pred_eval - y_eval)) else NA_real_
+	          list(
+	            likelihood = glm_family,
+	            n_eval = length(y_eval),
+	            rmse = rmse,
+	            mae = mae
+	          )
+	        }
+	      }
+
+	      if (!is.null(folds_out) && folds_out$n_folds >= 2L) {
+	        fold_id <- folds_out$fold_id
+	        n_folds_use <- folds_out$n_folds
+
+	        X_design <- X_full
+	        if (!isTRUE(force_no_intercept)) {
+	          X_design <- cbind(Intercept = 1, X_design)
+	        }
+
+	        pred_oos <- rep(NA_real_, n_total)
+	        by_fold <- vector("list", n_folds_use)
+	        family_obj <- if (glm_family == "binomial") stats::binomial() else stats::gaussian()
+
+	        for (fold in seq_len(n_folds_use)) {
+	          test_idx <- which(fold_id == fold)
+	          train_idx <- which(fold_id != fold)
+	          if (!length(test_idx) || !length(train_idx)) {
+	            next
+	          }
+
+	          X_train <- X_design[train_idx, , drop = FALSE]
+	          y_train <- y_full[train_idx]
+	          X_test <- X_design[test_idx, , drop = FALSE]
+	          y_test <- y_full[test_idx]
+
+	          col_sd <- apply(X_train, 2, sd)
+	          keep_cols <- is.finite(col_sd) & (col_sd > 0)
+	          if (!isTRUE(force_no_intercept)) {
+	            keep_cols[1] <- TRUE
+	          }
+	          X_train_use <- X_train[, keep_cols, drop = FALSE]
+	          X_test_use <- X_test[, keep_cols, drop = FALSE]
+
+	          fallback <- mean(y_train)
+	          pred_fold <- rep(fallback, length(test_idx))
+	          fit <- tryCatch({
+	            stats::glm.fit(x = X_train_use, y = y_train, family = family_obj)
+	          }, error = function(e) NULL)
+	          beta <- if (!is.null(fit)) fit$coefficients else NULL
+	          if (!is.null(beta)) {
+	            beta[is.na(beta)] <- 0
+	            if (all(is.finite(beta))) {
+	              eta <- as.numeric(X_test_use %*% beta)
+	              pred_fold <- if (glm_family == "binomial") stats::plogis(eta) else eta
+	            }
+	          }
+
+	          pred_oos[test_idx] <- pred_fold
+	          fold_metrics <- compute_metrics(y_test, pred_fold)
+	          fold_metrics$fold <- fold
+	          fold_metrics$eval_note <- "oos"
+	          by_fold[[fold]] <- fold_metrics
+	        }
+
+	        overall_metrics <- compute_metrics(y_full, pred_oos)
+	        overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
+	        overall_metrics$n_folds <- n_folds_use
+	        overall_metrics$seed <- glm_eval_control$seed
+	        overall_metrics$by_fold <- by_fold
+
+	        if (!is.null(stage_eval) && length(stage_eval) == n_total) {
+	          stage_eval <- as.integer(stage_eval)
+	          by_stage <- list()
+	          if (any(stage_eval == 0L)) {
+	            idx0 <- which(stage_eval == 0L)
+	            by_stage$primary <- compute_metrics(y_full[idx0], pred_oos[idx0])
+	          }
+	          if (any(stage_eval == 1L)) {
+	            idx1 <- which(stage_eval == 1L)
+	            by_stage$general <- compute_metrics(y_full[idx1], pred_oos[idx1])
+	          }
+	          if (length(by_stage) > 0L) {
+	            overall_metrics$by_stage <- by_stage
+	          }
+	        }
+
+	        fit_metrics <- overall_metrics
+
+	        metric_items <- if (glm_family == "binomial") {
+	          Filter(Negate(is.null), list(
+	            format_metric("AUC", fit_metrics$auc, 4),
+	            format_metric("LogLoss", fit_metrics$log_loss, 4),
+	            format_metric("Acc", fit_metrics$accuracy, 3),
+	            format_metric("Brier", fit_metrics$brier, 4)
+	          ))
+	        } else {
+	          Filter(Negate(is.null), list(
+	            format_metric("RMSE", fit_metrics$rmse, 4),
+	            format_metric("MAE", fit_metrics$mae, 4)
+	          ))
+	        }
+	        if (!is.null(fit_metrics) && length(metric_items) > 0L) {
+	          message(sprintf("GLM OOS fit metrics (%s, %s): %s",
+	                          mode_note,
+	                          fit_metrics$eval_note,
+	                          paste(metric_items, collapse = ", ")))
+	        }
+	      }
+	    }
+
+	    if (!use_coeff_cache) {
+	      # fit outcome model, post regularization
+	      {
+	        # solve(t(cbind( main_dat, interacted_dat )) %*% cbind( main_dat, interacted_dat ))
+	        # solve(t(main_dat) %*% main_dat); solve(t(interacted_dat) %*% interacted_dat)
+	        #  + 0 + 1 to get the glm to return the var-covar for the intercept
+	        glm_formula <- if (force_no_intercept) {
+	          Y_glm ~ 0 + glm_input
+	        } else {
+	          Y_glm ~ glm_input
+	        }
         my_model <- glm(glm_formula, family = glm_family)
         coef_vec <- coef(my_model)
         coef_no_intercept <- if (force_no_intercept) coef_vec else coef_vec[-1]
@@ -546,22 +816,22 @@ generate_ModelOutcome <- function(){
           main_info <- main_info[-Main_na,]
           main_info$d_index <- 1:nrow(main_info) # check
         }
-        if(!is.null(varcov_cluster_variable)){
-          if(length(unique(varcov_cluster_variable))==1){ stop("Only 1 implied cluster in varcov_cluster_variable -- cannot compute cluster varcov")}
-          vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
-        }
-        if(is.null(varcov_cluster_variable)){
-          vcov_OutcomeModel <- vcov(  my_model, complete = T)
-        }
-        if (force_no_intercept) {
-          vcov_OutcomeModel <- rbind(c(0, rep(0, ncol(vcov_OutcomeModel))),
-                                     cbind(rep(0, nrow(vcov_OutcomeModel)), vcov_OutcomeModel))
-        }
-        coef_vec <- coef(my_model)
-        if (force_no_intercept) {
-          model_coef_vec <- coef_vec
-          EST_INTERCEPT_tf <- strenv$jnp$array(0, dtype = strenv$dtj)
-        } else {
+	        if(!is.null(varcov_cluster_variable)){
+	          if(length(unique(varcov_cluster_variable))==1){ stop("Only 1 implied cluster in varcov_cluster_variable -- cannot compute cluster varcov")}
+	          vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
+	        }
+	        if(is.null(varcov_cluster_variable)){
+	          vcov_OutcomeModel <- vcov(  my_model, complete = T)
+	        }
+		        if (force_no_intercept) {
+		          vcov_OutcomeModel <- rbind(c(0, rep(0, ncol(vcov_OutcomeModel))),
+		                                     cbind(rep(0, nrow(vcov_OutcomeModel)), vcov_OutcomeModel))
+		        }
+	        coef_vec <- coef(my_model)
+	        if (force_no_intercept) {
+	          model_coef_vec <- coef_vec
+	          EST_INTERCEPT_tf <- strenv$jnp$array(0, dtype = strenv$dtj)
+	        } else {
           model_coef_vec <- coef_vec[-1]
           EST_INTERCEPT_tf <- strenv$jnp$array(as.matrix(coef_vec[1]), dtype = strenv$dtj)
         }

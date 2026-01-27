@@ -175,7 +175,8 @@ cs2step_eval_outcome_model_glm <- function(Y,
     vcov = eval_env$vcov_OutcomeModel,
     main_info = eval_env$main_info,
     interaction_info = eval_env$interaction_info,
-    family = eval_env$glm_family
+    family = eval_env$glm_family,
+    fit_metrics = eval_env$fit_metrics
   )
 }
 
