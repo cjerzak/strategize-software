@@ -676,7 +676,7 @@ strategize       <-          function(
                     "interaction_info_PreRegularization", "REGRESSION_PARAMS_jax",
                     "regularization_adjust_hash", "main_dat", "my_mean",
                     "EST_INTERCEPT_tf", "my_model", "EST_COEFFICIENTS_tf",
-                    "neural_model_info")
+                    "neural_model_info", "fit_metrics")
 
   for(Round_ in RoundsPool){
   for(GroupCounter in 1:length(GroupsPool)){
@@ -2109,6 +2109,7 @@ strategize       <-          function(
       inter_info_name <- paste0("interaction_info_", suffix, "_jnp")
       vcov_name <- paste0("vcov_OutcomeModel_", suffix, "_jnp")
       intercept_name <- paste0("EST_INTERCEPT_tf_", suffix, "_jnp")
+      metrics_name <- paste0("fit_metrics_", suffix, "_jnp")
 
       main_info <- if (exists(main_info_name, inherits = TRUE)) {
         get(main_info_name, inherits = TRUE)
@@ -2130,6 +2131,11 @@ strategize       <-          function(
       } else {
         NA_real_
       }
+      fit_metrics <- if (exists(metrics_name, inherits = TRUE)) {
+        get(metrics_name, inherits = TRUE)
+      } else {
+        NULL
+      }
       baseline <- if (is.na(intercept)) NA_real_ else linkinv(intercept)
       n_main <- if (!is.null(main_info)) nrow(main_info) else 0L
 
@@ -2149,6 +2155,7 @@ strategize       <-          function(
         link = ifelse(glm_family == "binomial", "logit", "identity"),
         intercept = intercept,
         baseline = baseline,
+        fit_metrics = fit_metrics,
         main_effects = main_effects,
         top_interactions = top_interactions,
         note = note
