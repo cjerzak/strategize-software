@@ -556,6 +556,33 @@ generate_ModelOutcome <- function(){
 	          cluster_full <- cluster_full[ok_rows]
 	        }
 	      }
+	      if (is.null(cluster_full) || length(cluster_full) != length(y_full)) {
+	        cluster_raw <- NULL
+	        if (exists("respondent_id", inherits = TRUE)) {
+	          cluster_raw <- get("respondent_id", inherits = TRUE)
+	        }
+	        if ((is.null(cluster_raw) || length(cluster_raw) == 0L) &&
+	            exists("respondent_task_id", inherits = TRUE)) {
+	          cluster_raw <- get("respondent_task_id", inherits = TRUE)
+	        }
+	        if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
+	          cluster_raw <- as.vector(cluster_raw)
+	          if (isTRUE(diff) &&
+	              exists("pair_mat", inherits = TRUE) &&
+	              !is.null(pair_mat) &&
+	              nrow(pair_mat) > 0) {
+	            need <- suppressWarnings(max(pair_mat[, 1], na.rm = TRUE))
+	            if (is.finite(need) && length(cluster_raw) >= need) {
+	              cluster_full <- cluster_raw[pair_mat[, 1]]
+	            }
+	          } else if (length(cluster_raw) == length(Y_glm)) {
+	            cluster_full <- cluster_raw
+	          }
+	          if (!is.null(cluster_full) && !all(ok_rows)) {
+	            cluster_full <- cluster_full[ok_rows]
+	          }
+	        }
+	      }
 	      stage_eval <- NULL
 	      if (exists("stage_vec", inherits = TRUE) &&
 	          length(stage_vec) == length(Y_glm)) {

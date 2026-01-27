@@ -2297,66 +2297,138 @@ generate_ModelOutcome_neural <- function(){
     neural_skip_oos_eval <- isTRUE(get("neural_oos_eval_internal", inherits = TRUE))
   }
   if (!isTRUE(neural_skip_oos_eval) && isTRUE(eval_control$enabled)) {
-    n_total <- length(Y_use)
-    if (n_total > 0L) {
-      eval_idx <- seq_len(n_total)
-      if (!is.null(eval_control$max_n) &&
-          is.finite(eval_control$max_n) &&
-          eval_control$max_n > 0L &&
-          eval_control$max_n < n_total) {
-        eval_seed <- eval_control$seed
-        if (is.null(eval_seed) || is.na(eval_seed)) {
-          eval_seed <- 123L
-        }
-        rng <- strenv$np$random$default_rng(as.integer(eval_seed))
-        idx_py <- rng$choice(as.integer(n_total),
-                             size = as.integer(eval_control$max_n),
-                             replace = FALSE)
-        eval_idx <- as.integer(reticulate::py_to_r(idx_py)) + 1L
-      }
-
-      y_all <- NULL
-      y_levels_full <- NULL
-      ok_rows <- rep(TRUE, n_total)
-      if (likelihood == "bernoulli") {
-        y_all <- as.numeric(Y_use)
-        ok_rows <- is.finite(y_all) & (y_all %in% c(0, 1))
-      } else if (likelihood == "categorical") {
-        y_levels_full <- levels(as.factor(Y_use))
-        y_all <- match(as.character(Y_use), y_levels_full) - 1L
-        ok_rows <- !is.na(y_all)
-      } else {
-        y_all <- as.numeric(Y_use)
-        ok_rows <- is.finite(y_all)
-      }
-      if (!all(ok_rows)) {
-        eval_idx <- eval_idx[ok_rows[eval_idx]]
-      }
-
-      n_eval_total <- length(eval_idx)
-      if (n_eval_total >= 2L) {
-        subset_note <- if (n_eval_total < n_total) {
-          sprintf("n=%d/%d", n_eval_total, n_total)
-        } else {
-          sprintf("n=%d", n_eval_total)
-        }
-
-        cluster_obs <- NULL
-        if (exists("varcov_cluster_variable_", inherits = TRUE)) {
-          cluster_raw <- get("varcov_cluster_variable_", inherits = TRUE)
-          if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
-            if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
-              cluster_obs <- cluster_raw[pair_mat[, 1]]
-            } else if (!pairwise_mode && length(cluster_raw) == n_total) {
-              cluster_obs <- cluster_raw
-            }
+    fit_metrics <- local({
+      restore_rng_state <- function(old_seed) {
+        if (is.null(old_seed)) {
+          if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+            rm(".Random.seed", envir = .GlobalEnv)
           }
-        }
-        cluster_eval <- if (!is.null(cluster_obs) && length(cluster_obs) == n_total) {
-          cluster_obs[eval_idx]
         } else {
-          NULL
+          assign(".Random.seed", old_seed, envir = .GlobalEnv)
         }
+      }
+      old_seed_state <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+      } else {
+        NULL
+      }
+      on.exit(restore_rng_state(old_seed_state), add = FALSE)
+
+      fit_metrics <- tryCatch({
+        fit_metrics <- NULL
+        n_total <- length(Y_use)
+        if (n_total > 0L) {
+        eval_idx <- seq_len(n_total)
+        if (!is.null(eval_control$max_n) &&
+            is.finite(eval_control$max_n) &&
+            eval_control$max_n > 0L &&
+            eval_control$max_n < n_total) {
+          eval_seed <- eval_control$seed
+          if (is.null(eval_seed) || is.na(eval_seed)) {
+            eval_seed <- 123L
+          }
+          rng <- strenv$np$random$default_rng(as.integer(eval_seed))
+          idx_py <- rng$choice(as.integer(n_total),
+                               size = as.integer(eval_control$max_n),
+                               replace = FALSE)
+          eval_idx <- as.integer(reticulate::py_to_r(idx_py)) + 1L
+        }
+
+        y_all <- NULL
+        y_levels_full <- NULL
+        ok_rows <- rep(TRUE, n_total)
+        if (likelihood == "bernoulli") {
+          y_all <- as.numeric(Y_use)
+          ok_rows <- is.finite(y_all) & (y_all %in% c(0, 1))
+        } else if (likelihood == "categorical") {
+          y_levels_full <- levels(as.factor(Y_use))
+          y_all <- match(as.character(Y_use), y_levels_full) - 1L
+          ok_rows <- !is.na(y_all)
+        } else {
+          y_all <- as.numeric(Y_use)
+          ok_rows <- is.finite(y_all)
+        }
+        if (!all(ok_rows)) {
+          eval_idx <- eval_idx[ok_rows[eval_idx]]
+        }
+
+        n_eval_total <- length(eval_idx)
+        if (n_eval_total >= 2L) {
+          subset_note <- if (n_eval_total < n_total) {
+            sprintf("n=%d/%d", n_eval_total, n_total)
+          } else {
+            sprintf("n=%d", n_eval_total)
+          }
+
+	        cluster_obs <- NULL
+	        if (exists("varcov_cluster_variable_", inherits = TRUE)) {
+	          cluster_raw <- get("varcov_cluster_variable_", inherits = TRUE)
+	          if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
+	            if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
+	              need <- suppressWarnings(max(pair_mat[, 1], na.rm = TRUE))
+	              if (is.finite(need) && length(cluster_raw) >= need) {
+	                cluster_obs <- cluster_raw[pair_mat[, 1]]
+	              }
+	            } else if (!pairwise_mode && length(cluster_raw) == n_total) {
+	              cluster_obs <- cluster_raw
+	            }
+	          }
+	        }
+	        if (is.null(cluster_obs) || length(cluster_obs) != n_total) {
+	          cluster_raw <- NULL
+
+	          subset_by_indi <- function(x) {
+	            if (is.null(x) || length(x) == 0L) {
+	              return(NULL)
+	            }
+	            x <- as.vector(x)
+	            if (!exists("indi_", inherits = TRUE)) {
+	              return(x)
+	            }
+	            idx <- get("indi_", inherits = TRUE)
+	            if (is.null(idx) || length(idx) == 0L) {
+	              return(x)
+	            }
+	            if (length(x) == length(Y_)) {
+	              return(x)
+	            }
+	            max_idx <- suppressWarnings(max(as.integer(idx), na.rm = TRUE))
+	            if (is.finite(max_idx) && length(x) >= max_idx) {
+	              return(x[idx])
+	            }
+	            x
+	          }
+
+	          resp_id <- if (exists("respondent_id", inherits = TRUE)) {
+	            subset_by_indi(get("respondent_id", inherits = TRUE))
+	          } else {
+	            NULL
+	          }
+	          task_id <- if (exists("respondent_task_id", inherits = TRUE)) {
+	            subset_by_indi(get("respondent_task_id", inherits = TRUE))
+	          } else {
+	            NULL
+	          }
+
+	          if (!is.null(resp_id) && length(resp_id) > 0L) {
+	            cluster_raw <- resp_id
+	          } else if (!is.null(task_id) && length(task_id) > 0L) {
+	            cluster_raw <- task_id
+	          }
+
+	          if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
+	            if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
+	              cluster_obs <- cluster_raw[pair_mat[, 1]]
+	            } else if (!pairwise_mode && length(cluster_raw) == n_total) {
+	              cluster_obs <- cluster_raw
+	            }
+	          }
+	        }
+	        cluster_eval <- if (!is.null(cluster_obs) && length(cluster_obs) == n_total) {
+	          cluster_obs[eval_idx]
+	        } else {
+	          NULL
+	        }
 
         make_folds <- function(n, n_folds, cluster = NULL, seed = 123L) {
           n <- as.integer(n)
@@ -2421,8 +2493,7 @@ generate_ModelOutcome_neural <- function(){
           fold_id <- folds_out$fold_id
           n_folds_use <- as.integer(folds_out$n_folds)
 
-          init_model <- paste(deparse(generate_ModelOutcome_neural), collapse = "\n")
-          init_model <- gsub(init_model, pattern = "function \\(\\)", replacement = "")
+          init_model <- body(generate_ModelOutcome_neural)
 
           compute_auc <- function(y_true, y_score) {
             y_true <- as.numeric(y_true)
@@ -2644,11 +2715,17 @@ generate_ModelOutcome_neural <- function(){
               indi_full <- get("indi_", inherits = TRUE)
               fold_env$indi_ <- if (!is.null(indi_full)) indi_full[raw_train] else raw_train
             } else {
-              fold_env$indi_ <- raw_train
+            fold_env$indi_ <- raw_train
             }
 
+            fold_seed <- eval_control$seed
+            if (is.null(fold_seed) || is.na(fold_seed) || !is.finite(fold_seed)) {
+              fold_seed <- 123L
+            }
+            set.seed(as.integer(fold_seed) + as.integer(fold))
+
             fit_ok <- tryCatch({
-              eval(parse(text = init_model), envir = fold_env)
+              eval(init_model, envir = fold_env)
               is.function(fold_env$my_model)
             }, error = function(e) FALSE)
 
@@ -2795,9 +2872,17 @@ generate_ModelOutcome_neural <- function(){
                             subset_note,
                             paste(metric_items, collapse = ", ")))
           }
+          }
         }
       }
-    }
+      fit_metrics
+      }, error = function(e) {
+        message(sprintf("Neural OOS evaluation failed: %s", conditionMessage(e)))
+        NULL
+      })
+
+      fit_metrics
+  })
   }
 
   if (likelihood == "categorical") {
