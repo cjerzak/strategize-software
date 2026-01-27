@@ -12,7 +12,11 @@ get_neural_fit <- local({
     skip_on_cran()
     skip_if_no_jax()
 
-    withr::local_envvar(c(STRATEGIZE_NEURAL_FAST_MCMC = "true"))
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true",
+      STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+      STRATEGIZE_NEURAL_EVAL_SEED = "123"
+    ))
 
     data <- generate_test_data(n = 40, seed = 123)
     params <- default_strategize_params(fast = TRUE)
@@ -455,4 +459,40 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
     sd_prob >= 0.10,
     info = sprintf("Prior predictive SD %.3f below 0.10", sd_prob)
   )
+})
+
+test_that("neural outcome model exports cross-fitted OOS fit metrics", {
+  fit <- get_neural_fit()
+  res <- fit$res
+
+  info <- NULL
+  if (!is.null(res$neural_model_info)) {
+    info <- res$neural_model_info$ast
+    if (is.null(info)) {
+      info <- res$neural_model_info$dag
+    }
+  }
+  if (is.null(info)) {
+    skip("Neural model info unavailable for fit-metrics check.")
+  }
+
+  metrics <- info$fit_metrics
+  expect_type(metrics, "list")
+  expect_true(is.character(metrics$eval_note))
+  expect_match(metrics$eval_note, "^oos_\\d+fold$")
+  expect_equal(metrics$n_folds, 2L)
+  expect_equal(metrics$seed, 123L)
+  expect_true(is.list(metrics$by_fold))
+  expect_true(length(metrics$by_fold) >= 2L)
+
+  if (identical(metrics$likelihood, "bernoulli")) {
+    expect_true(is.finite(metrics$log_loss))
+    expect_gte(metrics$log_loss, 0)
+  } else if (identical(metrics$likelihood, "categorical")) {
+    expect_true(is.finite(metrics$log_loss))
+    expect_gte(metrics$log_loss, 0)
+  } else if (identical(metrics$likelihood, "normal")) {
+    expect_true(is.finite(metrics$rmse))
+    expect_gte(metrics$rmse, 0)
+  }
 })
