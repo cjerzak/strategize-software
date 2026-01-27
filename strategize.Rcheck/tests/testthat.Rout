@@ -174,10 +174,47 @@ SGD Iteration: 3 of 3
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
-[ FAIL 0 | WARN 6 | SKIP 103 | PASS 68 ]
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 0 1
+ok_counter = 0
+Starting a glinternet fit...
+[1] 0 2
+ok_counter = 0
+[1] 1 1
+ok_counter = 0
+[1] 1 2
+ok_counter = 0
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+Creating Hessian functions (D=2 parameters per player)
+SGD Iteration: 1 of 3
+SGD Iteration: 2 of 3
+SGD Iteration: 3 of 3
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 3
+SGD Iteration: 2 of 3
+SGD Iteration: 3 of 3
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+ok_counter = 0
+ok_counter = 0
+ok_counter = 0
+ok_counter = 0
+ok_counter = 0
+ok_counter = 0
+[ FAIL 0 | WARN 13 | SKIP 106 | PASS 95 ]
 
-══ Skipped tests (103) ═════════════════════════════════════════════════════════
-• On CRAN (102): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+══ Skipped tests (106) ═════════════════════════════════════════════════════════
+• JAX available; neural fit is slow and not exercised here (1):
+  'test-prediction-api.R:147:7'
+• On CRAN (104): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
   'test-build-backend.R:2:3', 'test-build-backend.R:36:3',
   'test-build-backend.R:85:3', 'test-choice-token-gradient.R:6:3',
@@ -204,9 +241,10 @@ strategize() call has finished...
   'test-input-validation.R:352:3', 'test-input-validation.R:373:3',
   'test-input-validation.R:388:3', 'test-input-validation.R:406:3',
   'test-input-validation.R:421:3', 'test-input-validation.R:439:3',
-  'test-input-validation.R:458:3', 'test-input-validation.R:470:3',
-  'test-input-validation.R:482:3', 'test-input-validation.R:498:3',
-  'test-input-validation.R:512:3', 'test-neural.R:35:3', 'test-neural.R:61:3',
+  'test-input-validation.R:454:3', 'test-input-validation.R:472:3',
+  'test-input-validation.R:499:3', 'test-input-validation.R:511:3',
+  'test-input-validation.R:523:3', 'test-input-validation.R:539:3',
+  'test-input-validation.R:553:3', 'test-neural.R:35:3', 'test-neural.R:61:3',
   'test-onestep.R:13:3', 'test-onestep.R:40:3', 'test-onestep.R:75:3',
   'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
   'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
@@ -230,8 +268,8 @@ strategize() call has finished...
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 6 | SKIP 103 | PASS 68 ]
+[ FAIL 0 | WARN 13 | SKIP 106 | PASS 95 ]
 > 
 > proc.time()
    user  system elapsed 
- 29.835   3.810  25.437 
+ 33.709   4.524  28.649 

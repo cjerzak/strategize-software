@@ -2341,7 +2341,7 @@ generate_ModelOutcome_neural <- function(){
     if (length(optimizer_tag) != 1L || is.na(optimizer_tag) || !nzchar(optimizer_tag)) {
       optimizer_tag <- "adam"
     }
-    if (!optimizer_tag %in% c("adam", "adabelief")) {
+    if (!optimizer_tag %in% c("adam", "adamw", "adabelief")) {
       stop(
         sprintf("Unknown optimizer '%s' for SVI.", optimizer_tag),
         call. = FALSE
@@ -2451,6 +2451,22 @@ generate_ModelOutcome_neural <- function(){
     }
     svi_optim <- if (optimizer_tag == "adam") {
       strenv$numpyro$optim$Adam(lr_schedule)
+    } else if (optimizer_tag == "adamw") {
+      if (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW")) {
+        strenv$numpyro$optim$AdamW(lr_schedule)
+      } else if (reticulate::py_has_attr(strenv$optax, "adamw")) {
+        optax_optim <- strenv$optax$adamw(learning_rate = lr_schedule)
+        if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
+          strenv$numpyro$optim$optax_to_numpyro(optax_optim)
+        } else {
+          optax_optim
+        }
+      } else {
+        stop(
+          "optimizer='adamw' requested, but neither numpyro.optim.AdamW nor optax.adamw is available.",
+          call. = FALSE
+        )
+      }
     } else {
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
       if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {

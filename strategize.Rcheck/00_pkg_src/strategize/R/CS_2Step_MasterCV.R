@@ -118,8 +118,10 @@
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
 #'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 #'   For variational inference (subsample_method = "batch_vi"), set
-#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim) or
-#'   \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
+#'   \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
+#'   a scaling-law heuristic based on model/data size) and
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 #'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
 #' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors
@@ -151,7 +153,11 @@
 #'   or \code{"SecondOrder"} for testing or advanced routines.
 #' @param optimism Character string controlling optimistic / extra-gradient updates for the
 #'   gradient optimizer. Options: \code{"extragrad"} (default), \code{"smp"} (stochastic mirror-prox),
-#'   \code{"ogda"}, or \code{"none"}. Only supported when \code{use_optax = FALSE}.
+#'   \code{"ogda"}, \code{"rain"} (anchored extra-gradient with a decaying quadratic anchor penalty),
+#'   or \code{"none"}. Only supported when \code{use_optax = FALSE}.
+#' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
+#'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
+#'   initial anchor penalty \eqn{\lambda_0} that decays linearly to zero over \code{nSGD} iterations.
 #' 
 #' @details
 #' \code{cv_strategize} implements a cross-validation routine for
@@ -290,8 +296,9 @@ cv_strategize       <-          function(
                                             primary_n_field = 1L,
                                             nMonte_Qglm = 100L,
                                             optim_type = "gd",
-                                            optimism = "extragrad"){
-  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp"))
+                                            optimism = "extragrad",
+                                            optimism_coef = 1){
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
   }
@@ -396,6 +403,7 @@ cv_strategize       <-          function(
             use_regularization = use_regularization,
             optim_type = optim_type,
             optimism = optimism,
+            optimism_coef = optimism_coef,
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             nMonte_adversarial = nMonte_adversarial,
@@ -470,6 +478,7 @@ cv_strategize       <-          function(
                               temperature = temperature, 
                               optim_type = optim_type,
                               optimism = optimism,
+                              optimism_coef = optimism_coef,
                               force_gaussian = force_gaussian,
                               use_regularization = use_regularization,
                               a_init_sd = a_init_sd,

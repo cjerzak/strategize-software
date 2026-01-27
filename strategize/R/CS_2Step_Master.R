@@ -205,8 +205,8 @@
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
 #'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 #'   For variational inference (subsample_method = "batch_vi"), set
-#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim) or
-#'   \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
+#'   \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
 #'   a scaling-law heuristic based on model/data size) and
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional

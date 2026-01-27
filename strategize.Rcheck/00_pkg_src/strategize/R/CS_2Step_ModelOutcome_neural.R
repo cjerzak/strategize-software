@@ -1,3 +1,991 @@
+neural_get_party_index <- function(model_info, party_label = NULL){
+  if (is.null(model_info) || is.null(model_info$party_levels)) {
+    return(ai(0L))
+  }
+  if (!is.null(model_info$party_index_map) && !is.null(party_label)) {
+    key <- as.character(party_label)
+    if (key %in% names(model_info$party_index_map)) {
+      return(ai(model_info$party_index_map[[key]]))
+    }
+  }
+  if (is.null(party_label)) {
+    return(ai(0L))
+  }
+  idx <- match(as.character(party_label), model_info$party_levels) - 1L
+  if (is.na(idx)) ai(0L) else ai(idx)
+}
+
+neural_get_resp_party_index <- function(model_info, party_label = NULL){
+  if (is.null(model_info) || is.null(model_info$resp_party_levels)) {
+    return(ai(0L))
+  }
+  if (!is.null(model_info$resp_party_index_map) && !is.null(party_label)) {
+    key <- as.character(party_label)
+    if (key %in% names(model_info$resp_party_index_map)) {
+      return(ai(model_info$resp_party_index_map[[key]]))
+    }
+  }
+  if (is.null(party_label)) {
+    return(ai(0L))
+  }
+  idx <- match(as.character(party_label), model_info$resp_party_levels) - 1L
+  if (is.na(idx)) ai(0L) else ai(idx)
+}
+
+neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
+  mode <- NULL
+  if (!is.null(model_info) && !is.null(model_info$stage_mode)) {
+    mode <- tolower(as.character(model_info$stage_mode))
+  }
+  if (length(mode) != 1L || is.na(mode) || !nzchar(mode)) {
+    mode <- "same"
+  }
+
+  has_shape <- function(x) {
+    tryCatch({
+      x$shape
+      TRUE
+    }, error = function(e) FALSE)
+  }
+  if (has_shape(party_left_idx) || has_shape(party_right_idx)) {
+    pl <- strenv$jnp$array(party_left_idx)
+    pr <- strenv$jnp$array(party_right_idx)
+    same <- strenv$jnp$equal(pl, pr)
+    stage <- if (identical(mode, "different")) {
+      strenv$jnp$logical_not(same)
+    } else {
+      same
+    }
+    return(strenv$jnp$astype(stage, strenv$jnp$int32))
+  }
+
+  same <- ai(party_left_idx) == ai(party_right_idx)
+  if (identical(mode, "different")) {
+    return(ifelse(same, 0L, 1L))
+  }
+  ifelse(same, 1L, 0L)
+}
+
+neural_matchup_index <- function(party_left_idx, party_right_idx, model_info){
+  if (is.null(model_info)) {
+    return(NULL)
+  }
+  n_party_levels <- if (!is.null(model_info$n_party_levels)) {
+    as.integer(model_info$n_party_levels)
+  } else if (!is.null(model_info$party_levels)) {
+    length(model_info$party_levels)
+  } else {
+    NA_integer_
+  }
+  if (is.na(n_party_levels) || n_party_levels < 1L) {
+    return(NULL)
+  }
+  pl <- strenv$jnp$array(party_left_idx)
+  pr <- strenv$jnp$array(party_right_idx)
+  p_min <- strenv$jnp$minimum(pl, pr)
+  p_max <- strenv$jnp$maximum(pl, pr)
+  half_term <- strenv$jnp$floor_divide(p_min * (p_min - 1L), ai(2L))
+  idx <- p_min * ai(n_party_levels) - half_term + (p_max - p_min)
+  strenv$jnp$astype(idx, strenv$jnp$int32)
+}
+
+neural_logits_to_q <- function(logits, likelihood){
+  if (likelihood == "bernoulli") {
+    prob <- strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L))
+    return(strenv$jnp$reshape(prob, list(1L, 1L)))
+  }
+  if (likelihood == "categorical") {
+    probs <- strenv$jax$nn$softmax(logits, axis = -1L)
+    prob <- strenv$jnp$take(probs, 1L, axis = 1L)
+    return(strenv$jnp$reshape(prob, list(1L, 1L)))
+  }
+  mu <- strenv$jnp$squeeze(logits, axis = 1L)
+  strenv$jnp$reshape(mu, list(1L, 1L))
+}
+
+neural_params_from_theta <- function(theta_vec, model_info){
+  if (is.null(model_info)) {
+    stop("neural_params_from_theta requires a non-null model_info.", call. = FALSE)
+  }
+  if (is.null(theta_vec)) {
+    return(model_info$params)
+  }
+  schema_missing <- is.null(model_info$param_names) ||
+    is.null(model_info$param_offsets) ||
+    is.null(model_info$param_sizes) ||
+    is.null(model_info$param_shapes)
+  if (isTRUE(schema_missing)) {
+    if (!is.null(model_info$params) &&
+        !is.null(model_info$n_factors) &&
+        !is.null(model_info$model_depth)) {
+      schema <- neural_build_param_schema(
+        params = model_info$params,
+        n_factors = model_info$n_factors,
+        model_depth = model_info$model_depth
+      )
+      model_info$param_names <- schema$param_names
+      model_info$param_shapes <- schema$param_shapes
+      model_info$param_sizes <- schema$param_sizes
+      model_info$param_offsets <- schema$param_offsets
+      if (is.null(model_info$n_params)) {
+        model_info$n_params <- schema$n_params
+      }
+    } else {
+      stop("model_info is missing parameter schema; cannot unpack theta_vec.", call. = FALSE)
+    }
+  }
+  theta_vec <- strenv$jnp$reshape(theta_vec, list(-1L))
+  offsets_num <- as.integer(unlist(model_info$param_offsets))
+  sizes_num <- as.integer(unlist(model_info$param_sizes))
+  if (length(offsets_num) != length(sizes_num)) {
+    stop("param_offsets and param_sizes length mismatch in model_info.", call. = FALSE)
+  }
+  theta_len <- as.integer(theta_vec$shape[[1]])
+  max_end <- if (length(sizes_num) > 0L) max(offsets_num + sizes_num) else 0L
+  expected_total <- if (!is.null(model_info$n_params)) as.integer(model_info$n_params) else max_end
+  if (is.finite(theta_len) && is.finite(expected_total) && theta_len != expected_total) {
+    stop(sprintf("theta_vec length (%d) does not match expected parameter total (%d).",
+                 theta_len, expected_total),
+         call. = FALSE)
+  }
+  if (is.finite(theta_len) && is.finite(max_end) && theta_len < max_end) {
+    stop(sprintf("theta_vec length (%d) is shorter than required (%d).",
+                 theta_len, max_end),
+         call. = FALSE)
+  }
+  params <- list()
+  param_names <- model_info$param_names
+  param_offsets <- model_info$param_offsets
+  param_sizes <- model_info$param_sizes
+  param_shapes <- model_info$param_shapes
+  for (i_ in seq_along(param_names)) {
+    start <- as.integer(param_offsets[[i_]])
+    size <- as.integer(param_sizes[[i_]])
+    if (is.finite(theta_len) && is.finite(start) && is.finite(size) &&
+        (start < 0L || (start + size) > theta_len)) {
+      stop(sprintf("theta_vec slice for '%s' (%d..%d) exceeds length (%d).",
+                   param_names[[i_]], start, start + size - 1L, theta_len),
+           call. = FALSE)
+    }
+    idx <- strenv$jnp$arange(ai(start), ai(start + size))
+    slice <- strenv$jnp$take(theta_vec, idx, axis = 0L)
+    shape_use <- param_shapes[[i_]]
+    if (length(shape_use) == 0L) {
+      shape_use <- c(1L)
+    }
+    shape_size <- as.integer(prod(shape_use))
+    if (is.finite(size) && is.finite(shape_size) && size != shape_size) {
+      stop(sprintf("Param '%s' size (%d) does not match shape product (%d).",
+                   param_names[[i_]], size, shape_size),
+           call. = FALSE)
+    }
+    params[[param_names[[i_]]]] <- strenv$jnp$reshape(slice, as.integer(shape_use))
+  }
+  params
+}
+
+neural_build_param_schema <- function(params,
+                                      n_factors,
+                                      model_depth) {
+  if (is.null(params) || !is.list(params)) {
+    stop("neural_build_param_schema requires a params list.", call. = FALSE)
+  }
+  n_factors <- as.integer(n_factors)
+  model_depth <- as.integer(model_depth)
+  if (is.na(n_factors) || n_factors < 1L) {
+    stop("neural_build_param_schema requires n_factors >= 1.", call. = FALSE)
+  }
+  if (is.na(model_depth) || model_depth < 1L) {
+    stop("neural_build_param_schema requires model_depth >= 1.", call. = FALSE)
+  }
+
+  param_names <- c(paste0("E_factor_", seq_len(n_factors)),
+                   "E_feature_id",
+                   "E_party", "E_resp_party", "E_choice",
+                   "E_sep", "E_segment")
+  if (!is.null(params$E_stage)) {
+    param_names <- c(param_names, "E_stage")
+  }
+  if (!is.null(params$E_matchup)) {
+    param_names <- c(param_names, "E_matchup")
+  }
+  if (!is.null(params$E_rel)) {
+    param_names <- c(param_names, "E_rel")
+  }
+  if (!is.null(params$W_resp_x)) {
+    param_names <- c(param_names, "W_resp_x")
+  }
+  if (!is.null(params$M_cross)) {
+    param_names <- c(param_names, "M_cross")
+  }
+  if (!is.null(params$W_cross_out)) {
+    param_names <- c(param_names, "W_cross_out")
+  }
+  for (l_ in 1L:model_depth) {
+    param_names <- c(param_names,
+                     paste0("alpha_attn_l", l_),
+                     paste0("alpha_ff_l", l_),
+                     paste0("RMS_attn_l", l_),
+                     paste0("RMS_ff_l", l_),
+                     paste0("W_q_l", l_),
+                     paste0("W_k_l", l_),
+                     paste0("W_v_l", l_),
+                     paste0("W_o_l", l_),
+                     paste0("W_ff1_l", l_),
+                     paste0("W_ff2_l", l_))
+  }
+  param_names <- c(param_names, "RMS_final", "W_out", "b_out")
+  if (!is.null(params$sigma)) {
+    param_names <- c(param_names, "sigma")
+  }
+  param_names <- param_names[param_names %in% names(params)]
+
+  param_shapes <- lapply(param_names, function(name) {
+    shape <- tryCatch(reticulate::py_to_r(params[[name]]$shape), error = function(e) NULL)
+    if (is.null(shape)) integer(0) else as.integer(shape)
+  })
+  param_sizes <- vapply(param_shapes, function(shape) {
+    if (length(shape) == 0L) {
+      1L
+    } else {
+      as.integer(prod(shape))
+    }
+  }, integer(1))
+  param_offsets <- as.integer(cumsum(c(0L, param_sizes))[seq_len(length(param_sizes))])
+  param_total <- sum(param_sizes)
+
+  list(
+    param_names = param_names,
+    param_shapes = param_shapes,
+    param_sizes = param_sizes,
+    param_offsets = param_offsets,
+    n_params = ai(param_total)
+  )
+}
+
+neural_flatten_params <- function(params, schema, dtype = NULL) {
+  if (is.null(dtype)) {
+    dtype <- strenv$jnp$float32
+  }
+  parts <- lapply(schema$param_names, function(name) {
+    strenv$jnp$ravel(params[[name]])
+  })
+  if (length(parts) == 0L) {
+    return(strenv$jnp$array(numeric(0), dtype = dtype))
+  }
+  strenv$jnp$concatenate(parts, axis = 0L)
+}
+
+neural_cross_encoder_mode <- function(model_info) {
+  mode <- NULL
+  if (!is.null(model_info$cross_candidate_encoder_mode)) {
+    mode <- tolower(as.character(model_info$cross_candidate_encoder_mode))
+  }
+  if (length(mode) != 1L || is.na(mode) || !nzchar(mode)) {
+    if (isTRUE(model_info$cross_candidate_encoder)) {
+      return("term")
+    }
+    return("none")
+  }
+  if (mode %in% c("none", "term", "full")) {
+    return(mode)
+  }
+  if (mode %in% c("true", "false")) {
+    return(ifelse(mode == "true", "term", "none"))
+  }
+  if (isTRUE(model_info$cross_candidate_encoder)) {
+    return("term")
+  }
+  "none"
+}
+
+neural_rms_norm <- function(x, g, model_dims, eps = 1e-6) {
+  if (is.null(g)) {
+    return(x)
+  }
+  mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
+  inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
+  g_use <- strenv$jnp$reshape(g, list(1L, 1L, ai(model_dims)))
+  x * inv_rms * g_use
+}
+
+neural_param_or_default <- function(params, name, default) {
+  val <- params[[name]]
+  if (is.null(val)) {
+    return(default)
+  }
+  val
+}
+
+neural_add_segment_embedding <- function(tokens, segment_idx, model_info, params = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  if (is.null(params$E_segment)) {
+    return(tokens)
+  }
+  seg_vec <- strenv$jnp$take(params$E_segment, ai(segment_idx), axis = 0L)
+  seg_tok <- strenv$jnp$reshape(seg_vec, list(1L, 1L, ai(model_info$model_dims)))
+  tokens + seg_tok
+}
+
+neural_build_sep_token <- function(model_info, n_batch = NULL, params = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  sep_vec <- if (!is.null(params$E_sep)) {
+    params$E_sep
+  } else {
+    strenv$jnp$zeros(list(ai(model_info$model_dims)), dtype = strenv$dtj)
+  }
+  sep_tok <- strenv$jnp$reshape(sep_vec, list(1L, 1L, ai(model_info$model_dims)))
+  if (is.null(n_batch)) {
+    return(sep_tok)
+  }
+  sep_tok * strenv$jnp$ones(list(ai(n_batch), 1L, 1L))
+}
+
+add_party_rel_tokens <- function(tokens,
+                                       party_idx,
+                                       model_info,
+                                       resp_party_idx = NULL,
+                                       params = NULL,
+                                       use_role = FALSE,
+                                       role_id = NULL,
+                                       require_party = TRUE){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  tok_ndim <- length(tokens$shape)
+
+  if (!is.null(params$E_feature_id)) {
+    dims <- ai(model_info$model_dims)
+    feature_tok <- if (tok_ndim == 3L) {
+      strenv$jnp$reshape(params$E_feature_id, list(1L, tokens$shape[[2]], dims))
+    } else if (tok_ndim == 2L) {
+      strenv$jnp$reshape(params$E_feature_id, list(tokens$shape[[1]], dims))
+    } else {
+      NULL
+    }
+    if (!is.null(feature_tok)) {
+      tokens <- tokens + feature_tok
+    }
+  }
+
+  if (isTRUE(require_party) && is.null(params$E_party)) {
+    stop("E_party is required for party/rel tokens.")
+  }
+
+  party_idx_arr <- strenv$jnp$array(party_idx)
+  party_idx_arr <- strenv$jnp$astype(party_idx_arr, strenv$jnp$int32)
+
+  party_vec <- NULL
+  if (!is.null(params$E_party)) {
+    party_vec <- strenv$jnp$take(params$E_party, party_idx_arr, axis = 0L)
+  }
+
+  if (isTRUE(use_role) && !is.null(params$E_role)) {
+    role_id_use <- if (is.null(role_id)) 0L else role_id
+    n_roles <- ai(params$E_role$shape[[1]])
+    role_use <- if (ai(role_id_use) >= n_roles) 0L else ai(role_id_use)
+    role_vec <- strenv$jnp$take(params$E_role, strenv$jnp$array(ai(role_use)), axis = 0L)
+
+    dims <- ai(model_info$model_dims)
+    role_add <- if (tok_ndim == 3L) {
+      strenv$jnp$reshape(role_vec, list(1L, 1L, dims))
+    } else {
+      strenv$jnp$reshape(role_vec, list(1L, dims))
+    }
+    tokens <- tokens + role_add
+
+    if (!is.null(party_vec)) {
+      party_vec <- party_vec + strenv$jnp$reshape(role_vec, list(dims))
+    }
+  }
+
+  if (!is.null(party_vec)) {
+    dims <- ai(model_info$model_dims)
+    party_tok <- if (tok_ndim == 3L) {
+      strenv$jnp$reshape(party_vec, list(tokens$shape[[1]], 1L, dims))
+    } else {
+      strenv$jnp$reshape(party_vec, list(1L, dims))
+    }
+    tokens <- strenv$jnp$concatenate(list(tokens, party_tok),
+                                     axis = if (tok_ndim == 3L) 1L else 0L)
+  }
+
+  if (!is.null(params$E_rel)) {
+    rel_idx <- if (is.null(model_info$cand_party_to_resp_idx) || is.null(resp_party_idx)) {
+      if (tok_ndim == 3L) {
+        strenv$jnp$full(list(tokens$shape[[1]]), ai(2L))
+      } else {
+        ai(2L)
+      }
+    } else {
+      cand_map <- strenv$jnp$atleast_1d(model_info$cand_party_to_resp_idx)
+      cand_resp_idx <- strenv$jnp$take(cand_map, party_idx_arr, axis = 0L)
+      is_known <- cand_resp_idx >= 0L
+      resp_arr <- strenv$jnp$array(resp_party_idx)
+      is_match <- strenv$jnp$equal(cand_resp_idx, resp_arr)
+      strenv$jnp$where(is_match, ai(0L),
+                       strenv$jnp$where(is_known, ai(1L), ai(2L)))
+    }
+    rel_idx <- strenv$jnp$astype(strenv$jnp$array(rel_idx), strenv$jnp$int32)
+    rel_vec <- strenv$jnp$take(params$E_rel, rel_idx, axis = 0L)
+    dims <- ai(model_info$model_dims)
+    rel_tok <- if (tok_ndim == 3L) {
+      strenv$jnp$reshape(rel_vec, list(tokens$shape[[1]], 1L, dims))
+    } else {
+      strenv$jnp$reshape(rel_vec, list(1L, dims))
+    }
+    tokens <- strenv$jnp$concatenate(list(tokens, rel_tok),
+                                     axis = if (tok_ndim == 3L) 1L else 0L)
+  }
+
+  tokens
+}
+
+add_context_tokens <- function(model_info,
+                                      resp_party_idx,
+                                      stage_idx = NULL,
+                                      matchup_idx = NULL,
+                                      resp_cov = NULL,
+                                      params = NULL,
+                                      batch = FALSE){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  token_list <- list()
+  dims <- ai(model_info$model_dims)
+  is_batch <- isTRUE(batch)
+
+  resp_party_idx_use <- if (is.null(resp_party_idx)) 0L else resp_party_idx
+  if (!is_batch) {
+    resp_party_idx_use <- ai(resp_party_idx_use)
+    resp_party_idx_use <- strenv$jnp$atleast_1d(strenv$jnp$array(resp_party_idx_use))
+  } else {
+    resp_party_idx_use <- strenv$jnp$atleast_1d(resp_party_idx_use)
+  }
+
+  stage_idx_use <- NULL
+  if (!is.null(stage_idx)) {
+    if (!is_batch) {
+      stage_use <- ai(stage_idx)
+      if (ai(stage_use) < 0L) stage_use <- 0L
+      stage_idx_use <- strenv$jnp$atleast_1d(strenv$jnp$array(stage_use))
+    } else {
+      stage_idx_use <- strenv$jnp$atleast_1d(stage_idx)
+    }
+  }
+
+  matchup_idx_use <- NULL
+  if (!is.null(matchup_idx)) {
+    matchup_idx_use <- strenv$jnp$atleast_1d(matchup_idx)
+  }
+
+  N_batch <- 1L
+  if (is_batch) {
+    N_batch <- tryCatch(ai(resp_party_idx_use$shape[[1L]]), error = function(e) 1L)
+  }
+
+  if (!is.null(params$E_stage) && !is.null(stage_idx_use)) {
+    stage_vec <- params$E_stage[resp_party_idx_use, stage_idx_use]
+    stage_tok <- strenv$jnp$reshape(stage_vec, list(-1L, 1L, dims))
+    token_list[[length(token_list) + 1L]] <- stage_tok
+  }
+  if (!is.null(params$E_resp_party)) {
+    resp_vec <- strenv$jnp$take(params$E_resp_party, resp_party_idx_use, axis = 0L)
+    resp_tok <- strenv$jnp$reshape(resp_vec, list(-1L, 1L, dims))
+    token_list[[length(token_list) + 1L]] <- resp_tok
+  }
+  if (!is.null(params$E_matchup) && !is.null(matchup_idx_use)) {
+    matchup_vec <- strenv$jnp$take(params$E_matchup, matchup_idx_use, axis = 0L)
+    matchup_tok <- strenv$jnp$reshape(matchup_vec, list(-1L, 1L, dims))
+    token_list[[length(token_list) + 1L]] <- matchup_tok
+  }
+  if (!is.null(params$W_resp_x)) {
+    use_resp_cov <- TRUE
+    if (!is_batch) {
+      use_resp_cov <- !is.null(model_info$resp_cov_mean) &&
+        ai(model_info$n_resp_covariates) > 0L
+    }
+    if (use_resp_cov) {
+      if (is.null(resp_cov) && !is.null(model_info$resp_cov_mean)) {
+        resp_cov <- model_info$resp_cov_mean
+      }
+      if (!is.null(resp_cov)) {
+        resp_cov_mat <- strenv$jnp$atleast_2d(resp_cov)
+        if (ai(resp_cov_mat$shape[[2]]) > 0L) {
+          if (ai(resp_cov_mat$shape[[1]]) == 1L && is_batch && N_batch > 1L) {
+            resp_cov_mat <- resp_cov_mat * strenv$jnp$ones(list(N_batch, 1L))
+          }
+          cov_vec <- strenv$jnp$einsum("nc,cm->nm", resp_cov_mat, params$W_resp_x)
+          cov_tok <- strenv$jnp$reshape(cov_vec, list(-1L, 1L, dims))
+          token_list[[length(token_list) + 1L]] <- cov_tok
+        }
+      }
+    }
+  }
+
+  if (length(token_list) == 0L) {
+    return(NULL)
+  }
+  strenv$jnp$concatenate(token_list, axis = 1L)
+}
+
+neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
+                                               resp_party_idx = NULL,
+                                               params = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  D_local <- ai(X_idx$shape[[2]])
+  token_list <- vector("list", D_local)
+  for (d_ in 1L:D_local) {
+    E_d <- params[[paste0("E_factor_", d_)]]
+    idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+    token_list[[d_]] <- strenv$jnp$take(E_d, idx_d, axis = 0L)
+  }
+  tokens <- strenv$jnp$stack(token_list, axis = 1L)
+  add_party_rel_tokens(tokens,
+                       party_idx = party_idx,
+                       resp_party_idx = resp_party_idx,
+                       model_info = model_info,
+                       params = params,
+                       require_party = FALSE)
+}
+
+neural_build_context_tokens_batch <- function(model_info,
+                                              resp_party_idx,
+                                              stage_idx = NULL,
+                                              matchup_idx = NULL,
+                                              resp_cov = NULL,
+                                              params = NULL){
+  add_context_tokens(model_info = model_info,
+                     resp_party_idx = resp_party_idx,
+                     stage_idx = stage_idx,
+                     matchup_idx = matchup_idx,
+                     resp_cov = resp_cov,
+                     params = params,
+                     batch = TRUE)
+}
+
+neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model_info, params = NULL,
+                                               use_role = FALSE, resp_party_idx = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  pi_vec <- strenv$jnp$reshape(pi_vec, list(-1L))
+  token_list <- vector("list", ai(model_info$n_factors))
+  for (d_ in seq_len(ai(model_info$n_factors))) {
+    idx <- model_info$factor_index_list[[d_]]
+    idx <- strenv$jnp$atleast_1d(idx)
+    p_sub <- strenv$jnp$take(pi_vec, idx, axis = 0L)
+    p_full <- apply_implicit_parameterization_jnp(p_sub,
+                                                  implicit = isTRUE(model_info$implicit),
+                                                  axis = 0L,
+                                                  clip = TRUE)
+    E_d <- params[[paste0("E_factor_", d_)]]
+    n_p <- ai(p_full$shape[[1]])
+    n_e <- ai(E_d$shape[[1]])
+    if (!is.na(n_p) && !is.na(n_e) && n_p != n_e) {
+      if (n_e > n_p) {
+        pad_n <- ai(n_e - n_p)
+        pad <- strenv$jnp$zeros(list(pad_n), dtype = strenv$dtj)
+        p_full <- strenv$jnp$concatenate(list(p_full, pad), axis = 0L)
+      } else {
+        p_full <- strenv$jnp$take(p_full, strenv$jnp$arange(ai(n_e)), axis = 0L)
+      }
+    }
+    token_list[[d_]] <- strenv$jnp$einsum("l,lm->m", p_full, E_d)
+  }
+  tokens <- strenv$jnp$stack(token_list, axis = 0L)
+  tokens <- add_party_rel_tokens(tokens,
+                                 party_idx = party_idx,
+                                 role_id = role_id,
+                                 use_role = use_role,
+                                 resp_party_idx = resp_party_idx,
+                                 model_info = model_info,
+                                 params = params)
+  strenv$jnp$reshape(tokens, list(1L, tokens$shape[[1]], model_info$model_dims))
+}
+
+neural_build_context_tokens <- function(model_info,
+                                        resp_party_idx = NULL,
+                                        stage_idx = NULL,
+                                        matchup_idx = NULL,
+                                        resp_cov_vec = NULL,
+                                        params = NULL){
+  add_context_tokens(model_info = model_info,
+                     resp_party_idx = resp_party_idx,
+                     stage_idx = stage_idx,
+                     matchup_idx = matchup_idx,
+                     resp_cov = resp_cov_vec,
+                     params = params,
+                     batch = FALSE)
+}
+
+neural_build_choice_token <- function(model_info, params = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  if (!is.null(params$E_choice)) {
+    choice_vec <- params$E_choice
+  } else {
+    choice_vec <- strenv$jnp$zeros(list(ai(model_info$model_dims)), dtype = strenv$dtj)
+  }
+  strenv$jnp$reshape(choice_vec, list(1L, 1L, ai(model_info$model_dims)))
+}
+
+neural_run_transformer <- function(tokens, model_info, params = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  for (l_ in 1L:ai(model_info$model_depth)) {
+    Wq <- params[[paste0("W_q_l", l_)]]
+    Wk <- params[[paste0("W_k_l", l_)]]
+    Wv <- params[[paste0("W_v_l", l_)]]
+    Wo <- params[[paste0("W_o_l", l_)]]
+    Wff1 <- params[[paste0("W_ff1_l", l_)]]
+    Wff2 <- params[[paste0("W_ff2_l", l_)]]
+    RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
+    RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
+    alpha_attn <- neural_param_or_default(params, paste0("alpha_attn_l", l_), 1.0)
+    alpha_ff <- neural_param_or_default(params, paste0("alpha_ff_l", l_), 1.0)
+
+    tokens_norm <- neural_rms_norm(tokens, RMS_attn, model_info$model_dims)
+    Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
+    K <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wk)
+    V <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wv)
+
+    Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], Q$shape[[2]],
+                                    ai(model_info$n_heads), ai(model_info$head_dim)))
+    Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]],
+                                    ai(model_info$n_heads), ai(model_info$head_dim)))
+    Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]],
+                                    ai(model_info$n_heads), ai(model_info$head_dim)))
+    scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
+    scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
+    attn <- strenv$jax$nn$softmax(scores, axis = -1L)
+    context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
+    context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]],
+                                                  context_h$shape[[2]],
+                                                  ai(model_info$model_dims)))
+    attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
+
+    h1 <- tokens + alpha_attn * attn_out
+    h1_norm <- neural_rms_norm(h1, RMS_ff, model_info$model_dims)
+    ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
+    ff_act <- strenv$jax$nn$swish(ff_pre)
+    ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
+    tokens <- h1 + alpha_ff * ff_out
+  }
+  tokens <- neural_rms_norm(tokens, params$RMS_final, model_info$model_dims)
+  tokens
+}
+
+neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
+                                         resp_party_idx = NULL,
+                                         stage_idx = NULL,
+                                         matchup_idx = NULL,
+                                         resp_cov_vec = NULL,
+                                         params = NULL, use_role = FALSE){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  choice_tok <- neural_build_choice_token(model_info, params)
+  resp_tokens <- neural_build_context_tokens(model_info,
+                                             resp_party_idx = resp_party_idx,
+                                             stage_idx = stage_idx,
+                                             matchup_idx = matchup_idx,
+                                             resp_cov_vec = resp_cov_vec,
+                                             params = params)
+  cand_tokens <- neural_build_candidate_tokens_soft(pi_vec, party_idx, 0L, model_info, params,
+                                                    use_role = use_role,
+                                                    resp_party_idx = resp_party_idx)
+  if (!is.null(resp_tokens)) {
+    tokens <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, cand_tokens), axis = 1L)
+  } else {
+    tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
+  }
+  tokens <- neural_run_transformer(tokens, model_info, params)
+  choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+  strenv$jnp$squeeze(choice_out, axis = 1L)
+}
+
+neural_candidate_utility_soft <- function(pi_vec, party_idx,
+                                          resp_party_idx, stage_idx,
+                                          model_info,
+                                          resp_cov_vec = NULL,
+                                          params = NULL,
+                                          matchup_idx = NULL){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  phi <- neural_encode_candidate_soft(pi_vec, party_idx, model_info,
+                                      resp_party_idx = resp_party_idx,
+                                      stage_idx = stage_idx,
+                                      matchup_idx = matchup_idx,
+                                      resp_cov_vec = resp_cov_vec,
+                                      params = params)
+  logits <- strenv$jnp$einsum("nm,mo->no", phi, params$W_out)
+  if (!is.null(params$b_out)) {
+    logits <- logits + params$b_out
+  }
+  logits
+}
+
+neural_predict_pair_soft <- function(pi_left, pi_right,
+                                     party_left_idx, party_right_idx,
+                                     resp_party_idx, model_info,
+                                     resp_cov_vec = NULL,
+                                     params = NULL,
+                                     return_logits = FALSE){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  mode <- neural_cross_encoder_mode(model_info)
+  use_cross_encoder <- identical(mode, "full")
+  use_cross_term <- identical(mode, "term")
+  stage_idx <- neural_stage_index(party_left_idx, party_right_idx, model_info)
+  matchup_idx <- NULL
+  if (!is.null(params$E_matchup)) {
+    matchup_idx <- neural_matchup_index(party_left_idx, party_right_idx, model_info)
+  }
+  if (isTRUE(use_cross_encoder)) {
+    choice_tok <- neural_build_choice_token(model_info, params)
+    ctx_tokens <- neural_build_context_tokens(model_info,
+                                              resp_party_idx = resp_party_idx,
+                                              stage_idx = stage_idx,
+                                              matchup_idx = matchup_idx,
+                                              resp_cov_vec = resp_cov_vec,
+                                              params = params)
+    left_tokens <- neural_add_segment_embedding(
+      neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
+                                         resp_party_idx = resp_party_idx),
+      0L,
+      model_info = model_info,
+      params = params
+    )
+    right_tokens <- neural_add_segment_embedding(
+      neural_build_candidate_tokens_soft(pi_right, party_right_idx, 1L, model_info, params,
+                                         resp_party_idx = resp_party_idx),
+      1L,
+      model_info = model_info,
+      params = params
+    )
+    sep_tok <- neural_build_sep_token(model_info, params = params)
+    token_parts <- list(choice_tok)
+    if (!is.null(ctx_tokens)) {
+      token_parts <- c(token_parts, list(ctx_tokens))
+    }
+    token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+    tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
+    tokens <- neural_run_transformer(tokens, model_info, params)
+    cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+    cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+    logits <- strenv$jnp$einsum("nm,mo->no", cls_out, params$W_out)
+    if (!is.null(params$b_out)) {
+      logits <- logits + params$b_out
+    }
+  } else {
+    phi_left <- neural_encode_candidate_soft(pi_left, party_left_idx, model_info,
+                                             resp_party_idx = resp_party_idx,
+                                             stage_idx = stage_idx,
+                                             matchup_idx = matchup_idx,
+                                             resp_cov_vec = resp_cov_vec,
+                                             params = params)
+    phi_right <- neural_encode_candidate_soft(pi_right, party_right_idx, model_info,
+                                              resp_party_idx = resp_party_idx,
+                                              stage_idx = stage_idx,
+                                              matchup_idx = matchup_idx,
+                                              resp_cov_vec = resp_cov_vec,
+                                              params = params)
+    u_left <- strenv$jnp$einsum("nm,mo->no", phi_left, params$W_out)
+    if (!is.null(params$b_out)) {
+      u_left <- u_left + params$b_out
+    }
+    u_right <- strenv$jnp$einsum("nm,mo->no", phi_right, params$W_out)
+    if (!is.null(params$b_out)) {
+      u_right <- u_right + params$b_out
+    }
+    logits <- u_left - u_right
+    if (isTRUE(use_cross_term) && !is.null(params$M_cross)) {
+      cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_left, params$M_cross, phi_right)
+      cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
+      cross_out <- if (!is.null(params$W_cross_out)) {
+        strenv$jnp$reshape(params$W_cross_out, list(1L, -1L))
+      } else {
+        strenv$jnp$zeros(list(1L, ai(params$W_out$shape[[2]])), dtype = strenv$dtj)
+      }
+      logits <- logits + cross_term * cross_out
+    }
+  }
+  if (return_logits) {
+    return(logits)
+  }
+  neural_logits_to_q(logits, model_info$likelihood)
+}
+
+neural_predict_single_soft <- function(pi_vec,
+                                       party_idx,
+                                       resp_party_idx,
+                                       model_info,
+                                       resp_cov_vec = NULL,
+                                       params = NULL){
+  logits <- neural_candidate_utility_soft(pi_vec, party_idx,
+                                          resp_party_idx, stage_idx = NULL,
+                                          model_info = model_info,
+                                          resp_cov_vec = resp_cov_vec,
+                                          params = params)
+  neural_logits_to_q(logits, model_info$likelihood)
+}
+
+neural_getQStar_single <- function(pi_star_ast,
+                                   EST_COEFFICIENTS_tf_ast) {
+  if (!exists("neural_model_info_ast_jnp", inherits = TRUE)) {
+    stop("neural_getQStar_single requires neural_model_info_ast_jnp.", call. = FALSE)
+  }
+  model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
+  party_label <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
+    GroupsPool[1]
+  } else {
+    NULL
+  }
+  party_idx <- neural_get_party_index(model_ast, party_label)
+  resp_idx <- neural_get_resp_party_index(model_ast, party_label)
+  params_ast <- neural_params_from_theta(EST_COEFFICIENTS_tf_ast, model_ast)
+  Qhat <- neural_predict_single_soft(pi_star_ast, party_idx, resp_idx, model_ast,
+                                     params = params_ast)
+  strenv$jnp$concatenate(list(Qhat, Qhat, Qhat), 0L)
+}
+
+neural_getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
+                                      EST_COEFFICIENTS_tf_ast,
+                                      EST_COEFFICIENTS_tf_dag) {
+  if (!exists("neural_model_info_ast_jnp", inherits = TRUE)) {
+    stop("neural_getQStar_diff_BASE requires neural_model_info_ast_jnp.", call. = FALSE)
+  }
+  model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
+  model_dag <- if (exists("neural_model_info_dag_jnp", inherits = TRUE)) {
+    get("neural_model_info_dag_jnp", inherits = TRUE)
+  } else {
+    model_ast
+  }
+
+  party_label_ast <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
+    GroupsPool[1]
+  } else {
+    NULL
+  }
+  party_label_dag <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 1) {
+    GroupsPool[2]
+  } else {
+    party_label_ast
+  }
+
+  party_idx_ast <- neural_get_party_index(model_ast, party_label_ast)
+  party_idx_dag <- neural_get_party_index(model_dag, party_label_dag)
+  resp_idx_ast <- neural_get_resp_party_index(model_ast, party_label_ast)
+  resp_idx_dag <- neural_get_resp_party_index(model_dag, party_label_dag)
+  params_ast <- neural_params_from_theta(EST_COEFFICIENTS_tf_ast, model_ast)
+  params_dag <- neural_params_from_theta(EST_COEFFICIENTS_tf_dag, model_dag)
+
+  if (exists("Q_DISAGGREGATE", inherits = TRUE) && !isTRUE(Q_DISAGGREGATE)) {
+    resp_idx_dag <- resp_idx_ast
+    params_dag <- params_ast
+  }
+
+  Qhat_ast_among_ast <- neural_predict_pair_soft(
+    pi_star_ast, pi_star_dag,
+    party_idx_ast, party_idx_dag,
+    resp_idx_ast, model_ast,
+    params = params_ast
+  )
+
+  if (exists("Q_DISAGGREGATE", inherits = TRUE) && !isTRUE(Q_DISAGGREGATE)) {
+    Qhat_population <- Qhat_ast_among_dag <- Qhat_ast_among_ast
+  } else {
+    Qhat_ast_among_dag <- neural_predict_pair_soft(
+      pi_star_ast, pi_star_dag,
+      party_idx_ast, party_idx_dag,
+      resp_idx_dag, model_dag,
+      params = params_dag
+    )
+    Qhat_population <- Qhat_ast_among_ast * strenv$jnp$array(strenv$AstProp) +
+      Qhat_ast_among_dag * strenv$jnp$array(strenv$DagProp)
+  }
+
+  strenv$jnp$concatenate(list(Qhat_population,
+                              Qhat_ast_among_ast,
+                              Qhat_ast_among_dag), 0L)
+}
+
+cs2step_build_pair_mat <- function(pair_id,
+                                   W,
+                                   profile_order = NULL,
+                                   competing_group_variable_candidate = NULL) {
+  if (is.null(pair_id) || !length(pair_id)) {
+    return(NULL)
+  }
+  if (is.null(W) || !length(W)) {
+    stop("cs2step_build_pair_mat requires a non-empty W.", call. = FALSE)
+  }
+  W <- as.matrix(W)
+  pair_id <- as.vector(pair_id)
+  if (length(pair_id) != nrow(W)) {
+    stop(sprintf("pair_id has %d elements but W has %d rows.",
+                 length(pair_id), nrow(W)),
+         call. = FALSE)
+  }
+
+  pair_indices_list <- tapply(seq_along(pair_id), pair_id, c)
+  profile_order_present <- !is.null(profile_order) &&
+    length(profile_order) == length(pair_id)
+
+  row_key <- apply(W, 1, function(row) {
+    paste(ifelse(is.na(row), "NA", as.character(row)), collapse = "|")
+  })
+  row_hash <- vapply(row_key, function(key) {
+    ints <- utf8ToInt(key)
+    if (!length(ints)) {
+      return(0)
+    }
+    sum(ints * seq_along(ints)) %% 2147483647
+  }, numeric(1))
+
+  pair_mat <- do.call(rbind, lapply(pair_indices_list, function(idx){
+    order_by_profile <- profile_order_present &&
+      length(idx) == 2L &&
+      length(unique(profile_order[idx])) == 2L &&
+      !any(is.na(profile_order[idx]))
+    if (!is.null(competing_group_variable_candidate)) {
+      if (order_by_profile) {
+        idx[order(competing_group_variable_candidate[idx],
+                  profile_order[idx],
+                  row_hash[idx],
+                  idx)]
+      } else {
+        idx[order(competing_group_variable_candidate[idx],
+                  row_hash[idx],
+                  idx)]
+      }
+    } else if (order_by_profile) {
+      idx[order(profile_order[idx],
+                row_hash[idx],
+                idx)]
+    } else {
+      idx[order(row_hash[idx], idx)]
+    }
+  }))
+
+  list(
+    pair_mat = pair_mat,
+    pair_sizes = lengths(pair_indices_list),
+    profile_order_present = profile_order_present
+  )
+}
+
 generate_ModelOutcome_neural <- function(){
   message("Defining MCMC parameters in generate_ModelOutcome_neural...")
   mcmc_control <- list(
@@ -19,7 +1007,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
   )
-  RMS_scale = 0.2
+  RMS_scale = 0.35
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
@@ -27,6 +1015,8 @@ generate_ModelOutcome_neural <- function(){
   model_dims <- 128L
   model_depth <- 2L
   cross_candidate_encoder_mode <- "none"
+  warn_stage_imbalance_pct <- 0.10
+  warn_min_cell_n <- 50L
   normalize_cross_candidate_encoder <- function(value) {
     if (is.null(value)) {
       return("none")
@@ -87,12 +1077,22 @@ generate_ModelOutcome_neural <- function(){
         neural_mcmc_control$cross_candidate_encoder
       )
     }
+    if (!is.null(neural_mcmc_control$warn_stage_imbalance_pct)) {
+      warn_stage_imbalance_pct <- as.numeric(neural_mcmc_control$warn_stage_imbalance_pct)
+    }
+    if (!is.null(neural_mcmc_control$warn_min_cell_n)) {
+      warn_min_cell_n <- as.integer(neural_mcmc_control$warn_min_cell_n)
+    }
     mcmc_overrides <- neural_mcmc_control
     mcmc_overrides$uncertainty_scope <- NULL
     mcmc_overrides$n_bayesian_models <- NULL
     mcmc_overrides$ModelDims <- NULL
     mcmc_overrides$ModelDepth <- NULL
     mcmc_overrides$cross_candidate_encoder <- NULL
+  }
+  uncertainty_scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
+  if (nzchar(uncertainty_scope_env)) {
+    uncertainty_scope <- tolower(as.character(uncertainty_scope_env))
   }
   fast_mcmc_flag <- tolower(Sys.getenv("STRATEGIZE_NEURAL_FAST_MCMC")) %in%
     c("1", "true", "yes")
@@ -156,8 +1156,9 @@ generate_ModelOutcome_neural <- function(){
   TransformerHeads <- ai(cand_heads[which.min(abs(cand_heads - 8L))])
   head_dim <- ai(ai(MD_int / TransformerHeads))
   FFDim <- ai(ai(round(MD_int * WideMultiplicationFactor)))
-  #weight_sd_scale <- sqrt(2) / sqrt(as.numeric(ModelDims))
-  weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
+  weight_sd_scale <- sqrt(2) / sqrt(as.numeric(ModelDims))
+  #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
+  
   # Depth-aware scaling for priors and ReZero-style residual gates.
   depth_prior_scale <- 1 / sqrt(as.numeric(ModelDepth))
   gate_sd_scale <- 0.1 * depth_prior_scale
@@ -299,48 +1300,18 @@ generate_ModelOutcome_neural <- function(){
   # Build pairwise or single-candidate data
   pair_mat <- NULL
   if (pairwise_mode) {
-    pair_indices_list <- tapply(seq_along(pair_id_), pair_id_, c)
-    pair_sizes <- lengths(pair_indices_list)
-    if (!all(pair_sizes == 2L)) {
+    pair_info <- cs2step_build_pair_mat(
+      pair_id = pair_id_,
+      W = W_,
+      profile_order = profile_order_,
+      competing_group_variable_candidate = competing_group_variable_candidate_
+    )
+    if (is.null(pair_info) || is.null(pair_info$pair_sizes) ||
+        !all(pair_info$pair_sizes == 2L)) {
       warning("pair_id does not define exactly 2 rows per pair; falling back to single-candidate model.")
       pairwise_mode <- FALSE
     } else {
-      profile_order_present <- !is.null(profile_order_) && length(profile_order_) == length(Y_)
-      row_key <- apply(W_, 1, function(row) {
-        paste(ifelse(is.na(row), "NA", as.character(row)), collapse = "|")
-      })
-      row_hash <- vapply(row_key, function(key) {
-        ints <- utf8ToInt(key)
-        if (!length(ints)) {
-          return(0)
-        }
-        sum(ints * seq_along(ints)) %% 2147483647
-      }, numeric(1))
-
-      pair_mat <- do.call(rbind, lapply(pair_indices_list, function(idx){
-        order_by_profile <- profile_order_present &&
-          length(idx) == 2L &&
-          length(unique(profile_order_[idx])) == 2L &&
-          !any(is.na(profile_order_[idx]))
-        if (!is.null(competing_group_variable_candidate_)) {
-          if (order_by_profile) {
-            idx[order(competing_group_variable_candidate_[idx],
-                      profile_order_[idx],
-                      row_hash[idx],
-                      idx)]
-          } else {
-            idx[order(competing_group_variable_candidate_[idx],
-                      row_hash[idx],
-                      idx)]
-          }
-        } else if (order_by_profile) {
-          idx[order(profile_order_[idx],
-                    row_hash[idx],
-                    idx)]
-        } else {
-          idx[order(row_hash[idx], idx)]
-        }
-      }))
+      pair_mat <- pair_info$pair_mat
     }
   }
 
@@ -360,6 +1331,61 @@ generate_ModelOutcome_neural <- function(){
     party_single <- party_index
     resp_party_use <- resp_party_index
     X_use <- X_
+  }
+
+  stage_diagnostics <- NULL
+  if (pairwise_mode) {
+    stage_is_primary <- party_left == party_right
+    n_total <- length(stage_is_primary)
+    n_primary <- if (n_total > 0L) sum(stage_is_primary, na.rm = TRUE) else 0L
+    n_general <- if (n_total > 0L) sum(!stage_is_primary, na.rm = TRUE) else 0L
+    pct_primary <- if (n_total > 0L) n_primary / n_total else NA_real_
+    stage_label <- ifelse(stage_is_primary, "primary", "general")
+    resp_party_label <- if (!is.null(resp_party_levels)) {
+      idx <- as.integer(resp_party_use) + 1L
+      idx[idx < 1L | idx > length(resp_party_levels)] <- NA_integer_
+      resp_party_levels[idx]
+    } else {
+      as.character(resp_party_use)
+    }
+    stage_table <- table(resp_party_label, stage_label)
+    cell_counts <- as.integer(stage_table)
+    min_cell_n <- if (length(cell_counts) > 0L) min(cell_counts) else NA_integer_
+    single_stage_only <- isTRUE(pct_primary == 0 || pct_primary == 1)
+    warn_stage_imbalance <- is.finite(pct_primary) &&
+      (pct_primary < warn_stage_imbalance_pct || pct_primary > (1 - warn_stage_imbalance_pct))
+    warn_sparse_cells <- !is.na(min_cell_n) && min_cell_n < warn_min_cell_n
+
+    if (isTRUE(warn_stage_imbalance)) {
+      warning(
+        sprintf("Stage imbalance detected in neural training data (pct_primary=%.3f).", pct_primary),
+        call. = FALSE
+      )
+    }
+    if (isTRUE(warn_sparse_cells)) {
+      warning(
+        sprintf("Sparse stage/resp-party cells detected (min cell n=%d).", min_cell_n),
+        call. = FALSE
+      )
+    }
+    if (isTRUE(single_stage_only)) {
+      warning(
+        "Stage indicator has no variation; E_stage is not identified for the unused stage.",
+        call. = FALSE
+      )
+    }
+
+    stage_diagnostics <- list(
+      n_primary = as.integer(n_primary),
+      n_general = as.integer(n_general),
+      pct_primary = pct_primary,
+      resp_party_stage_table = stage_table,
+      single_stage_only = single_stage_only,
+      sparse_cells = warn_sparse_cells,
+      min_cell_n = min_cell_n,
+      warn_stage_imbalance_pct = warn_stage_imbalance_pct,
+      warn_min_cell_n = warn_min_cell_n
+    )
   }
 
   n_resp_covariates <- if (!is.null(X_use)) ai(ncol(X_use)) else ai(0L)
@@ -405,11 +1431,552 @@ generate_ModelOutcome_neural <- function(){
   }
 
   pdtype_ <- ddtype_ <- strenv$jnp$float32
-  rms_norm <- function(x, g, eps = 1e-6) {
-    mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
-    inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
-    g_use <- strenv$jnp$reshape(g, list(1L, 1L, ModelDims))
-    x * inv_rms * g_use
+  manual_noncentered_loc_scale <- FALSE
+  p2d_eps <- 1e-6
+  p2d_hash31 <- function(x, mod = 2147483647) {
+    bytes <- utf8ToInt(as.character(x))
+    h <- 0
+    for (b in bytes) {
+      h <- (h * 31 + b) %% mod
+    }
+    if (!is.finite(h) || is.na(h) || h < 0) {
+      h <- 0
+    }
+    as.integer(h)
+  }
+  p2d_draw_fixed_normal <- function(name, scale, shape_tuple, dtype = ddtype_) {
+    seed <- p2d_hash31(paste0("p2d:", name))
+    key <- strenv$jax$random$PRNGKey(ai(seed))
+    draw <- strenv$jax$random$normal(key, shape = shape_tuple, dtype = dtype)
+    as.numeric(scale) * draw
+  }
+  p2d_init_normal <- function(name, scale, shape_tuple, dtype = ddtype_) {
+    p2d_draw_fixed_normal(paste0(name, ":init"), scale, shape_tuple, dtype = dtype)
+  }
+  p2d_init_halfnormal <- function(name, scale, shape_tuple, dtype = ddtype_) {
+    strenv$jnp$abs(p2d_draw_fixed_normal(paste0(name, ":init"), scale, shape_tuple, dtype = dtype)) + p2d_eps
+  }
+  p2d_init_lognormal <- function(name, sd, shape_tuple, dtype = ddtype_) {
+    strenv$jnp$exp(p2d_draw_fixed_normal(paste0(name, ":init_log"), sd, shape_tuple, dtype = dtype)) + p2d_eps
+  }
+  p2d_constraint_positive <- NULL
+  if (!is.null(strenv$numpyro$distributions) &&
+      reticulate::py_has_attr(strenv$numpyro$distributions, "constraints")) {
+    constraints_mod <- strenv$numpyro$distributions$constraints
+    if (!is.null(constraints_mod) && reticulate::py_has_attr(constraints_mod, "positive")) {
+      p2d_constraint_positive <- constraints_mod$positive
+    }
+  }
+  p2d <- function(name,
+                  sample_fxn,
+                  init_fxn,
+                  constraint = NULL,
+                  uncertainty_scope_arg = uncertainty_scope,
+                  is_output_layer = FALSE) {
+    scope <- tolower(as.character(uncertainty_scope_arg))
+    if (identical(scope, "output") && !isTRUE(is_output_layer)) {
+      init_val <- init_fxn()
+      if (!is.null(constraint)) {
+        return(strenv$numpyro$param(name, init_val, constraint = constraint))
+      }
+      return(strenv$numpyro$param(name, init_val))
+    }
+    sample_fxn()
+  }
+  sample_loc_scale <- function(name, scale, shape_tuple) {
+    if (isTRUE(manual_noncentered_loc_scale)) {
+      z <- strenv$numpyro$sample(
+        paste0(name, "_z"),
+        strenv$numpyro$distributions$Normal(0., 1.)$expand(shape_tuple)
+      )
+      strenv$numpyro$deterministic(name, scale * z)
+    } else {
+      strenv$numpyro$sample(
+        name,
+        strenv$numpyro$distributions$Normal(0., scale)$expand(shape_tuple)
+      )
+    }
+  }
+
+  sample_shared_transformer_params <- function(D_local, pairwise = FALSE) {
+    output_only_mode <- identical(tolower(as.character(uncertainty_scope)), "output")
+
+    tau_factor <- if (isTRUE(output_only_mode)) {
+      as.numeric(factor_embed_sd_scale)
+    } else {
+      strenv$numpyro$sample(
+        "tau_factor",
+        strenv$numpyro$distributions$HalfNormal(as.numeric(factor_embed_sd_scale))
+      )
+    }
+    tau_context <- if (isTRUE(output_only_mode)) {
+      as.numeric(context_embed_sd_scale)
+    } else {
+      strenv$numpyro$sample(
+        "tau_context",
+        strenv$numpyro$distributions$HalfNormal(as.numeric(context_embed_sd_scale))
+      )
+    }
+
+    E_factor_list <- vector("list", D_local)
+    for (d_ in 1L:D_local) {
+      raw_name <- paste0("E_factor_", d_, "_raw")
+      raw_shape <- reticulate::tuple(ai(factor_levels_aug[d_]), ModelDims)
+      E_factor_raw <- p2d(
+        name = raw_name,
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            raw_name,
+            strenv$numpyro$distributions$Normal(0., tau_factor),
+            sample_shape = raw_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal(raw_name, tau_factor, raw_shape)
+        }
+      )
+      E_factor_centered <- center_factor_embeddings(E_factor_raw, factor_levels_int[d_])
+      E_factor_list[[d_]] <- strenv$numpyro$deterministic(
+        paste0("E_factor_", d_),
+        E_factor_centered
+      )
+    }
+
+    E_feature_shape <- reticulate::tuple(ai(D_local), ModelDims)
+    E_feature_id <- p2d(
+      name = "E_feature_id",
+      sample_fxn = function() {
+        strenv$numpyro$sample(
+          "E_feature_id",
+          strenv$numpyro$distributions$Normal(0., tau_context),
+          sample_shape = E_feature_shape
+        )
+      },
+      init_fxn = function() {
+        p2d_init_normal("E_feature_id", tau_context, E_feature_shape)
+      }
+    )
+
+    E_party_shape <- reticulate::tuple(ai(n_party_levels), ModelDims)
+    E_party <- p2d(
+      name = "E_party",
+      sample_fxn = function() {
+        strenv$numpyro$sample(
+          "E_party",
+          strenv$numpyro$distributions$Normal(0., tau_context),
+          sample_shape = E_party_shape
+        )
+      },
+      init_fxn = function() {
+        p2d_init_normal("E_party", tau_context, E_party_shape)
+      }
+    )
+
+    E_rel_shape <- reticulate::tuple(ai(n_rel_levels), ModelDims)
+    E_rel <- p2d(
+      name = "E_rel",
+      sample_fxn = function() {
+        strenv$numpyro$sample(
+          "E_rel",
+          strenv$numpyro$distributions$Normal(0., tau_context),
+          sample_shape = E_rel_shape
+        )
+      },
+      init_fxn = function() {
+        p2d_init_normal("E_rel", tau_context, E_rel_shape)
+      }
+    )
+
+    E_resp_party_shape <- reticulate::tuple(ai(n_resp_party_levels), ModelDims)
+    E_resp_party <- p2d(
+      name = "E_resp_party",
+      sample_fxn = function() {
+        strenv$numpyro$sample(
+          "E_resp_party",
+          strenv$numpyro$distributions$Normal(0., tau_context),
+          sample_shape = E_resp_party_shape
+        )
+      },
+      init_fxn = function() {
+        p2d_init_normal("E_resp_party", tau_context, E_resp_party_shape)
+      }
+    )
+
+    E_stage <- NULL
+    E_matchup <- NULL
+    if (isTRUE(pairwise)) {
+      E_stage_shape <- reticulate::tuple(ai(n_resp_party_levels), ai(2L), ModelDims)
+      E_stage <- p2d(
+        name = "E_stage",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_stage",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = E_stage_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_stage", tau_context, E_stage_shape)
+        }
+      )
+      if (isTRUE(use_matchup_token)) {
+        E_matchup_shape <- reticulate::tuple(ai(n_matchup_levels), ModelDims)
+        E_matchup <- p2d(
+          name = "E_matchup",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "E_matchup",
+              strenv$numpyro$distributions$Normal(0., tau_context),
+              sample_shape = E_matchup_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("E_matchup", tau_context, E_matchup_shape)
+          }
+        )
+      }
+    }
+
+    E_choice_shape <- reticulate::tuple(ModelDims)
+    E_choice <- p2d(
+      name = "E_choice",
+      sample_fxn = function() {
+        strenv$numpyro$sample(
+          "E_choice",
+          strenv$numpyro$distributions$Normal(0., tau_context),
+          sample_shape = E_choice_shape
+        )
+      },
+      init_fxn = function() {
+        p2d_init_normal("E_choice", tau_context, E_choice_shape)
+      }
+    )
+
+    E_sep <- NULL
+    E_segment <- NULL
+    if (isTRUE(pairwise) && isTRUE(use_cross_encoder)) {
+      E_sep_shape <- reticulate::tuple(ModelDims)
+      E_sep <- p2d(
+        name = "E_sep",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_sep",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = E_sep_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_sep", tau_context, E_sep_shape)
+        }
+      )
+
+      E_segment_shape <- reticulate::tuple(ai(2L), ModelDims)
+      E_segment <- p2d(
+        name = "E_segment",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_segment",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = E_segment_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_segment", tau_context, E_segment_shape)
+        }
+      )
+    }
+
+    W_resp_x <- NULL
+    if (n_resp_covariates > 0L) {
+      W_resp_x_shape <- reticulate::tuple(ai(n_resp_covariates), ModelDims)
+      W_resp_x <- p2d(
+        name = "W_resp_x",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "W_resp_x",
+            strenv$numpyro$distributions$Normal(0., resp_cov_sd),
+            sample_shape = W_resp_x_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_resp_x", resp_cov_sd, W_resp_x_shape)
+        }
+      )
+    }
+
+    layer_params <- list()
+    for (l_ in 1L:ModelDepth) {
+      tau_w_prior <- as.numeric(weight_sd_scale * depth_prior_scale)
+      tau_w_l <- if (isTRUE(output_only_mode)) {
+        tau_w_prior
+      } else {
+        strenv$numpyro$sample(
+          paste0("tau_w_", l_),
+          strenv$numpyro$distributions$HalfNormal(tau_w_prior)
+        )
+      }
+
+      alpha_attn_name <- paste0("alpha_attn_l", l_)
+      alpha_attn_l <- p2d(
+        name = alpha_attn_name,
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            alpha_attn_name,
+            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
+          )
+        },
+        init_fxn = function() {
+          p2d_init_halfnormal(alpha_attn_name, gate_sd_scale, reticulate::tuple())
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      alpha_ff_name <- paste0("alpha_ff_l", l_)
+      alpha_ff_l <- p2d(
+        name = alpha_ff_name,
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            alpha_ff_name,
+            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
+          )
+        },
+        init_fxn = function() {
+          p2d_init_halfnormal(alpha_ff_name, gate_sd_scale, reticulate::tuple())
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      RMS_attn_name <- paste0("RMS_attn_l", l_)
+      RMS_attn_shape <- reticulate::tuple(ModelDims)
+      RMS_attn_l <- p2d(
+        name = RMS_attn_name,
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            RMS_attn_name,
+            strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+            sample_shape = RMS_attn_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_lognormal(RMS_attn_name, RMS_scale, RMS_attn_shape)
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      RMS_ff_name <- paste0("RMS_ff_l", l_)
+      RMS_ff_shape <- reticulate::tuple(ModelDims)
+      RMS_ff_l <- p2d(
+        name = RMS_ff_name,
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            RMS_ff_name,
+            strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+            sample_shape = RMS_ff_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_lognormal(RMS_ff_name, RMS_scale, RMS_ff_shape)
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      W_q_name <- paste0("W_q_l", l_)
+      W_q_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_q_l <- p2d(
+        name = W_q_name,
+        sample_fxn = function() {
+          sample_loc_scale(W_q_name, tau_w_l, W_q_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal(W_q_name, tau_w_l, W_q_shape)
+        }
+      )
+
+      W_k_name <- paste0("W_k_l", l_)
+      W_k_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_k_l <- p2d(
+        name = W_k_name,
+        sample_fxn = function() {
+          sample_loc_scale(W_k_name, tau_w_l, W_k_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal(W_k_name, tau_w_l, W_k_shape)
+        }
+      )
+
+      W_v_name <- paste0("W_v_l", l_)
+      W_v_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_v_l <- p2d(
+        name = W_v_name,
+        sample_fxn = function() {
+          sample_loc_scale(W_v_name, tau_w_l, W_v_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal(W_v_name, tau_w_l, W_v_shape)
+        }
+      )
+
+      W_o_name <- paste0("W_o_l", l_)
+      W_o_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_o_l <- p2d(
+        name = W_o_name,
+        sample_fxn = function() {
+          sample_loc_scale(W_o_name, tau_w_l, W_o_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal(W_o_name, tau_w_l, W_o_shape)
+        }
+      )
+
+      W_ff1_name <- paste0("W_ff1_l", l_)
+      W_ff1_shape <- reticulate::tuple(ModelDims, FFDim)
+      W_ff1_l <- p2d(
+        name = W_ff1_name,
+        sample_fxn = function() {
+          sample_loc_scale(W_ff1_name, tau_w_l, W_ff1_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal(W_ff1_name, tau_w_l, W_ff1_shape)
+        }
+      )
+
+      W_ff2_name <- paste0("W_ff2_l", l_)
+      W_ff2_shape <- reticulate::tuple(FFDim, ModelDims)
+      W_ff2_l <- p2d(
+        name = W_ff2_name,
+        sample_fxn = function() {
+          sample_loc_scale(W_ff2_name, tau_w_l, W_ff2_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal(W_ff2_name, tau_w_l, W_ff2_shape)
+        }
+      )
+
+      layer_params[[paste0("W_q_l", l_)]] <- W_q_l
+      layer_params[[paste0("W_k_l", l_)]] <- W_k_l
+      layer_params[[paste0("W_v_l", l_)]] <- W_v_l
+      layer_params[[paste0("W_o_l", l_)]] <- W_o_l
+      layer_params[[paste0("W_ff1_l", l_)]] <- W_ff1_l
+      layer_params[[paste0("W_ff2_l", l_)]] <- W_ff2_l
+      layer_params[[paste0("RMS_attn_l", l_)]] <- RMS_attn_l
+      layer_params[[paste0("RMS_ff_l", l_)]] <- RMS_ff_l
+      layer_params[[paste0("alpha_attn_l", l_)]] <- alpha_attn_l
+      layer_params[[paste0("alpha_ff_l", l_)]] <- alpha_ff_l
+    }
+
+    RMS_final_shape <- reticulate::tuple(ModelDims)
+    RMS_final <- p2d(
+      name = "RMS_final",
+      sample_fxn = function() {
+        strenv$numpyro$sample(
+          "RMS_final",
+          strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+          sample_shape = RMS_final_shape
+        )
+      },
+      init_fxn = function() {
+        p2d_init_lognormal("RMS_final", RMS_scale, RMS_final_shape)
+      },
+      constraint = p2d_constraint_positive
+    )
+    tau_w_out <- strenv$numpyro$sample(
+      "tau_w_out",
+      strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale))
+    )
+    W_out <- sample_loc_scale("W_out", tau_w_out,
+                              reticulate::tuple(ModelDims, nOutcomes))
+    tau_b <- strenv$numpyro$sample(
+      "tau_b",
+      strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale))
+    )
+    b_out <- sample_loc_scale("b_out", tau_b, reticulate::tuple(nOutcomes))
+
+    M_cross <- NULL
+    W_cross_out <- NULL
+    if (isTRUE(pairwise) && isTRUE(use_cross_term)) {
+      # Antisymmetric bilinear term enables opponent-dependent matchups.
+      tau_cross <- if (isTRUE(output_only_mode)) {
+        as.numeric(cross_weight_sd_scale)
+      } else {
+        strenv$numpyro$sample(
+          "tau_cross",
+          strenv$numpyro$distributions$HalfNormal(as.numeric(cross_weight_sd_scale))
+        )
+      }
+      M_cross_shape <- reticulate::tuple(ModelDims, ModelDims)
+      M_cross_raw <- p2d(
+        name = "M_cross_raw",
+        sample_fxn = function() {
+          sample_loc_scale("M_cross_raw", tau_cross, M_cross_shape)
+        },
+        init_fxn = function() {
+          p2d_init_normal("M_cross_raw", tau_cross, M_cross_shape)
+        }
+      )
+      M_cross <- 0.5 * (M_cross_raw - strenv$jnp$transpose(M_cross_raw))
+      M_cross <- strenv$numpyro$deterministic("M_cross", M_cross)
+      W_cross_out <- strenv$numpyro$sample(
+        "W_cross_out",
+        strenv$numpyro$distributions$Normal(0., 0.25),
+        sample_shape = reticulate::tuple(nOutcomes)
+      )
+    }
+
+    sigma <- NULL
+    if (likelihood == "normal") {
+      sigma <- strenv$numpyro$sample(
+        "sigma",
+        strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale))
+      )
+    }
+
+    params_view <- if (isTRUE(pairwise)) {
+      list(
+        E_feature_id = E_feature_id,
+        E_party = E_party,
+        E_rel = E_rel,
+        E_resp_party = E_resp_party,
+        E_stage = E_stage,
+        E_choice = E_choice,
+        E_sep = E_sep,
+        E_segment = E_segment
+      )
+    } else {
+      list(
+        E_feature_id = E_feature_id,
+        E_party = E_party,
+        E_rel = E_rel,
+        E_resp_party = E_resp_party,
+        E_choice = E_choice
+      )
+    }
+    if (isTRUE(pairwise) && isTRUE(use_matchup_token)) {
+      params_view$E_matchup <- E_matchup
+    }
+    if (n_resp_covariates > 0L) {
+      params_view$W_resp_x <- W_resp_x
+    }
+    for (d_ in 1L:D_local) {
+      params_view[[paste0("E_factor_", d_)]] <- E_factor_list[[d_]]
+    }
+    params_view <- c(params_view, layer_params)
+    params_view$RMS_final <- RMS_final
+    params_view$W_out <- W_out
+    params_view$b_out <- b_out
+    if (isTRUE(pairwise) && isTRUE(use_cross_term)) {
+      params_view$M_cross <- M_cross
+      params_view$W_cross_out <- W_cross_out
+    }
+
+    list(
+      params_view = params_view,
+      E_choice = E_choice,
+      W_out = W_out,
+      b_out = b_out,
+      sigma = sigma,
+      M_cross = M_cross,
+      W_cross_out = W_cross_out
+    )
   }
 
   BayesianPairTransformerModel <- function(X_left, X_right, party_left, party_right,
@@ -417,241 +1984,63 @@ generate_ModelOutcome_neural <- function(){
     N_local <- ai(X_left$shape[[1]])
     D_local <- ai(X_left$shape[[2]])
 
-    tau_factor <- strenv$numpyro$sample("tau_factor",
-                                        strenv$numpyro$distributions$HalfNormal(as.numeric(factor_embed_sd_scale)))
-    tau_context <- strenv$numpyro$sample("tau_context",
-                                         strenv$numpyro$distributions$HalfNormal(as.numeric(context_embed_sd_scale)))
-    for (d_ in 1L:D_local) {
-      E_factor_raw <- strenv$numpyro$sample(paste0("E_factor_", d_, "_raw"),
-                                           strenv$numpyro$distributions$Normal(0., tau_factor),
-                                           sample_shape = reticulate::tuple(ai(factor_levels_aug[d_]), ModelDims))
-      E_factor_centered <- center_factor_embeddings(E_factor_raw, factor_levels_int[d_])
-      assign(paste0("E_factor_", d_),
-             strenv$numpyro$deterministic(paste0("E_factor_", d_), E_factor_centered))
-    }
-    E_feature_id <- strenv$numpyro$sample("E_feature_id",
-                                          strenv$numpyro$distributions$Normal(0., tau_context),
-                                          sample_shape = reticulate::tuple(ai(D_local), ModelDims))
-    E_party <- strenv$numpyro$sample("E_party",
-                                    strenv$numpyro$distributions$Normal(0., tau_context),
-                                    sample_shape = reticulate::tuple(ai(n_party_levels), ModelDims))
-    E_rel <- strenv$numpyro$sample("E_rel",
-                                  strenv$numpyro$distributions$Normal(0., tau_context),
-                                  sample_shape = reticulate::tuple(ai(n_rel_levels), ModelDims))
-    E_resp_party <- strenv$numpyro$sample("E_resp_party",
-                                         strenv$numpyro$distributions$Normal(0., tau_context),
-                                         sample_shape = reticulate::tuple(ai(n_resp_party_levels), ModelDims))
-    E_stage <- strenv$numpyro$sample("E_stage",
-                                    strenv$numpyro$distributions$Normal(0., tau_context),
-                                    sample_shape = reticulate::tuple(ai(n_resp_party_levels), ai(2L), ModelDims))
-    if (isTRUE(use_matchup_token)) {
-      E_matchup <- strenv$numpyro$sample("E_matchup",
-                                        strenv$numpyro$distributions$Normal(0., tau_context),
-                                        sample_shape = reticulate::tuple(ai(n_matchup_levels), ModelDims))
-    }
-    E_choice <- strenv$numpyro$sample("E_choice",
-                                     strenv$numpyro$distributions$Normal(0., tau_context),
-                                     sample_shape = reticulate::tuple(ModelDims))
-    E_sep <- NULL
-    E_segment <- NULL
-    if (isTRUE(use_cross_encoder)) {
-      E_sep <- strenv$numpyro$sample("E_sep",
-                                     strenv$numpyro$distributions$Normal(0., tau_context),
-                                     sample_shape = reticulate::tuple(ModelDims))
-      E_segment <- strenv$numpyro$sample("E_segment",
-                                         strenv$numpyro$distributions$Normal(0., tau_context),
-                                         sample_shape = reticulate::tuple(ai(2L), ModelDims))
-    }
-    if (n_resp_covariates > 0L) {
-      W_resp_x <- strenv$numpyro$sample("W_resp_x",
-                                       strenv$numpyro$distributions$Normal(0., resp_cov_sd),
-                                       sample_shape = reticulate::tuple(ai(n_resp_covariates), ModelDims))
-    }
+    shared_params <- sample_shared_transformer_params(D_local = D_local, pairwise = TRUE)
+    params_view <- shared_params$params_view
+    E_choice <- shared_params$E_choice
+    W_out <- shared_params$W_out
+    b_out <- shared_params$b_out
+    sigma <- shared_params$sigma
+    M_cross <- shared_params$M_cross
+    W_cross_out <- shared_params$W_cross_out
 
-    for (l_ in 1L:ModelDepth) {
-      tau_w_l <- strenv$numpyro$sample(paste0("tau_w_", l_),
-                                       strenv$numpyro$distributions$HalfNormal(
-                                         as.numeric(weight_sd_scale * depth_prior_scale)
-                                       ))
-      assign(paste0("alpha_attn_l", l_),
-             strenv$numpyro$sample(paste0("alpha_attn_l", l_),
-                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
-      assign(paste0("alpha_ff_l", l_),
-             strenv$numpyro$sample(paste0("alpha_ff_l", l_),
-                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
-      assign(paste0("RMS_attn_l", l_),
-             strenv$numpyro$sample(paste0("RMS_attn_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
-                                   sample_shape = reticulate::tuple(ModelDims)))
-      assign(paste0("RMS_ff_l", l_),
-             strenv$numpyro$sample(paste0("RMS_ff_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
-                                   sample_shape = reticulate::tuple(ModelDims)))
-      assign(paste0("W_q_l", l_),
-             strenv$numpyro$sample(paste0("W_q_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_k_l", l_),
-             strenv$numpyro$sample(paste0("W_k_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_v_l", l_),
-             strenv$numpyro$sample(paste0("W_v_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_o_l", l_),
-             strenv$numpyro$sample(paste0("W_o_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_ff1_l", l_),
-             strenv$numpyro$sample(paste0("W_ff1_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, FFDim)))
-      assign(paste0("W_ff2_l", l_),
-             strenv$numpyro$sample(paste0("W_ff2_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(FFDim, ModelDims)))
-    }
-    RMS_final <- strenv$numpyro$sample("RMS_final",
-                                       strenv$numpyro$distributions$LogNormal(0., RMS_scale),
-                                       sample_shape = reticulate::tuple(ModelDims))
-
-    tau_w_out <- strenv$numpyro$sample("tau_w_out",
-                                       strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
-    W_out <- strenv$numpyro$sample("W_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_w_out),
-                                  sample_shape = reticulate::tuple(ModelDims, nOutcomes))
-    tau_b <- strenv$numpyro$sample("tau_b",
-                                   strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale)))
-    b_out <- strenv$numpyro$sample("b_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_b),
-                                  sample_shape = reticulate::tuple(nOutcomes))
-    if (isTRUE(use_cross_term)) {
-      # Antisymmetric bilinear term enables opponent-dependent matchups.
-      tau_cross <- strenv$numpyro$sample("tau_cross",
-                                         strenv$numpyro$distributions$HalfNormal(as.numeric(cross_weight_sd_scale)))
-      M_cross_raw <- strenv$numpyro$sample("M_cross_raw",
-                                           strenv$numpyro$distributions$Normal(0., tau_cross),
-                                           sample_shape = reticulate::tuple(ModelDims, ModelDims))
-      M_cross <- 0.5 * (M_cross_raw - strenv$jnp$transpose(M_cross_raw))
-      M_cross <- strenv$numpyro$deterministic("M_cross", M_cross)
-      W_cross_out <- strenv$numpyro$sample("W_cross_out",
-                                           strenv$numpyro$distributions$Normal(0., 0.25),
-                                           sample_shape = reticulate::tuple(nOutcomes))
-    }
-    if (likelihood == "normal") {
-      sigma <- strenv$numpyro$sample("sigma",
-                                     strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale)))
-    }
+    transformer_model_info <- list(
+      model_depth = ModelDepth,
+      model_dims = ModelDims,
+      n_heads = TransformerHeads,
+      head_dim = head_dim
+    )
+    model_info_local <- list(
+      model_dims = ModelDims,
+      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
+      n_party_levels = ai(n_party_levels)
+    )
 
     embed_candidate <- function(X_idx, party_idx, resp_p) {
-      N_batch <- ai(X_idx$shape[[1]])
-      token_list <- vector("list", D_local)
-      for (d_ in 1L:D_local) {
-        E_d <- get(paste0("E_factor_", d_))
-        idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-        token_list[[d_]] <- strenv$jnp$take(E_d, idx_d, axis = 0L)
-      }
-      tokens <- strenv$jnp$stack(token_list, axis = 1L)
-      feature_tok <- strenv$jnp$reshape(E_feature_id, list(1L, D_local, ModelDims))
-      tokens <- tokens + feature_tok
-      party_tok <- strenv$jnp$take(E_party, party_idx, axis = 0L)
-      party_tok <- strenv$jnp$reshape(party_tok, list(N_batch, 1L, ModelDims))
-      cand_resp_idx <- strenv$jnp$take(cand_party_to_resp_idx_jnp, party_idx, axis = 0L)
-      is_known <- cand_resp_idx >= 0L
-      is_match <- strenv$jnp$equal(cand_resp_idx, resp_p)
-      rel_idx <- strenv$jnp$where(is_match, ai(0L),
-                                  strenv$jnp$where(is_known, ai(1L), ai(2L)))
-      rel_idx <- strenv$jnp$astype(rel_idx, strenv$jnp$int32)
-      rel_tok <- strenv$jnp$take(E_rel, rel_idx, axis = 0L)
-      rel_tok <- strenv$jnp$reshape(rel_tok, list(N_batch, 1L, ModelDims))
-      strenv$jnp$concatenate(list(tokens, party_tok, rel_tok), axis = 1L)
+      neural_build_candidate_tokens_hard(X_idx, party_idx,
+                                         model_info = model_info_local,
+                                         resp_party_idx = resp_p,
+                                         params = params_view)
     }
 
     add_segment_embedding <- function(tokens, segment_idx) {
-      if (is.null(E_segment)) {
-        return(tokens)
-      }
-      seg_vec <- strenv$jnp$take(E_segment, ai(segment_idx), axis = 0L)
-      seg_tok <- strenv$jnp$reshape(seg_vec, list(1L, 1L, ModelDims))
-      tokens + seg_tok
+      neural_add_segment_embedding(tokens, segment_idx,
+                                   model_info = model_info_local,
+                                   params = params_view)
     }
 
     run_transformer <- function(tokens) {
-      for (l_ in 1L:ModelDepth) {
-        Wq <- get(paste0("W_q_l", l_))
-        Wk <- get(paste0("W_k_l", l_))
-        Wv <- get(paste0("W_v_l", l_))
-        Wo <- get(paste0("W_o_l", l_))
-        Wff1 <- get(paste0("W_ff1_l", l_))
-        Wff2 <- get(paste0("W_ff2_l", l_))
-        RMS_attn <- get(paste0("RMS_attn_l", l_))
-        RMS_ff <- get(paste0("RMS_ff_l", l_))
-        alpha_attn <- get(paste0("alpha_attn_l", l_))
-        alpha_ff <- get(paste0("alpha_ff_l", l_))
-
-        tokens_norm <- rms_norm(tokens, RMS_attn)
-        Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
-        K <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wk)
-        V <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wv)
-
-        Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], Q$shape[[2]], TransformerHeads, head_dim))
-        Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]], TransformerHeads, head_dim))
-        Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]], TransformerHeads, head_dim))
-        scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(head_dim)))
-        scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
-        attn <- strenv$jax$nn$softmax(scores, axis = -1L)
-        context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
-        context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
-        attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
-
-        h1 <- tokens + alpha_attn * attn_out
-        h1_norm <- rms_norm(h1, RMS_ff)
-        ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
-        ff_act <- strenv$jax$nn$swish(ff_pre)
-        ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + alpha_ff * ff_out
-      }
-      tokens <- rms_norm(tokens, RMS_final)
-      tokens
+      neural_run_transformer(tokens,
+                             model_info = transformer_model_info,
+                             params = params_view)
     }
 
     compute_matchup_idx <- function(pl, pr) {
-      p_min <- strenv$jnp$minimum(pl, pr)
-      p_max <- strenv$jnp$maximum(pl, pr)
-      half_term <- strenv$jnp$floor_divide(p_min * (p_min - 1L), ai(2L))
-      idx <- p_min * ai(n_party_levels) - half_term + (p_max - p_min)
-      strenv$jnp$astype(idx, strenv$jnp$int32)
+      neural_matchup_index(pl, pr, model_info_local)
     }
 
     build_context_tokens <- function(stage_idx, resp_p, resp_c, matchup_idx = NULL) {
-      N_batch <- ai(resp_p$shape[[1]])
-      stage_tok <- E_stage[resp_p, stage_idx]
-      stage_tok <- strenv$jnp$reshape(stage_tok, list(N_batch, 1L, ModelDims))
-      resp_party_tok <- strenv$jnp$take(E_resp_party, resp_p, axis = 0L)
-      resp_party_tok <- strenv$jnp$reshape(resp_party_tok, list(N_batch, 1L, ModelDims))
-      resp_tokens <- list(stage_tok, resp_party_tok)
-      if (isTRUE(use_matchup_token) && !is.null(matchup_idx)) {
-        matchup_tok <- strenv$jnp$take(E_matchup, matchup_idx, axis = 0L)
-        matchup_tok <- strenv$jnp$reshape(matchup_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- matchup_tok
-      }
-      if (n_resp_covariates > 0L) {
-        resp_cov_tok <- strenv$jnp$einsum("nc,cm->nm", resp_c, W_resp_x)
-        resp_cov_tok <- strenv$jnp$reshape(resp_cov_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- resp_cov_tok
-      }
-      strenv$jnp$concatenate(resp_tokens, axis = 1L)
+      neural_build_context_tokens_batch(model_info = model_info_local,
+                                        resp_party_idx = resp_p,
+                                        stage_idx = stage_idx,
+                                        matchup_idx = matchup_idx,
+                                        resp_cov = resp_c,
+                                        params = params_view)
     }
 
     build_sep_token <- function(N_batch) {
-      sep_vec <- if (!is.null(E_sep)) {
-        E_sep
-      } else {
-        strenv$jnp$zeros(list(ModelDims))
-      }
-      sep_tok <- strenv$jnp$reshape(sep_vec, list(1L, 1L, ModelDims))
-      sep_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
+      neural_build_sep_token(model_info_local,
+                             n_batch = N_batch,
+                             params = params_view)
     }
 
     encode_pair_cross <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
@@ -684,8 +2073,7 @@ generate_ModelOutcome_neural <- function(){
     }
 
     do_forward_and_lik_ <- function(Xl, Xr, pl, pr, resp_p, resp_c, Yb) {
-      stage_idx <- strenv$jnp$equal(pl, pr)
-      stage_idx <- strenv$jnp$astype(stage_idx, strenv$jnp$int32)
+      stage_idx <- neural_stage_index(pl, pr, model_info_local)
       matchup_idx <- NULL
       if (isTRUE(use_matchup_token)) {
         matchup_idx <- compute_matchup_idx(pl, pr)
@@ -754,181 +2142,53 @@ generate_ModelOutcome_neural <- function(){
     N_local <- ai(X$shape[[1]])
     D_local <- ai(X$shape[[2]])
 
-    tau_factor <- strenv$numpyro$sample("tau_factor",
-                                        strenv$numpyro$distributions$HalfNormal(as.numeric(factor_embed_sd_scale)))
-    tau_context <- strenv$numpyro$sample("tau_context",
-                                         strenv$numpyro$distributions$HalfNormal(as.numeric(context_embed_sd_scale)))
-    for (d_ in 1L:D_local) {
-      E_factor_raw <- strenv$numpyro$sample(paste0("E_factor_", d_, "_raw"),
-                                           strenv$numpyro$distributions$Normal(0., tau_factor),
-                                           sample_shape = reticulate::tuple(ai(factor_levels_aug[d_]), ModelDims))
-      E_factor_centered <- center_factor_embeddings(E_factor_raw, factor_levels_int[d_])
-      assign(paste0("E_factor_", d_),
-             strenv$numpyro$deterministic(paste0("E_factor_", d_), E_factor_centered))
-    }
-    E_feature_id <- strenv$numpyro$sample("E_feature_id",
-                                          strenv$numpyro$distributions$Normal(0., tau_context),
-                                          sample_shape = reticulate::tuple(ai(D_local), ModelDims))
-    E_party <- strenv$numpyro$sample("E_party",
-                                    strenv$numpyro$distributions$Normal(0., tau_context),
-                                    sample_shape = reticulate::tuple(ai(n_party_levels), ModelDims))
-    E_rel <- strenv$numpyro$sample("E_rel",
-                                  strenv$numpyro$distributions$Normal(0., tau_context),
-                                  sample_shape = reticulate::tuple(ai(n_rel_levels), ModelDims))
-    E_resp_party <- strenv$numpyro$sample("E_resp_party",
-                                         strenv$numpyro$distributions$Normal(0., tau_context),
-                                         sample_shape = reticulate::tuple(ai(n_resp_party_levels), ModelDims))
-    E_choice <- strenv$numpyro$sample("E_choice",
-                                     strenv$numpyro$distributions$Normal(0., tau_context),
-                                     sample_shape = reticulate::tuple(ModelDims))
-    if (n_resp_covariates > 0L) {
-      W_resp_x <- strenv$numpyro$sample("W_resp_x",
-                                       strenv$numpyro$distributions$Normal(0., resp_cov_sd),
-                                       sample_shape = reticulate::tuple(ai(n_resp_covariates), ModelDims))
-    }
+    shared_params <- sample_shared_transformer_params(D_local = D_local, pairwise = FALSE)
+    params_view <- shared_params$params_view
+    E_choice <- shared_params$E_choice
+    W_out <- shared_params$W_out
+    b_out <- shared_params$b_out
+    sigma <- shared_params$sigma
 
-    for (l_ in 1L:ModelDepth) {
-      tau_w_l <- strenv$numpyro$sample(paste0("tau_w_", l_),
-                                       strenv$numpyro$distributions$HalfNormal(
-                                         as.numeric(weight_sd_scale * depth_prior_scale)
-                                       ))
-      assign(paste0("alpha_attn_l", l_),
-             strenv$numpyro$sample(paste0("alpha_attn_l", l_),
-                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
-      assign(paste0("alpha_ff_l", l_),
-             strenv$numpyro$sample(paste0("alpha_ff_l", l_),
-                                   strenv$numpyro$distributions$Normal(0., gate_sd_scale)))
-      assign(paste0("RMS_attn_l", l_),
-             strenv$numpyro$sample(paste0("RMS_attn_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
-                                   sample_shape = reticulate::tuple(ModelDims)))
-      assign(paste0("RMS_ff_l", l_),
-             strenv$numpyro$sample(paste0("RMS_ff_l", l_),
-                                   strenv$numpyro$distributions$LogNormal(0., RMS_scale),
-                                   sample_shape = reticulate::tuple(ModelDims)))
-      assign(paste0("W_q_l", l_),
-             strenv$numpyro$sample(paste0("W_q_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_k_l", l_),
-             strenv$numpyro$sample(paste0("W_k_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_v_l", l_),
-             strenv$numpyro$sample(paste0("W_v_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_o_l", l_),
-             strenv$numpyro$sample(paste0("W_o_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, ModelDims)))
-      assign(paste0("W_ff1_l", l_),
-             strenv$numpyro$sample(paste0("W_ff1_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(ModelDims, FFDim)))
-      assign(paste0("W_ff2_l", l_),
-             strenv$numpyro$sample(paste0("W_ff2_l", l_),
-                                  strenv$numpyro$distributions$Normal(0., tau_w_l),
-                                  sample_shape = reticulate::tuple(FFDim, ModelDims)))
-    }
-    RMS_final <- strenv$numpyro$sample("RMS_final",
-                                       strenv$numpyro$distributions$LogNormal(0., RMS_scale),
-                                       sample_shape = reticulate::tuple(ModelDims))
-
-    tau_w_out <- strenv$numpyro$sample("tau_w_out",
-                                       strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale)))
-    W_out <- strenv$numpyro$sample("W_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_w_out),
-                                  sample_shape = reticulate::tuple(ModelDims, nOutcomes))
-    tau_b <- strenv$numpyro$sample("tau_b",
-                                   strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale)))
-    b_out <- strenv$numpyro$sample("b_out",
-                                  strenv$numpyro$distributions$Normal(0., tau_b),
-                                  sample_shape = reticulate::tuple(nOutcomes))
-    if (likelihood == "normal") {
-      sigma <- strenv$numpyro$sample("sigma",
-                                     strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale)))
-    }
+    transformer_model_info <- list(
+      model_depth = ModelDepth,
+      model_dims = ModelDims,
+      n_heads = TransformerHeads,
+      head_dim = head_dim
+    )
+    model_info_local <- list(
+      model_dims = ModelDims,
+      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
+      n_party_levels = ai(n_party_levels)
+    )
 
     embed_candidate <- function(X_idx, party_idx, resp_p) {
-      N_batch <- ai(X_idx$shape[[1]])
-      token_list <- vector("list", D_local)
-      for (d_ in 1L:D_local) {
-        E_d <- get(paste0("E_factor_", d_))
-        idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-        token_list[[d_]] <- strenv$jnp$take(E_d, idx_d, axis = 0L)
-      }
-      tokens <- strenv$jnp$stack(token_list, axis = 1L)
-      feature_tok <- strenv$jnp$reshape(E_feature_id, list(1L, D_local, ModelDims))
-      tokens <- tokens + feature_tok
-      party_tok <- strenv$jnp$take(E_party, party_idx, axis = 0L)
-      party_tok <- strenv$jnp$reshape(party_tok, list(N_batch, 1L, ModelDims))
-      cand_resp_idx <- strenv$jnp$take(cand_party_to_resp_idx_jnp, party_idx, axis = 0L)
-      is_known <- cand_resp_idx >= 0L
-      is_match <- strenv$jnp$equal(cand_resp_idx, resp_p)
-      rel_idx <- strenv$jnp$where(is_match, ai(0L),
-                                  strenv$jnp$where(is_known, ai(1L), ai(2L)))
-      rel_idx <- strenv$jnp$astype(rel_idx, strenv$jnp$int32)
-      rel_tok <- strenv$jnp$take(E_rel, rel_idx, axis = 0L)
-      rel_tok <- strenv$jnp$reshape(rel_tok, list(N_batch, 1L, ModelDims))
-      strenv$jnp$concatenate(list(tokens, party_tok, rel_tok), axis = 1L)
+      neural_build_candidate_tokens_hard(X_idx, party_idx,
+                                         model_info = model_info_local,
+                                         resp_party_idx = resp_p,
+                                         params = params_view)
     }
 
     run_transformer <- function(tokens) {
-      for (l_ in 1L:ModelDepth) {
-        Wq <- get(paste0("W_q_l", l_))
-        Wk <- get(paste0("W_k_l", l_))
-        Wv <- get(paste0("W_v_l", l_))
-        Wo <- get(paste0("W_o_l", l_))
-        Wff1 <- get(paste0("W_ff1_l", l_))
-        Wff2 <- get(paste0("W_ff2_l", l_))
-        RMS_attn <- get(paste0("RMS_attn_l", l_))
-        RMS_ff <- get(paste0("RMS_ff_l", l_))
-        alpha_attn <- get(paste0("alpha_attn_l", l_))
-        alpha_ff <- get(paste0("alpha_ff_l", l_))
-
-        tokens_norm <- rms_norm(tokens, RMS_attn)
-        Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
-        K <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wk)
-        V <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wv)
-
-        Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], Q$shape[[2]], TransformerHeads, head_dim))
-        Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]], TransformerHeads, head_dim))
-        Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]], TransformerHeads, head_dim))
-        scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(head_dim)))
-        scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
-        attn <- strenv$jax$nn$softmax(scores, axis = -1L)
-        context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
-        context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
-        attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
-
-        h1 <- tokens + alpha_attn * attn_out
-        h1_norm <- rms_norm(h1, RMS_ff)
-        ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
-        ff_act <- strenv$jax$nn$swish(ff_pre)
-        ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + alpha_ff * ff_out
-      }
-      tokens <- rms_norm(tokens, RMS_final)
-      tokens
+      neural_run_transformer(tokens,
+                             model_info = transformer_model_info,
+                             params = params_view)
     }
 
     do_forward_and_lik_ <- function(Xb, pb, resp_p, resp_c, Yb) {
       N_batch <- ai(Xb$shape[[1]])
       choice_tok <- strenv$jnp$reshape(E_choice, list(1L, 1L, ModelDims))
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
-      resp_tokens <- list()
-      resp_party_tok <- strenv$jnp$take(E_resp_party, resp_p, axis = 0L)
-      resp_party_tok <- strenv$jnp$reshape(resp_party_tok, list(N_batch, 1L, ModelDims))
-      resp_tokens[[length(resp_tokens) + 1L]] <- resp_party_tok
-      if (n_resp_covariates > 0L) {
-        resp_cov_tok <- strenv$jnp$einsum("nc,cm->nm", resp_c, W_resp_x)
-        resp_cov_tok <- strenv$jnp$reshape(resp_cov_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- resp_cov_tok
-      }
+      ctx_tokens <- neural_build_context_tokens_batch(model_info = model_info_local,
+                                                      resp_party_idx = resp_p,
+                                                      resp_cov = resp_c,
+                                                      params = params_view)
       cand_tokens <- embed_candidate(Xb, pb, resp_p)
-      tokens <- strenv$jnp$concatenate(c(list(choice_tok), resp_tokens, list(cand_tokens)),
-                                       axis = 1L)
+      token_parts <- list(choice_tok)
+      if (!is.null(ctx_tokens)) {
+        token_parts <- c(token_parts, list(ctx_tokens))
+      }
+      token_parts <- c(token_parts, list(cand_tokens))
+      tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
       tokens <- run_transformer(tokens)
       choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
       choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
@@ -998,10 +2258,64 @@ generate_ModelOutcome_neural <- function(){
     party_single_jnp <- strenv$jnp$array(as.integer(party_single))$astype(strenv$jnp$int32)
   }
 
+  model_fn_base <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
+  model_fn <- model_fn_base
+  locscale_reparam <- NULL
+  if (!is.null(strenv$numpyro$infer) &&
+      reticulate::py_has_attr(strenv$numpyro$infer, "reparam")) {
+    reparam_mod <- strenv$numpyro$infer$reparam
+    if (reticulate::py_has_attr(reparam_mod, "LocScaleReparam")) {
+      locscale_reparam <- reparam_mod$LocScaleReparam
+    }
+  }
+  if (is.null(locscale_reparam)) {
+    locscale_reparam <- tryCatch(
+      reticulate::import("numpyro.infer.reparam", delay_load = TRUE)$LocScaleReparam,
+      error = function(e) NULL
+    )
+  }
+  if (!is.null(locscale_reparam) &&
+      reticulate::py_has_attr(strenv$numpyro, "handlers")) {
+    reparam_config <- list()
+    for (l_ in 1L:ModelDepth) {
+      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+        site <- paste0(base, l_)
+        reparam_config[[site]] <- locscale_reparam(centered = 0)
+      }
+    }
+    reparam_config[["W_out"]] <- locscale_reparam(centered = 0)
+    reparam_config[["b_out"]] <- locscale_reparam(centered = 0)
+    if (isTRUE(use_cross_term)) {
+      reparam_config[["M_cross_raw"]] <- locscale_reparam(centered = 0)
+    }
+    model_fn <- tryCatch(
+      strenv$numpyro$handlers$reparam(fn = model_fn_base, config = reparam_config),
+      error = function(e) NULL
+    )
+    if (is.null(model_fn)) {
+      model_fn <- model_fn_base
+      manual_noncentered_loc_scale <- TRUE
+    } else {
+      manual_noncentered_loc_scale <- FALSE
+    }
+  } else {
+    manual_noncentered_loc_scale <- TRUE
+  }
+
   t0_ <- Sys.time()
-  if (identical(subsample_method, "batch_vi")) {
-    message("Enlisting SVI with autoguide for minibatched likelihood...")
-    model_fn <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
+  output_only_mode <- identical(tolower(as.character(uncertainty_scope)), "output")
+  use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
+  SVIParams <- NULL
+  svi_loss_curve <- NULL
+  if (isTRUE(use_svi)) {
+    if (isTRUE(output_only_mode)) {
+      message("Enlisting SVI with autoguide for output-only uncertainty...")
+    } else {
+      message("Enlisting SVI with autoguide for minibatched likelihood...")
+    }
+    if (!is.null(strenv$numpyro) && reticulate::py_has_attr(strenv$numpyro, "clear_param_store")) {
+      tryCatch(strenv$numpyro$clear_param_store(), error = function(e) NULL)
+    }
     guide_name <- if (!is.null(mcmc_control$vi_guide)) {
       tolower(as.character(mcmc_control$vi_guide))
     } else {
@@ -1027,7 +2341,7 @@ generate_ModelOutcome_neural <- function(){
     if (length(optimizer_tag) != 1L || is.na(optimizer_tag) || !nzchar(optimizer_tag)) {
       optimizer_tag <- "adam"
     }
-    if (!optimizer_tag %in% c("adam", "adabelief")) {
+    if (!optimizer_tag %in% c("adam", "adamw", "adabelief")) {
       stop(
         sprintf("Unknown optimizer '%s' for SVI.", optimizer_tag),
         call. = FALSE
@@ -1051,9 +2365,48 @@ generate_ModelOutcome_neural <- function(){
         call. = FALSE
       )
     }
-    svi_steps <- as.integer(mcmc_control$svi_steps)
-    if (length(svi_steps) != 1L || is.na(svi_steps) || svi_steps < 1L) {
-      svi_steps <- 1L
+    svi_steps_input <- mcmc_control$svi_steps
+    svi_steps <- NULL
+    if (is.character(svi_steps_input)) {
+      steps_tag <- tolower(as.character(svi_steps_input))
+      if (length(steps_tag) == 1L && !is.na(steps_tag) && nzchar(steps_tag) &&
+          identical(steps_tag, "optimal")) {
+        n_obs_svi <- length(Y_use)
+        pairwise_scaling <- pairwise_mode
+        if (isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
+          pair_id_use <- pair_id_
+          pair_id_use <- pair_id_use[!is.na(pair_id_use)]
+          if (length(pair_id_use) > 0L) {
+            n_obs_svi <- length(unique(pair_id_use))
+            pairwise_scaling <- TRUE
+          }
+        }
+        svi_steps <- neural_optimal_svi_steps(
+          n_obs = n_obs_svi,
+          n_factors = length(factor_levels_int),
+          factor_levels = factor_levels_int,
+          model_dims = ModelDims,
+          model_depth = ModelDepth,
+          n_party_levels = n_party_levels,
+          n_resp_party_levels = n_resp_party_levels,
+          n_resp_covariates = n_resp_covariates,
+          n_outcomes = nOutcomes,
+          pairwise_mode = pairwise_scaling,
+          use_matchup_token = use_matchup_token,
+          use_cross_encoder = use_cross_encoder,
+          use_cross_term = use_cross_term,
+          batch_size = mcmc_control$batch_size,
+          subsample_method = subsample_method
+        )
+        mcmc_control$svi_steps <- svi_steps
+        message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
+      }
+    }
+    if (is.null(svi_steps)) {
+      svi_steps <- as.integer(svi_steps_input)
+      if (length(svi_steps) != 1L || is.na(svi_steps) || svi_steps < 1L) {
+        svi_steps <- 1L
+      }
     }
     warmup_frac <- if (!is.null(mcmc_control$svi_lr_warmup_frac)) {
       as.numeric(mcmc_control$svi_lr_warmup_frac)
@@ -1098,6 +2451,22 @@ generate_ModelOutcome_neural <- function(){
     }
     svi_optim <- if (optimizer_tag == "adam") {
       strenv$numpyro$optim$Adam(lr_schedule)
+    } else if (optimizer_tag == "adamw") {
+      if (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW")) {
+        strenv$numpyro$optim$AdamW(lr_schedule)
+      } else if (reticulate::py_has_attr(strenv$optax, "adamw")) {
+        optax_optim <- strenv$optax$adamw(learning_rate = lr_schedule)
+        if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
+          strenv$numpyro$optim$optax_to_numpyro(optax_optim)
+        } else {
+          optax_optim
+        }
+      } else {
+        stop(
+          "optimizer='adamw' requested, but neither numpyro.optim.AdamW nor optax.adamw is available.",
+          call. = FALSE
+        )
+      }
     } else {
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
       if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
@@ -1134,6 +2503,32 @@ generate_ModelOutcome_neural <- function(){
                             resp_cov = resp_cov_jnp,
                             Y_obs = Y_jnp)
     }
+    svi_loss_curve <- tryCatch({
+      if (reticulate::py_has_attr(svi_result, "losses")) {
+        as.numeric(reticulate::py_to_r(svi_result$losses))
+      } else if (!is.null(svi_result$losses)) {
+        as.numeric(reticulate::py_to_r(svi_result$losses))
+      } else {
+        NULL
+      }
+    }, error = function(e) NULL)
+    if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L &&
+        identical(subsample_method, "batch_vi")) {
+      svi_loss_curve <- as.numeric(svi_loss_curve)
+      svi_loss_curve[!is.finite(svi_loss_curve)] <- NA_real_
+      try(suppressWarnings(plot(svi_loss_curve,
+                                type = "l",
+                                main = "SVI ELBO loss",
+                                xlab = "Iteration",
+                                ylab = "ELBO loss")), TRUE)
+      finite_idx <- is.finite(svi_loss_curve)
+      if (sum(finite_idx, na.rm = TRUE) >= 2L) {
+        try(points(lowess(svi_loss_curve[finite_idx]),
+                   type = "l",
+                   lwd = 2,
+                   col = "red"), TRUE)
+      }
+    }
     svi_state <- if (!is.null(svi_result$state)) {
       svi_result$state
     } else if (length(svi_result) > 0L) {
@@ -1142,6 +2537,7 @@ generate_ModelOutcome_neural <- function(){
       svi_result
     }
     params <- svi$get_params(svi_state)
+    SVIParams <- params
     n_draws <- ai(mcmc_control$svi_num_draws)
     if (length(n_draws) != 1L || is.na(n_draws) || !is.finite(n_draws) || n_draws < 1L) {
       n_draws <- 1L
@@ -1164,13 +2560,13 @@ generate_ModelOutcome_neural <- function(){
     if (identical(subsample_method, "batch")) {
       message("Enlisting HMCECS kernels for subsampled likelihood...")
       kernel <- strenv$numpyro$infer$HMCECS(
-        strenv$numpyro$infer$NUTS(if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel),
+        strenv$numpyro$infer$NUTS(model_fn),
         num_blocks = if (!is.null(mcmc_control$num_blocks)) ai(mcmc_control$num_blocks) else ai(4L)
       )
     } else {
       message("Enlisting NUTS kernels for full-data likelihood...")
       kernel <- strenv$numpyro$infer$NUTS(
-        if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel,
+        model_fn,
         max_tree_depth = ai(8L),
         target_accept_prob = 0.85
       )
@@ -1240,6 +2636,46 @@ generate_ModelOutcome_neural <- function(){
     missing_draw <- strenv$jnp$expand_dims(missing_draw, axis = 2L)
     strenv$jnp$concatenate(list(centered_real, missing_draw), axis = 2L)
   }
+  get_loc_scale_draws <- function(name, scale_name) {
+    draws <- PosteriorDraws[[name]]
+    if (!is.null(draws)) {
+      return(draws)
+    }
+    base_names <- c(paste0(name, "_decentered"),
+                    paste0(name, "_base"),
+                    paste0(name, "_z"))
+    base_draws <- NULL
+    for (base_name in base_names) {
+      if (!is.null(PosteriorDraws[[base_name]])) {
+        base_draws <- PosteriorDraws[[base_name]]
+        break
+      }
+    }
+    if (is.null(base_draws)) {
+      return(NULL)
+    }
+    scale_draws <- PosteriorDraws[[scale_name]]
+    if (is.null(scale_draws)) {
+      return(NULL)
+    }
+    scale_shape <- tryCatch(
+      as.integer(reticulate::py_to_r(scale_draws$shape)),
+      error = function(e) NULL
+    )
+    base_shape <- tryCatch(
+      as.integer(reticulate::py_to_r(base_draws$shape)),
+      error = function(e) NULL
+    )
+    if (is.null(scale_shape) || is.null(base_shape)) {
+      return(scale_draws * base_draws)
+    }
+    extra_dims <- length(base_shape) - length(scale_shape)
+    if (extra_dims > 0L) {
+      reshape_dims <- c(scale_shape, rep(1L, extra_dims))
+      scale_draws <- strenv$jnp$reshape(scale_draws, as.list(reshape_dims))
+    }
+    scale_draws * base_draws
+  }
   get_cross_draws <- function() {
     draws <- PosteriorDraws$M_cross
     if (!is.null(draws)) {
@@ -1247,82 +2683,142 @@ generate_ModelOutcome_neural <- function(){
     }
     raw_draws <- PosteriorDraws$M_cross_raw
     if (is.null(raw_draws)) {
+      raw_draws <- get_loc_scale_draws("M_cross_raw", "tau_cross")
+    }
+    if (is.null(raw_draws)) {
       return(NULL)
     }
     trans_axes <- list(0L, 1L, 3L, 2L)
     0.5 * (raw_draws - strenv$jnp$transpose(raw_draws, trans_axes))
   }
+  get_param_draws <- function(name) {
+    if (startsWith(name, "E_factor_")) {
+      return(get_centered_factor_draws(name))
+    }
+    if (identical(name, "M_cross")) {
+      return(get_cross_draws())
+    }
+    if (identical(name, "W_out")) {
+      return(get_loc_scale_draws("W_out", "tau_w_out"))
+    }
+    if (identical(name, "b_out")) {
+      return(get_loc_scale_draws("b_out", "tau_b"))
+    }
+    if (grepl("^W_(q|k|v|o)_l\\d+$", name) ||
+        grepl("^W_ff(1|2)_l\\d+$", name)) {
+      layer_id <- sub(".*_l", "", name)
+      tau_name <- paste0("tau_w_", layer_id)
+      return(get_loc_scale_draws(name, tau_name))
+    }
+    PosteriorDraws[[name]]
+  }
 
-  ParamsMean <- list(
-    E_party = mean_param(PosteriorDraws$E_party),
-    E_resp_party = mean_param(PosteriorDraws$E_resp_party),
-    E_choice = mean_param(PosteriorDraws$E_choice)
-  )
-  if (!is.null(PosteriorDraws$E_sep)) {
-    ParamsMean$E_sep <- mean_param(PosteriorDraws$E_sep)
+  p2d_output_only <- isTRUE(output_only_mode)
+  get_svi_param <- function(name) {
+    if (is.null(SVIParams)) {
+      return(NULL)
+    }
+    tryCatch(SVIParams[[name]], error = function(e) NULL)
   }
-  if (!is.null(PosteriorDraws$E_segment)) {
-    ParamsMean$E_segment <- mean_param(PosteriorDraws$E_segment)
+  get_site_mean_or_param <- function(name) {
+    draws <- PosteriorDraws[[name]]
+    if (!is.null(draws)) {
+      return(mean_param(draws))
+    }
+    get_svi_param(name)
   }
-  if (!is.null(PosteriorDraws$E_feature_id)) {
-    ParamsMean$E_feature_id <- mean_param(PosteriorDraws$E_feature_id)
+
+  ParamsMean <- list()
+  ParamsMean$E_party <- get_site_mean_or_param("E_party")
+  ParamsMean$E_resp_party <- get_site_mean_or_param("E_resp_party")
+  ParamsMean$E_choice <- get_site_mean_or_param("E_choice")
+  if (is.null(ParamsMean$E_party) || is.null(ParamsMean$E_resp_party) || is.null(ParamsMean$E_choice)) {
+    stop("Neural model is missing required embedding estimates.", call. = FALSE)
   }
-  if (!is.null(PosteriorDraws$E_rel)) {
-    ParamsMean$E_rel <- mean_param(PosteriorDraws$E_rel)
+
+  maybe_site <- function(name, assign_as = name) {
+    value <- get_site_mean_or_param(name)
+    if (!is.null(value)) {
+      ParamsMean[[assign_as]] <<- value
+    }
+    invisible(value)
   }
-  if (!is.null(PosteriorDraws$E_stage)) {
-    ParamsMean$E_stage <- mean_param(PosteriorDraws$E_stage)
+
+  maybe_site("E_sep")
+  maybe_site("E_segment")
+  maybe_site("E_feature_id")
+  maybe_site("E_rel")
+  maybe_site("E_stage")
+  maybe_site("E_matchup")
+
+  W_out_draws <- get_loc_scale_draws("W_out", "tau_w_out")
+  if (!is.null(W_out_draws)) {
+    ParamsMean$W_out <- mean_param(W_out_draws)
   }
-  if (!is.null(PosteriorDraws$E_matchup)) {
-    ParamsMean$E_matchup <- mean_param(PosteriorDraws$E_matchup)
+  b_out_draws <- get_loc_scale_draws("b_out", "tau_b")
+  if (!is.null(b_out_draws)) {
+    ParamsMean$b_out <- mean_param(b_out_draws)
   }
-  if (!is.null(PosteriorDraws$W_out)) {
-    ParamsMean$W_out <- mean_param(PosteriorDraws$W_out)
-  }
-  if (!is.null(PosteriorDraws$b_out)) {
-    ParamsMean$b_out <- mean_param(PosteriorDraws$b_out)
-  }
+
   cross_draws <- get_cross_draws()
   if (!is.null(cross_draws)) {
     ParamsMean$M_cross <- mean_param(cross_draws)
+  } else if (isTRUE(p2d_output_only) && isTRUE(pairwise_mode) && isTRUE(use_cross_term)) {
+    M_cross_raw <- get_svi_param("M_cross_raw")
+    if (!is.null(M_cross_raw)) {
+      ParamsMean$M_cross <- 0.5 * (M_cross_raw - strenv$jnp$transpose(M_cross_raw))
+    }
   }
+
   if (!is.null(PosteriorDraws$W_cross_out)) {
     ParamsMean$W_cross_out <- mean_param(PosteriorDraws$W_cross_out)
   }
   if (likelihood == "normal") {
     ParamsMean$sigma <- mean_param(PosteriorDraws$sigma)
   }
-  if (n_resp_covariates > 0L && !is.null(PosteriorDraws$W_resp_x)) {
-    ParamsMean$W_resp_x <- mean_param(PosteriorDraws$W_resp_x)
+
+  if (n_resp_covariates > 0L) {
+    maybe_site("W_resp_x")
   }
-  for (d_ in 1:length(factor_levels)) {
+
+  for (d_ in seq_along(factor_levels_int)) {
     name <- paste0("E_factor_", d_)
     draws <- get_centered_factor_draws(name)
     if (!is.null(draws)) {
       ParamsMean[[name]] <- mean_param(draws)
+    } else if (isTRUE(p2d_output_only)) {
+      raw_name <- paste0(name, "_raw")
+      raw_val <- get_svi_param(raw_name)
+      if (!is.null(raw_val)) {
+        ParamsMean[[name]] <- center_factor_embeddings(raw_val, factor_levels_int[d_])
+      }
     }
   }
+
   for (l_ in 1L:ModelDepth) {
     alpha_attn_name <- paste0("alpha_attn_l", l_)
     alpha_ff_name <- paste0("alpha_ff_l", l_)
-    if (!is.null(PosteriorDraws[[alpha_attn_name]])) {
-      ParamsMean[[alpha_attn_name]] <- mean_param(PosteriorDraws[[alpha_attn_name]])
+    maybe_site(alpha_attn_name)
+    maybe_site(alpha_ff_name)
+
+    maybe_site(paste0("RMS_attn_l", l_))
+    maybe_site(paste0("RMS_ff_l", l_))
+
+    for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+      name <- paste0(base, l_)
+      tau_name <- paste0("tau_w_", l_)
+      draws <- get_loc_scale_draws(name, tau_name)
+      if (!is.null(draws)) {
+        ParamsMean[[name]] <- mean_param(draws)
+      } else if (isTRUE(p2d_output_only)) {
+        value <- get_svi_param(name)
+        if (!is.null(value)) {
+          ParamsMean[[name]] <- value
+        }
+      }
     }
-    if (!is.null(PosteriorDraws[[alpha_ff_name]])) {
-      ParamsMean[[alpha_ff_name]] <- mean_param(PosteriorDraws[[alpha_ff_name]])
-    }
-    ParamsMean[[paste0("RMS_attn_l", l_)]] <- mean_param(PosteriorDraws[[paste0("RMS_attn_l", l_)]])
-    ParamsMean[[paste0("RMS_ff_l", l_)]] <- mean_param(PosteriorDraws[[paste0("RMS_ff_l", l_)]])
-    ParamsMean[[paste0("W_q_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_q_l",  l_)]])
-    ParamsMean[[paste0("W_k_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_k_l",  l_)]])
-    ParamsMean[[paste0("W_v_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_v_l",  l_)]])
-    ParamsMean[[paste0("W_o_l", l_)]]  <- mean_param(PosteriorDraws[[paste0("W_o_l",  l_)]])
-    ParamsMean[[paste0("W_ff1_l", l_)]]<- mean_param(PosteriorDraws[[paste0("W_ff1_l",l_)]])
-    ParamsMean[[paste0("W_ff2_l", l_)]]<- mean_param(PosteriorDraws[[paste0("W_ff2_l",l_)]])
   }
-  if (!is.null(PosteriorDraws$RMS_final)) {
-    ParamsMean$RMS_final <- mean_param(PosteriorDraws$RMS_final)
-  }
+  maybe_site("RMS_final")
 
   TransformerPredict_pair <- function(params, Xl_new, Xr_new, pl_new, pr_new,
                                       resp_party_new = NULL, resp_cov_new = NULL,
@@ -1344,89 +2840,31 @@ generate_ModelOutcome_neural <- function(){
     }
     resp_c <- strenv$jnp$array(as.matrix(resp_cov_new))$astype(ddtype_)
 
+    model_info_local <- list(
+      model_dims = ModelDims,
+      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp
+    )
+
     embed_candidate <- function(X_idx, party_idx, resp_p) {
-      D_local <- ai(X_idx$shape[[2]])
-      token_list <- vector("list", D_local)
-      for (d_ in 1L:D_local) {
-        E_d <- params[[paste0("E_factor_", d_)]]
-        idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-        token_list[[d_]] <- strenv$jnp$take(E_d, idx_d, axis = 0L)
-      }
-      tokens <- strenv$jnp$stack(token_list, axis = 1L)
-      if (!is.null(params$E_feature_id)) {
-        feature_tok <- strenv$jnp$reshape(params$E_feature_id, list(1L, D_local, ModelDims))
-        tokens <- tokens + feature_tok
-      }
-      party_tok <- strenv$jnp$take(params$E_party, party_idx, axis = 0L)
-      party_tok <- strenv$jnp$reshape(party_tok, list(tokens$shape[[1]], 1L, ModelDims))
-      if (is.null(params$E_rel)) {
-        return(strenv$jnp$concatenate(list(tokens, party_tok), axis = 1L))
-      }
-      cand_resp_idx <- strenv$jnp$take(cand_party_to_resp_idx_jnp, party_idx, axis = 0L)
-      is_known <- cand_resp_idx >= 0L
-      is_match <- strenv$jnp$equal(cand_resp_idx, resp_p)
-      rel_idx <- strenv$jnp$where(is_match, ai(0L),
-                                  strenv$jnp$where(is_known, ai(1L), ai(2L)))
-      rel_idx <- strenv$jnp$astype(rel_idx, strenv$jnp$int32)
-      rel_tok <- strenv$jnp$take(params$E_rel, rel_idx, axis = 0L)
-      rel_tok <- strenv$jnp$reshape(rel_tok, list(tokens$shape[[1]], 1L, ModelDims))
-      strenv$jnp$concatenate(list(tokens, party_tok, rel_tok), axis = 1L)
+      neural_build_candidate_tokens_hard(X_idx, party_idx,
+                                         model_info = model_info_local,
+                                         resp_party_idx = resp_p,
+                                         params = params)
     }
 
     add_segment_embedding <- function(tokens, segment_idx) {
-      if (is.null(params$E_segment)) {
-        return(tokens)
-      }
-      seg_vec <- strenv$jnp$take(params$E_segment, ai(segment_idx), axis = 0L)
-      seg_tok <- strenv$jnp$reshape(seg_vec, list(1L, 1L, ModelDims))
-      tokens + seg_tok
+      neural_add_segment_embedding(tokens, segment_idx,
+                                   model_info = model_info_local,
+                                   params = params)
     }
 
     run_transformer <- function(tokens) {
-      for (l_ in 1L:ModelDepth) {
-        Wq <- params[[paste0("W_q_l", l_)]]
-        Wk <- params[[paste0("W_k_l", l_)]]
-        Wv <- params[[paste0("W_v_l", l_)]]
-        Wo <- params[[paste0("W_o_l", l_)]]
-        Wff1 <- params[[paste0("W_ff1_l", l_)]]
-        Wff2 <- params[[paste0("W_ff2_l", l_)]]
-        RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
-        RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
-        alpha_attn <- params[[paste0("alpha_attn_l", l_)]]
-        if (is.null(alpha_attn)) {
-          alpha_attn <- 1.0
-        }
-        alpha_ff <- params[[paste0("alpha_ff_l", l_)]]
-        if (is.null(alpha_ff)) {
-          alpha_ff <- 1.0
-        }
-
-        tokens_norm <- rms_norm(tokens, RMS_attn)
-        Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
-        K <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wk)
-        V <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wv)
-
-        Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], Q$shape[[2]], TransformerHeads, head_dim))
-        Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]], TransformerHeads, head_dim))
-        Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]], TransformerHeads, head_dim))
-        scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(head_dim)))
-        scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
-        attn <- strenv$jax$nn$softmax(scores, axis = -1L)
-        context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
-        context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
-        attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
-
-        h1 <- tokens + alpha_attn * attn_out
-        h1_norm <- rms_norm(h1, RMS_ff)
-        ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
-        ff_act <- strenv$jax$nn$swish(ff_pre)
-        ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + alpha_ff * ff_out
-      }
-      if (!is.null(params$RMS_final)) {
-        tokens <- rms_norm(tokens, params$RMS_final)
-      }
-      tokens
+      neural_run_transformer(tokens,
+                             model_info = list(model_depth = ModelDepth,
+                                               model_dims = ModelDims,
+                                               n_heads = TransformerHeads,
+                                               head_dim = head_dim),
+                             params = params)
     }
 
     compute_matchup_idx <- function(pl, pr) {
@@ -1438,42 +2876,18 @@ generate_ModelOutcome_neural <- function(){
     }
 
     build_context_tokens <- function(stage_idx, resp_p, resp_c, matchup_idx = NULL) {
-      N_batch <- ai(resp_p$shape[[1]])
-      resp_tokens <- list()
-      if (!is.null(params$E_stage)) {
-        stage_tok <- params$E_stage[resp_p, stage_idx]
-        stage_tok <- strenv$jnp$reshape(stage_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- stage_tok
-      }
-      if (!is.null(params$E_resp_party)) {
-        resp_party_tok <- strenv$jnp$take(params$E_resp_party, resp_p, axis = 0L)
-        resp_party_tok <- strenv$jnp$reshape(resp_party_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- resp_party_tok
-      }
-      if (!is.null(params$E_matchup) && !is.null(matchup_idx)) {
-        matchup_tok <- strenv$jnp$take(params$E_matchup, matchup_idx, axis = 0L)
-        matchup_tok <- strenv$jnp$reshape(matchup_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- matchup_tok
-      }
-      if (!is.null(params$W_resp_x) && ai(resp_c$shape[[2]]) > 0L) {
-        resp_cov_tok <- strenv$jnp$einsum("nc,cm->nm", resp_c, params$W_resp_x)
-        resp_cov_tok <- strenv$jnp$reshape(resp_cov_tok, list(N_batch, 1L, ModelDims))
-        resp_tokens[[length(resp_tokens) + 1L]] <- resp_cov_tok
-      }
-      if (length(resp_tokens) == 0L) {
-        return(NULL)
-      }
-      strenv$jnp$concatenate(resp_tokens, axis = 1L)
+      neural_build_context_tokens_batch(model_info = model_info_local,
+                                        resp_party_idx = resp_p,
+                                        stage_idx = stage_idx,
+                                        matchup_idx = matchup_idx,
+                                        resp_cov = resp_c,
+                                        params = params)
     }
 
     build_sep_token <- function(N_batch) {
-      sep_vec <- if (!is.null(params$E_sep)) {
-        params$E_sep
-      } else {
-        strenv$jnp$zeros(list(ModelDims))
-      }
-      sep_tok <- strenv$jnp$reshape(sep_vec, list(1L, 1L, ModelDims))
-      sep_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
+      neural_build_sep_token(model_info_local,
+                             n_batch = N_batch,
+                             params = params)
     }
 
     encode_pair_cross <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
@@ -1522,8 +2936,7 @@ generate_ModelOutcome_neural <- function(){
       strenv$jnp$squeeze(choice_out, axis = 1L)
     }
 
-    stage_idx <- strenv$jnp$equal(pl, pr)
-    stage_idx <- strenv$jnp$astype(stage_idx, strenv$jnp$int32)
+    stage_idx <- neural_stage_index(pl, pr, model_info_local)
     matchup_idx <- NULL
     if (!is.null(params$E_matchup)) {
       matchup_idx <- compute_matchup_idx(pl, pr)
@@ -1585,98 +2998,40 @@ generate_ModelOutcome_neural <- function(){
     }
     resp_c <- strenv$jnp$array(as.matrix(resp_cov_new))$astype(ddtype_)
 
+    model_info_local <- list(
+      model_dims = ModelDims,
+      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp
+    )
+
     embed_candidate <- function(X_idx, party_idx, resp_p) {
-      D_local <- ai(X_idx$shape[[2]])
-      token_list <- vector("list", D_local)
-      for (d_ in 1L:D_local) {
-        E_d <- params[[paste0("E_factor_", d_)]]
-        idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-        token_list[[d_]] <- strenv$jnp$take(E_d, idx_d, axis = 0L)
-      }
-      tokens <- strenv$jnp$stack(token_list, axis = 1L)
-      if (!is.null(params$E_feature_id)) {
-        feature_tok <- strenv$jnp$reshape(params$E_feature_id, list(1L, D_local, ModelDims))
-        tokens <- tokens + feature_tok
-      }
-      party_tok <- strenv$jnp$take(params$E_party, party_idx, axis = 0L)
-      party_tok <- strenv$jnp$reshape(party_tok, list(tokens$shape[[1]], 1L, ModelDims))
-      if (is.null(params$E_rel)) {
-        return(strenv$jnp$concatenate(list(tokens, party_tok), axis = 1L))
-      }
-      cand_resp_idx <- strenv$jnp$take(cand_party_to_resp_idx_jnp, party_idx, axis = 0L)
-      is_known <- cand_resp_idx >= 0L
-      is_match <- strenv$jnp$equal(cand_resp_idx, resp_p)
-      rel_idx <- strenv$jnp$where(is_match, ai(0L),
-                                  strenv$jnp$where(is_known, ai(1L), ai(2L)))
-      rel_idx <- strenv$jnp$astype(rel_idx, strenv$jnp$int32)
-      rel_tok <- strenv$jnp$take(params$E_rel, rel_idx, axis = 0L)
-      rel_tok <- strenv$jnp$reshape(rel_tok, list(tokens$shape[[1]], 1L, ModelDims))
-      strenv$jnp$concatenate(list(tokens, party_tok, rel_tok), axis = 1L)
+      neural_build_candidate_tokens_hard(X_idx, party_idx,
+                                         model_info = model_info_local,
+                                         resp_party_idx = resp_p,
+                                         params = params)
     }
 
     run_transformer <- function(tokens) {
-      for (l_ in 1L:ModelDepth) {
-        Wq <- params[[paste0("W_q_l", l_)]]
-        Wk <- params[[paste0("W_k_l", l_)]]
-        Wv <- params[[paste0("W_v_l", l_)]]
-        Wo <- params[[paste0("W_o_l", l_)]]
-        Wff1 <- params[[paste0("W_ff1_l", l_)]]
-        Wff2 <- params[[paste0("W_ff2_l", l_)]]
-        RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
-        RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
-        alpha_attn <- params[[paste0("alpha_attn_l", l_)]]
-        if (is.null(alpha_attn)) {
-          alpha_attn <- 1.0
-        }
-        alpha_ff <- params[[paste0("alpha_ff_l", l_)]]
-        if (is.null(alpha_ff)) {
-          alpha_ff <- 1.0
-        }
-
-        tokens_norm <- rms_norm(tokens, RMS_attn)
-        Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
-        K <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wk)
-        V <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wv)
-
-        Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], Q$shape[[2]], TransformerHeads, head_dim))
-        Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]], TransformerHeads, head_dim))
-        Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]], TransformerHeads, head_dim))
-        scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(head_dim)))
-        scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
-        attn <- strenv$jax$nn$softmax(scores, axis = -1L)
-        context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
-        context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]], context_h$shape[[2]], ModelDims))
-        attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
-
-        h1 <- tokens + alpha_attn * attn_out
-        h1_norm <- rms_norm(h1, RMS_ff)
-        ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
-        ff_act <- strenv$jax$nn$swish(ff_pre)
-        ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-        tokens <- h1 + alpha_ff * ff_out
-      }
-      if (!is.null(params$RMS_final)) {
-        tokens <- rms_norm(tokens, params$RMS_final)
-      }
-      tokens
+      neural_run_transformer(tokens,
+                             model_info = list(model_depth = ModelDepth,
+                                               model_dims = ModelDims,
+                                               n_heads = TransformerHeads,
+                                               head_dim = head_dim),
+                             params = params)
     }
 
-    resp_tokens <- list()
-    if (!is.null(params$E_resp_party)) {
-      resp_party_tok <- strenv$jnp$take(params$E_resp_party, resp_p, axis = 0L)
-      resp_party_tok <- strenv$jnp$reshape(resp_party_tok, list(Xb$shape[[1]], 1L, ModelDims))
-      resp_tokens[[length(resp_tokens) + 1L]] <- resp_party_tok
-    }
-    if (!is.null(params$W_resp_x) && ai(resp_c$shape[[2]]) > 0L) {
-      resp_cov_tok <- strenv$jnp$einsum("nc,cm->nm", resp_c, params$W_resp_x)
-      resp_cov_tok <- strenv$jnp$reshape(resp_cov_tok, list(Xb$shape[[1]], 1L, ModelDims))
-      resp_tokens[[length(resp_tokens) + 1L]] <- resp_cov_tok
-    }
+    ctx_tokens <- neural_build_context_tokens_batch(model_info = model_info_local,
+                                                    resp_party_idx = resp_p,
+                                                    resp_cov = resp_c,
+                                                    params = params)
     choice_tok <- strenv$jnp$reshape(params$E_choice, list(1L, 1L, ModelDims))
     choice_tok <- choice_tok * strenv$jnp$ones(list(Xb$shape[[1]], 1L, 1L))
     cand_tokens <- embed_candidate(Xb, pb, resp_p)
-    tokens <- strenv$jnp$concatenate(c(list(choice_tok), resp_tokens, list(cand_tokens)),
-                                     axis = 1L)
+    token_parts <- list(choice_tok)
+    if (!is.null(ctx_tokens)) {
+      token_parts <- c(token_parts, list(ctx_tokens))
+    }
+    token_parts <- c(token_parts, list(cand_tokens))
+    tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
     tokens <- run_transformer(tokens)
     choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
     choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
@@ -1820,82 +3175,23 @@ generate_ModelOutcome_neural <- function(){
   }
 
   # Neural parameter vector and diagonal posterior covariance
-  param_names <- c(paste0("E_factor_", seq_len(length(factor_levels))),
-                   "E_feature_id",
-                   "E_party", "E_resp_party", "E_choice",
-                   "E_sep", "E_segment")
-  if (!is.null(ParamsMean$E_stage)) {
-    param_names <- c(param_names, "E_stage")
-  }
-  if (!is.null(ParamsMean$E_matchup)) {
-    param_names <- c(param_names, "E_matchup")
-  }
-  if (!is.null(ParamsMean$E_rel)) {
-    param_names <- c(param_names, "E_rel")
-  }
-  if (n_resp_covariates > 0L && !is.null(ParamsMean$W_resp_x)) {
-    param_names <- c(param_names, "W_resp_x")
-  }
-  if (!is.null(ParamsMean$M_cross)) {
-    param_names <- c(param_names, "M_cross")
-  }
-  if (!is.null(ParamsMean$W_cross_out)) {
-    param_names <- c(param_names, "W_cross_out")
-  }
-  for (l_ in 1L:ModelDepth) {
-    param_names <- c(param_names,
-                     paste0("alpha_attn_l", l_),
-                     paste0("alpha_ff_l", l_),
-                     paste0("RMS_attn_l", l_),
-                     paste0("RMS_ff_l", l_),
-                     paste0("W_q_l", l_),
-                     paste0("W_k_l", l_),
-                     paste0("W_v_l", l_),
-                     paste0("W_o_l", l_),
-                     paste0("W_ff1_l", l_),
-                     paste0("W_ff2_l", l_))
-  }
-  param_names <- c(param_names, "RMS_final", "W_out", "b_out")
-  if (likelihood == "normal") {
-    param_names <- c(param_names, "sigma")
-  }
-  param_names <- param_names[param_names %in% names(ParamsMean)]
+  param_schema <- neural_build_param_schema(
+    params = ParamsMean,
+    n_factors = length(factor_levels),
+    model_depth = ModelDepth
+  )
+  param_names <- param_schema$param_names
+  param_shapes <- param_schema$param_shapes
+  param_sizes <- param_schema$param_sizes
+  param_offsets <- param_schema$param_offsets
+  param_total <- as.integer(param_schema$n_params)
 
-  param_shapes <- lapply(param_names, function(name) {
-    shape <- tryCatch(reticulate::py_to_r(ParamsMean[[name]]$shape), error = function(e) NULL)
-    if (is.null(shape)) integer(0) else as.integer(shape)
-  })
-  param_sizes <- vapply(param_shapes, function(shape) {
-    if (length(shape) == 0L) {
-      1L
-    } else {
-      as.integer(prod(shape))
-    }
-  }, integer(1))
-  param_offsets <- as.integer(cumsum(c(0L, param_sizes))[seq_len(length(param_sizes))])
-  param_total <- sum(param_sizes)
-
-  flatten_params <- function(params) {
-    parts <- lapply(param_names, function(name) {
-      strenv$jnp$ravel(params[[name]])
-    })
-    if (length(parts) == 0L) {
-      return(strenv$jnp$array(numeric(0), dtype = ddtype_))
-    }
-    strenv$jnp$concatenate(parts, axis = 0L)
-  }
-  theta_mean <- flatten_params(ParamsMean)
+  theta_mean <- neural_flatten_params(ParamsMean, param_schema, dtype = ddtype_)
   theta_mean_num <- as.numeric(strenv$np$array(theta_mean))
 
   var_parts <- lapply(seq_along(param_names), function(i_) {
     name <- param_names[[i_]]
-    if (startsWith(name, "E_factor_")) {
-      draws <- get_centered_factor_draws(name)
-    } else if (identical(name, "M_cross")) {
-      draws <- get_cross_draws()
-    } else {
-      draws <- PosteriorDraws[[name]]
-    }
+    draws <- get_param_draws(name)
     if (is.null(draws)) {
       return(strenv$jnp$zeros(list(ai(param_sizes[[i_]])), dtype = ddtype_))
     }
@@ -1914,7 +3210,7 @@ generate_ModelOutcome_neural <- function(){
     param_var <- param_var[seq_len(param_total)]
   }
   if (uncertainty_scope == "output") {
-    keep <- param_names %in% c("W_out", "b_out", "sigma")
+    keep <- param_names %in% c("W_out", "b_out", "sigma", "W_cross_out")
     mask <- unlist(mapply(function(keep_i, size_i) rep(keep_i, size_i),
                           keep, param_sizes))
     if (length(mask) == length(param_var)) {
@@ -2152,6 +3448,19 @@ generate_ModelOutcome_neural <- function(){
     }
   }
 
+  if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L) {
+    finite_losses <- svi_loss_curve[is.finite(svi_loss_curve)]
+    svi_summary <- list(
+      svi_elbo = svi_loss_curve,
+      svi_elbo_final = if (length(finite_losses)) tail(finite_losses, 1) else NA_real_
+    )
+    if (is.null(fit_metrics)) {
+      fit_metrics <- svi_summary
+    } else {
+      fit_metrics <- c(fit_metrics, svi_summary)
+    }
+  }
+
   neural_model_info <- list(
     params = ParamsMean,
     param_names = param_names,
@@ -2192,6 +3501,8 @@ generate_ModelOutcome_neural <- function(){
     choice_token_index = 0L,
     likelihood = likelihood,
     fit_metrics = fit_metrics,
+    svi_loss_curve = svi_loss_curve,
+    stage_diagnostics = stage_diagnostics,
     model_dims = ModelDims,
     model_depth = ModelDepth,
     n_heads = TransformerHeads,

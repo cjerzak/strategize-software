@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.4.5)  22 JAN 2026 21:15
+This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex 2024.4.5)  26 JAN 2026 21:06
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -347,8 +347,8 @@ File: l3backend-pdftex.def 2024-02-20 L3 backend support: PDF output (pdfTeX)
 \l__color_backend_stack_int=\count294
 \l__pdf_internal_box=\box58
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpAJsjq5/Rd2pdf9fac
-3f226ce9/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpRVxnGA/Rd2pdfec0e
+1b5f1ad/Rd2.aux)
 \openout1 = `Rd2.aux'.
 
 LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 8.
@@ -386,23 +386,21 @@ LaTeX Font Info:    ... okay on input line 8.
 )
 Package hyperref Info: Link coloring ON on input line 8.
 
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpAJsjq5/Rd2pdf9fac
-3f226ce9/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpAJsjq5/Rd2pdf9fac
-3f226ce9/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpRVxnGA/Rd2pdfec0e
+1b5f1ad/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpRVxnGA/Rd2pdfec0e
+1b5f1ad/Rd2.out)
 \@outlinefile=\write4
 \openout4 = `Rd2.out'.
 
 LaTeX Font Info:    Trying to load font information for TS1+ptm on input line 2
 3.
-
-(/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd
+ (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd
 File: ts1ptm.fd 2001/06/04 font definitions for TS1/ptm.
 )
 LaTeX Font Info:    Trying to load font information for T1+zi4 on input line 24
 .
-
-(/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd
+ (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd
 File: t1zi4.fd 2018/01/14 T1/zi4 (Inconsolata)
 )
 LaTeX Font Info:    Font shape `T1/zi4/m/n' will be
@@ -425,8 +423,8 @@ LaTeX Font Info:    Trying to load font information for U+rsfs on input line 24
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd
 File: ursfs.fd 1998/03/24 rsfs font definition file (jk)
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpAJsjq5/Rd2pdf9fac
-3f226ce9/Rd2.toc [1
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpRVxnGA/Rd2pdfec0e
+1b5f1ad/Rd2.toc [1
 
 
 {/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/loc
@@ -436,310 +434,331 @@ al/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr/local/texlive/2024
 \openout5 = `Rd2.toc'.
 
 
-[2]
+[2] [3]
 LaTeX Font Info:    Font shape `T1/zi4/m/n' will be
-(Font)              scaled to size 9.0pt on input line 110.
- [3] [4]
+(Font)              scaled to size 9.0pt on input line 131.
+ [4]
 LaTeX Font Info:    Trying to load font information for TS1+zi4 on input line 2
-21.
+42.
  (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
 File: ts1zi4.fd 2018/01/14 TS1/zi4 (Inconsolata)
 )
 LaTeX Font Info:    Font shape `TS1/zi4/m/n' will be
-(Font)              scaled to size 9.0pt on input line 221.
- [5{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-ts1.enc}]
- [6] [7]
-Overfull \hbox (7.43814pt too wide) in paragraph at lines 390--394
+(Font)              scaled to size 9.0pt on input line 242.
+ [5] [6{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-ts1.e
+nc}] [7]
+Overfull \hbox (7.43814pt too wide) in paragraph at lines 412--416
 []\T1/ptm/m/n/10 is also []\T1/zi4/m/n/10 NULL[]\T1/ptm/m/n/10 , a se-quence of
  val-ues is au-to-mat-i-cally gen-er-ated (e.g., via []\T1/zi4/m/n/10 10^seq(-4
 ,
  []
 
-
-Overfull \hbox (4.05756pt too wide) in paragraph at lines 399--401
+[8]
+Overfull \hbox (4.05756pt too wide) in paragraph at lines 421--423
 []\T1/ptm/m/n/10 An in-te-ger or user-specified par-ti-tion-ing in-di-cat-ing t
 he num-ber of cross-validation
  []
 
 
-Overfull \hbox (0.43765pt too wide) in paragraph at lines 416--419
+Overfull \hbox (0.43765pt too wide) in paragraph at lines 438--441
 []\T1/ptm/m/n/10 An op-tional vari-able for spec-i-fy-ing which can-di-date is 
 in com-pe-ti-tion with which
  []
 
-[8]
-Overfull \hbox (4.06934pt too wide) in paragraph at lines 463--469
+
+Overfull \hbox (4.06934pt too wide) in paragraph at lines 485--491
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
  []
 
 [9]
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 505--522
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--546
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
  []
 
 
-Overfull \hbox (93.58759pt too wide) in paragraph at lines 505--522
+Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--546
 \T1/ptm/m/n/10 AST/DAG mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial mod
 el). Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
  []
 
 
-Overfull \hbox (2.49959pt too wide) in paragraph at lines 505--522
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--546
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
-[]\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim)
+[]\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
  []
 
 
-Overfull \hbox (102.91927pt too wide) in paragraph at lines 505--522
-\T1/ptm/m/n/10 or []\T1/zi4/m/n/10 "adabelief" []\T1/ptm/m/n/10 (op-tax). Learn
-ing-rate de-cay is con-trolled by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_s
-chedule
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--546
+\T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
+10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
+ng-
  []
 
 
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 505--522
+Overfull \hbox (29.60909pt too wide) in paragraph at lines 527--546
+\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
+ural_mcmc_control$svi_lr_schedule
+ []
+
+
+Overfull \hbox (47.89987pt too wide) in paragraph at lines 527--546
 []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
 with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
 i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
  []
 
-
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 544--548
+[10]
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 568--572
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
  []
 
-[10] [11] [12]
-Overfull \hbox (21.33908pt too wide) in paragraph at lines 728--732
+
+Overfull \hbox (15.69867pt too wide) in paragraph at lines 586--590
+[]\T1/zi4/m/n/10 "ogda"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "rain" []\T1/ptm/m/n
+/10 (an-chored extra-gradient with a de-cay-ing quadratic an-chor penalty),
+ []
+
+[11] [12] [13]
+Overfull \hbox (21.33908pt too wide) in paragraph at lines 757--761
 []\T1/zi4/m/n/10 plot_best_response_curves []\T1/ptm/m/n/10 takes the re-sult o
 f an ad-ver-sar-ial [][][]\T1/zi4/m/n/10 strategize[][][] []\T1/ptm/m/n/10 run 
 (i.e., with []\T1/zi4/m/n/10 adversarial
  []
 
-[13] [14] [15] [16]
-Overfull \hbox (1.81654pt too wide) in paragraph at lines 955--957
+[14] [15] [16]
+Overfull \hbox (1.81654pt too wide) in paragraph at lines 984--986
 []\T1/ptm/m/n/10 In ad-ver-sar-ial (two-player) mode, both AST and DAG play-ers
 ' met-rics are shown. In non-adversarial
  []
 
-[17] [18]
+[17] [18] [19]
 LaTeX Font Info:    Font shape `TS1/zi4/m/n' will be
-(Font)              scaled to size 10.0pt on input line 1097.
- [19] [20] [21] [22]
-Overfull \hbox (11.55678pt too wide) in paragraph at lines 1284--1287
+(Font)              scaled to size 10.0pt on input line 1126.
+
+Overfull \hbox (44.92848pt too wide) in paragraph at lines 1148--1149
+[]\T1/ptm/m/n/10 a data.frame con-tain-ing fac-tor columns plus []\T1/zi4/m/n/1
+0 pair_id []\T1/ptm/m/n/10 (and op-tion-ally []\T1/zi4/m/n/10 profile_order[]\T
+1/ptm/m/n/10 ),
+ []
+
+[20] [21] [22] [23] [24] [25]
+Overfull \hbox (11.55678pt too wide) in paragraph at lines 1479--1482
 []\T1/ptm/m/n/10 Logical in-di-cat-ing whether the out-come []\T1/zi4/m/n/10 Y 
 []\T1/ptm/m/n/10 rep-re-sents a first-difference or difference-
  []
 
 
-Overfull \hbox (4.06934pt too wide) in paragraph at lines 1293--1299
+Overfull \hbox (4.06934pt too wide) in paragraph at lines 1488--1494
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
  []
 
-
-Overfull \hbox (6.55933pt too wide) in paragraph at lines 1307--1311
+[26]
+Overfull \hbox (6.55933pt too wide) in paragraph at lines 1502--1506
 \T1/ptm/m/n/10 model co-ef-fi-cients to-ward a shared av-er-age when []\T1/zi4/
 m/n/10 adversarial_model_strategy
  []
 
-[23]
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 1333--1351
+
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 1528--1548
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
  []
 
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1333--1351
+Overfull \hbox (38.9694pt too wide) in paragraph at lines 1528--1548
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
 lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
  []
 
 
-Overfull \hbox (2.41992pt too wide) in paragraph at lines 1333--1351
+Overfull \hbox (2.41992pt too wide) in paragraph at lines 1528--1548
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
 tput" []\T1/ptm/m/n/10 to com-pute delta-
  []
 
 
-Overfull \hbox (12.74069pt too wide) in paragraph at lines 1333--1351
+Overfull \hbox (12.74069pt too wide) in paragraph at lines 1528--1548
 \T1/ptm/m/n/10 Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims []\T1/ptm/m/n
 /10 and []\T1/zi4/m/n/10 neural_mcmc_control$ModelDepth
  []
 
 
-Overfull \hbox (119.73929pt too wide) in paragraph at lines 1333--1351
+Overfull \hbox (119.73929pt too wide) in paragraph at lines 1528--1548
 []\T1/ptm/m/n/10 to over-ride the Trans-former hid-den width and depth. Set []\
 T1/zi4/m/n/10 neural_mcmc_control$cross_candidate_encoder
  []
 
 
-Overfull \hbox (2.49959pt too wide) in paragraph at lines 1333--1351
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 1528--1548
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
-[]\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim)
+[]\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
  []
 
 
-Overfull \hbox (102.91927pt too wide) in paragraph at lines 1333--1351
-\T1/ptm/m/n/10 or []\T1/zi4/m/n/10 "adabelief" []\T1/ptm/m/n/10 (op-tax). Learn
-ing-rate de-cay is con-trolled by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_s
-chedule
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 1528--1548
+\T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
+10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
+ng-
  []
 
 
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 1333--1351
+Overfull \hbox (29.60909pt too wide) in paragraph at lines 1528--1548
+\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
+ural_mcmc_control$svi_lr_schedule
+ []
+
+
+Overfull \hbox (47.89987pt too wide) in paragraph at lines 1528--1548
 []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
 with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
 i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
  []
 
 
-Overfull \hbox (17.64828pt too wide) in paragraph at lines 1352--1355
+Overfull \hbox (17.64828pt too wide) in paragraph at lines 1549--1552
 []\T1/ptm/m/n/10 A char-ac-ter string spec-i-fy-ing the type of penalty (e.g., 
 []\T1/zi4/m/n/10 "KL"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "L2"[]\T1/ptm/m/n/10 ,
  or []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 )
  []
 
-
-Overfull \hbox (19.19803pt too wide) in paragraph at lines 1359--1362
+[27]
+Overfull \hbox (19.19803pt too wide) in paragraph at lines 1556--1559
 \T1/zi4/m/n/10 TRUE[]\T1/ptm/m/n/10 . []\T1/zi4/m/n/10 "full" []\T1/ptm/m/n/10 
 dif-fer-en-ti-ates through the full op-ti-miza-tion trace (de-fault). []\T1/zi4
 /m/n/10 "implicit"
  []
 
 
-Overfull \hbox (20.21663pt too wide) in paragraph at lines 1359--1362
+Overfull \hbox (20.21663pt too wide) in paragraph at lines 1556--1559
 []\T1/ptm/m/n/10 uses im-plicit dif-fer-en-ti-a-tion at the so-lu-tion (ad-ver-
 sar-ial equi-lib-rium or non-adversarial
  []
 
 
-Overfull \hbox (4.58041pt too wide) in paragraph at lines 1371--1373
+Overfull \hbox (4.58041pt too wide) in paragraph at lines 1568--1570
 []\T1/ptm/m/n/10 Numeric in $\OT1/cmr/m/n/10 (0\OML/cmm/m/it/10 ; \OT1/cmr/m/n/
 10 1)$\T1/ptm/m/n/10 , spec-i-fy-ing the con-fi-dence level for in-ter-vals or 
 cred-i-ble bounds.
  []
 
-[24]
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 1384--1388
+
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 1581--1585
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
  []
 
-[25]
-Overfull \hbox (3.3386pt too wide) in paragraph at lines 1491--1492
+[28] [29]
+Overfull \hbox (3.3386pt too wide) in paragraph at lines 1693--1694
 []\T1/ptm/m/n/10 Standard er-rors for en-tries in []\T1/zi4/m/n/10 pi_star_poin
 t[]\T1/ptm/m/n/10 . Mir-rors the struc-ture of []\T1/zi4/m/n/10 pi_star_point
  []
 
-[26]
-Overfull \hbox (15.05844pt too wide) in paragraph at lines 1513--1516
+
+Overfull \hbox (15.05844pt too wide) in paragraph at lines 1715--1718
 [][][]\T1/zi4/m/n/10 cv_strategize[][][] []\T1/ptm/m/n/10 for cross-validation 
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
  []
 
-[27] [28]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1655--1658
+[30] [31] [32]
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1857--1860
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
  []
 
-[29] [30] [31]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 1806--1809
+[33] [34]
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2008--2011
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
  []
 
-
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 1843--1846
+[35]
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2045--2048
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
  []
 
-[32]
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 1875--1877
+
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2077--2079
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
  []
 
-[33]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 1974--1976
+[36] [37]
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2176--2178
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
  []
 
-[34] [35] [36] [37] [38] [39] [40] [41]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2479--2493
+[38] [39] [40] [41] [42] [43] [44] [45]
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2681--2695
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
  []
 
 
-Overfull \hbox (2.49959pt too wide) in paragraph at lines 2479--2493
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2681--2695
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
-[]\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim)
+[]\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
  []
 
 
-Overfull \hbox (102.91927pt too wide) in paragraph at lines 2479--2493
-\T1/ptm/m/n/10 or []\T1/zi4/m/n/10 "adabelief" []\T1/ptm/m/n/10 (op-tax). Learn
-ing-rate de-cay is con-trolled by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_s
-chedule
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2681--2695
+\T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
+m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
  []
 
 
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 2479--2493
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
- []
-
-[42]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpAJsjq5/Rd2pdf9fac
-3f226ce9/Rd2.ind [43] [44
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpRVxnGA/Rd2pdfec0e
+1b5f1ad/Rd2.ind [46] [47
 
 
 ])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpAJsjq5/Rd2pdf9fac
-3f226ce9/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpRVxnGA/Rd2pdfec0e
+1b5f1ad/Rd2.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-02-20>
  ***********
 Package rerunfilecheck Info: File `Rd2.out' has not changed.
-(rerunfilecheck)             Checksum: 9AA532DD5C0D72C4D7A345DC5625BB84;3921.
+(rerunfilecheck)             Checksum: 9EB20EF86490B42083FA282609A9A0B4;4664.
  ) 
 Here is how much of TeX's memory you used:
- 10784 strings out of 474116
- 163840 string characters out of 5743683
+ 10819 strings out of 474116
+ 164459 string characters out of 5743683
  1942187 words of memory out of 5000000
- 32737 multiletter control sequences out of 15000+600000
+ 32742 multiletter control sequences out of 15000+600000
  595802 words of font info for 83 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 92i,7n,95p,1046b,735s stack positions out of 10000i,1000n,20000p,200000b,200000s
-</usr/local/texlive/2024/texmf-dist/fonts/type1/public/inconsolata/Inconsolat
-a-zi4r.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/c
-mex10.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cm
-mi10.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmm
-i5.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7
-.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmib10
-.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.p
-fb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb>
-</usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb><
-/usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></u
-sr/local/texlive/2024/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/t
-exlive/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/202
-4/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-di
-st/fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (44 pages, 278219 bytes).
+ 92i,7n,95p,1046b,737s stack positions out of 10000i,1000n,20000p,200000b,200000s
+
+pdfTeX warning (dest): name{Rfn.predict} has been referenced but does not exist
+, replaced by a fixed one
+
+</usr/local/texlive/2024/texmf-dist/fonts/type1/public/inconsolata/Inconsolata-
+zi4r.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cme
+x10.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi
+10.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5
+.pfb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.p
+fb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmmib10.p
+fb></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb
+></usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></
+usr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></u
+sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
+/local/texlive/2024/texmf-dist/fonts/type1/urw/times/utmb8a.pfb></usr/local/tex
+live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
+texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
+/fonts/type1/urw/times/utmri8a.pfb>
+Output written on Rd2.pdf (47 pages, 285224 bytes).
 PDF statistics:
- 692 PDF objects out of 1000 (max. 8388607)
- 610 compressed objects within 7 object streams
- 224 named destinations out of 1000 (max. 500000)
- 201 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 764 PDF objects out of 1000 (max. 8388607)
+ 679 compressed objects within 7 object streams
+ 254 named destinations out of 1000 (max. 500000)
+ 241 words of extra memory for PDF output out of 10000 (max. 10000000)
 

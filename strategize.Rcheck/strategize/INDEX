@@ -1,3 +1,5 @@
+as_function             Convert a fitted predictor to a scoring
+                        function
 build_backend           Build the environment for 'strategize'. Creates
                         a conda environment in which JAX and NumPy are
                         installed. Users may also create such an
@@ -17,10 +19,15 @@ plot_convergence        Plot Convergence Diagnostics for Strategize
                         Results
 plot_quadrant_breakdown
                         Plot Four-Quadrant Contribution Breakdown
+predict.strategic_predictor
+                        Predict from a fitted strategic predictor
+predict_pair            Predict on wide-format pairwise data
+prediction-api          Prediction-Only Outcome Model API
 print.hessian_analysis
                         Print method for hessian_analysis objects
 print.strategize_result
                         Print Method for strategize Results
+strategic_prediction    Fit a prediction-only outcome model
 strategize              Estimate Optimal (or Adversarial) Stochastic
                         Interventions for Conjoint Experiments
 strategize.plot         Plot Estimated Probabilities for Hypothetical

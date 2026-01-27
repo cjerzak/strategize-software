@@ -55,6 +55,7 @@ strategize(
   use_optax = FALSE,
   optim_type = "gd",
   optimism = "extragrad",
+  optimism_coef = 1,
   compute_hessian = TRUE,
   hessian_max_dim = 50L
 )
@@ -192,8 +193,10 @@ the opponent-dependent cross-candidate term in pairwise mode, or set
 \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
 that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 For variational inference (subsample_method = "batch_vi"), set
-\code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim) or
-\code{"adabelief"} (optax). Learning-rate decay is controlled by
+\code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
+\code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+\code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
+a scaling-law heuristic based on model/data size) and
 \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.}
 
@@ -276,8 +279,13 @@ Defaults to \code{FALSE}.}
 \item{optimism}{Character string controlling optimistic / extra-gradient updates for the gradient
 optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
 \code{"smp"} (stochastic mirror-prox: extra-gradient with weighted averaging of look-ahead points),
-\code{"ogda"} (optimistic gradient), or \code{"none"} (standard updates). Only supported when
+\code{"ogda"} (optimistic gradient), \code{"rain"} (anchored extra-gradient with a decaying
+quadratic anchor penalty), or \code{"none"} (standard updates). Only supported when
 \code{use_optax = FALSE}.}
+
+\item{optimism_coef}{Numeric scalar controlling the magnitude of optimism adjustments. For
+\code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
+initial anchor penalty \eqn{\lambda_0} that decays linearly to zero over \code{nSGD} iterations.}
 
 \item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
 geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
