@@ -42,8 +42,8 @@ NULL
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
 #'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 #'   For variational inference (subsample_method = "batch_vi"), set
-#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim) or
-#'   \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
+#'   \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 #'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
 #' @param diff Difference mode flag
@@ -522,9 +522,9 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       !is.null(neural_mcmc_control$optimizer)) {
     optimizer_val <- tolower(as.character(neural_mcmc_control$optimizer))
     if (length(optimizer_val) != 1L || is.na(optimizer_val) ||
-        !optimizer_val %in% c("adam", "adabelief")) {
+        !optimizer_val %in% c("adam", "adamw", "adabelief")) {
       stop(
-        "'neural_mcmc_control$optimizer' must be 'adam' or 'adabelief'.",
+        "'neural_mcmc_control$optimizer' must be 'adam', 'adamw', or 'adabelief'.",
         call. = FALSE
       )
     }
