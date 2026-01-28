@@ -925,17 +925,38 @@ generate_ModelOutcome <- function(){
 		                pred_fold <- if (glm_family == "binomial") stats::plogis(eta) else eta
 		              }
 		            }
-		            pred_oos[test_pos] <- pred_fold
-		            fold_metrics <- compute_metrics(y_test, pred_fold)
-		            fold_metrics$fold <- fold
-		            fold_metrics$eval_note <- "oos"
-		            fold_metrics$n_test <- length(test_pos)
-		            fold_metrics$n_train <- length(train_pos)
-		            fold_metrics$protocol <- "legacy_fixed_design"
-		            by_fold[[fold]] <- fold_metrics
-		          }
-		        } else {
-		          # Nested protocol: re-run screening + interaction filtering on training folds only.
+			            pred_oos[test_pos] <- pred_fold
+			            fold_metrics <- compute_metrics(y_test, pred_fold)
+			            fold_metrics$fold <- fold
+			            fold_metrics$eval_note <- "oos"
+			            fold_metrics$n_test <- length(test_pos)
+			            fold_metrics$n_train <- length(train_pos)
+			            fold_metrics$protocol <- "legacy_fixed_design"
+			            fold_metric_items <- if (glm_family == "binomial") {
+			              Filter(Negate(is.null), list(
+			                format_metric("AUC", fold_metrics$auc, 4),
+			                format_metric("LogLoss", fold_metrics$log_loss, 4),
+			                format_metric("Acc", fold_metrics$accuracy, 3),
+			                format_metric("Brier", fold_metrics$brier, 4)
+			              ))
+			            } else {
+			              Filter(Negate(is.null), list(
+			                format_metric("RMSE", fold_metrics$rmse, 4),
+			                format_metric("MAE", fold_metrics$mae, 4)
+			              ))
+			            }
+			            if (length(fold_metric_items) > 0L) {
+			              message(sprintf("GLM OOS fold %d/%d (%s, %s): %s",
+			                              fold,
+			                              n_folds_use,
+			                              mode_note,
+			                              fold_metrics$protocol,
+			                              paste(fold_metric_items, collapse = ", ")))
+			            }
+			            by_fold[[fold]] <- fold_metrics
+			          }
+			        } else {
+			          # Nested protocol: re-run screening + interaction filtering on training folds only.
 		          is_pairwise <- isTRUE(diff)
 		          force_no_interactions_eval <- exists("force_no_interactions", inherits = TRUE) &&
 		            isTRUE(get("force_no_interactions", inherits = TRUE))
@@ -1235,16 +1256,37 @@ generate_ModelOutcome <- function(){
 		            fold_metrics <- compute_metrics(y_test, pred_fold)
 		            fold_metrics$fold <- fold
 		            fold_metrics$eval_note <- "oos"
-		            fold_metrics$n_test <- length(test_pos)
-		            fold_metrics$n_train <- length(train_pos)
-		            fold_metrics$protocol <- "nested_fold_refit"
-		            fold_metrics$screening_used <- screening_used
-		            fold_metrics$n_main <- ncol(X_main_train)
-		            fold_metrics$n_inter <- if (!is.null(X_inter_train)) ncol(X_inter_train) else 0L
-		            fold_metrics$n_stage <- if (!is.null(stage_dat_train)) ncol(stage_dat_train) else 0L
-		            by_fold[[fold]] <- fold_metrics
-		          }
-		        }
+			            fold_metrics$n_test <- length(test_pos)
+			            fold_metrics$n_train <- length(train_pos)
+			            fold_metrics$protocol <- "nested_fold_refit"
+			            fold_metrics$screening_used <- screening_used
+			            fold_metrics$n_main <- ncol(X_main_train)
+			            fold_metrics$n_inter <- if (!is.null(X_inter_train)) ncol(X_inter_train) else 0L
+			            fold_metrics$n_stage <- if (!is.null(stage_dat_train)) ncol(stage_dat_train) else 0L
+			            fold_metric_items <- if (glm_family == "binomial") {
+			              Filter(Negate(is.null), list(
+			                format_metric("AUC", fold_metrics$auc, 4),
+			                format_metric("LogLoss", fold_metrics$log_loss, 4),
+			                format_metric("Acc", fold_metrics$accuracy, 3),
+			                format_metric("Brier", fold_metrics$brier, 4)
+			              ))
+			            } else {
+			              Filter(Negate(is.null), list(
+			                format_metric("RMSE", fold_metrics$rmse, 4),
+			                format_metric("MAE", fold_metrics$mae, 4)
+			              ))
+			            }
+			            if (length(fold_metric_items) > 0L) {
+			              message(sprintf("GLM OOS fold %d/%d (%s, %s): %s",
+			                              fold,
+			                              n_folds_use,
+			                              mode_note,
+			                              fold_metrics$protocol,
+			                              paste(fold_metric_items, collapse = ", ")))
+			            }
+			            by_fold[[fold]] <- fold_metrics
+			          }
+			        }
 
 		        overall_metrics <- compute_metrics(y_eval, pred_oos)
 		        overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)

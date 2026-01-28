@@ -10,18 +10,24 @@ getQStar_single <- function(pi_star_ast, pi_star_dag,
   pi_star_dag <- strenv$jnp$reshape(pi_star_dag, list(-1L, 1L))
 
   # coef info
-  main_coef <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
-                                                       indices = main_indices_i0, 
-                                                       axis = 0L),1L)
+  main_coef <- strenv$jnp$reshape(
+    strenv$jnp$take(EST_COEFFICIENTS_tf_ast,
+                    indices = main_indices_i0,
+                    axis = 0L),
+    list(-1L, 1L)
+  )
   main_term <- strenv$jnp$reshape(
     strenv$jnp$sum(strenv$jnp$reshape(main_coef, list(-1L)) *
                      strenv$jnp$reshape(pi_star_ast, list(-1L))),
     list(1L, 1L)
   )
   if(!is.null(inter_indices_i0)){ 
-    inter_coef <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_ast,
-                                                          indices = inter_indices_i0, 
-                                                          axis = 0L), 1L)
+    inter_coef <- strenv$jnp$reshape(
+      strenv$jnp$take(EST_COEFFICIENTS_tf_ast,
+                      indices = inter_indices_i0,
+                      axis = 0L),
+      list(-1L, 1L)
+    )
   
     # get interaction info
     pi_dp <- strenv$jnp$take(pi_star_ast, 
@@ -67,8 +73,12 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   }
 
   # coef
-  main_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
-                                   indices = main_indices_i0, axis = 0L),1L)
+  main_coef_ast <- strenv$jnp$reshape(
+    strenv$jnp$take(EST_COEFFICIENTS_tf_ast,
+                    indices = main_indices_i0,
+                    axis = 0L),
+    list(-1L, 1L)
+  )
   DELTA_pi_star <- strenv$jnp$reshape((pi_star_ast - pi_star_dag), list(-1L))
   main_term_ast <- strenv$jnp$reshape(
     strenv$jnp$sum(strenv$jnp$reshape(main_coef_ast, list(-1L)) * DELTA_pi_star),
@@ -76,9 +86,12 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   )
   
   if(!is.null(inter_indices_i0)){ 
-    inter_coef_ast <- strenv$jnp$expand_dims(strenv$jnp$take(EST_COEFFICIENTS_tf_ast, 
-                                                             indices = inter_indices_i0, 
-                                                             axis = 0L),1L)
+    inter_coef_ast <- strenv$jnp$reshape(
+      strenv$jnp$take(EST_COEFFICIENTS_tf_ast,
+                      indices = inter_indices_i0,
+                      axis = 0L),
+      list(-1L, 1L)
+    )
   
     # get interaction info
     pi_ast_dp <- strenv$jnp$take(pi_star_ast, n2int( ai(interaction_info$dl_index_adj)-1L), axis=0L)
@@ -107,15 +120,23 @@ getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
 
   if( !Q_DISAGGREGATE ){ Qhat_population <- Qhat_ast_among_dag <- Qhat_ast_among_ast }
   if( Q_DISAGGREGATE ){ # run if DisaggreateQ
-    main_coef_dag <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_dag, 
-                                 indices = main_indices_i0, axis=0L), 1L)
+    main_coef_dag <- strenv$jnp$reshape(
+      strenv$jnp$take(EST_COEFFICIENTS_tf_dag,
+                      indices = main_indices_i0,
+                      axis = 0L),
+      list(-1L, 1L)
+    )
     main_term_dag <- strenv$jnp$reshape(
       strenv$jnp$sum(strenv$jnp$reshape(main_coef_dag, list(-1L)) * DELTA_pi_star),
       list(1L, 1L)
     )
     if(!is.null(inter_indices_i0)){ 
-      inter_coef_dag <- strenv$jnp$expand_dims( strenv$jnp$take(EST_COEFFICIENTS_tf_dag, 
-                                                                indices = inter_indices_i0, axis=0L), 1L)
+      inter_coef_dag <- strenv$jnp$reshape(
+        strenv$jnp$take(EST_COEFFICIENTS_tf_dag,
+                        indices = inter_indices_i0,
+                        axis = 0L),
+        list(-1L, 1L)
+      )
       inter_term_dag <- strenv$jnp$reshape(
         strenv$jnp$sum(strenv$jnp$reshape(inter_coef_dag, list(-1L)) * DELTA_pi_star_prod),
         list(1L, 1L)
