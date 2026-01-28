@@ -89,6 +89,8 @@ build_kappa_helpers <- function(compile_fxn, temp_pushf, ctx,
   party_idx_dag <- ctx$party_idx_dag
   resp_idx_ast <- ctx$resp_idx_ast
   resp_idx_dag <- ctx$resp_idx_dag
+  stage_idx_ast <- neural_stage_index(party_idx_ast, party_idx_ast, model_ast_primary)
+  stage_idx_dag <- neural_stage_index(party_idx_dag, party_idx_dag, model_dag_primary)
 
   use_utilities <- FALSE
   utility_ast <- utility_dag <- NULL
@@ -127,7 +129,7 @@ build_kappa_helpers <- function(compile_fxn, temp_pushf, ctx,
         v,
         party_idx_ast,
         resp_idx_ast,
-        1L,
+        stage_idx_ast,
         model_ast_primary,
         params = params_ast0,
         matchup_idx = matchup_idx
@@ -141,7 +143,7 @@ build_kappa_helpers <- function(compile_fxn, temp_pushf, ctx,
         v,
         party_idx_dag,
         resp_idx_dag,
-        1L,
+        stage_idx_dag,
         model_dag_primary,
         params = params_dag0,
         matchup_idx = matchup_idx
