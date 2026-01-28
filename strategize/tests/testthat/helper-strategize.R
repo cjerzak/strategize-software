@@ -196,7 +196,7 @@ generate_test_p_list <- function(W) {
 #' @param fast Logical; if TRUE, use minimal iterations for faster tests
 #' @return Named list of default parameters
 default_strategize_params <- function(fast = TRUE) {
-  list(
+  params <- list(
     lambda = 0.1,
     K = 1,
     nSGD = if (fast) 5L else 100L,
@@ -209,6 +209,15 @@ default_strategize_params <- function(fast = TRUE) {
     conda_env = "strategize_env",
     conda_env_required = TRUE
   )
+
+  if (fast) {
+    params$neural_mcmc_control <- list(
+      n_samples_warmup = 10L,
+      n_samples_mcmc = 10L
+    )
+  }
+
+  params
 }
 
 # =============================================================================
