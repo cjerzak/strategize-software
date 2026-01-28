@@ -174,16 +174,24 @@ FullGetQStar_ <- function(a_i_ast,                                #1
 ){
   
   # Map logits -> simplex (respecting ParameterizationType)
+  main_comp_mat_use <- strenv$main_comp_mat
+  shadow_comp_mat_use <- strenv$shadow_comp_mat
+  if (is.null(main_comp_mat_use)) {
+    main_comp_mat_use <- strenv$OneTf_flat
+  }
+  if (is.null(shadow_comp_mat_use)) {
+    shadow_comp_mat_use <- strenv$OneTf_flat
+  }
   pi_star_full_i_ast <- strenv$getPrettyPi_diff( pi_star_i_ast<-strenv$a2Simplex_diff_use(a_i_ast), 
                                                  strenv$ParameterizationType,
                                                  strenv$d_locator_use,       
-                                                 strenv$main_comp_mat,   
-                                                 strenv$shadow_comp_mat  )
+                                                 main_comp_mat_use,   
+                                                 shadow_comp_mat_use  )
   pi_star_full_i_dag <- strenv$getPrettyPi_diff( pi_star_i_dag<-strenv$a2Simplex_diff_use(a_i_dag),
                                                  strenv$ParameterizationType,
                                                  strenv$d_locator_use,       
-                                                 strenv$main_comp_mat,   
-                                                 strenv$shadow_comp_mat  )
+                                                 main_comp_mat_use,   
+                                                 shadow_comp_mat_use  )
   
   # Average-case path
   if(!adversarial){

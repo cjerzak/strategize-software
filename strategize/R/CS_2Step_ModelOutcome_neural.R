@@ -1012,7 +1012,14 @@ neural_getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   params_ast <- neural_params_from_theta(EST_COEFFICIENTS_tf_ast, model_ast)
   params_dag <- neural_params_from_theta(EST_COEFFICIENTS_tf_dag, model_dag)
 
-  if (exists("Q_DISAGGREGATE", inherits = TRUE) && !isTRUE(Q_DISAGGREGATE)) {
+  disaggregate <- if (exists("Q_DISAGGREGATE", inherits = TRUE)) {
+    isTRUE(Q_DISAGGREGATE)
+  } else if (exists("adversarial", inherits = TRUE)) {
+    isTRUE(adversarial)
+  } else {
+    FALSE
+  }
+  if (!isTRUE(disaggregate)) {
     resp_idx_dag <- resp_idx_ast
     params_dag <- params_ast
   }
@@ -1024,7 +1031,7 @@ neural_getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
     params = params_ast
   )
 
-  if (exists("Q_DISAGGREGATE", inherits = TRUE) && !isTRUE(Q_DISAGGREGATE)) {
+  if (!isTRUE(disaggregate)) {
     Qhat_population <- Qhat_ast_among_dag <- Qhat_ast_among_ast
   } else {
     Qhat_ast_among_dag <- neural_predict_pair_soft(
