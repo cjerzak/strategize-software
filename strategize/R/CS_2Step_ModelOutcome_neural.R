@@ -92,15 +92,15 @@ neural_matchup_index <- function(party_left_idx, party_right_idx, model_info){
 neural_logits_to_q <- function(logits, likelihood){
   if (likelihood == "bernoulli") {
     prob <- strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L))
-    return(strenv$jnp$reshape(prob, list(1L, 1L)))
+    return(strenv$jnp$reshape(prob, list(-1L, 1L)))
   }
   if (likelihood == "categorical") {
     probs <- strenv$jax$nn$softmax(logits, axis = -1L)
     prob <- strenv$jnp$take(probs, 1L, axis = 1L)
-    return(strenv$jnp$reshape(prob, list(1L, 1L)))
+    return(strenv$jnp$reshape(prob, list(-1L, 1L)))
   }
   mu <- strenv$jnp$squeeze(logits, axis = 1L)
-  strenv$jnp$reshape(mu, list(1L, 1L))
+  strenv$jnp$reshape(mu, list(-1L, 1L))
 }
 
 apply_implicit_parameterization_jnp <- function(p_sub,
@@ -480,6 +480,12 @@ add_context_tokens <- function(model_info,
   token_list <- list()
   dims <- ai(model_info$model_dims)
   is_batch <- isTRUE(batch)
+  has_shape <- function(x) {
+    tryCatch({
+      x$shape
+      TRUE
+    }, error = function(e) FALSE)
+  }
 
   resp_party_idx_use <- if (is.null(resp_party_idx)) 0L else resp_party_idx
   if (!is_batch) {
@@ -492,9 +498,14 @@ add_context_tokens <- function(model_info,
   stage_idx_use <- NULL
   if (!is.null(stage_idx)) {
     if (!is_batch) {
-      stage_use <- ai(stage_idx)
-      if (ai(stage_use) < 0L) stage_use <- 0L
-      stage_idx_use <- strenv$jnp$atleast_1d(strenv$jnp$array(stage_use))
+      if (has_shape(stage_idx)) {
+        stage_use <- strenv$jnp$maximum(strenv$jnp$array(stage_idx), ai(0L))
+        stage_idx_use <- strenv$jnp$atleast_1d(stage_use)
+      } else {
+        stage_use <- ai(stage_idx)
+        if (ai(stage_use) < 0L) stage_use <- 0L
+        stage_idx_use <- strenv$jnp$atleast_1d(strenv$jnp$array(stage_use))
+      }
     } else {
       stage_idx_use <- strenv$jnp$atleast_1d(stage_idx)
     }
