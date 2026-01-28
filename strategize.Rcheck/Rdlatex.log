@@ -102,177 +102,167 @@ Overfull \hbox (4.06934pt too wide) in paragraph at lines 485--491
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
 
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--546
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--547
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--546
+Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 AST/DAG mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial mod
 el). Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--546
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--546
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
 10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
 ng-
 
-Overfull \hbox (29.60909pt too wide) in paragraph at lines 527--546
-\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
-ural_mcmc_control$svi_lr_schedule
-
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 527--546
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
+Overfull \hbox (44.25041pt too wide) in paragraph at lines 527--547
+[]\T1/zi4/m/n/10 batch_size[]\T1/ptm/m/n/10 ) and []\T1/zi4/m/n/10 neural_mcmc_
+control$svi_lr_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cos
+ine"[]\T1/ptm/m/n/10 ),
 [9]
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 568--572
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 569--573
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
 [10] [11] [12]
-Overfull \hbox (21.33908pt too wide) in paragraph at lines 759--763
+Overfull \hbox (21.33908pt too wide) in paragraph at lines 760--764
 []\T1/zi4/m/n/10 plot_best_response_curves []\T1/ptm/m/n/10 takes the re-sult o
 f an ad-ver-sar-ial [][][]\T1/zi4/m/n/10 strategize[][][] []\T1/ptm/m/n/10 run 
 (i.e., with []\T1/zi4/m/n/10 adversarial
 [13] [14] [15] [16]
-Overfull \hbox (1.81654pt too wide) in paragraph at lines 986--988
+Overfull \hbox (1.81654pt too wide) in paragraph at lines 987--989
 []\T1/ptm/m/n/10 In ad-ver-sar-ial (two-player) mode, both AST and DAG play-ers
 ' met-rics are shown. In non-adversarial
 [17] [18] [19]
-Overfull \hbox (44.92848pt too wide) in paragraph at lines 1150--1151
+Overfull \hbox (44.92848pt too wide) in paragraph at lines 1151--1152
 []\T1/ptm/m/n/10 a data.frame con-tain-ing fac-tor columns plus []\T1/zi4/m/n/1
 0 pair_id []\T1/ptm/m/n/10 (and op-tion-ally []\T1/zi4/m/n/10 profile_order[]\T
 1/ptm/m/n/10 ),
 [20] [21] [22] [23] [24]
-Overfull \hbox (11.55678pt too wide) in paragraph at lines 1481--1484
+Overfull \hbox (11.55678pt too wide) in paragraph at lines 1482--1485
 []\T1/ptm/m/n/10 Logical in-di-cat-ing whether the out-come []\T1/zi4/m/n/10 Y 
 []\T1/ptm/m/n/10 rep-re-sents a first-difference or difference-
 [25]
-Overfull \hbox (4.06934pt too wide) in paragraph at lines 1490--1496
+Overfull \hbox (4.06934pt too wide) in paragraph at lines 1491--1497
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
 
-Overfull \hbox (6.55933pt too wide) in paragraph at lines 1504--1508
+Overfull \hbox (6.55933pt too wide) in paragraph at lines 1505--1509
 \T1/ptm/m/n/10 model co-ef-fi-cients to-ward a shared av-er-age when []\T1/zi4/
 m/n/10 adversarial_model_strategy
 
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 1531--1552
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (38.9694pt too wide) in paragraph at lines 1531--1552
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
 lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
 
-Overfull \hbox (2.41992pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (2.41992pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
 tput" []\T1/ptm/m/n/10 to com-pute delta-
 
-Overfull \hbox (12.74069pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (12.74069pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims []\T1/ptm/m/n
 /10 and []\T1/zi4/m/n/10 neural_mcmc_control$ModelDepth
 
-Overfull \hbox (119.73929pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (119.73929pt too wide) in paragraph at lines 1531--1552
 []\T1/ptm/m/n/10 to over-ride the Trans-former hid-den width and depth. Set []\
 T1/zi4/m/n/10 neural_mcmc_control$cross_candidate_encoder
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (6.90968pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
 10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
 ng-
 
-Overfull \hbox (29.60909pt too wide) in paragraph at lines 1530--1550
-\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
-ural_mcmc_control$svi_lr_schedule
-
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 1530--1550
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
+Overfull \hbox (44.25041pt too wide) in paragraph at lines 1531--1552
+[]\T1/zi4/m/n/10 batch_size[]\T1/ptm/m/n/10 ) and []\T1/zi4/m/n/10 neural_mcmc_
+control$svi_lr_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cos
+ine"[]\T1/ptm/m/n/10 ),
 [26]
-Overfull \hbox (17.64828pt too wide) in paragraph at lines 1551--1554
+Overfull \hbox (17.64828pt too wide) in paragraph at lines 1553--1556
 []\T1/ptm/m/n/10 A char-ac-ter string spec-i-fy-ing the type of penalty (e.g., 
 []\T1/zi4/m/n/10 "KL"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "L2"[]\T1/ptm/m/n/10 ,
  or []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 )
 
-Overfull \hbox (19.19803pt too wide) in paragraph at lines 1558--1561
+Overfull \hbox (19.19803pt too wide) in paragraph at lines 1560--1563
 \T1/zi4/m/n/10 TRUE[]\T1/ptm/m/n/10 . []\T1/zi4/m/n/10 "full" []\T1/ptm/m/n/10 
 dif-fer-en-ti-ates through the full op-ti-miza-tion trace (de-fault). []\T1/zi4
 /m/n/10 "implicit"
 
-Overfull \hbox (20.21663pt too wide) in paragraph at lines 1558--1561
+Overfull \hbox (20.21663pt too wide) in paragraph at lines 1560--1563
 []\T1/ptm/m/n/10 uses im-plicit dif-fer-en-ti-a-tion at the so-lu-tion (ad-ver-
 sar-ial equi-lib-rium or non-adversarial
 
-Overfull \hbox (4.58041pt too wide) in paragraph at lines 1570--1572
+Overfull \hbox (4.58041pt too wide) in paragraph at lines 1572--1574
 []\T1/ptm/m/n/10 Numeric in $\OT1/cmr/m/n/10 (0\OML/cmm/m/it/10 ; \OT1/cmr/m/n/
 10 1)$\T1/ptm/m/n/10 , spec-i-fy-ing the con-fi-dence level for in-ter-vals or 
 cred-i-ble bounds.
 
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 1583--1587
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 1585--1589
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
 [27]
-Overfull \hbox (2.5983pt too wide) in paragraph at lines 1627--1634
+Overfull \hbox (2.5983pt too wide) in paragraph at lines 1629--1636
 \T1/ptm/m/n/10 ahead points), []\T1/zi4/m/n/10 "ogda" []\T1/ptm/m/n/10 (op-ti-m
 istic gra-di-ent), []\T1/zi4/m/n/10 "rain" []\T1/ptm/m/n/10 (RAIN: Re-cur-sive 
 An-chored
 [28]
-Overfull \hbox (3.3386pt too wide) in paragraph at lines 1697--1698
+Overfull \hbox (3.3386pt too wide) in paragraph at lines 1699--1700
 []\T1/ptm/m/n/10 Standard er-rors for en-tries in []\T1/zi4/m/n/10 pi_star_poin
 t[]\T1/ptm/m/n/10 . Mir-rors the struc-ture of []\T1/zi4/m/n/10 pi_star_point
 
-Overfull \hbox (15.05844pt too wide) in paragraph at lines 1719--1722
+Overfull \hbox (15.05844pt too wide) in paragraph at lines 1721--1724
 [][][]\T1/zi4/m/n/10 cv_strategize[][][] []\T1/ptm/m/n/10 for cross-validation 
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
-[29]
-Underfull \vbox (badness 10000) has occurred while \output is active [30]
-[31]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1861--1864
+[29] [30] [31]
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1863--1866
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
 [32] [33]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 2012--2015
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2014--2017
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
 [34]
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 2049--2052
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2051--2054
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
 
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 2081--2083
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2083--2085
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
 [35] [36]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 2180--2182
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2182--2184
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
 [37] [38] [39] [40] [41] [42] [43] [44]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (4.38026pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
 m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
 [45]
 No file Rd2.ind.
 [46]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -297,7 +287,7 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (46 pages, 276957 bytes).
+Output written on Rd2.pdf (46 pages, 277013 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (64 entries accepted, 0 rejected).
@@ -373,22 +363,22 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.out)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
 pdftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/us
 r/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
@@ -411,175 +401,167 @@ Overfull \hbox (4.06934pt too wide) in paragraph at lines 485--491
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
 [9]
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--546
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--547
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--546
+Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 AST/DAG mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial mod
 el). Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--546
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--546
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
 10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
 ng-
 
-Overfull \hbox (29.60909pt too wide) in paragraph at lines 527--546
-\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
-ural_mcmc_control$svi_lr_schedule
-
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 527--546
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
+Overfull \hbox (44.25041pt too wide) in paragraph at lines 527--547
+[]\T1/zi4/m/n/10 batch_size[]\T1/ptm/m/n/10 ) and []\T1/zi4/m/n/10 neural_mcmc_
+control$svi_lr_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cos
+ine"[]\T1/ptm/m/n/10 ),
 [10]
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 568--572
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 569--573
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
 [11] [12] [13]
-Overfull \hbox (21.33908pt too wide) in paragraph at lines 759--763
+Overfull \hbox (21.33908pt too wide) in paragraph at lines 760--764
 []\T1/zi4/m/n/10 plot_best_response_curves []\T1/ptm/m/n/10 takes the re-sult o
 f an ad-ver-sar-ial [][][]\T1/zi4/m/n/10 strategize[][][] []\T1/ptm/m/n/10 run 
 (i.e., with []\T1/zi4/m/n/10 adversarial
 [14] [15] [16] [17]
-Overfull \hbox (1.81654pt too wide) in paragraph at lines 986--988
+Overfull \hbox (1.81654pt too wide) in paragraph at lines 987--989
 []\T1/ptm/m/n/10 In ad-ver-sar-ial (two-player) mode, both AST and DAG play-ers
 ' met-rics are shown. In non-adversarial
 [18] [19]
-Overfull \hbox (44.92848pt too wide) in paragraph at lines 1150--1151
+Overfull \hbox (44.92848pt too wide) in paragraph at lines 1151--1152
 []\T1/ptm/m/n/10 a data.frame con-tain-ing fac-tor columns plus []\T1/zi4/m/n/1
 0 pair_id []\T1/ptm/m/n/10 (and op-tion-ally []\T1/zi4/m/n/10 profile_order[]\T
 1/ptm/m/n/10 ),
 [20] [21] [22] [23] [24] [25]
-Overfull \hbox (11.55678pt too wide) in paragraph at lines 1481--1484
+Overfull \hbox (11.55678pt too wide) in paragraph at lines 1482--1485
 []\T1/ptm/m/n/10 Logical in-di-cat-ing whether the out-come []\T1/zi4/m/n/10 Y 
 []\T1/ptm/m/n/10 rep-re-sents a first-difference or difference-
 
-Overfull \hbox (4.06934pt too wide) in paragraph at lines 1490--1496
+Overfull \hbox (4.06934pt too wide) in paragraph at lines 1491--1497
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
 [26]
-Overfull \hbox (6.55933pt too wide) in paragraph at lines 1504--1508
+Overfull \hbox (6.55933pt too wide) in paragraph at lines 1505--1509
 \T1/ptm/m/n/10 model co-ef-fi-cients to-ward a shared av-er-age when []\T1/zi4/
 m/n/10 adversarial_model_strategy
 
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 1531--1552
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (38.9694pt too wide) in paragraph at lines 1531--1552
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
 lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
 
-Overfull \hbox (2.41992pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (2.41992pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
 tput" []\T1/ptm/m/n/10 to com-pute delta-
 
-Overfull \hbox (12.74069pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (12.74069pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims []\T1/ptm/m/n
 /10 and []\T1/zi4/m/n/10 neural_mcmc_control$ModelDepth
 
-Overfull \hbox (119.73929pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (119.73929pt too wide) in paragraph at lines 1531--1552
 []\T1/ptm/m/n/10 to over-ride the Trans-former hid-den width and depth. Set []\
 T1/zi4/m/n/10 neural_mcmc_control$cross_candidate_encoder
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (6.90968pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
 10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
 ng-
 
-Overfull \hbox (29.60909pt too wide) in paragraph at lines 1530--1550
-\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
-ural_mcmc_control$svi_lr_schedule
-
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 1530--1550
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
-
-Overfull \hbox (17.64828pt too wide) in paragraph at lines 1551--1554
+Overfull \hbox (44.25041pt too wide) in paragraph at lines 1531--1552
+[]\T1/zi4/m/n/10 batch_size[]\T1/ptm/m/n/10 ) and []\T1/zi4/m/n/10 neural_mcmc_
+control$svi_lr_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cos
+ine"[]\T1/ptm/m/n/10 ),
+[27]
+Overfull \hbox (17.64828pt too wide) in paragraph at lines 1553--1556
 []\T1/ptm/m/n/10 A char-ac-ter string spec-i-fy-ing the type of penalty (e.g., 
 []\T1/zi4/m/n/10 "KL"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "L2"[]\T1/ptm/m/n/10 ,
  or []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 )
-[27]
-Overfull \hbox (19.19803pt too wide) in paragraph at lines 1558--1561
+
+Overfull \hbox (19.19803pt too wide) in paragraph at lines 1560--1563
 \T1/zi4/m/n/10 TRUE[]\T1/ptm/m/n/10 . []\T1/zi4/m/n/10 "full" []\T1/ptm/m/n/10 
 dif-fer-en-ti-ates through the full op-ti-miza-tion trace (de-fault). []\T1/zi4
 /m/n/10 "implicit"
 
-Overfull \hbox (20.21663pt too wide) in paragraph at lines 1558--1561
+Overfull \hbox (20.21663pt too wide) in paragraph at lines 1560--1563
 []\T1/ptm/m/n/10 uses im-plicit dif-fer-en-ti-a-tion at the so-lu-tion (ad-ver-
 sar-ial equi-lib-rium or non-adversarial
 
-Overfull \hbox (4.58041pt too wide) in paragraph at lines 1570--1572
+Overfull \hbox (4.58041pt too wide) in paragraph at lines 1572--1574
 []\T1/ptm/m/n/10 Numeric in $\OT1/cmr/m/n/10 (0\OML/cmm/m/it/10 ; \OT1/cmr/m/n/
 10 1)$\T1/ptm/m/n/10 , spec-i-fy-ing the con-fi-dence level for in-ter-vals or 
 cred-i-ble bounds.
 
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 1583--1587
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 1585--1589
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
 [28]
-Overfull \hbox (2.5983pt too wide) in paragraph at lines 1627--1634
+Overfull \hbox (2.5983pt too wide) in paragraph at lines 1629--1636
 \T1/ptm/m/n/10 ahead points), []\T1/zi4/m/n/10 "ogda" []\T1/ptm/m/n/10 (op-ti-m
 istic gra-di-ent), []\T1/zi4/m/n/10 "rain" []\T1/ptm/m/n/10 (RAIN: Re-cur-sive 
 An-chored
 [29]
-Overfull \hbox (3.3386pt too wide) in paragraph at lines 1697--1698
+Overfull \hbox (3.3386pt too wide) in paragraph at lines 1699--1700
 []\T1/ptm/m/n/10 Standard er-rors for en-tries in []\T1/zi4/m/n/10 pi_star_poin
 t[]\T1/ptm/m/n/10 . Mir-rors the struc-ture of []\T1/zi4/m/n/10 pi_star_point
 
-Overfull \hbox (15.05844pt too wide) in paragraph at lines 1719--1722
+Overfull \hbox (15.05844pt too wide) in paragraph at lines 1721--1724
 [][][]\T1/zi4/m/n/10 cv_strategize[][][] []\T1/ptm/m/n/10 for cross-validation 
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
 [30] [31] [32]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1861--1864
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1863--1866
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
 [33] [34]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 2012--2015
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2014--2017
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
 [35]
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 2049--2052
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2051--2054
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
 
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 2081--2083
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2083--2085
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
 [36] [37]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 2180--2182
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2182--2184
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
 [38] [39] [40] [41] [42] [43] [44] [45]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (4.38026pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
 m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
 
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.ind [46] [47])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.ind [46] [47])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -604,7 +586,7 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (47 pages, 285835 bytes).
+Output written on Rd2.pdf (47 pages, 285754 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (64 entries accepted, 0 rejected).
@@ -680,22 +662,22 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.out)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
 pdftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/us
 r/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
@@ -718,175 +700,167 @@ Overfull \hbox (4.06934pt too wide) in paragraph at lines 485--491
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
 [9]
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--546
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 527--547
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--546
+Overfull \hbox (93.58759pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 AST/DAG mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial mod
 el). Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--546
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--546
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 527--547
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
 10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
 ng-
 
-Overfull \hbox (29.60909pt too wide) in paragraph at lines 527--546
-\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
-ural_mcmc_control$svi_lr_schedule
-
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 527--546
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
+Overfull \hbox (44.25041pt too wide) in paragraph at lines 527--547
+[]\T1/zi4/m/n/10 batch_size[]\T1/ptm/m/n/10 ) and []\T1/zi4/m/n/10 neural_mcmc_
+control$svi_lr_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cos
+ine"[]\T1/ptm/m/n/10 ),
 [10]
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 568--572
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 569--573
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
 [11] [12] [13]
-Overfull \hbox (21.33908pt too wide) in paragraph at lines 759--763
+Overfull \hbox (21.33908pt too wide) in paragraph at lines 760--764
 []\T1/zi4/m/n/10 plot_best_response_curves []\T1/ptm/m/n/10 takes the re-sult o
 f an ad-ver-sar-ial [][][]\T1/zi4/m/n/10 strategize[][][] []\T1/ptm/m/n/10 run 
 (i.e., with []\T1/zi4/m/n/10 adversarial
 [14] [15] [16] [17]
-Overfull \hbox (1.81654pt too wide) in paragraph at lines 986--988
+Overfull \hbox (1.81654pt too wide) in paragraph at lines 987--989
 []\T1/ptm/m/n/10 In ad-ver-sar-ial (two-player) mode, both AST and DAG play-ers
 ' met-rics are shown. In non-adversarial
 [18] [19]
-Overfull \hbox (44.92848pt too wide) in paragraph at lines 1150--1151
+Overfull \hbox (44.92848pt too wide) in paragraph at lines 1151--1152
 []\T1/ptm/m/n/10 a data.frame con-tain-ing fac-tor columns plus []\T1/zi4/m/n/1
 0 pair_id []\T1/ptm/m/n/10 (and op-tion-ally []\T1/zi4/m/n/10 profile_order[]\T
 1/ptm/m/n/10 ),
 [20] [21] [22] [23] [24] [25]
-Overfull \hbox (11.55678pt too wide) in paragraph at lines 1481--1484
+Overfull \hbox (11.55678pt too wide) in paragraph at lines 1482--1485
 []\T1/ptm/m/n/10 Logical in-di-cat-ing whether the out-come []\T1/zi4/m/n/10 Y 
 []\T1/ptm/m/n/10 rep-re-sents a first-difference or difference-
 
-Overfull \hbox (4.06934pt too wide) in paragraph at lines 1490--1496
+Overfull \hbox (4.06934pt too wide) in paragraph at lines 1491--1497
 []\T1/zi4/m/n/10 neural_mcmc_control$n_bayesian_models = 2 []\T1/ptm/m/n/10 to 
 fit sep-a-rate AST/DAG mod-
 [26]
-Overfull \hbox (6.55933pt too wide) in paragraph at lines 1504--1508
+Overfull \hbox (6.55933pt too wide) in paragraph at lines 1505--1509
 \T1/ptm/m/n/10 model co-ef-fi-cients to-ward a shared av-er-age when []\T1/zi4/
 m/n/10 adversarial_model_strategy
 
-Overfull \hbox (5.17787pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (5.17787pt too wide) in paragraph at lines 1531--1552
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (38.9694pt too wide) in paragraph at lines 1531--1552
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
 lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
 
-Overfull \hbox (2.41992pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (2.41992pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
 tput" []\T1/ptm/m/n/10 to com-pute delta-
 
-Overfull \hbox (12.74069pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (12.74069pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 Use []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims []\T1/ptm/m/n
 /10 and []\T1/zi4/m/n/10 neural_mcmc_control$ModelDepth
 
-Overfull \hbox (119.73929pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (119.73929pt too wide) in paragraph at lines 1531--1552
 []\T1/ptm/m/n/10 to over-ride the Trans-former hid-den width and depth. Set []\
 T1/zi4/m/n/10 neural_mcmc_control$cross_candidate_encoder
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (6.90968pt too wide) in paragraph at lines 1530--1550
+Overfull \hbox (6.90968pt too wide) in paragraph at lines 1531--1552
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_steps []\T1/ptm/m/n/
 10 (in-te-ger steps, or []\T1/zi4/m/n/10 "optimal" []\T1/ptm/m/n/10 for a scali
 ng-
 
-Overfull \hbox (29.60909pt too wide) in paragraph at lines 1530--1550
-\T1/ptm/m/n/10 law heuris-tic based on model/data size) and []\T1/zi4/m/n/10 ne
-ural_mcmc_control$svi_lr_schedule
-
-Overfull \hbox (47.89987pt too wide) in paragraph at lines 1530--1550
-[]\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), 
-with op-tional []\T1/zi4/m/n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/z
-i4/m/n/10 svi_lr_end_factor[]\T1/ptm/m/n/10 . 
-
-Overfull \hbox (17.64828pt too wide) in paragraph at lines 1551--1554
+Overfull \hbox (44.25041pt too wide) in paragraph at lines 1531--1552
+[]\T1/zi4/m/n/10 batch_size[]\T1/ptm/m/n/10 ) and []\T1/zi4/m/n/10 neural_mcmc_
+control$svi_lr_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cos
+ine"[]\T1/ptm/m/n/10 ),
+[27]
+Overfull \hbox (17.64828pt too wide) in paragraph at lines 1553--1556
 []\T1/ptm/m/n/10 A char-ac-ter string spec-i-fy-ing the type of penalty (e.g., 
 []\T1/zi4/m/n/10 "KL"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "L2"[]\T1/ptm/m/n/10 ,
  or []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 )
-[27]
-Overfull \hbox (19.19803pt too wide) in paragraph at lines 1558--1561
+
+Overfull \hbox (19.19803pt too wide) in paragraph at lines 1560--1563
 \T1/zi4/m/n/10 TRUE[]\T1/ptm/m/n/10 . []\T1/zi4/m/n/10 "full" []\T1/ptm/m/n/10 
 dif-fer-en-ti-ates through the full op-ti-miza-tion trace (de-fault). []\T1/zi4
 /m/n/10 "implicit"
 
-Overfull \hbox (20.21663pt too wide) in paragraph at lines 1558--1561
+Overfull \hbox (20.21663pt too wide) in paragraph at lines 1560--1563
 []\T1/ptm/m/n/10 uses im-plicit dif-fer-en-ti-a-tion at the so-lu-tion (ad-ver-
 sar-ial equi-lib-rium or non-adversarial
 
-Overfull \hbox (4.58041pt too wide) in paragraph at lines 1570--1572
+Overfull \hbox (4.58041pt too wide) in paragraph at lines 1572--1574
 []\T1/ptm/m/n/10 Numeric in $\OT1/cmr/m/n/10 (0\OML/cmm/m/it/10 ; \OT1/cmr/m/n/
 10 1)$\T1/ptm/m/n/10 , spec-i-fy-ing the con-fi-dence level for in-ter-vals or 
 cred-i-ble bounds.
 
-Overfull \hbox (19.82838pt too wide) in paragraph at lines 1583--1587
+Overfull \hbox (19.82838pt too wide) in paragraph at lines 1585--1589
 []\T1/ptm/m/n/10 (de-fault) for Monte Carlo sam-pling with per-draw pri-mary wi
 n-ners, or []\T1/zi4/m/n/10 "linearized"
 [28]
-Overfull \hbox (2.5983pt too wide) in paragraph at lines 1627--1634
+Overfull \hbox (2.5983pt too wide) in paragraph at lines 1629--1636
 \T1/ptm/m/n/10 ahead points), []\T1/zi4/m/n/10 "ogda" []\T1/ptm/m/n/10 (op-ti-m
 istic gra-di-ent), []\T1/zi4/m/n/10 "rain" []\T1/ptm/m/n/10 (RAIN: Re-cur-sive 
 An-chored
 [29]
-Overfull \hbox (3.3386pt too wide) in paragraph at lines 1697--1698
+Overfull \hbox (3.3386pt too wide) in paragraph at lines 1699--1700
 []\T1/ptm/m/n/10 Standard er-rors for en-tries in []\T1/zi4/m/n/10 pi_star_poin
 t[]\T1/ptm/m/n/10 . Mir-rors the struc-ture of []\T1/zi4/m/n/10 pi_star_point
 
-Overfull \hbox (15.05844pt too wide) in paragraph at lines 1719--1722
+Overfull \hbox (15.05844pt too wide) in paragraph at lines 1721--1724
 [][][]\T1/zi4/m/n/10 cv_strategize[][][] []\T1/ptm/m/n/10 for cross-validation 
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
 [30] [31] [32]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1861--1864
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1863--1866
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
 [33] [34]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 2012--2015
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2014--2017
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
 [35]
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 2049--2052
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2051--2054
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
 
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 2081--2083
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2083--2085
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
 [36] [37]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 2180--2182
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2182--2184
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
 [38] [39] [40] [41] [42] [43] [44] [45]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (4.38026pt too wide) in paragraph at lines 2685--2699
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2687--2701
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
 m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
 
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.ind [46] [47])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpP2Y0qR/Rd2pdf104e
-62cf61e14/Rd2.aux) )
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.ind [46] [47])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp9OVmFT/Rd2pdf1563
+52e313778/Rd2.aux) )
 (see the transcript file for additional information)
 pdfTeX warning (dest): name{Rfn.predict} has been referenced but does not exist
 , replaced by a fixed one
@@ -905,8 +879,8 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (47 pages, 286067 bytes).
+Output written on Rd2.pdf (47 pages, 286114 bytes).
 Transcript written on Rd2.log.
 Saving output to ‘strategize-manual.pdf’ ...
 Done
-You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//RtmpP2Y0qR/Rd2pdf104e62cf61e14'
+You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//Rtmp9OVmFT/Rd2pdf156352e313778'

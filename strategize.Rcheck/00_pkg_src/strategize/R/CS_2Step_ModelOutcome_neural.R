@@ -1128,7 +1128,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
   )
-  RMS_scale = 0.35
+  RMS_scale = 0.5
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
@@ -1283,7 +1283,7 @@ generate_ModelOutcome_neural <- function(){
   #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
   
   # Depth-aware scaling for priors and ReZero-style residual gates.
-  depth_prior_scale <- 1 / sqrt(as.numeric(ModelDepth))
+  depth_prior_scale <- sqrt(2) / sqrt(as.numeric(ModelDepth))
   gate_sd_scale <- 0.1 * depth_prior_scale
   embed_sd_scale <- 4 * weight_sd_scale
   factor_embed_sd_scale <- embed_sd_scale
@@ -2291,7 +2291,9 @@ generate_ModelOutcome_neural <- function(){
     local_lik <- function() {
       if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
         with(strenv$numpyro$plate("data", size = N_local,
-                                  subsample_size = ai(mcmc_control$batch_size),
+                                  # Clamp subsample_size to the available data to avoid
+                                  # plate() errors when batch_size > N_local.
+                                  subsample_size = ai(min(ai(mcmc_control$batch_size), N_local)),
                                   dim = -1L) %as% "idx", {
                                     Xl_b <- strenv$jnp$take(X_left, idx, axis = 0L)
                                     Xr_b <- strenv$jnp$take(X_right, idx, axis = 0L)
@@ -2391,7 +2393,9 @@ generate_ModelOutcome_neural <- function(){
     local_lik <- function() {
       if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
         with(strenv$numpyro$plate("data", size = N_local,
-                                  subsample_size = ai(mcmc_control$batch_size),
+                                  # Clamp subsample_size to the available data to avoid
+                                  # plate() errors when batch_size > N_local.
+                                  subsample_size = ai(min(ai(mcmc_control$batch_size), N_local)),
                                   dim = -1L) %as% "idx", {
                                     Xb <- strenv$jnp$take(X, idx, axis = 0L)
                                     pb <- strenv$jnp$take(party, idx, axis = 0L)
@@ -2909,6 +2913,32 @@ generate_ModelOutcome_neural <- function(){
             fold_metrics$eval_note <- "oos"
             fold_metrics$n_test <- length(test_idx)
             fold_metrics$n_train <- length(train_idx)
+            fold_metric_items <- if (likelihood == "bernoulli") {
+              Filter(Negate(is.null), list(
+                format_metric("AUC", fold_metrics$auc, 4),
+                format_metric("LogLoss", fold_metrics$log_loss, 4),
+                format_metric("Acc", fold_metrics$accuracy, 3),
+                format_metric("Brier", fold_metrics$brier, 4)
+              ))
+            } else if (likelihood == "categorical") {
+              Filter(Negate(is.null), list(
+                format_metric("LogLoss", fold_metrics$log_loss, 4),
+                format_metric("Acc", fold_metrics$accuracy, 3)
+              ))
+            } else {
+              Filter(Negate(is.null), list(
+                format_metric("RMSE", fold_metrics$rmse, 4),
+                format_metric("MAE", fold_metrics$mae, 4),
+                format_metric("NLL", fold_metrics$nll, 4)
+              ))
+            }
+            if (length(fold_metric_items) > 0L) {
+              message(sprintf("Neural OOS fold %d/%d (%s): %s",
+                              fold,
+                              n_folds_use,
+                              ifelse(pairwise_mode, "pairwise", "single"),
+                              paste(fold_metric_items, collapse = ", ")))
+            }
             by_fold[[fold]] <- fold_metrics
           }
 

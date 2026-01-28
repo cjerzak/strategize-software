@@ -298,4 +298,4 @@ GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905
 > 
 > proc.time()
    user  system elapsed 
- 31.028   4.042  26.248 
+ 24.896   3.282  19.469 
