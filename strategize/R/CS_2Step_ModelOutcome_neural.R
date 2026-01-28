@@ -2291,7 +2291,9 @@ generate_ModelOutcome_neural <- function(){
     local_lik <- function() {
       if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
         with(strenv$numpyro$plate("data", size = N_local,
-                                  subsample_size = ai(mcmc_control$batch_size),
+                                  # Clamp subsample_size to the available data to avoid
+                                  # plate() errors when batch_size > N_local.
+                                  subsample_size = ai(min(ai(mcmc_control$batch_size), N_local)),
                                   dim = -1L) %as% "idx", {
                                     Xl_b <- strenv$jnp$take(X_left, idx, axis = 0L)
                                     Xr_b <- strenv$jnp$take(X_right, idx, axis = 0L)
@@ -2391,7 +2393,9 @@ generate_ModelOutcome_neural <- function(){
     local_lik <- function() {
       if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
         with(strenv$numpyro$plate("data", size = N_local,
-                                  subsample_size = ai(mcmc_control$batch_size),
+                                  # Clamp subsample_size to the available data to avoid
+                                  # plate() errors when batch_size > N_local.
+                                  subsample_size = ai(min(ai(mcmc_control$batch_size), N_local)),
                                   dim = -1L) %as% "idx", {
                                     Xb <- strenv$jnp$take(X, idx, axis = 0L)
                                     pb <- strenv$jnp$take(party, idx, axis = 0L)
