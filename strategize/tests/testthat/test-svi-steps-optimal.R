@@ -124,7 +124,7 @@ test_that("neural_optimal_svi_steps handles pairwise cross-encoder configs", {
   expect_gte(steps, 1L)
 })
 
-test_that("neural_optimal_svi_steps ignores batch_size when subsample_method='batch'", {
+test_that("neural_optimal_svi_steps treats subsample_method='batch' like 'batch_vi'", {
   steps_small_batch <- strategize:::neural_optimal_svi_steps(
     n_obs = 10000,
     n_factors = 10,
@@ -139,6 +139,22 @@ test_that("neural_optimal_svi_steps ignores batch_size when subsample_method='ba
     subsample_method = "batch",
     batch_size = 64
   )
+  steps_small_batch_vi <- strategize:::neural_optimal_svi_steps(
+    n_obs = 10000,
+    n_factors = 10,
+    factor_levels = rep(3L, 10),
+    model_dims = 64,
+    model_depth = 2,
+    n_party_levels = 2,
+    n_resp_party_levels = 2,
+    n_resp_covariates = 0,
+    n_outcomes = 1,
+    pairwise_mode = FALSE,
+    subsample_method = "batch_vi",
+    batch_size = 64
+  )
+  expect_identical(steps_small_batch, steps_small_batch_vi)
+
   steps_large_batch <- strategize:::neural_optimal_svi_steps(
     n_obs = 10000,
     n_factors = 10,
@@ -153,5 +169,19 @@ test_that("neural_optimal_svi_steps ignores batch_size when subsample_method='ba
     subsample_method = "batch",
     batch_size = 512
   )
-  expect_identical(steps_small_batch, steps_large_batch)
+  steps_large_batch_vi <- strategize:::neural_optimal_svi_steps(
+    n_obs = 10000,
+    n_factors = 10,
+    factor_levels = rep(3L, 10),
+    model_dims = 64,
+    model_depth = 2,
+    n_party_levels = 2,
+    n_resp_party_levels = 2,
+    n_resp_covariates = 0,
+    n_outcomes = 1,
+    pairwise_mode = FALSE,
+    subsample_method = "batch_vi",
+    batch_size = 512
+  )
+  expect_identical(steps_large_batch, steps_large_batch_vi)
 })
