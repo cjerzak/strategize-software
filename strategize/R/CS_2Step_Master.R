@@ -69,6 +69,8 @@
 #'   optim_type = "gd",
 #'   optimism = "extragrad",
 #'   optimism_coef = 1,
+#'   rain_gamma = 0.05,
+#'   rain_eta = NULL,
 #'   compute_hessian = TRUE,
 #'   hessian_max_dim = 50L
 #' )
