@@ -279,13 +279,15 @@ Defaults to \code{FALSE}.}
 \item{optimism}{Character string controlling optimistic / extra-gradient updates for the gradient
 optimizer. Options: \code{"extragrad"} (default; classic Korpelevich extra-gradient),
 \code{"smp"} (stochastic mirror-prox: extra-gradient with weighted averaging of look-ahead points),
-\code{"ogda"} (optimistic gradient), \code{"rain"} (anchored extra-gradient with a decaying
-quadratic anchor penalty), or \code{"none"} (standard updates). Only supported when
+\code{"ogda"} (optimistic gradient), \code{"rain"} (RAIN: Recursive Anchored Iteration with
+anchored extra-gradient and increasing quadratic anchor penalties), or \code{"none"}
+(standard updates). Only supported when
 \code{use_optax = FALSE}.}
 
 \item{optimism_coef}{Numeric scalar controlling the magnitude of optimism adjustments. For
 \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
-initial anchor penalty \eqn{\lambda_0} that decays linearly to zero over \code{nSGD} iterations.}
+initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multiplicatively by
+\eqn{(1+\gamma)} each outer stage (\eqn{\gamma} fixed internally at 1).}
 
 \item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
 geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
