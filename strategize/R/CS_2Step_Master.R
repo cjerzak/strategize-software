@@ -568,6 +568,9 @@ strategize       <-          function(
 
   # define evaluation environment
   evaluation_environment <- environment()
+  if (identical(outcome_model_type, "neural")) {
+    strenv$neural_model_env <- evaluation_environment
+  }
   
   # add colnames if not available 
   if(!is.null(X)){ if(is.null(colnames(X))){ colnames(X) <- paste0("V",1:ncol(X)) } }

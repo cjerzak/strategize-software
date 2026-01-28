@@ -863,12 +863,26 @@ neural_predict_single_soft <- function(pi_vec,
   neural_logits_to_q(logits, model_info$likelihood)
 }
 
+neural_resolve_model_info <- function(name) {
+  if (exists(name, inherits = TRUE)) {
+    return(get(name, inherits = TRUE))
+  }
+  if (exists("strenv", inherits = TRUE)) {
+    model_env <- tryCatch(strenv$neural_model_env, error = function(e) NULL)
+    if (is.environment(model_env) &&
+        exists(name, envir = model_env, inherits = TRUE)) {
+      return(get(name, envir = model_env, inherits = TRUE))
+    }
+  }
+  NULL
+}
+
 neural_getQStar_single <- function(pi_star_ast,
                                    EST_COEFFICIENTS_tf_ast) {
-  if (!exists("neural_model_info_ast_jnp", inherits = TRUE)) {
+  model_ast <- neural_resolve_model_info("neural_model_info_ast_jnp")
+  if (is.null(model_ast)) {
     stop("neural_getQStar_single requires neural_model_info_ast_jnp.", call. = FALSE)
   }
-  model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
   party_label <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
     GroupsPool[1]
   } else {
@@ -885,14 +899,13 @@ neural_getQStar_single <- function(pi_star_ast,
 neural_getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
                                       EST_COEFFICIENTS_tf_ast,
                                       EST_COEFFICIENTS_tf_dag) {
-  if (!exists("neural_model_info_ast_jnp", inherits = TRUE)) {
+  model_ast <- neural_resolve_model_info("neural_model_info_ast_jnp")
+  if (is.null(model_ast)) {
     stop("neural_getQStar_diff_BASE requires neural_model_info_ast_jnp.", call. = FALSE)
   }
-  model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
-  model_dag <- if (exists("neural_model_info_dag_jnp", inherits = TRUE)) {
-    get("neural_model_info_dag_jnp", inherits = TRUE)
-  } else {
-    model_ast
+  model_dag <- neural_resolve_model_info("neural_model_info_dag_jnp")
+  if (is.null(model_dag)) {
+    model_dag <- model_ast
   }
 
   party_label_ast <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
