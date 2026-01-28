@@ -199,7 +199,8 @@ For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
 \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
 \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
-a scaling-law heuristic based on model/data size) and
+a scaling-law heuristic based on model/data size; for minibatched VI this
+also scales with \code{batch_size}) and
 \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.}
 
