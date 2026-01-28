@@ -5,6 +5,12 @@ generate_ModelOutcome <- function(){
   vcov_OutcomeModel_by_k <- NULL
   neural_model_info <- NULL
   fit_metrics <- NULL
+  # Preserve the user-requested regularization flag for downstream diagnostics/evaluation.
+  use_regularization_input <- if (exists("use_regularization", inherits = TRUE)) {
+    isTRUE(use_regularization)
+  } else {
+    FALSE
+  }
   file_suffix <- if (!is.null(outcome_model_key)) {
     sprintf("%s_%s_%s", GroupsPool[GroupCounter], Round_, outcome_model_key)
   } else {
@@ -542,10 +548,10 @@ generate_ModelOutcome <- function(){
 	      glm_eval_control$n_folds <- eval_folds_env
 	    }
 
-	    if (isTRUE(glm_eval_control$enabled)) {
-	      mode_note <- ifelse(isTRUE(diff), "pairwise", "single")
-	      y_full <- as.numeric(Y_glm)
-	      X_full <- as.matrix(glm_input)
+		    if (isTRUE(glm_eval_control$enabled)) {
+		      mode_note <- ifelse(isTRUE(diff), "pairwise", "single")
+		      y_full <- as.numeric(Y_glm)
+		      X_full <- as.matrix(glm_input)
 
 	      ok_rows <- is.finite(y_full)
 	      if (!all(ok_rows)) {
@@ -788,114 +794,507 @@ generate_ModelOutcome <- function(){
 	        }
 	      }
 
-	      if (!is.null(folds_out) && folds_out$n_folds >= 2L && n_eval_total >= 2L) {
-	        fold_id <- folds_out$fold_id
-	        n_folds_use <- folds_out$n_folds
+		      if (!is.null(folds_out) && folds_out$n_folds >= 2L && n_eval_total >= 2L) {
+		        fold_id <- folds_out$fold_id
+		        n_folds_use <- folds_out$n_folds
 
-	        X_design <- X_full
-	        if (!isTRUE(force_no_intercept)) {
-	          X_design <- cbind(Intercept = 1, X_design)
-	        }
+		        # Prefer a nested (fold-refit) evaluation to avoid leakage from any
+		        # feature screening / interaction filtering done on the full dataset.
+		        nested_flag <- Sys.getenv("STRATEGIZE_GLM_EVAL_NESTED")
+		        use_nested_eval <- TRUE
+		        if (nzchar(nested_flag) &&
+		            tolower(nested_flag) %in% c("0", "false", "no")) {
+		          use_nested_eval <- FALSE
+		        }
 
-	        pred_oos <- rep(NA_real_, n_total)
-	        by_fold <- vector("list", n_folds_use)
-	        family_obj <- if (glm_family == "binomial") stats::binomial() else stats::gaussian()
+		        main_info_full <- NULL
+		        if (exists("main_info_PreRegularization", inherits = TRUE)) {
+		          main_info_full <- get("main_info_PreRegularization", inherits = TRUE)
+		        }
+		        if (is.null(main_info_full) || !is.data.frame(main_info_full) || nrow(main_info_full) == 0L) {
+		          main_info_full <- main_info
+		        }
+		        if (is.null(main_info_full) || !is.data.frame(main_info_full) || nrow(main_info_full) == 0L) {
+		          use_nested_eval <- FALSE
+		        }
 
-	        for (fold in seq_len(n_folds_use)) {
-	          test_pos <- which(fold_id == fold)
-	          train_pos <- which(fold_id != fold)
-	          if (!length(test_pos) || !length(train_pos)) {
-	            next
-	          }
+		        interaction_info_full <- NULL
+		        if (exists("interaction_info_PreRegularization", inherits = TRUE)) {
+		          interaction_info_full <- get("interaction_info_PreRegularization", inherits = TRUE)
+		        } else {
+		          interaction_info_full <- interaction_info
+		        }
+		        if (is.null(interaction_info_full) || !is.data.frame(interaction_info_full)) {
+		          interaction_info_full <- data.frame()
+		        }
 
-	          test_idx <- eval_idx[test_pos]
-	          train_idx <- eval_idx[train_pos]
+		        W_mat <- if (exists("W_", inherits = TRUE) && !is.null(W_)) {
+		          tryCatch(as.matrix(W_), error = function(e) NULL)
+		        } else {
+		          NULL
+		        }
+		        if (is.null(W_mat) || nrow(W_mat) == 0L || ncol(W_mat) == 0L) {
+		          use_nested_eval <- FALSE
+		        }
 
-	          X_train <- X_design[train_idx, , drop = FALSE]
-	          y_train <- y_full[train_idx]
-	          X_test <- X_design[test_idx, , drop = FALSE]
-	          y_test <- y_full[test_idx]
+		        pair_mat_full <- NULL
+		        if (isTRUE(diff)) {
+		          if (exists("pair_mat", inherits = TRUE)) {
+		            pair_mat_full <- get("pair_mat", inherits = TRUE)
+		          }
+		          if (is.null(pair_mat_full) || is.null(dim(pair_mat_full)) || ncol(pair_mat_full) != 2L) {
+		            use_nested_eval <- FALSE
+		          }
+		        }
 
-	          col_sd <- apply(X_train, 2, sd)
-	          keep_cols <- is.finite(col_sd) & (col_sd > 0)
-	          if (!isTRUE(force_no_intercept)) {
-	            keep_cols[1] <- TRUE
-	          }
-	          X_train_use <- X_train[, keep_cols, drop = FALSE]
-	          X_test_use <- X_test[, keep_cols, drop = FALSE]
+		        # Pull the evaluation subset into a compact index space.
+		        y_eval <- y_full[eval_idx]
+		        stage_eval_sub <- NULL
+		        if (!is.null(stage_eval) && length(stage_eval) == n_total) {
+		          stage_eval_sub <- as.integer(stage_eval[eval_idx])
+		        }
 
-	          fallback <- mean(y_train)
-	          pred_fold <- rep(fallback, length(test_idx))
-	          fit <- tryCatch({
-	            stats::glm.fit(x = X_train_use, y = y_train, family = family_obj)
-	          }, error = function(e) NULL)
-	          beta <- if (!is.null(fit)) fit$coefficients else NULL
-	          if (!is.null(beta)) {
-	            beta[is.na(beta)] <- 0
-	            if (all(is.finite(beta))) {
-	              eta <- as.numeric(X_test_use %*% beta)
-	              pred_fold <- if (glm_family == "binomial") stats::plogis(eta) else eta
-	            }
-	          }
+		        # Build base main-effect design (pre-screening) on the evaluation subset.
+		        main_info_eval <- main_info_full
+		        if (all(c("d", "l") %in% names(main_info_eval))) {
+		          main_info_eval <- main_info_eval[, c("d", "l"), drop = FALSE]
+		        }
+		        if (!all(c("d", "l") %in% names(main_info_eval))) {
+		          use_nested_eval <- FALSE
+		        }
 
-	          pred_oos[test_idx] <- pred_fold
-	          fold_metrics <- compute_metrics(y_test, pred_fold)
-	          fold_metrics$fold <- fold
-	          fold_metrics$eval_note <- "oos"
-	          fold_metrics$n_test <- length(test_idx)
-	          fold_metrics$n_train <- length(train_idx)
-	          by_fold[[fold]] <- fold_metrics
-	        }
+		        # Interaction metadata used for fold-specific interaction selection.
+		        interaction_pair_col_full <- character(0)
+		        if (!is.null(interaction_info_full) &&
+		            nrow(interaction_info_full) > 0L &&
+		            all(c("d", "dp") %in% names(interaction_info_full))) {
+		          interaction_pair_col_full <- apply(
+		            cbind(interaction_info_full$d, interaction_info_full$dp),
+		            1,
+		            function(zer) paste(sort(zer), collapse = "_")
+		          )
+		        }
 
-	        pred_eval <- pred_oos[eval_idx]
-	        overall_metrics <- compute_metrics(y_full[eval_idx], pred_eval)
-	        overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
-	        overall_metrics$eval_subset <- subset_note
-	        overall_metrics$n_folds <- n_folds_use
-	        overall_metrics$seed <- glm_eval_control$seed
-	        overall_metrics$by_fold <- by_fold
+		        # Pre-compute glinternet's allowable interaction column pairs once.
+		        InteractionPairs_all <- NULL
+		        if (use_nested_eval && nrow(main_info_eval) >= 2L) {
+		          InteractionPairs_all <- t(utils::combn(seq_len(nrow(main_info_eval)), m = 2))
+		          InteractionPairs_all <- InteractionPairs_all[
+		            main_info_eval$d[InteractionPairs_all[, 1]] != main_info_eval$d[InteractionPairs_all[, 2]],
+		            ,
+		            drop = FALSE
+		          ]
+		          if (nrow(InteractionPairs_all) == 0L) {
+		            InteractionPairs_all <- NULL
+		          }
+		        }
 
-	        if (!is.null(stage_eval) && length(stage_eval) == n_total) {
-	          stage_eval <- as.integer(stage_eval[eval_idx])
-	          y_eval <- y_full[eval_idx]
-	          by_stage <- list()
-	          if (any(stage_eval == 0L)) {
-	            idx0 <- which(stage_eval == 0L)
-	            by_stage$primary <- compute_metrics(y_eval[idx0], pred_eval[idx0])
-	          }
-	          if (any(stage_eval == 1L)) {
-	            idx1 <- which(stage_eval == 1L)
-	            by_stage$general <- compute_metrics(y_eval[idx1], pred_eval[idx1])
-	          }
-	          if (length(by_stage) > 0L) {
-	            overall_metrics$by_stage <- by_stage
-	          }
-	        }
+		        pred_oos <- rep(NA_real_, n_eval_total)
+		        by_fold <- vector("list", n_folds_use)
+		        family_obj <- if (glm_family == "binomial") stats::binomial() else stats::gaussian()
 
-	        fit_metrics <- overall_metrics
+		        # Optional: allow evaluating with the legacy "fixed design" protocol.
+		        if (!isTRUE(use_nested_eval)) {
+		          X_design <- X_full[eval_idx, , drop = FALSE]
+		          if (!isTRUE(force_no_intercept)) {
+		            X_design <- cbind(Intercept = 1, X_design)
+		          }
+		          for (fold in seq_len(n_folds_use)) {
+		            test_pos <- which(fold_id == fold)
+		            train_pos <- which(fold_id != fold)
+		            if (!length(test_pos) || !length(train_pos)) next
+		            X_train <- X_design[train_pos, , drop = FALSE]
+		            y_train <- y_eval[train_pos]
+		            X_test <- X_design[test_pos, , drop = FALSE]
+		            y_test <- y_eval[test_pos]
+		            col_sd <- apply(X_train, 2, sd)
+		            keep_cols <- is.finite(col_sd) & (col_sd > 0)
+		            if (!isTRUE(force_no_intercept)) keep_cols[1] <- TRUE
+		            X_train_use <- X_train[, keep_cols, drop = FALSE]
+		            X_test_use <- X_test[, keep_cols, drop = FALSE]
+		            fallback <- mean(y_train)
+		            pred_fold <- rep(fallback, length(test_pos))
+		            fit <- tryCatch({
+		              stats::glm.fit(x = X_train_use, y = y_train, family = family_obj)
+		            }, error = function(e) NULL)
+		            beta <- if (!is.null(fit)) fit$coefficients else NULL
+		            if (!is.null(beta)) {
+		              beta[is.na(beta)] <- 0
+		              if (all(is.finite(beta))) {
+		                eta <- as.numeric(X_test_use %*% beta)
+		                pred_fold <- if (glm_family == "binomial") stats::plogis(eta) else eta
+		              }
+		            }
+		            pred_oos[test_pos] <- pred_fold
+		            fold_metrics <- compute_metrics(y_test, pred_fold)
+		            fold_metrics$fold <- fold
+		            fold_metrics$eval_note <- "oos"
+		            fold_metrics$n_test <- length(test_pos)
+		            fold_metrics$n_train <- length(train_pos)
+		            fold_metrics$protocol <- "legacy_fixed_design"
+		            by_fold[[fold]] <- fold_metrics
+		          }
+		        } else {
+		          # Nested protocol: re-run screening + interaction filtering on training folds only.
+		          is_pairwise <- isTRUE(diff)
+		          force_no_interactions_eval <- exists("force_no_interactions", inherits = TRUE) &&
+		            isTRUE(get("force_no_interactions", inherits = TRUE))
+		          used_regularization_eval <- exists("UsedRegularization", inherits = TRUE) &&
+		            isTRUE(get("UsedRegularization", inherits = TRUE))
 
-	        metric_items <- if (glm_family == "binomial") {
-	          Filter(Negate(is.null), list(
-	            format_metric("AUC", fit_metrics$auc, 4),
-	            format_metric("LogLoss", fit_metrics$log_loss, 4),
-	            format_metric("Acc", fit_metrics$accuracy, 3),
-	            format_metric("Brier", fit_metrics$brier, 4)
-	          ))
-	        } else {
-	          Filter(Negate(is.null), list(
-	            format_metric("RMSE", fit_metrics$rmse, 4),
-	            format_metric("MAE", fit_metrics$mae, 4)
-	          ))
-	        }
-	        if (!is.null(fit_metrics) && length(metric_items) > 0L) {
-	          message(sprintf("GLM OOS fit metrics (%s, %s, %s): %s",
-	                          mode_note,
-	                          fit_metrics$eval_note,
-	                          subset_note,
-	                          paste(metric_items, collapse = ", ")))
-	        }
-	      }
-	    }
+		          obs_map <- NULL
+		          pair_mat_eval <- NULL
+		          raw_idx_all <- integer(0)
+		          left_pos_all <- NULL
+		          right_pos_all <- NULL
+
+		          if (is_pairwise) {
+		            pair_mat_use <- pair_mat_full
+		            if (!all(ok_rows)) {
+		              pair_mat_use <- pair_mat_use[ok_rows, , drop = FALSE]
+		            }
+		            pair_mat_eval <- pair_mat_use[eval_idx, , drop = FALSE]
+		            raw_idx_all <- sort(unique(as.integer(c(pair_mat_eval))))
+		          } else {
+		            obs_map <- which(ok_rows)
+		            raw_idx_all <- as.integer(obs_map[eval_idx])
+		          }
+
+		          W_raw <- W_mat[raw_idx_all, , drop = FALSE]
+		          main_raw <- apply(main_info_eval, 1, function(row_) {
+		            1 * (W_raw[, row_[["d"]]] == row_[["l"]])
+		          })
+		          if (is.null(dim(main_raw))) {
+		            main_raw <- matrix(main_raw, ncol = 1L)
+		          }
+
+		          if (is_pairwise) {
+		            left_pos_all <- match(pair_mat_eval[, 1], raw_idx_all)
+		            right_pos_all <- match(pair_mat_eval[, 2], raw_idx_all)
+		          }
+
+		          main_obs_eval <- if (is_pairwise) {
+		            main_raw[left_pos_all, , drop = FALSE] - main_raw[right_pos_all, , drop = FALSE]
+		          } else {
+		            main_raw
+		          }
+
+		          compute_interactions_obs <- function(pos, interaction_df) {
+		            if (is.null(interaction_df) || nrow(interaction_df) == 0L) return(NULL)
+		            if (!all(c("dl_index", "dplp_index") %in% names(interaction_df))) return(NULL)
+		            dl_cols <- as.integer(interaction_df$dl_index)
+		            dp_cols <- as.integer(interaction_df$dplp_index)
+		            if (!length(dl_cols) || !length(dp_cols)) return(NULL)
+		            if (is_pairwise) {
+		              lp <- left_pos_all[pos]
+		              rp <- right_pos_all[pos]
+		              left_prod <- main_raw[lp, dl_cols, drop = FALSE] * main_raw[lp, dp_cols, drop = FALSE]
+		              right_prod <- main_raw[rp, dl_cols, drop = FALSE] * main_raw[rp, dp_cols, drop = FALSE]
+		              left_prod - right_prod
+		            } else {
+		              main_raw[pos, dl_cols, drop = FALSE] * main_raw[pos, dp_cols, drop = FALSE]
+		            }
+		          }
+
+		          for (fold in seq_len(n_folds_use)) {
+		            test_pos <- which(fold_id == fold)
+		            train_pos <- which(fold_id != fold)
+		            if (!length(test_pos) || !length(train_pos)) next
+
+		            y_train <- y_eval[train_pos]
+		            y_test <- y_eval[test_pos]
+
+		            # Start from the full (pre-regularization) feature set.
+		            main_keep <- rep(TRUE, ncol(main_obs_eval))
+		            interaction_keep_idx <- if (!force_no_interactions_eval) {
+		              seq_len(nrow(interaction_info_full))
+		            } else {
+		              integer(0)
+		            }
+
+		            # Optional glinternet-based screening (performed inside each fold).
+		            selected_pair_keys <- character(0)
+		            screening_used <- FALSE
+		            if (!force_no_interactions_eval && isTRUE(used_regularization_eval)) {
+		              screening_used <- TRUE
+		              main_train_full <- main_obs_eval[train_pos, , drop = FALSE]
+
+		              # If the training fold has no usable signal, skip screening.
+		              col_sd_main <- tryCatch(apply(main_train_full, 2, sd), error = function(e) NULL)
+		              if (!is.null(col_sd_main) &&
+		                  any(is.finite(col_sd_main) & col_sd_main > 0)) {
+		                n_obs_glm <- length(y_train)
+		                nFolds_glm_use <- if (exists("nFolds_glm", inherits = TRUE) &&
+		                                      is.numeric(nFolds_glm) &&
+		                                      length(nFolds_glm) == 1L &&
+		                                      is.finite(nFolds_glm)) {
+		                  min(as.integer(nFolds_glm), floor(n_obs_glm / 2))
+		                } else {
+		                  floor(n_obs_glm / 2)
+		                }
+		                glinternet_results <- tryCatch({
+		                  if (nFolds_glm_use < 2L) {
+		                    glinternet::glinternet(
+		                      X = main_train_full,
+		                      Y = y_train,
+		                      family = glm_family,
+		                      numLevels = rep(1, times = ncol(main_train_full)),
+		                      interactionPairs = InteractionPairs_all
+		                    )
+		                  } else {
+		                    glinternet::glinternet.cv(
+		                      X = main_train_full,
+		                      Y = y_train,
+		                      family = glm_family,
+		                      numLevels = rep(1, times = ncol(main_train_full)),
+		                      interactionPairs = InteractionPairs_all,
+		                      nFolds = nFolds_glm_use
+		                    )
+		                  }
+		                }, error = function(e) NULL)
+
+		                keep_OnlyMain <- NULL
+		                keep_MainWithInter <- NULL
+		                if (!is.null(glinternet_results) &&
+		                    !is.null(glinternet_results$activeSet) &&
+		                    length(glinternet_results$activeSet) >= 1L) {
+		                  keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
+		                  keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
+		                }
+		                if (!is.null(glinternet_results) && is.null(keep_MainWithInter)) {
+		                  glinternet_results2 <- tryCatch({
+		                    glinternet::glinternet(
+		                      X = main_train_full,
+		                      Y = y_train,
+		                      family = glm_family,
+		                      numLevels = rep(1, times = ncol(main_train_full)),
+		                      interactionPairs = InteractionPairs_all,
+		                      numToFind = 1L
+		                    )
+		                  }, error = function(e) NULL)
+		                  if (!is.null(glinternet_results2) &&
+		                      !is.null(glinternet_results2$activeSet) &&
+		                      length(glinternet_results2$activeSet) >= 1L) {
+		                    as_last <- glinternet_results2$activeSet[[length(glinternet_results2$activeSet)]]
+		                    keep_OnlyMain <- as_last$cont
+		                    keep_MainWithInter <- as_last$contcont
+		                  }
+		                }
+
+		                AllMain <- sort(unique(c(keep_OnlyMain, c(keep_MainWithInter))))
+		                if (length(AllMain) > 0L) {
+		                  selected_factors <- unique(main_info_eval$d[AllMain])
+		                  if (length(selected_factors) > 0L) {
+		                    main_keep <- main_info_eval$d %in% selected_factors
+		                  }
+		                }
+
+		                if (!is.null(keep_MainWithInter) && length(keep_MainWithInter) > 0L) {
+		                  keep_MainWithInter <- as.matrix(keep_MainWithInter)
+		                  if (ncol(keep_MainWithInter) == 2L) {
+		                    keep_inter_d <- cbind(
+		                      main_info_eval$d[keep_MainWithInter[, 1]],
+		                      main_info_eval$d[keep_MainWithInter[, 2]]
+		                    )
+		                    selected_pair_keys <- apply(keep_inter_d, 1, function(zer) {
+		                      paste(sort(zer), collapse = "_")
+		                    })
+		                  }
+		                }
+		              }
+
+		              # If screening failed, fall back to using the full main-effect set.
+		              if (!any(main_keep)) {
+		                main_keep <- rep(TRUE, ncol(main_obs_eval))
+		              }
+		            }
+
+		            if (!force_no_interactions_eval &&
+		                nrow(interaction_info_full) > 0L) {
+		              if (length(selected_pair_keys) > 0L && length(interaction_pair_col_full) == nrow(interaction_info_full)) {
+		                interaction_keep_idx <- which(interaction_pair_col_full %in% selected_pair_keys)
+		              }
+		            } else {
+		              interaction_keep_idx <- integer(0)
+		            }
+
+		            X_main_train <- main_obs_eval[train_pos, main_keep, drop = FALSE]
+		            X_main_test <- main_obs_eval[test_pos, main_keep, drop = FALSE]
+
+		            interaction_fold <- if (length(interaction_keep_idx) > 0L &&
+		                                     nrow(interaction_info_full) > 0L) {
+		              interaction_info_full[interaction_keep_idx, , drop = FALSE]
+		            } else {
+		              interaction_info_full[0, , drop = FALSE]
+		            }
+
+		            X_inter_train <- compute_interactions_obs(train_pos, interaction_fold)
+		            X_inter_test <- compute_interactions_obs(test_pos, interaction_fold)
+		            if (!is.null(X_inter_train) && ncol(X_inter_train) > 0L) {
+		              inter_sd <- apply(X_inter_train, 2, sd)
+		              keep_inter_cols <- is.finite(inter_sd) & (inter_sd > 0)
+		              if (any(keep_inter_cols)) {
+		                X_inter_train <- X_inter_train[, keep_inter_cols, drop = FALSE]
+		                X_inter_test <- X_inter_test[, keep_inter_cols, drop = FALSE]
+		              } else {
+		                X_inter_train <- NULL
+		                X_inter_test <- NULL
+		              }
+		            } else {
+		              X_inter_train <- NULL
+		              X_inter_test <- NULL
+		            }
+
+		            # Fold-specific stage interactions (optional).
+		            stage_dat_train <- NULL
+		            stage_dat_test <- NULL
+		            if (!is.null(stage_eval_sub) &&
+		                length(stage_eval_sub) == n_eval_total) {
+		              stage_train <- stage_eval_sub[train_pos]
+		              stage_sd <- suppressWarnings(stats::sd(stage_train))
+		              if (is.finite(stage_sd) && stage_sd > 0) {
+		                stage_main_train <- matrix(stage_train, ncol = 1L)
+		                stage_main_test <- matrix(stage_eval_sub[test_pos], ncol = 1L)
+		                colnames(stage_main_train) <- "stage_general"
+		                colnames(stage_main_test) <- "stage_general"
+
+		                stage_factor_train <- sweep(X_main_train, 1, stage_train, `*`)
+		                stage_factor_sd <- apply(as.matrix(stage_factor_train), 2, sd)
+		                keep_stage_main <- is.finite(stage_factor_sd) & (stage_factor_sd > 0)
+
+		                stage_inter_train <- NULL
+		                keep_stage_inter <- logical(0)
+		                stage_inter_test <- NULL
+		                if (!is.null(X_inter_train) && ncol(X_inter_train) > 0L) {
+		                  stage_inter_train <- sweep(X_inter_train, 1, stage_train, `*`)
+		                  stage_inter_sd <- apply(as.matrix(stage_inter_train), 2, sd)
+		                  keep_stage_inter <- is.finite(stage_inter_sd) & (stage_inter_sd > 0)
+		                }
+
+		                if (any(keep_stage_main) || any(keep_stage_inter)) {
+		                  stage_dat_train <- stage_main_train
+		                  stage_dat_test <- stage_main_test
+		                  if (any(keep_stage_main)) {
+		                    stage_factor_test <- sweep(X_main_test, 1, stage_eval_sub[test_pos], `*`)
+		                    stage_dat_train <- cbind(stage_dat_train,
+		                                             as.matrix(stage_factor_train[, keep_stage_main, drop = FALSE]))
+		                    stage_dat_test <- cbind(stage_dat_test,
+		                                            as.matrix(stage_factor_test[, keep_stage_main, drop = FALSE]))
+		                  }
+		                  if (any(keep_stage_inter) && !is.null(stage_inter_train)) {
+		                    stage_inter_test <- sweep(X_inter_test, 1, stage_eval_sub[test_pos], `*`)
+		                    stage_dat_train <- cbind(stage_dat_train,
+		                                             as.matrix(stage_inter_train[, keep_stage_inter, drop = FALSE]))
+		                    stage_dat_test <- cbind(stage_dat_test,
+		                                            as.matrix(stage_inter_test[, keep_stage_inter, drop = FALSE]))
+		                  }
+		                }
+		              }
+		            }
+
+		            X_train <- X_main_train
+		            X_test <- X_main_test
+		            if (!is.null(X_inter_train) && ncol(X_inter_train) > 0L) {
+		              X_train <- cbind(X_train, X_inter_train)
+		              X_test <- cbind(X_test, X_inter_test)
+		            }
+		            if (!is.null(stage_dat_train) && ncol(stage_dat_train) > 0L) {
+		              X_train <- cbind(X_train, stage_dat_train)
+		              X_test <- cbind(X_test, stage_dat_test)
+		            }
+
+		            if (!isTRUE(force_no_intercept)) {
+		              X_train <- cbind(Intercept = 1, X_train)
+		              X_test <- cbind(Intercept = 1, X_test)
+		            }
+
+		            col_sd <- apply(as.matrix(X_train), 2, sd)
+		            keep_cols <- is.finite(col_sd) & (col_sd > 0)
+		            if (!isTRUE(force_no_intercept) && length(keep_cols) >= 1L) {
+		              keep_cols[1] <- TRUE
+		            }
+		            X_train_use <- as.matrix(X_train[, keep_cols, drop = FALSE])
+		            X_test_use <- as.matrix(X_test[, keep_cols, drop = FALSE])
+
+		            fallback <- mean(y_train)
+		            pred_fold <- rep(fallback, length(test_pos))
+		            fit <- tryCatch({
+		              stats::glm.fit(x = X_train_use, y = y_train, family = family_obj)
+		            }, error = function(e) NULL)
+		            beta <- if (!is.null(fit)) fit$coefficients else NULL
+		            if (!is.null(beta)) {
+		              beta[is.na(beta)] <- 0
+		              if (all(is.finite(beta))) {
+		                eta <- as.numeric(X_test_use %*% beta)
+		                pred_fold <- if (glm_family == "binomial") stats::plogis(eta) else eta
+		              }
+		            }
+
+		            pred_oos[test_pos] <- pred_fold
+
+		            fold_metrics <- compute_metrics(y_test, pred_fold)
+		            fold_metrics$fold <- fold
+		            fold_metrics$eval_note <- "oos"
+		            fold_metrics$n_test <- length(test_pos)
+		            fold_metrics$n_train <- length(train_pos)
+		            fold_metrics$protocol <- "nested_fold_refit"
+		            fold_metrics$screening_used <- screening_used
+		            fold_metrics$n_main <- ncol(X_main_train)
+		            fold_metrics$n_inter <- if (!is.null(X_inter_train)) ncol(X_inter_train) else 0L
+		            fold_metrics$n_stage <- if (!is.null(stage_dat_train)) ncol(stage_dat_train) else 0L
+		            by_fold[[fold]] <- fold_metrics
+		          }
+		        }
+
+		        overall_metrics <- compute_metrics(y_eval, pred_oos)
+		        overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
+		        overall_metrics$eval_subset <- subset_note
+		        overall_metrics$n_folds <- n_folds_use
+		        overall_metrics$seed <- glm_eval_control$seed
+		        overall_metrics$by_fold <- by_fold
+		        overall_metrics$eval_protocol <- ifelse(isTRUE(use_nested_eval),
+		                                                "nested_fold_refit",
+		                                                "legacy_fixed_design")
+
+		        if (!is.null(stage_eval_sub) && length(stage_eval_sub) == n_eval_total) {
+		          by_stage <- list()
+		          if (any(stage_eval_sub == 0L)) {
+		            idx0 <- which(stage_eval_sub == 0L)
+		            by_stage$primary <- compute_metrics(y_eval[idx0], pred_oos[idx0])
+		          }
+		          if (any(stage_eval_sub == 1L)) {
+		            idx1 <- which(stage_eval_sub == 1L)
+		            by_stage$general <- compute_metrics(y_eval[idx1], pred_oos[idx1])
+		          }
+		          if (length(by_stage) > 0L) {
+		            overall_metrics$by_stage <- by_stage
+		          }
+		        }
+
+		        fit_metrics <- overall_metrics
+
+		        metric_items <- if (glm_family == "binomial") {
+		          Filter(Negate(is.null), list(
+		            format_metric("AUC", fit_metrics$auc, 4),
+		            format_metric("LogLoss", fit_metrics$log_loss, 4),
+		            format_metric("Acc", fit_metrics$accuracy, 3),
+		            format_metric("Brier", fit_metrics$brier, 4)
+		          ))
+		        } else {
+		          Filter(Negate(is.null), list(
+		            format_metric("RMSE", fit_metrics$rmse, 4),
+		            format_metric("MAE", fit_metrics$mae, 4)
+		          ))
+		        }
+		        if (!is.null(fit_metrics) && length(metric_items) > 0L) {
+		          message(sprintf("GLM OOS fit metrics (%s, %s, %s): %s",
+		                          mode_note,
+		                          fit_metrics$eval_note,
+		                          subset_note,
+		                          paste(metric_items, collapse = ", ")))
+		        }
+		      }
+		    }
 
 	    if (!use_coeff_cache) {
 	      # fit outcome model, post regularization
