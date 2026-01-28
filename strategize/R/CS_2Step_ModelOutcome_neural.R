@@ -1128,7 +1128,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
   )
-  RMS_scale = 0.35
+  RMS_scale = 0.5
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
@@ -1283,7 +1283,7 @@ generate_ModelOutcome_neural <- function(){
   #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
   
   # Depth-aware scaling for priors and ReZero-style residual gates.
-  depth_prior_scale <- 1 / sqrt(as.numeric(ModelDepth))
+  depth_prior_scale <- sqrt(2) / sqrt(as.numeric(ModelDepth))
   gate_sd_scale <- 0.1 * depth_prior_scale
   embed_sd_scale <- 4 * weight_sd_scale
   factor_embed_sd_scale <- embed_sd_scale

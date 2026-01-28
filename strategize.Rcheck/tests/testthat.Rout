@@ -235,7 +235,7 @@ ok_counter = 0
 GLM OOS fit metrics (single, oos_3fold): AUC=0.7933, LogLoss=0.5488, Acc=0.710, Brier=0.1835
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905, Brier=0.0422
-[ FAIL 0 | WARN 38 | SKIP 107 | PASS 110 ]
+[ FAIL 0 | WARN 38 | SKIP 107 | PASS 111 ]
 
 ══ Skipped tests (107) ═════════════════════════════════════════════════════════
 • JAX available; neural fit is slow and not exercised here (1):
@@ -294,8 +294,8 @@ GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 38 | SKIP 107 | PASS 110 ]
+[ FAIL 0 | WARN 38 | SKIP 107 | PASS 111 ]
 > 
 > proc.time()
    user  system elapsed 
- 25.242   3.456  19.884 
+ 31.028   4.042  26.248 

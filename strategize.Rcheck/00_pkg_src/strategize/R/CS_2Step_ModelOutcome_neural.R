@@ -3170,9 +3170,10 @@ generate_ModelOutcome_neural <- function(){
             pairwise_scaling <- TRUE
           }
         }
-        svi_subsample_method <- subsample_method
-        if (identical(svi_subsample_method, "batch")) {
-          svi_subsample_method <- "full"
+        svi_subsample_method <- if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
+          "batch_vi"
+        } else {
+          subsample_method
         }
         svi_steps <- neural_optimal_svi_steps(
           n_obs = n_obs_svi,
