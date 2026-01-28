@@ -74,7 +74,7 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        primary_strength = 1.0,
                                        primary_n_entrants = 1L,
                                        primary_n_field = 1L,
-                                       rain_gamma = 1,
+                                       rain_gamma = 0.05,
                                        rain_eta = NULL) {
 
   # ---- Y validation ----
