@@ -305,7 +305,7 @@ cv_strategize       <-          function(
                                             optim_type = "gd",
                                             optimism = "extragrad",
                                             optimism_coef = 1,
-                                            rain_gamma = 1,
+                                            rain_gamma = 0.05,
                                             rain_eta = NULL){
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   if (use_optax && optimism != "none") {

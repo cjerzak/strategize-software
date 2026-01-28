@@ -16,7 +16,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           quiet = TRUE,
                           optimism = c("none", "ogda", "extragrad", "smp", "rain"),
                           optimism_coef = 1,
-                          rain_gamma = 1,
+                          rain_gamma = 0.05,
                           rain_eta = NULL
                           ){
   optimism <- match.arg(optimism)
@@ -121,6 +121,19 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       rain_rescale_target <- rain_rescale_threshold
     }
 
+    clamp_scale_factor <- function(scale_factor, rain_max_val, rain_lambda0_scaled) {
+      safe_lambda <- max(rain_lambda0_scaled, 1e-30)
+      max_scale <- rain_max_val / safe_lambda
+      if (!is.finite(max_scale) || max_scale <= 0) {
+        max_scale <- rain_max_val
+      }
+      max_scale <- min(max_scale, rain_max_val)
+      if (!is.finite(scale_factor) || scale_factor <= 0) {
+        return(max_scale)
+      }
+      return(min(scale_factor, max_scale))
+    }
+
     rain_log_step <- function(step_idx) {
       if (step_idx < 5 || step_idx %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) {
         message(sprintf("SGD Iteration: %s of %s", step_idx, nSGD))
@@ -143,6 +156,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
       if (weight_pow_val > rain_rescale_threshold) {
         scale_factor <- weight_pow_val / rain_rescale_target
+        scale_factor <- clamp_scale_factor(scale_factor, rain_max_val, rain_lambda0_scaled)
         if (is.finite(scale_factor) && scale_factor > 1) {
           scale_tf <- strenv$jnp$array(scale_factor, strenv$dtj)
           rain_weight_pow <- strenv$jnp$divide(rain_weight_pow, scale_tf)
@@ -282,6 +296,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
       if (weight_pow_val * rain_gamma_step_num > rain_rescale_threshold) {
         scale_factor <- (weight_pow_val * rain_gamma_step_num) / rain_rescale_target
+        scale_factor <- clamp_scale_factor(scale_factor, rain_max_val, rain_lambda0_scaled)
         if (is.finite(scale_factor) && scale_factor > 1) {
           scale_tf <- strenv$jnp$array(scale_factor, strenv$dtj)
           rain_weight_pow <- strenv$jnp$divide(rain_weight_pow, scale_tf)
