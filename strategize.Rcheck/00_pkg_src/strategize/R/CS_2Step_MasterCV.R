@@ -1,0 +1,518 @@
+#' Cross-validation for Optimal Stochastic Interventions in Conjoint Analysis
+#'
+#' Performs cross-validation to select the regularization parameter \eqn{\lambda} 
+#' (and, if desired, other hyperparameters) for the \code{\link{strategize}} function. 
+#' This function splits the data by respondent (or user-specified units), trains
+#' candidate models under a grid of \eqn{\lambda} values, and evaluates out-of-sample
+#' performance, returning the model that maximizes a chosen criterion (e.g., out-of-sample 
+#' expected utility or log-likelihood).
+#'
+#' @param Y A numeric or binary response vector. If binary (e.g., 0–1), it should 
+#'   correspond to forced-choice outcomes (1 if candidate \code{A} is chosen; 0 if 
+#'   candidate \code{B} is chosen). If numeric, please see details in 
+#'   \code{\link{strategize}} for how outcomes are handled.
+#' @param W A data frame or matrix representing the randomized conjoint attributes. 
+#'   Each column is a factor or character vector indicating attribute levels for a 
+#'   particular dimension. Multiple columns can be used if the conjoint has multiple
+#'   attributes. 
+#' @param X Optional covariate matrix or data frame for modeling systematic 
+#'   heterogeneity. If \code{K > 1}, this is typically required for multi-class or 
+#'   cluster-based models. Otherwise, set \code{X = NULL}.
+#' @param lambda_seq A numeric vector of candidate \eqn{\lambda} values for 
+#'   cross-validation. If \code{NULL} and \code{lambda} is also \code{NULL}, 
+#'   a sequence of values is automatically generated (e.g., via 
+#'   \code{10^seq(-4, 0, length.out = 5) * sd(Y)}).
+#' @param lambda A single user-specified \eqn{\lambda} value. If provided, 
+#'   cross-validation is effectively disabled unless \code{lambda_seq} is also 
+#'   supplied. 
+#' @param folds An integer or user-specified partitioning indicating the number of 
+#'   cross-validation folds. Defaults to 2. See Details for how data splitting is done.
+#' @param varcov_cluster_variable An optional clustering variable for robust standard 
+#'   errors. For instance, if the data is from multiple respondents, specify respondent 
+#'   IDs here for cluster-robust inference (via sandwich estimation). If \code{NULL}, no 
+#'   cluster-based variance correction is used.
+#' @param competing_group_variable_respondent Optional vector for multi-round or 
+#'   multi-group setups, indicating which respondent belongs to which group. Used for 
+#'   advanced or adversarial designs (e.g., dual-party contexts). If \code{NULL}, 
+#'   standard usage is assumed.
+#' @param competing_group_variable_candidate Similar to 
+#'   \code{competing_group_variable_respondent}, but for candidate-level grouping. 
+#'   If \code{NULL}, standard usage is assumed.
+#' @param competing_group_competition_variable_candidate An optional variable for 
+#'   specifying which candidate is in competition with which group. Relevant if 
+#'   multi-step adversarial frameworks are used.
+#' @param pair_id An optional vector (same length as \code{Y}) identifying which 
+#'   rows (candidate pairs) belong to the same forced choice. For example, if each 
+#'   respondent evaluates multiple pairs, this ID ensures correct grouping. 
+#'   Required only in certain advanced difference-in-differences or paired analyses.
+#' @param respondent_id A user-specified ID to denote respondent-level grouping, 
+#'   typically used to cluster standard errors or to perform out-of-sample validation 
+#'   by respondent. If \code{NULL}, a simple row index is used for splitting.
+#' @param respondent_task_id Another optional ID for tasks (e.g., each respondent 
+#'   might see multiple tasks). Helps in advanced designs. If \code{NULL}, ignored.
+#' @param profile_order An optional vector capturing the ordering of candidate 
+#'   profiles within tasks, if multiple profiles are being shown. Used in difference 
+#'   or extended hierarchical modeling.
+#' @param p_list A list of assignment probabilities for each attribute, if known 
+#'   or desired as a baseline. If \code{NULL}, each level is assumed to have 
+#'   uniform probability or derived from empirical frequencies in \code{W}.
+#' @param slate_list An optional list specifying alternative or restricted sets of 
+#'   attribute levels. Used when a subset of attributes is feasible or when bounding 
+#'   certain strategies in an adversarial design.
+#' @param use_optax Logical. If \code{TRUE}, uses the \pkg{optax} Python library 
+#'   (via \pkg{reticulate}) for gradient-based optimization. If \code{FALSE}, uses 
+#'   a default gradient-based approach from \pkg{jax}.
+#' @param K An integer specifying the number of mixture components or clusters if 
+#'   \code{X} is used (e.g., for multi-class analysis). Defaults to 1 (no mixture).
+#' @param nSGD An integer number of iterations for gradient-based training. Defaults 
+#'   to 100 but can be increased if convergence has not been reached.
+#' @param diff Logical indicating whether a difference-based model (e.g., for 
+#'   forced-choice or difference-in-outcomes) is used. Defaults to \code{FALSE}, but 
+#'   set \code{TRUE} in certain difference-of-utility designs.
+#' @param adversarial Logical indicating whether to use a two-party or multi-agent 
+#'   \emph{adversarial} approach in the optimization. If \code{TRUE}, a min-max 
+#'   (zero-sum) formulation is employed. Defaults to \code{FALSE} (single-agent 
+#'   or average-case optimization).
+#' @param adversarial_model_strategy Character string indicating whether to estimate
+#'   \code{"four"} outcome models (primary + general for each group), \code{"two"} outcome models
+#'   (one per group reused for both primary and general), or \code{"neural"} (Bayesian Transformer
+#'   models with party tokens; defaults to a single pooled model across groups and stages. Set
+#'   \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models) in adversarial
+#'   mode.
+#' @param partial_pooling Logical indicating whether to partially pool (shrink) group-specific
+#'   outcome model coefficients toward a shared average when using the "two" strategy. When
+#'   \code{NULL}, defaults to \code{TRUE} in the two-strategy adversarial case.
+#' @param partial_pooling_strength Numeric scalar controlling the amount of shrinkage used for
+#'   partial pooling in the two-strategy adversarial case.
+#' @param use_regularization Logical; if \code{TRUE}, penalty-based regularization
+#'   is used for the outcome model. Usually set to \code{TRUE} for large designs.
+#'   Defaults to \code{TRUE}.
+#' @param force_gaussian Logical indicating whether a Gaussian family
+#'   (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary.
+#'   Defaults to \code{FALSE}.
+#' @param temperature Optional numeric temperature controlling the smoothness of
+#'   Gumbel-Softmax sampling when exploring probability vectors. Smaller values
+#'   lead to distributions closer to the argmax. Defaults to \code{NULL}, which
+#'   allows internal defaults.
+#' @param a_init_sd A numeric controlling the random initialization scale for
+#'   unconstrained parameters in gradient-based optimization. Defaults to 0.001.
+#'   Larger values can help avoid local minima in complex outcome landscapes.
+#' @param learning_rate_max Base learning rate for gradient-based optimizers.
+#'   Defaults to \code{0.001}.
+#' @param penalty_type A character string specifying the type of penalty for the
+#'   \emph{optimal stochastic intervention}, e.g., \code{"KL"}, \code{"L2"},
+#'   or \code{"LogMaxProb"}. The default is \code{"KL"}.
+#' @param outcome_model_type Character string indicating the outcome model to
+#'   use, such as \code{"glm"} for generalized linear models or \code{"neural"}
+#'   for a neural-network approximation. Defaults to \code{"glm"}.
+#' @param neural_mcmc_control Optional list overriding default MCMC settings used when
+#'   \code{outcome_model_type = "neural"}. Use
+#'   \code{neural_mcmc_control$uncertainty_scope = "output"} to restrict delta-method
+#'   uncertainty to output-layer parameters. In adversarial neural mode, set
+#'   \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models
+#'   (default is 1 for a single differential model). Use
+#'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth}
+#'   to override the Transformer hidden width and depth. Set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
+#'   the opponent-dependent cross-candidate term in pairwise mode, or set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
+#'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
+#'   For variational inference (subsample_method = "batch_vi"), set
+#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
+#'   \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
+#'   a scaling-law heuristic based on model/data size; for minibatched VI this
+#'   also scales with \code{batch_size}) and
+#'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
+#'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
+#' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors
+#'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
+#' @param conda_env A character specifying the name of a Conda environment for
+#'   \pkg{reticulate}. Defaults to \code{"strategize_env"}.
+#' @param conda_env_required Logical. If \code{TRUE}, errors if the specified 
+#'   Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
+#'   back gracefully.
+#' @param conf_level The confidence level (between 0 and 1) for interval estimation, 
+#'   default 0.90.
+#' @param nFolds_glm An integer specifying the number of folds in internal 
+#'   regression-based cross-validation (if used) for outcome model selection. 
+#'   Defaults to 3.
+#' @param nMonte_adversarial A positive integer specifying the number of Monte Carlo 
+#'   draws for the min-max (adversarial) stage, if \code{adversarial = TRUE}. Defaults 
+#'   to 5.
+#' @param primary_pushforward Character string controlling the primary-stage push-forward estimator.
+#'   Use \code{"mc"} (default) for Monte Carlo sampling with per-draw primary winners, or
+#'   \code{"linearized"} for the faster averaged-weight approximation, or
+#'   \code{"multi"} for multi-candidate primaries.
+#' @param primary_strength Numeric scalar controlling primary decisiveness (see \code{\link{strategize}}).
+#' @param primary_n_entrants Integer number of entrant candidates per party in multi-candidate primaries.
+#' @param primary_n_field Integer number of field candidates per party in multi-candidate primaries.
+#' @param nMonte_Qglm An integer specifying the number of Monte Carlo draws 
+#'   for evaluating certain integrals in \code{glm}-based approximations, default 100.
+#' @param optim_type A character describing the optimization routine. Typically 
+#'   \code{"default"} uses a standard gradient-based approach; set \code{"tryboth"} 
+#'   or \code{"SecondOrder"} for testing or advanced routines.
+#' @param optimism Character string controlling optimistic / extra-gradient updates for the
+#'   gradient optimizer. Options: \code{"extragrad"} (default), \code{"smp"} (stochastic mirror-prox),
+#'   \code{"ogda"}, \code{"rain"} (RAIN: Recursive Anchored Iteration with anchored extra-gradient and
+#'   increasing quadratic anchor penalties),
+#'   or \code{"none"}. Only supported when \code{use_optax = FALSE}.
+#' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
+#'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
+#'   initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \eqn{(1+\gamma)}
+#'   each outer stage.
+#' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+#'   Only used when \code{optimism = "rain"}.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
+#'   to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.
+#' 
+#' @details
+#' \code{cv_strategize} implements a cross-validation routine for
+#' \code{\link{strategize}}. First, the data is split into \code{folds} parts. 
+#' For each fold, we train candidate outcome models and compute out-of-sample 
+#' performance. The best-performing \eqn{\lambda} is selected. Finally, a 
+#' refit on the full data is done using the chosen hyperparameters, returning 
+#' the results of the final \code{\link{strategize}} call with \eqn{\lambda} set 
+#' to the best value.
+#'
+#' The function supports a wide range of conjoints, including forced-choice 
+#' (where \code{diff = TRUE}), multi-cluster outcome modeling (where \eqn{K > 1}), 
+#' and adversarial designs (where \code{adversarial = TRUE}). Regularization for the 
+#' outcome model or for the candidate distribution can be enabled via 
+#' \code{use_regularization} and \code{penalty_type}. Cross-validation is particularly 
+#' helpful when the data is limited or highly dimensional.
+#'
+#' @return A named list with components:
+#' \describe{
+#'   \item{pi_star_point}{The estimated optimal probability distribution(s) over 
+#'   candidate profiles (\eqn{\hat{\boldsymbol{\pi}}^*}).}
+#'
+#'   \item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
+#'   under the selected optimal distribution.}
+#'
+#'   \item{lambda}{The chosen \eqn{\lambda} value from cross-validation (and 
+#'   any other relevant hyperparameters).}
+#'
+#'   \item{CVInfo}{A data frame or matrix summarizing cross-validation results, 
+#'   e.g., in-sample and out-of-sample estimates for each candidate \eqn{\lambda}.}
+#'
+#'   \item{Other components}{Various additional objects useful for inference and 
+#'   debugging (e.g., final model fits, standard error estimates, weighting 
+#'   details).}
+#' }
+#'
+#' @seealso 
+#' \code{\link{strategize}} for direct optimization of stochastic interventions 
+#' in conjoint analysis, including average and adversarial settings. 
+#'
+#' @examples
+#' \donttest{
+#' # ================================================
+#' # Cross-validation to select regularization lambda
+#' # ================================================
+#' set.seed(123)
+#' n <- 400  # profiles (200 pairs)
+#'
+#' # Generate factor matrix
+#' W <- data.frame(
+#'   Gender = sample(c("Male", "Female"), n, replace = TRUE),
+#'   Age = sample(c("35", "50", "65"), n, replace = TRUE),
+#'   Party = sample(c("Dem", "Rep"), n, replace = TRUE)
+#' )
+#'
+#' # Simulate outcome with true effects
+#' latent <- 0.2 * (W$Gender == "Female") + 0.15 * (W$Age == "35")
+#' prob <- plogis(latent)
+#'
+#' # Create paired forced-choice structure
+#' pair_id <- rep(1:(n/2), each = 2)
+#' Y <- numeric(n)
+#' for (p in unique(pair_id)) {
+#'   idx <- which(pair_id == p)
+#'   winner <- sample(idx, 1, prob = prob[idx])
+#'   Y[idx] <- as.integer(seq_along(idx) == which(idx == winner))
+#' }
+#' profile_order <- rep(1:2, n/2)
+#'
+#' # Cross-validate over lambda values
+#' # Lower lambda = less regularization = further from baseline
+#' cv_result <- cv_strategize(
+#'   Y = Y,
+#'   W = W,
+#'   lambda_seq = c(0.01, 0.1, 0.5, 1.0),
+#'   folds = 2,
+#'   pair_id = pair_id,
+#'   respondent_id = pair_id,
+#'   profile_order = profile_order,
+#'   diff = TRUE,
+#'   nSGD = 50,
+#'   compute_se = FALSE
+#' )
+#'
+#' # View CV results and selected lambda
+#' print(cv_result$lambda)       # Optimal lambda
+#' print(cv_result$CVInfo)       # Performance at each lambda
+#' print(cv_result$pi_star_point) # Optimal distribution
+#' print(cv_result$Q_point)       # Expected outcome
+#' }
+#'
+#' @export
+
+cv_strategize       <-          function(
+                                            Y,
+                                            W,
+                                            X = NULL,
+                                            lambda_seq = NULL,
+                                            lambda = NULL,
+                                            folds = 2L,
+                                            varcov_cluster_variable = NULL,
+                                            competing_group_variable_respondent = NULL,
+                                            competing_group_variable_candidate = NULL,
+                                            competing_group_competition_variable_candidate = NULL,
+                                            pair_id = NULL,
+                                            respondent_id = NULL,
+                                            respondent_task_id = NULL,
+                                            profile_order = NULL,
+                                            p_list = NULL,
+                                            slate_list = NULL,
+                                            use_optax = F,
+                                            K = 1,
+                                            nSGD = 100,
+                                            diff = F,
+                                            adversarial = F,
+                                            adversarial_model_strategy = "four",
+                                            partial_pooling = NULL,
+                                            partial_pooling_strength = 50,
+                                            use_regularization = TRUE,
+                                            force_gaussian = F,
+                                            temperature = 0.5,
+                                            a_init_sd = 0.001,
+                                            learning_rate_max = 0.001, 
+                                            penalty_type = "KL",
+                                            outcome_model_type = "glm",
+                                            neural_mcmc_control = NULL,
+                                            compute_se = T,
+                                            conda_env = "strategize_env",
+                                            conda_env_required = F,
+                                            conf_level = 0.90,
+                                            nFolds_glm = 3L,
+                                            nMonte_adversarial = 5L,
+                                            primary_pushforward = "mc",
+                                            primary_strength = 1.0,
+                                            primary_n_entrants = 1L,
+                                            primary_n_field = 1L,
+                                            nMonte_Qglm = 100L,
+                                            optim_type = "gd",
+                                            optimism = "extragrad",
+                                            optimism_coef = 1,
+                                            rain_gamma = 0.05,
+                                            rain_eta = NULL){
+  optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
+  if (use_optax && optimism != "none") {
+    stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
+  }
+  # initialize environment
+  if(!"jnp" %in% ls(envir = strenv)) {
+    initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
+  }
+
+  # setup lambda
+  if(is.null(lambda_seq) & is.null(lambda)){
+    lambda_seq <- 10^seq(-4, 0, length.out = 5) * sd(Y, na.rm = T)
+  }
+  if(is.null(lambda_seq) & !is.null(lambda)){ lambda_seq <- lambda }
+
+  if(is.null(respondent_id)){ respondent_id <- 1:length(Y) }
+  if(is.null(respondent_task_id)){ respondent_task_id <- rep(1L, length(Y)) }
+
+  # Ensure p_list is computed from full data for consistent dimensions across folds
+  # This prevents dimension mismatches when different CV folds see different factor levels
+  if(is.null(p_list)){
+    p_list <- lapply(1:ncol(W), function(col_idx){
+      tab <- table(W[, col_idx])
+      p_vec <- prop.table(tab)
+      return(p_vec)
+    })
+    names(p_list) <- colnames(W)
+  }
+
+  # CV sequence
+  {
+    message("Starting CV sequence...")
+    outsamp_results <- insamp_results <- matrix(nrow = 0, ncol = 4, dimnames = list(NULL, c("lambda","Qhat","Qse","selected")))
+
+    # build cv splits - same for all lambda 
+    all_tabs <- apply(W,2,table)
+    ok_counter <- 0; ok <- F; while(!ok){ 
+        ok_counter <- ok_counter + 1 
+        
+        # sample based on unique respondent-tasks 
+        tmp_ <- (paste0(respondent_id, "_", respondent_task_id))
+        indi_list <- sample(1:folds, size = length(unique(tmp_)), replace = T)
+        names(indi_list) <- unique(tmp_)
+        indi_list <- indi_list[tmp_]
+        
+        indi_list <- sapply(1:folds, function(f_){
+          list(which(!indi_list %in% f_), # pos 1 is in
+               which(indi_list %in% f_) ) # pos 2 is out 
+        })
+        split_tabs_in <- apply(indi_list,2,function(l_){ apply(W[l_[[1]],],2,table) })
+        if(all(names(unlist(all_tabs)) == names(unlist(split_tabs_in)))){
+          if(all(unlist(split_tabs_in) > 10)){ ok <- T }
+        }
+        if(ok_counter > 1000){stop("Stopping: Could not find split with > 10 observations per factor level.")}
+    }
+    
+    lambda_counter <- 0; for(lambda__ in lambda_seq){
+      lambda_counter <- lambda_counter + 1
+      Qoptimized__ <- replicate(n = folds, list())
+      message(sprintf("At lambda %s of %s...", lambda_counter, length(lambda_seq)))
+
+      # CV sequence
+      q_vec_in <- q_vec_out <- c()
+      for(split_ in c(1:folds)){
+        message(sprintf("On fold %s",split_))
+        for(type_ in c(1,2)){ 
+          # in sample optimization of pi*, evaluation on OOS coefficients 
+          use_indices <- indi_list[type_,split_][[1]]
+          nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
+          
+          if(type_ == 1){type_<-1}
+          if(type_ == 2){type_<-2}
+          
+          # strategize call
+          Qoptimized__[[split_]][[type_]] <- strategize(
+
+            # input data
+            Y = Y[use_indices],
+            W = W[use_indices,],
+            X = ifelse(K>1, yes = list(X[use_indices,]), no = list(NULL))[[1]],
+            varcov_cluster_variable = varcov_cluster_variable[use_indices],
+            pair_id = pair_id[use_indices],
+            respondent_id = respondent_id[ use_indices ],
+            respondent_task_id = respondent_task_id[ use_indices ],
+            profile_order = profile_order[ use_indices ],
+            competing_group_variable_respondent = if(!is.null(competing_group_variable_respondent)) competing_group_variable_respondent[use_indices] else NULL,
+            competing_group_variable_candidate = if(!is.null(competing_group_variable_candidate)) competing_group_variable_candidate[use_indices] else NULL,
+            competing_group_competition_variable_candidate = if(!is.null(competing_group_competition_variable_candidate)) competing_group_competition_variable_candidate[use_indices] else NULL,
+            p_list = p_list,
+            slate_list = slate_list,
+            use_optax = use_optax,
+            lambda = lambda__,
+
+            # hyperparameters
+            outcome_model_type = outcome_model_type,
+            neural_mcmc_control = neural_mcmc_control,
+            temperature = temperature,
+            compute_se = F,
+            nSGD = nSGD_use,
+            penalty_type = penalty_type,
+            K = K,
+            force_gaussian = force_gaussian,
+            use_regularization = use_regularization,
+            optim_type = optim_type,
+            optimism = optimism,
+            optimism_coef = optimism_coef,
+            rain_gamma = rain_gamma,
+            rain_eta = rain_eta,
+            a_init_sd = a_init_sd,
+            nFolds_glm = nFolds_glm,
+            nMonte_adversarial = nMonte_adversarial,
+            primary_pushforward = primary_pushforward,
+            primary_strength = primary_strength,
+            primary_n_entrants = primary_n_entrants,
+            primary_n_field = primary_n_field,
+            adversarial_model_strategy = adversarial_model_strategy,
+            partial_pooling = partial_pooling,
+            partial_pooling_strength = partial_pooling_strength,
+            diff = diff,
+            adversarial = adversarial,
+            conda_env = conda_env,
+            conda_env_required = conda_env_required
+          )
+        }
+        
+        # out of sample test of pi* on new estimates 
+        q_vec_in <- c(q_vec_in, Qoptimized__[[split_]][[1]]$Q_point)
+        q_vec_out <- c(q_vec_out, 
+          unlist(Qoptimized__[[split_]][[2]]$QFXN(
+          "pi_star_ast" = Qoptimized__[[split_]][[1]]$pi_star_red_ast,
+          "pi_star_dag" = Qoptimized__[[split_]][[1]]$pi_star_red_dag,
+          "EST_INTERCEPT_tf_ast" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
+          "EST_COEFFICIENTS_tf_ast" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp,
+          "EST_INTERCEPT_tf_dag" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
+          "EST_COEFFICIENTS_tf_dag" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp
+          )$tolist()[[1]])
+        )
+      }
+      outsamp_results <- as.data.frame(rbind(outsamp_results, 
+                                             c(lambda__, mean(q_vec_out), se(q_vec_out), 0)))
+      insamp_results <- as.data.frame(rbind(insamp_results, 
+                                            c(lambda__, mean(q_vec_in), se(q_vec_in), 0)))
+    }
+
+    # Use the requested confidence level to build SE-based bounds
+    qStar_lambda <- stats::qnorm(1 - (1 - conf_level)/2)
+    outsamp_results$l_bound <- outsamp_results$Qhat - qStar_lambda * outsamp_results$Qse
+    outsamp_results$u_bound <- outsamp_results$Qhat + qStar_lambda * outsamp_results$Qse
+    lambda__ <- lambda_seq[which_selected <- which.max(outsamp_results$Qhat)] # lambda.min rule
+    #lambda__ <- lambda_seq[which_selected <- which(outsamp_results$Qhat >= max(outsamp_results$l_bound))[1]] # lambda.se rule
+    outsamp_results$selected[which_selected] <- 1 
+    message(sprintf("Done with CV sequence & starting final run with log(lambda) of %.2f...",
+                    log(f2n(lambda__))))
+  }
+
+  # final output
+  gc(); strenv$py_gc$collect(); Qoptimized_ <- strategize(
+                              # input data
+                              Y = Y,
+                              W = W,
+                              X = ifelse(K > 1, yes = list(X), no = list(NULL))[[1]],
+                              nSGD = nSGD,
+                              penalty_type = penalty_type,
+                              varcov_cluster_variable = varcov_cluster_variable,
+                              competing_group_variable_respondent = competing_group_variable_respondent,
+                              competing_group_variable_candidate = competing_group_variable_candidate,
+                              competing_group_competition_variable_candidate = competing_group_competition_variable_candidate,
+                              pair_id = pair_id,
+                              respondent_id = respondent_id,
+                              respondent_task_id = respondent_task_id,
+                              profile_order = profile_order,
+                              p_list = p_list,
+                              slate_list = slate_list, 
+                              use_optax = use_optax, 
+                              lambda = lambda__, # this lambda is the one chosen via CV
+
+                              # hyperparameters
+                              outcome_model_type = outcome_model_type,
+                              neural_mcmc_control = neural_mcmc_control,
+                              temperature = temperature, 
+                              optim_type = optim_type,
+                              optimism = optimism,
+                              optimism_coef = optimism_coef,
+                              rain_gamma = rain_gamma,
+                              rain_eta = rain_eta,
+                              force_gaussian = force_gaussian,
+                              use_regularization = use_regularization,
+                              a_init_sd = a_init_sd,
+                              compute_se = compute_se,
+                              K = K,
+                              nMonte_adversarial = nMonte_adversarial,
+                              primary_pushforward = primary_pushforward,
+                              primary_strength = primary_strength,
+                              primary_n_entrants = primary_n_entrants,
+                              primary_n_field = primary_n_field,
+                              adversarial_model_strategy = adversarial_model_strategy,
+                              partial_pooling = partial_pooling,
+                              partial_pooling_strength = partial_pooling_strength,
+                              nFolds_glm = nFolds_glm,
+                              diff = diff,
+                              adversarial = adversarial,
+                              conda_env = conda_env,
+                              conda_env_required = conda_env_required)
+  message("Done with strategic analysis!")
+  return(c(Qoptimized_,
+           list(lambda = lambda__,
+                qStar_lambda = qStar_lambda,
+                CVInfo = outsamp_results)))
+}

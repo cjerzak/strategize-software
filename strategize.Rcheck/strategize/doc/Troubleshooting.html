@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<meta name="author" content="strategize package authors" />
+
+<meta name="date" content="2026-01-28" />
+
+<title>Troubleshooting Guide</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Troubleshooting Guide</h1>
+<h4 class="author">strategize package authors</h4>
+<h4 class="date">2026-01-28</h4>
+
+
+
+<p>This guide covers common issues when using the
+<code>strategize</code> package and their solutions.</p>
+<div id="setup-issues" class="section level2">
+<h2>Setup Issues</h2>
+<div id="conda-environment-not-found" class="section level3">
+<h3>“Conda environment not found”</h3>
+<p><strong>Symptom:</strong> Error message about missing conda
+environment when running <code>strategize()</code>.</p>
+<p><strong>Solution:</strong></p>
+<ol style="list-style-type: decimal">
+<li>Create the environment:</li>
+</ol>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(strategize)</span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="fu">build_backend</span>(<span class="at">conda_env =</span> <span class="st">&quot;strategize_env&quot;</span>)</span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li>Verify it was created:</li>
+</ol>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>reticulate<span class="sc">::</span><span class="fu">conda_list</span>()</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="co"># Should show &quot;strategize_env&quot; in the list</span></span></code></pre></div>
+<ol start="3" style="list-style-type: decimal">
+<li>If conda itself is not found, install Miniconda:</li>
+</ol>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a>reticulate<span class="sc">::</span><span class="fu">install_miniconda</span>()</span></code></pre></div>
+</div>
+<div id="jax-import-error-or-module-not-found" class="section level3">
+<h3>“JAX import error” or “Module not found”</h3>
+<p><strong>Symptom:</strong> Python import errors for JAX or related
+packages.</p>
+<p><strong>Solutions:</strong></p>
+<ol style="list-style-type: decimal">
+<li>Rebuild the environment:</li>
+</ol>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="fu">build_backend</span>(<span class="at">conda_env =</span> <span class="st">&quot;strategize_env&quot;</span>)</span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li>Check that JAX is properly installed:</li>
+</ol>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>reticulate<span class="sc">::</span><span class="fu">use_condaenv</span>(<span class="st">&quot;strategize_env&quot;</span>)</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a>reticulate<span class="sc">::</span><span class="fu">py_module_available</span>(<span class="st">&quot;jax&quot;</span>)</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="co"># Should return TRUE</span></span></code></pre></div>
+<ol start="3" style="list-style-type: decimal">
+<li>On Mac with Apple Silicon, ensure you have XCode command line
+tools:</li>
+</ol>
+<div class="sourceCode" id="cb6"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="ex">xcode-select</span> <span class="at">--install</span></span></code></pre></div>
+</div>
+<div id="python-not-found-or-reticulate-errors" class="section level3">
+<h3>“Python not found” or reticulate errors</h3>
+<p><strong>Symptom:</strong> reticulate cannot find Python.</p>
+<p><strong>Solution:</strong></p>
+<ol style="list-style-type: decimal">
+<li>Set the Python path explicitly:</li>
+</ol>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a><span class="fu">Sys.setenv</span>(<span class="at">RETICULATE_PYTHON =</span> <span class="st">&quot;/path/to/conda/envs/strategize_env/bin/python&quot;</span>)</span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li>Or set in your <code>.Rprofile</code>:</li>
+</ol>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="co"># Add to ~/.Rprofile</span></span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="fu">Sys.setenv</span>(<span class="at">RETICULATE_PYTHON =</span> <span class="st">&quot;~/miniconda3/envs/strategize_env/bin/python&quot;</span>)</span></code></pre></div>
+</div>
+</div>
+<div id="data-issues" class="section level2">
+<h2>Data Issues</h2>
+<div id="dimension-mismatch-errors" class="section level3">
+<h3>“Dimension mismatch” errors</h3>
+<p><strong>Symptom:</strong> Error about Y having N elements but W
+having M rows.</p>
+<p><strong>Cause:</strong> The outcome vector Y and factor matrix W must
+have the same length.</p>
+<p><strong>Solution:</strong></p>
+<p>For paired forced-choice conjoint data, ensure each profile is a
+separate row:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="co"># Wrong: One row per choice task</span></span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="co"># Y has 100 elements (100 tasks)</span></span>
+<span id="cb9-3"><a href="#cb9-3" tabindex="-1"></a><span class="co"># W has 100 rows</span></span>
+<span id="cb9-4"><a href="#cb9-4" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" tabindex="-1"></a><span class="co"># Correct: One row per profile</span></span>
+<span id="cb9-6"><a href="#cb9-6" tabindex="-1"></a><span class="co"># Y has 200 elements (100 tasks x 2 profiles)</span></span>
+<span id="cb9-7"><a href="#cb9-7" tabindex="-1"></a><span class="co"># W has 200 rows (each profile as separate row)</span></span>
+<span id="cb9-8"><a href="#cb9-8" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" tabindex="-1"></a><span class="co"># If your data is in wide format, convert to long:</span></span>
+<span id="cb9-10"><a href="#cb9-10" tabindex="-1"></a><span class="fu">library</span>(tidyr)</span>
+<span id="cb9-11"><a href="#cb9-11" tabindex="-1"></a>data_long <span class="ot">&lt;-</span> <span class="fu">pivot_longer</span>(data_wide, <span class="at">cols =</span> <span class="fu">starts_with</span>(<span class="st">&quot;profile&quot;</span>))</span></code></pre></div>
+</div>
+<div id="p_list-levels-dont-match-w" class="section level3">
+<h3>“p_list levels don’t match W”</h3>
+<p><strong>Symptom:</strong> Error about factor levels not matching
+between p_list and W.</p>
+<p><strong>Solution:</strong></p>
+<p>Use <code>create_p_list()</code> to auto-generate matching
+p_list:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="co"># Auto-generate from data</span></span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>p_list <span class="ot">&lt;-</span> <span class="fu">create_p_list</span>(W, <span class="at">uniform =</span> <span class="cn">TRUE</span>)</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a></span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a><span class="co"># Or manually ensure levels match:</span></span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a><span class="fu">unique</span>(W<span class="sc">$</span>Gender)  <span class="co"># Check what levels exist</span></span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a>p_list<span class="sc">$</span>Gender <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="at">Male =</span> <span class="fl">0.5</span>, <span class="at">Female =</span> <span class="fl">0.5</span>)  <span class="co"># Match exactly</span></span></code></pre></div>
+</div>
+<div id="missing-or-na-values" class="section level3">
+<h3>Missing or NA values</h3>
+<p><strong>Symptom:</strong> Warnings about NA values in Y or unexpected
+results.</p>
+<p><strong>Solution:</strong></p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="co"># Check for NAs</span></span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="fu">sum</span>(<span class="fu">is.na</span>(Y))</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a><span class="fu">sum</span>(<span class="fu">is.na</span>(W))</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a></span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a><span class="co"># Remove incomplete cases</span></span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a>complete <span class="ot">&lt;-</span> <span class="fu">complete.cases</span>(Y, W)</span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a>Y <span class="ot">&lt;-</span> Y[complete]</span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>W <span class="ot">&lt;-</span> W[complete, ]</span></code></pre></div>
+</div>
+</div>
+<div id="optimization-issues" class="section level2">
+<h2>Optimization Issues</h2>
+<div id="convergence-problems" class="section level3">
+<h3>Convergence problems</h3>
+<p><strong>Symptom:</strong> Q values fluctuate wildly, don’t improve,
+or give unexpected results.</p>
+<p><strong>Solutions:</strong></p>
+<ol style="list-style-type: decimal">
+<li>Increase iterations:</li>
+</ol>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(</span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>,</span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a>  <span class="at">nSGD =</span> <span class="dv">500</span>  <span class="co"># Increase from default 100</span></span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a>)</span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li>Decrease learning rate:</li>
+</ol>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>,</span>
+<span id="cb13-3"><a href="#cb13-3" tabindex="-1"></a>  <span class="at">learning_rate_max =</span> <span class="fl">0.0001</span>  <span class="co"># Lower than default 0.001</span></span>
+<span id="cb13-4"><a href="#cb13-4" tabindex="-1"></a>)</span></code></pre></div>
+<ol start="3" style="list-style-type: decimal">
+<li>Increase Monte Carlo samples for stable gradients:</li>
+</ol>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(</span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>,</span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a>  <span class="at">nMonte_Qglm =</span> <span class="dv">500</span>  <span class="co"># Increase from default 100</span></span>
+<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a>)</span></code></pre></div>
+</div>
+<div id="optimization-stuck-at-baseline" class="section level3">
+<h3>“Optimization stuck at baseline”</h3>
+<p><strong>Symptom:</strong> pi* is nearly identical to p_list
+(baseline).</p>
+<p><strong>Causes and solutions:</strong></p>
+<ol style="list-style-type: decimal">
+<li><strong>Lambda too high:</strong> Lower regularization allows more
+deviation from baseline</li>
+</ol>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(<span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.01</span>)  <span class="co"># Lower lambda</span></span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li><strong>Weak treatment effects:</strong> The outcome may not
+strongly depend on factors</li>
+</ol>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="co"># Check if factors actually predict Y</span></span>
+<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="fu">summary</span>(<span class="fu">glm</span>(Y <span class="sc">~</span> ., <span class="at">data =</span> <span class="fu">cbind</span>(<span class="at">Y =</span> Y, W), <span class="at">family =</span> binomial))</span></code></pre></div>
+<ol start="3" style="list-style-type: decimal">
+<li><strong>Use cross-validation:</strong> Let the data choose optimal
+lambda</li>
+</ol>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a>cv_result <span class="ot">&lt;-</span> <span class="fu">cv_strategize</span>(</span>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W,</span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a>  <span class="at">lambda_seq =</span> <span class="fu">c</span>(<span class="fl">0.001</span>, <span class="fl">0.01</span>, <span class="fl">0.1</span>, <span class="fl">0.5</span>, <span class="fl">1.0</span>)</span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a>)</span></code></pre></div>
+</div>
+<div id="memory-errors" class="section level3">
+<h3>Memory errors</h3>
+<p><strong>Symptom:</strong> R crashes or reports out of memory.</p>
+<p><strong>Solutions:</strong></p>
+<ol style="list-style-type: decimal">
+<li>Reduce Monte Carlo samples:</li>
+</ol>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>,</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>  <span class="at">nMonte_adversarial =</span> <span class="dv">10</span>,  <span class="co"># Reduce from default</span></span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a>  <span class="at">nMonte_Qglm =</span> <span class="dv">50</span>          <span class="co"># Reduce from default</span></span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a>)</span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li>Reduce gradient iterations:</li>
+</ol>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(<span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>, <span class="at">nSGD =</span> <span class="dv">50</span>)</span></code></pre></div>
+<ol start="3" style="list-style-type: decimal">
+<li>For initial exploration, subset your data:</li>
+</ol>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="co"># Use subset for testing</span></span>
+<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a>idx <span class="ot">&lt;-</span> <span class="fu">sample</span>(<span class="fu">nrow</span>(W), <span class="dv">1000</span>)</span>
+<span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a>result_test <span class="ot">&lt;-</span> <span class="fu">strategize</span>(<span class="at">Y =</span> Y[idx], <span class="at">W =</span> W[idx, ], <span class="at">lambda =</span> <span class="fl">0.1</span>)</span></code></pre></div>
+</div>
+</div>
+<div id="result-interpretation" class="section level2">
+<h2>Result Interpretation</h2>
+<div id="q-values-interpretation" class="section level3">
+<h3>Q values interpretation</h3>
+<ul>
+<li><strong>Q</strong>* represents the expected outcome under the
+optimal distribution</li>
+<li>For binary Y: Q* is expected probability of positive outcome (e.g.,
+vote share)</li>
+<li>Compare Q* to baseline: Under uniform p_list, expected value is
+typically ~0.5</li>
+</ul>
+</div>
+<div id="wide-confidence-intervals" class="section level3">
+<h3>Wide confidence intervals</h3>
+<p><strong>Causes:</strong></p>
+<ol style="list-style-type: decimal">
+<li><strong>Insufficient data:</strong> Need more observations for
+precise estimates</li>
+<li><strong>High lambda:</strong> Very regularized estimates have high
+uncertainty</li>
+<li><strong>Low Monte Carlo samples:</strong> Increase
+<code>nMonte_Qglm</code></li>
+</ol>
+<p><strong>Solutions:</strong></p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a><span class="co"># More Monte Carlo samples for tighter SEs</span></span>
+<span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(</span>
+<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>,</span>
+<span id="cb21-4"><a href="#cb21-4" tabindex="-1"></a>  <span class="at">nMonte_Qglm =</span> <span class="dv">500</span>,</span>
+<span id="cb21-5"><a href="#cb21-5" tabindex="-1"></a>  <span class="at">compute_se =</span> <span class="cn">TRUE</span></span>
+<span id="cb21-6"><a href="#cb21-6" tabindex="-1"></a>)</span></code></pre></div>
+</div>
+<div id="unexpected-pi-values" class="section level3">
+<h3>Unexpected pi* values</h3>
+<p><strong>Checks to perform:</strong></p>
+<ol style="list-style-type: decimal">
+<li>Verify p_list matches your experiment design</li>
+<li>Check that Y is coded correctly (1 = preferred outcome)</li>
+<li>Look at sample sizes per factor level:</li>
+</ol>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="fu">table</span>(W<span class="sc">$</span>Gender)  <span class="co"># Ensure adequate sample in each level</span></span></code></pre></div>
+</div>
+</div>
+<div id="adversarial-mode-issues" class="section level2">
+<h2>Adversarial Mode Issues</h2>
+<div id="adversarialtrue-requires-competing_group_variable" class="section level3">
+<h3>“adversarial=TRUE requires competing_group_variable”</h3>
+<p><strong>Solution:</strong> Provide party/group information for both
+respondents and candidates:</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">strategize</span>(</span>
+<span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a>  <span class="at">Y =</span> Y, <span class="at">W =</span> W, <span class="at">lambda =</span> <span class="fl">0.1</span>,</span>
+<span id="cb23-3"><a href="#cb23-3" tabindex="-1"></a>  <span class="at">adversarial =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb23-4"><a href="#cb23-4" tabindex="-1"></a>  <span class="at">competing_group_variable_respondent =</span> respondent_party,  <span class="co"># e.g., &quot;Dem&quot; or &quot;Rep&quot;</span></span>
+<span id="cb23-5"><a href="#cb23-5" tabindex="-1"></a>  <span class="at">competing_group_variable_candidate =</span> candidate_party     <span class="co"># Same for candidates</span></span>
+<span id="cb23-6"><a href="#cb23-6" tabindex="-1"></a>)</span></code></pre></div>
+</div>
+<div id="adversarial-equilibrium-not-at-0.5" class="section level3">
+<h3>Adversarial equilibrium not at 0.5</h3>
+<p>Q* in adversarial mode represents the equilibrium vote share. It
+deviates from 0.5 when:</p>
+<ul>
+<li>Voter proportions are asymmetric (more R than D voters)</li>
+<li>One party has structural advantage in factor preferences</li>
+</ul>
+<p>This is expected behavior, not an error.</p>
+</div>
+</div>
+<div id="getting-help" class="section level2">
+<h2>Getting Help</h2>
+<p>If you encounter issues not covered here:</p>
+<ol style="list-style-type: decimal">
+<li><strong>Check function documentation:</strong></li>
+</ol>
+<div class="sourceCode" id="cb24"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb24-1"><a href="#cb24-1" tabindex="-1"></a>?strategize</span>
+<span id="cb24-2"><a href="#cb24-2" tabindex="-1"></a>?cv_strategize</span></code></pre></div>
+<ol start="2" style="list-style-type: decimal">
+<li><p><strong>Report issues:</strong> <a href="https://github.com/cjerzak/strategize-software/issues" class="uri">https://github.com/cjerzak/strategize-software/issues</a></p></li>
+<li><p><strong>Include in bug reports:</strong></p>
+<ul>
+<li>R version: <code>R.version.string</code></li>
+<li>Package version: <code>packageVersion(&quot;strategize&quot;)</code></li>
+<li>Minimal reproducible example</li>
+<li>Full error message</li>
+</ul></li>
+</ol>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

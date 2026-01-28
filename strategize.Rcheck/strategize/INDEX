@@ -1,0 +1,42 @@
+as_function             Convert a fitted predictor to a scoring
+                        function
+build_backend           Build the environment for 'strategize'. Creates
+                        a conda environment in which JAX and NumPy are
+                        installed. Users may also create such an
+                        environment themselves.
+check_hessian_geometry
+                        Check Hessian Geometry at Nash Equilibrium
+create_p_list           Create Baseline Probability List from Data
+cv_strategize           Cross-validation for Optimal Stochastic
+                        Interventions in Conjoint Analysis
+get_final_gradients     Get Final Gradient Norms
+helpers                 User-Facing Helper Functions for strategize
+is_adversarial          Check if Result is Adversarial
+plot_best_response_curves
+                        Plot Dimension-by-Dimension Best-Response
+                        Curves from Adversarial 'strategize()' Output
+plot_convergence        Plot Convergence Diagnostics for Strategize
+                        Results
+plot_quadrant_breakdown
+                        Plot Four-Quadrant Contribution Breakdown
+predict.strategic_predictor
+                        Predict from a fitted strategic predictor
+predict_pair            Predict on wide-format pairwise data
+prediction-api          Prediction-Only Outcome Model API
+print.hessian_analysis
+                        Print method for hessian_analysis objects
+print.strategize_result
+                        Print Method for strategize Results
+strategic_prediction    Fit a prediction-only outcome model
+strategize              Estimate Optimal (or Adversarial) Stochastic
+                        Interventions for Conjoint Experiments
+strategize.plot         Plot Estimated Probabilities for Hypothetical
+                        Scenarios
+strategize_onestep      Estimate an Optimal (or Adversarial) Stochastic
+                        Intervention for Conjoint Analysis Using a
+                        One-Step M-estimation Approach
+strategize_preset       Get Recommended Parameter Settings
+summarize_adversarial   Summarize Adversarial Strategize Results
+summary.strategize_result
+                        Summary Method for strategize Results
+validate_equilibrium    Validate Nash Equilibrium Quality
