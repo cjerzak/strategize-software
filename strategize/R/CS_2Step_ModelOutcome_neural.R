@@ -735,6 +735,50 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
   strenv$jnp$squeeze(choice_out, axis = 1L)
 }
 
+neural_encode_pair_soft_batched <- function(pi_left, pi_right,
+                                            party_left_idx, party_right_idx,
+                                            model_info,
+                                            resp_party_idx = NULL,
+                                            stage_idx = NULL,
+                                            matchup_idx = NULL,
+                                            resp_cov_vec = NULL,
+                                            params = NULL,
+                                            use_role = FALSE){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  choice_tok <- neural_build_choice_token(model_info, params)
+  resp_tokens <- neural_build_context_tokens(model_info,
+                                             resp_party_idx = resp_party_idx,
+                                             stage_idx = stage_idx,
+                                             matchup_idx = matchup_idx,
+                                             resp_cov_vec = resp_cov_vec,
+                                             params = params)
+  left_tokens <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
+                                                    use_role = use_role,
+                                                    resp_party_idx = resp_party_idx)
+  right_tokens <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 0L, model_info, params,
+                                                     use_role = use_role,
+                                                     resp_party_idx = resp_party_idx)
+  if (!is.null(resp_tokens)) {
+    tokens_left <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, left_tokens), axis = 1L)
+    tokens_right <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, right_tokens), axis = 1L)
+  } else {
+    tokens_left <- strenv$jnp$concatenate(list(choice_tok, left_tokens), axis = 1L)
+    tokens_right <- strenv$jnp$concatenate(list(choice_tok, right_tokens), axis = 1L)
+  }
+  tokens <- strenv$jnp$concatenate(list(tokens_left, tokens_right), axis = 0L)
+  tokens <- neural_run_transformer(tokens, model_info, params)
+  choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+  phi_all <- strenv$jnp$squeeze(choice_out, axis = 1L)
+  idx_left <- strenv$jnp$arange(1L)
+  idx_right <- strenv$jnp$arange(1L, 2L)
+  list(
+    phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
+    phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
+  )
+}
+
 neural_candidate_utility_soft <- function(pi_vec, party_idx,
                                           resp_party_idx, stage_idx,
                                           model_info,
@@ -811,18 +855,16 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
       logits <- logits + params$b_out
     }
   } else {
-    phi_left <- neural_encode_candidate_soft(pi_left, party_left_idx, model_info,
-                                             resp_party_idx = resp_party_idx,
-                                             stage_idx = stage_idx,
-                                             matchup_idx = matchup_idx,
-                                             resp_cov_vec = resp_cov_vec,
-                                             params = params)
-    phi_right <- neural_encode_candidate_soft(pi_right, party_right_idx, model_info,
-                                              resp_party_idx = resp_party_idx,
-                                              stage_idx = stage_idx,
-                                              matchup_idx = matchup_idx,
-                                              resp_cov_vec = resp_cov_vec,
-                                              params = params)
+    phi_pair <- neural_encode_pair_soft_batched(pi_left, pi_right,
+                                                party_left_idx, party_right_idx,
+                                                model_info,
+                                                resp_party_idx = resp_party_idx,
+                                                stage_idx = stage_idx,
+                                                matchup_idx = matchup_idx,
+                                                resp_cov_vec = resp_cov_vec,
+                                                params = params)
+    phi_left <- phi_pair$phi_left
+    phi_right <- phi_pair$phi_right
     u_left <- strenv$jnp$einsum("nm,mo->no", phi_left, params$W_out)
     if (!is.null(params$b_out)) {
       u_left <- u_left + params$b_out
@@ -2162,6 +2204,23 @@ generate_ModelOutcome_neural <- function(){
       strenv$jnp$squeeze(choice_out, axis = 1L)
     }
 
+    encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
+      N_batch <- ai(Xl$shape[[1]])
+      X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
+      p_all <- strenv$jnp$concatenate(list(pl, pr), axis = 0L)
+      resp_p_all <- strenv$jnp$concatenate(list(resp_p, resp_p), axis = 0L)
+      resp_c_all <- if (is.null(resp_c)) NULL else strenv$jnp$concatenate(list(resp_c, resp_c), axis = 0L)
+      stage_all <- if (is.null(stage_idx)) NULL else strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
+      matchup_all <- if (is.null(matchup_idx)) NULL else strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
+      phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+      idx_left <- strenv$jnp$arange(N_batch)
+      idx_right <- strenv$jnp$arange(N_batch, 2L * N_batch)
+      list(
+        phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
+        phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
+      )
+    }
+
     do_forward_and_lik_ <- function(Xl, Xr, pl, pr, resp_p, resp_c, Yb) {
       stage_idx <- neural_stage_index(pl, pr, model_info_local)
       matchup_idx <- NULL
@@ -2171,8 +2230,9 @@ generate_ModelOutcome_neural <- function(){
       if (isTRUE(use_cross_encoder)) {
         logits <- encode_pair_cross(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
       } else {
-        phi_l <- encode_candidate(Xl, pl, resp_p, resp_c, stage_idx, matchup_idx)
-        phi_r <- encode_candidate(Xr, pr, resp_p, resp_c, stage_idx, matchup_idx)
+        phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
+        phi_l <- phi_pair$phi_left
+        phi_r <- phi_pair$phi_right
         u_l <- strenv$jnp$einsum("nm,mo->no", phi_l, W_out) + b_out
         u_r <- strenv$jnp$einsum("nm,mo->no", phi_r, W_out) + b_out
         logits <- u_l - u_r
@@ -3684,6 +3744,23 @@ generate_ModelOutcome_neural <- function(){
       strenv$jnp$squeeze(choice_out, axis = 1L)
     }
 
+    encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
+      N_batch <- ai(Xl$shape[[1]])
+      X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
+      p_all <- strenv$jnp$concatenate(list(pl, pr), axis = 0L)
+      resp_p_all <- strenv$jnp$concatenate(list(resp_p, resp_p), axis = 0L)
+      resp_c_all <- if (is.null(resp_c)) NULL else strenv$jnp$concatenate(list(resp_c, resp_c), axis = 0L)
+      stage_all <- if (is.null(stage_idx)) NULL else strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
+      matchup_all <- if (is.null(matchup_idx)) NULL else strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
+      phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+      idx_left <- strenv$jnp$arange(N_batch)
+      idx_right <- strenv$jnp$arange(N_batch, 2L * N_batch)
+      list(
+        phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
+        phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
+      )
+    }
+
     stage_idx <- neural_stage_index(pl, pr, model_info_local)
     matchup_idx <- NULL
     if (!is.null(params$E_matchup)) {
@@ -3692,8 +3769,9 @@ generate_ModelOutcome_neural <- function(){
     if (isTRUE(use_cross_encoder)) {
       logits <- encode_pair_cross(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
     } else {
-      phi_l <- encode_candidate(Xl, pl, resp_p, resp_c, stage_idx, matchup_idx)
-      phi_r <- encode_candidate(Xr, pr, resp_p, resp_c, stage_idx, matchup_idx)
+      phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
+      phi_l <- phi_pair$phi_left
+      phi_r <- phi_pair$phi_right
       b_out <- if (!is.null(params$b_out)) {
         params$b_out
       } else {
