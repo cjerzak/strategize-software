@@ -17,7 +17,7 @@ neural_optimal_svi_steps <- function(n_obs,
                                      min_steps_full = 50L,
                                      max_steps_full = 1000L,
                                      min_steps_batch_vi = 200L,
-                                     max_steps_batch_vi = 20000L) {
+                                     max_steps_batch_vi = 40000L) {
   n_obs <- suppressWarnings(as.integer(n_obs))
   if (length(n_obs) != 1L || is.na(n_obs) || n_obs < 1L) {
     return(1L)
