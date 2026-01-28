@@ -80,7 +80,7 @@ neural_optimal_svi_steps <- function(n_obs,
   if (length(subsample_method) != 1L || is.na(subsample_method) || !nzchar(subsample_method)) {
     subsample_method <- "full"
   }
-  is_batch_vi <- identical(subsample_method, "batch_vi")
+  is_batch_vi <- isTRUE(subsample_method %in% c("batch_vi", "batch"))
 
   ff_dim <- suppressWarnings(as.integer(round(as.numeric(model_dims) * 3.75)))
   if (is.na(ff_dim) || ff_dim < 1L) {
