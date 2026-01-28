@@ -78,23 +78,207 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   }
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
-  while(goOn == F){
-    if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
-      message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
+  if (use_rain) {
+    rain_gamma <- 1
+    rain_lambda0 <- as.numeric(optimism_coef)
+    if (!is.finite(rain_lambda0) || rain_lambda0 <= 0) {
+      rain_lambda0 <- 1e-8
     }
+    rain_L_est <- 1 / max(1e-8, as.numeric(learning_rate_max))
+    if (!is.finite(rain_L_est) || rain_L_est <= 0) {
+      rain_L_est <- 1
+    }
+    rain_S <- floor(log(rain_L_est / rain_lambda0, base = 1 + rain_gamma))
+    if (!is.finite(rain_S) || rain_S < 1) {
+      rain_S <- 1
+    }
+    rain_S <- min(rain_S, nSGD)
+    rain_lambda_sum <- strenv$jnp$array(0., strenv$dtj)
+    rain_anchor_sum_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
+    rain_anchor_sum_dag <- strenv$jnp$multiply(a_i_dag, strenv$jnp$array(0., strenv$dtj))
+    rain_stage <- 0L
+    rain_lambda_s <- rain_lambda0
 
-    if (use_rain) {
-      rain_lambda_val <- if (nSGD <= 1) {
-        optimism_coef
-      } else {
-        max(0, optimism_coef * (1 - (i - 1) / (nSGD - 1)))
+    rain_log_step <- function(step_idx) {
+      if (step_idx < 5 || step_idx %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) {
+        message(sprintf("SGD Iteration: %s of %s", step_idx, nSGD))
       }
-      rain_lambda_t <- strenv$jnp$array(rain_lambda_val, strenv$dtj)
-      strenv$rain_lambda_vec[i] <- list(rain_lambda_t)
     }
 
-    # do dag updates ("min" step - only do in adversarial mode)
-    if( i %% 1 == 0 & adversarial & !use_joint_extragrad ){
+    while (rain_stage < rain_S && i < nSGD) {
+      steps_left <- nSGD - i
+      stages_left <- rain_S - rain_stage
+      steps_stage <- max(1L, as.integer(floor(steps_left / stages_left)))
+      N_stage <- as.integer(floor(steps_stage / 2))
+      K_stage <- as.integer(steps_stage - N_stage)
+      L_epoch <- 2 * rain_L_est
+
+      run_seg_step <- function(eta_val) {
+        if (i >= nSGD) {
+          return(invisible(NULL))
+        }
+        i <<- i + 1
+        rain_log_step(i)
+        eta_t <- strenv$jnp$array(eta_val, strenv$dtj)
+
+        if (adversarial) {
+          SEED <<- strenv$jax$random$split(SEED)[[1L]]
+          base_grad_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
+                                      INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                      INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                      P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                      SLATE_VEC_ast, SLATE_VEC_dag,
+                                      LAMBDA,
+                                      Q_SIGN_ <- strenv$jnp$array(-1.),
+                                      SEED
+                                      )
+          loss_dag_val <- base_grad_dag[[1]]
+          grad_dag <- base_grad_dag[[2]]
+          if (rain_stage > 0) {
+            grad_dag <- strenv$jnp$subtract(
+              grad_dag,
+              strenv$jnp$subtract(
+                strenv$jnp$multiply(rain_lambda_sum, a_i_dag),
+                rain_anchor_sum_dag
+              )
+            )
+          }
+        }
+
+        SEED <<- strenv$jax$random$split(SEED)[[1L]]
+        base_grad_ast <- dQ_da_ast( a_i_ast, a_i_dag,
+                                    INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                    INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                    P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                    SLATE_VEC_ast, SLATE_VEC_dag,
+                                    LAMBDA,
+                                    Q_SIGN_ <- strenv$jnp$array(1.),
+                                    SEED
+                                    )
+        loss_ast_val <- base_grad_ast[[1]]
+        grad_ast <- base_grad_ast[[2]]
+        if (rain_stage > 0) {
+          grad_ast <- strenv$jnp$subtract(
+            grad_ast,
+            strenv$jnp$subtract(
+              strenv$jnp$multiply(rain_lambda_sum, a_i_ast),
+              rain_anchor_sum_ast
+            )
+          )
+        }
+
+        if (adversarial) {
+          a_pred_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_dag))
+        } else {
+          a_pred_dag <- a_i_dag
+        }
+        a_pred_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_ast))
+
+        if (adversarial) {
+          SEED <<- strenv$jax$random$split(SEED)[[1L]]
+          grad_pred_dag <- dQ_da_dag(  a_pred_ast, a_pred_dag,
+                                       INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                       INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                       INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                       INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                       P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                       SLATE_VEC_ast, SLATE_VEC_dag,
+                                       LAMBDA,
+                                       Q_SIGN_ <- strenv$jnp$array(-1.),
+                                       SEED
+                                       )[[2]]
+          if (rain_stage > 0) {
+            grad_pred_dag <- strenv$jnp$subtract(
+              grad_pred_dag,
+              strenv$jnp$subtract(
+                strenv$jnp$multiply(rain_lambda_sum, a_pred_dag),
+                rain_anchor_sum_dag
+              )
+            )
+          }
+        }
+
+        SEED <<- strenv$jax$random$split(SEED)[[1L]]
+        grad_pred_ast <- dQ_da_ast( a_pred_ast, a_pred_dag,
+                                    INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                    INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                    P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                    SLATE_VEC_ast, SLATE_VEC_dag,
+                                    LAMBDA,
+                                    Q_SIGN_ <- strenv$jnp$array(1.),
+                                    SEED
+                                    )[[2]]
+        if (rain_stage > 0) {
+          grad_pred_ast <- strenv$jnp$subtract(
+            grad_pred_ast,
+            strenv$jnp$subtract(
+              strenv$jnp$multiply(rain_lambda_sum, a_pred_ast),
+              rain_anchor_sum_ast
+            )
+          )
+        }
+
+        if (adversarial) {
+          a_i_dag <<- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_pred_dag))
+          strenv$grad_mag_dag_vec[i] <<- list(strenv$jnp$linalg$norm( grad_pred_dag ))
+          strenv$loss_dag_vec[i] <<- list(loss_dag_val)
+        }
+        a_i_ast <<- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_pred_ast))
+        strenv$grad_mag_ast_vec[i] <<- list(strenv$jnp$linalg$norm( grad_pred_ast ))
+        strenv$loss_ast_vec[i] <<- list(loss_ast_val)
+
+        inv_lr_val <- strenv$jnp$reciprocal(eta_t)
+        strenv$inv_learning_rate_ast_vec[i] <<- list(inv_lr_val)
+        if (adversarial) {
+          strenv$inv_learning_rate_dag_vec[i] <<- list(inv_lr_val)
+        }
+
+        strenv$rain_lambda_vec[i] <<- list(strenv$jnp$array(rain_lambda_s, strenv$dtj))
+        invisible(NULL)
+      }
+
+      if (N_stage > 0) {
+        eta_phase1 <- 1 / (4 * L_epoch)
+        for (k_ in seq_len(N_stage)) {
+          run_seg_step(eta_phase1)
+          if (i >= nSGD) {
+            break
+          }
+        }
+      }
+      if (i < nSGD && K_stage > 0) {
+        for (k_ in seq_len(K_stage)) {
+          eta_phase2 <- 1 / ((2^(k_ + 2)) * L_epoch)
+          run_seg_step(eta_phase2)
+          if (i >= nSGD) {
+            break
+          }
+        }
+      }
+
+      rain_lambda_next <- (1 + rain_gamma) * rain_lambda_s
+      rain_lambda_sum <- strenv$jnp$add(rain_lambda_sum, strenv$jnp$array(rain_lambda_next, strenv$dtj))
+      rain_anchor_sum_ast <- strenv$jnp$add(rain_anchor_sum_ast,
+                                            strenv$jnp$multiply(strenv$jnp$array(rain_lambda_next, strenv$dtj), a_i_ast))
+      rain_anchor_sum_dag <- strenv$jnp$add(rain_anchor_sum_dag,
+                                            strenv$jnp$multiply(strenv$jnp$array(rain_lambda_next, strenv$dtj), a_i_dag))
+      rain_lambda_s <- rain_lambda_next
+      rain_stage <- rain_stage + 1L
+    }
+  } else {
+    while(goOn == F){
+      if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
+        message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
+      }
+
+      # do dag updates ("min" step - only do in adversarial mode)
+      if( i %% 1 == 0 & adversarial & !use_joint_extragrad ){
       # note: dQ_da_dag built off FullGetQStar_
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,                    #1,2
@@ -432,10 +616,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         dag = list(a_pred_ast = a_pred_ast, a_pred_dag = a_pred_dag)
       )
     }
-    if(i >= nSGD){goOn <- TRUE}
-    if (use_rain) {
-      anchor_ast <- a_i_ast
-      anchor_dag <- a_i_dag
+      if(i >= nSGD){goOn <- TRUE}
+      if (use_rain) {
+        anchor_ast <- a_i_ast
+        anchor_dag <- a_i_dag
+      }
     }
   }
 

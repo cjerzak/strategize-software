@@ -130,13 +130,13 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=14.3018, Acc=0.400, Brier=0.6444
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.1250, LogLoss=4.9329, Acc=0.800, Brier=0.2722
 [1] 0 2
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
-GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.5833, LogLoss=6.3148, Acc=0.500, Brier=0.3125
 [1] 1 2
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
@@ -163,13 +163,13 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=14.3018, Acc=0.400, Brier=0.6444
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.1250, LogLoss=4.9329, Acc=0.800, Brier=0.2722
 [1] 0 2
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
-GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.5833, LogLoss=6.3148, Acc=0.500, Brier=0.3125
 [1] 1 2
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
@@ -196,13 +196,13 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=14.3018, Acc=0.400, Brier=0.6444
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.1250, LogLoss=4.9329, Acc=0.800, Brier=0.2722
 [1] 0 2
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
-GLM OOS fit metrics (pairwise, oos_3fold): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
+GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.5833, LogLoss=6.3148, Acc=0.500, Brier=0.3125
 [1] 1 2
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
@@ -235,12 +235,12 @@ ok_counter = 0
 GLM OOS fit metrics (single, oos_3fold): AUC=0.7933, LogLoss=0.5488, Acc=0.710, Brier=0.1835
 ok_counter = 0
 GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905, Brier=0.0422
-[ FAIL 0 | WARN 41 | SKIP 106 | PASS 109 ]
+[ FAIL 0 | WARN 38 | SKIP 107 | PASS 110 ]
 
-══ Skipped tests (106) ═════════════════════════════════════════════════════════
+══ Skipped tests (107) ═════════════════════════════════════════════════════════
 • JAX available; neural fit is slow and not exercised here (1):
   'test-prediction-api.R:147:7'
-• On CRAN (104): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+• On CRAN (105): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
   'test-build-backend.R:2:3', 'test-build-backend.R:36:3',
   'test-build-backend.R:85:3', 'test-choice-token-gradient.R:6:3',
@@ -270,12 +270,12 @@ GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905
   'test-input-validation.R:454:3', 'test-input-validation.R:472:3',
   'test-input-validation.R:499:3', 'test-input-validation.R:511:3',
   'test-input-validation.R:523:3', 'test-input-validation.R:539:3',
-  'test-input-validation.R:553:3', 'test-neural.R:35:3', 'test-neural.R:61:3',
-  'test-onestep.R:13:3', 'test-onestep.R:40:3', 'test-onestep.R:75:3',
-  'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
-  'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-penalty-types.R:8:3',
-  'test-penalty-types.R:25:3', 'test-penalty-types.R:42:3',
-  'test-presets.R:2:3', 'test-presets.R:27:3',
+  'test-input-validation.R:553:3', 'test-neural.R:39:3', 'test-neural.R:65:3',
+  'test-neural.R:465:3', 'test-onestep.R:13:3', 'test-onestep.R:40:3',
+  'test-onestep.R:75:3', 'test-onestep.R:99:3', 'test-onestep.R:122:3',
+  'test-onestep.R:152:3', 'test-onestep.R:181:3', 'test-onestep.R:204:3',
+  'test-penalty-types.R:8:3', 'test-penalty-types.R:25:3',
+  'test-penalty-types.R:42:3', 'test-presets.R:2:3', 'test-presets.R:27:3',
   'test-primary-pushforward.R:10:3', 'test-primary-pushforward.R:109:3',
   'test-primary-pushforward.R:145:3', 'test-primary-pushforward.R:174:3',
   'test-primary-pushforward.R:207:3', 'test-s3-methods.R:28:3',
@@ -294,8 +294,8 @@ GLM OOS fit metrics (pairwise, oos_3fold): AUC=0.9833, LogLoss=0.1153, Acc=0.905
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 41 | SKIP 106 | PASS 109 ]
+[ FAIL 0 | WARN 38 | SKIP 107 | PASS 110 ]
 > 
 > proc.time()
    user  system elapsed 
- 24.000   3.185  18.719 
+ 39.379   4.971  32.196 
