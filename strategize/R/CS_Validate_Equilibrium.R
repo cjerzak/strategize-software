@@ -234,6 +234,10 @@ validate_equilibrium <- function(result,
     if (!is.null(result$QFXN)) {
       set_if_missing("QFXN", result$QFXN)
     }
+    # Ensure helper sampling functions are available when re-jitting FullGetQStar_
+    # (e.g., after loading a saved result without attached namespace)
+    set_if_missing("draw_profile_samples", draw_profile_samples)
+    set_if_missing("sample_pool_jax", sample_pool_jax)
     if (identical(result$penalty_type, "LInfinity") &&
         !exists("split_vec_full", envir = eval_env, inherits = TRUE) &&
         !is.null(result$factor_levels)) {
