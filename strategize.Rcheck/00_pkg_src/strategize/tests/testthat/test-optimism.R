@@ -148,7 +148,7 @@ test_that("smp outputs averaged look-ahead points", {
   expect_true(length(gamma_dag) > 0)
 })
 
-test_that("rain uses a decaying anchor penalty", {
+test_that("rain uses increasing anchor weights (RAIN)", {
   skip_if_no_jax()
   withr::local_seed(789)
 
@@ -186,6 +186,6 @@ test_that("rain uses a decaying anchor penalty", {
     as.numeric(result$strenv$np$array(x))
   }, numeric(1))
   expect_equal(rain_vals[1], 0.5, tolerance = 1e-6)
-  expect_true(all(diff(rain_vals) <= 1e-8))
-  expect_true(rain_vals[length(rain_vals)] <= 1e-8)
+  expect_true(all(diff(rain_vals) >= -1e-8))
+  expect_true(rain_vals[length(rain_vals)] >= rain_vals[1] - 1e-8)
 })

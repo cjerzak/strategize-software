@@ -1,35 +1,42 @@
-neural_get_party_index <- function(model_info, party_label = NULL){
-  if (is.null(model_info) || is.null(model_info$party_levels)) {
+neural_get_index <- function(model_info,
+                             party_label = NULL,
+                             levels_field,
+                             map_field) {
+  if (is.null(model_info) || is.null(model_info[[levels_field]])) {
     return(ai(0L))
   }
-  if (!is.null(model_info$party_index_map) && !is.null(party_label)) {
+  if (!is.null(model_info[[map_field]]) && !is.null(party_label)) {
     key <- as.character(party_label)
-    if (key %in% names(model_info$party_index_map)) {
-      return(ai(model_info$party_index_map[[key]]))
+    if (key %in% names(model_info[[map_field]])) {
+      return(ai(model_info[[map_field]][[key]]))
     }
   }
   if (is.null(party_label)) {
     return(ai(0L))
   }
-  idx <- match(as.character(party_label), model_info$party_levels) - 1L
+  idx <- match(as.character(party_label), model_info[[levels_field]]) - 1L
   if (is.na(idx)) ai(0L) else ai(idx)
 }
 
+neural_get_party_index <- function(model_info, party_label = NULL){
+  neural_get_index(model_info,
+                   party_label = party_label,
+                   levels_field = "party_levels",
+                   map_field = "party_index_map")
+}
+
 neural_get_resp_party_index <- function(model_info, party_label = NULL){
-  if (is.null(model_info) || is.null(model_info$resp_party_levels)) {
-    return(ai(0L))
-  }
-  if (!is.null(model_info$resp_party_index_map) && !is.null(party_label)) {
-    key <- as.character(party_label)
-    if (key %in% names(model_info$resp_party_index_map)) {
-      return(ai(model_info$resp_party_index_map[[key]]))
-    }
-  }
-  if (is.null(party_label)) {
-    return(ai(0L))
-  }
-  idx <- match(as.character(party_label), model_info$resp_party_levels) - 1L
-  if (is.na(idx)) ai(0L) else ai(idx)
+  neural_get_index(model_info,
+                   party_label = party_label,
+                   levels_field = "resp_party_levels",
+                   map_field = "resp_party_index_map")
+}
+
+neural_has_shape <- function(x) {
+  tryCatch({
+    x$shape
+    TRUE
+  }, error = function(e) FALSE)
 }
 
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
@@ -41,13 +48,7 @@ neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NUL
     mode <- "same"
   }
 
-  has_shape <- function(x) {
-    tryCatch({
-      x$shape
-      TRUE
-    }, error = function(e) FALSE)
-  }
-  if (has_shape(party_left_idx) || has_shape(party_right_idx)) {
+  if (neural_has_shape(party_left_idx) || neural_has_shape(party_right_idx)) {
     pl <- strenv$jnp$array(party_left_idx)
     pr <- strenv$jnp$array(party_right_idx)
     same <- strenv$jnp$equal(pl, pr)
@@ -298,22 +299,34 @@ neural_flatten_params <- function(params, schema, dtype = NULL) {
   strenv$jnp$concatenate(parts, axis = 0L)
 }
 
-neural_cross_encoder_mode <- function(model_info) {
-  mode <- NULL
-  if (!is.null(model_info$cross_candidate_encoder_mode)) {
-    mode <- tolower(as.character(model_info$cross_candidate_encoder_mode))
+neural_normalize_cross_encoder_mode <- function(value) {
+  if (is.null(value)) {
+    return(NULL)
   }
-  if (length(mode) != 1L || is.na(mode) || !nzchar(mode)) {
-    if (isTRUE(model_info$cross_candidate_encoder)) {
-      return("term")
-    }
+  if (isTRUE(value)) {
+    return("term")
+  }
+  if (identical(value, FALSE)) {
     return("none")
   }
-  if (mode %in% c("none", "term", "full")) {
-    return(mode)
+  if (is.character(value)) {
+    mode <- tolower(as.character(value))
+    if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      if (mode %in% c("none", "term", "full")) {
+        return(mode)
+      }
+      if (mode %in% c("true", "false")) {
+        return(ifelse(mode == "true", "term", "none"))
+      }
+    }
   }
-  if (mode %in% c("true", "false")) {
-    return(ifelse(mode == "true", "term", "none"))
+  NA_character_
+}
+
+neural_cross_encoder_mode <- function(model_info) {
+  mode <- neural_normalize_cross_encoder_mode(model_info$cross_candidate_encoder_mode)
+  if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+    return(mode)
   }
   if (isTRUE(model_info$cross_candidate_encoder)) {
     return("term")
@@ -337,6 +350,50 @@ neural_param_or_default <- function(params, name, default) {
     return(default)
   }
   val
+}
+
+neural_linear_head <- function(phi, W_out, b_out = NULL, dtype = NULL) {
+  logits <- strenv$jnp$einsum("nm,mo->no", phi, W_out)
+  if (is.null(b_out)) {
+    dtype_use <- dtype
+    if (is.null(dtype_use)) {
+      dtype_use <- tryCatch(W_out$dtype, error = function(e) NULL)
+    }
+    if (is.null(dtype_use)) {
+      dtype_use <- strenv$dtj
+    }
+    b_out <- strenv$jnp$zeros(list(ai(W_out$shape[[2]])), dtype = dtype_use)
+  }
+  logits + b_out
+}
+
+neural_apply_cross_term <- function(logits, phi_left, phi_right,
+                                    M_cross, W_cross_out = NULL,
+                                    out_dim = NULL, dtype = NULL) {
+  if (is.null(M_cross)) {
+    return(logits)
+  }
+  cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_left, M_cross, phi_right)
+  cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
+  if (is.null(W_cross_out)) {
+    if (is.null(out_dim)) {
+      out_dim <- tryCatch(ai(logits$shape[[2]]), error = function(e) NULL)
+    }
+    if (is.null(out_dim)) {
+      out_dim <- ai(1L)
+    }
+    dtype_use <- dtype
+    if (is.null(dtype_use)) {
+      dtype_use <- tryCatch(logits$dtype, error = function(e) NULL)
+    }
+    if (is.null(dtype_use)) {
+      dtype_use <- strenv$dtj
+    }
+    cross_out <- strenv$jnp$zeros(list(1L, ai(out_dim)), dtype = dtype_use)
+  } else {
+    cross_out <- strenv$jnp$reshape(W_cross_out, list(1L, -1L))
+  }
+  logits + cross_term * cross_out
 }
 
 neural_add_segment_embedding <- function(tokens, segment_idx, model_info, params = NULL){
@@ -480,12 +537,6 @@ add_context_tokens <- function(model_info,
   token_list <- list()
   dims <- ai(model_info$model_dims)
   is_batch <- isTRUE(batch)
-  has_shape <- function(x) {
-    tryCatch({
-      x$shape
-      TRUE
-    }, error = function(e) FALSE)
-  }
 
   resp_party_idx_use <- if (is.null(resp_party_idx)) 0L else resp_party_idx
   if (!is_batch) {
@@ -498,7 +549,7 @@ add_context_tokens <- function(model_info,
   stage_idx_use <- NULL
   if (!is.null(stage_idx)) {
     if (!is_batch) {
-      if (has_shape(stage_idx)) {
+      if (neural_has_shape(stage_idx)) {
         stage_use <- strenv$jnp$maximum(strenv$jnp$array(stage_idx), ai(0L))
         stage_idx_use <- strenv$jnp$atleast_1d(stage_use)
       } else {
@@ -805,11 +856,7 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
                                       matchup_idx = matchup_idx,
                                       resp_cov_vec = resp_cov_vec,
                                       params = params)
-  logits <- strenv$jnp$einsum("nm,mo->no", phi, params$W_out)
-  if (!is.null(params$b_out)) {
-    logits <- logits + params$b_out
-  }
-  logits
+  neural_linear_head(phi, params$W_out, params$b_out)
 }
 
 neural_predict_pair_soft <- function(pi_left, pi_right,
@@ -861,10 +908,7 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
     tokens <- neural_run_transformer(tokens, model_info, params)
     cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
     cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
-    logits <- strenv$jnp$einsum("nm,mo->no", cls_out, params$W_out)
-    if (!is.null(params$b_out)) {
-      logits <- logits + params$b_out
-    }
+    logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
   } else {
     phi_pair <- neural_encode_pair_soft_batched(pi_left, pi_right,
                                                 party_left_idx, party_right_idx,
@@ -876,24 +920,13 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                                 params = params)
     phi_left <- phi_pair$phi_left
     phi_right <- phi_pair$phi_right
-    u_left <- strenv$jnp$einsum("nm,mo->no", phi_left, params$W_out)
-    if (!is.null(params$b_out)) {
-      u_left <- u_left + params$b_out
-    }
-    u_right <- strenv$jnp$einsum("nm,mo->no", phi_right, params$W_out)
-    if (!is.null(params$b_out)) {
-      u_right <- u_right + params$b_out
-    }
+    u_left <- neural_linear_head(phi_left, params$W_out, params$b_out)
+    u_right <- neural_linear_head(phi_right, params$W_out, params$b_out)
     logits <- u_left - u_right
-    if (isTRUE(use_cross_term) && !is.null(params$M_cross)) {
-      cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_left, params$M_cross, phi_right)
-      cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
-      cross_out <- if (!is.null(params$W_cross_out)) {
-        strenv$jnp$reshape(params$W_cross_out, list(1L, -1L))
-      } else {
-        strenv$jnp$zeros(list(1L, ai(params$W_out$shape[[2]])), dtype = strenv$dtj)
-      }
-      logits <- logits + cross_term * cross_out
+    if (isTRUE(use_cross_term)) {
+      logits <- neural_apply_cross_term(logits, phi_left, phi_right,
+                                        params$M_cross, params$W_cross_out,
+                                        out_dim = ai(params$W_out$shape[[2]]))
     }
   }
   if (return_logits) {
@@ -1109,27 +1142,9 @@ generate_ModelOutcome_neural <- function(){
     if (is.null(value)) {
       return("none")
     }
-    if (isTRUE(value)) {
-      return("term")
-    }
-    if (identical(value, FALSE)) {
-      return("none")
-    }
-    if (is.character(value)) {
-      mode <- tolower(as.character(value))
-      if (length(mode) != 1L || is.na(mode) || !nzchar(mode)) {
-        stop(
-          "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
-          "'none', 'term', or 'full'.",
-          call. = FALSE
-        )
-      }
-      if (mode %in% c("none", "term", "full")) {
-        return(mode)
-      }
-      if (mode %in% c("true", "false")) {
-        return(ifelse(mode == "true", "term", "none"))
-      }
+    mode <- neural_normalize_cross_encoder_mode(value)
+    if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      return(mode)
     }
     stop(
       "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
@@ -2188,7 +2203,7 @@ generate_ModelOutcome_neural <- function(){
 
     encode_pair_cross <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
       N_batch <- ai(Xl$shape[[1]])
-      choice_tok <- strenv$jnp$reshape(E_choice, list(1L, 1L, ModelDims))
+      choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
       ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, matchup_idx)
       left_tokens <- add_segment_embedding(embed_candidate(Xl, pl, resp_p), 0L)
@@ -2200,12 +2215,12 @@ generate_ModelOutcome_neural <- function(){
       tokens <- run_transformer(tokens)
       cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
       cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
-      strenv$jnp$einsum("nm,mo->no", cls_out, W_out) + b_out
+      neural_linear_head(cls_out, W_out, b_out)
     }
 
     encode_candidate <- function(Xa, pa, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
       N_batch <- ai(Xa$shape[[1]])
-      choice_tok <- strenv$jnp$reshape(E_choice, list(1L, 1L, ModelDims))
+      choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
       ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, matchup_idx)
       cand_tokens <- embed_candidate(Xa, pa, resp_p)
@@ -2244,14 +2259,13 @@ generate_ModelOutcome_neural <- function(){
         phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
         phi_l <- phi_pair$phi_left
         phi_r <- phi_pair$phi_right
-        u_l <- strenv$jnp$einsum("nm,mo->no", phi_l, W_out) + b_out
-        u_r <- strenv$jnp$einsum("nm,mo->no", phi_r, W_out) + b_out
+        u_l <- neural_linear_head(phi_l, W_out, b_out)
+        u_r <- neural_linear_head(phi_r, W_out, b_out)
         logits <- u_l - u_r
         if (isTRUE(use_cross_term)) {
-          cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_l, M_cross, phi_r)
-          cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
-          cross_out <- strenv$jnp$reshape(W_cross_out, list(1L, -1L))
-          logits <- logits + cross_term * cross_out
+          logits <- neural_apply_cross_term(logits, phi_l, phi_r,
+                                            M_cross, W_cross_out,
+                                            out_dim = ai(W_out$shape[[2]]))
         }
       }
 
@@ -2337,7 +2351,7 @@ generate_ModelOutcome_neural <- function(){
 
     do_forward_and_lik_ <- function(Xb, pb, resp_p, resp_c, Yb) {
       N_batch <- ai(Xb$shape[[1]])
-      choice_tok <- strenv$jnp$reshape(E_choice, list(1L, 1L, ModelDims))
+      choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
       ctx_tokens <- neural_build_context_tokens_batch(model_info = model_info_local,
                                                       resp_party_idx = resp_p,
@@ -2353,7 +2367,7 @@ generate_ModelOutcome_neural <- function(){
       tokens <- run_transformer(tokens)
       choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
       choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
-      logits <- strenv$jnp$einsum("nm,mo->no", choice_out, W_out) + b_out
+      logits <- neural_linear_head(choice_out, W_out, b_out)
 
       if (likelihood == "bernoulli") {
         logits_vec <- strenv$jnp$squeeze(logits, axis = 1L)
@@ -3661,7 +3675,8 @@ generate_ModelOutcome_neural <- function(){
 
     model_info_local <- list(
       model_dims = ModelDims,
-      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp
+      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
+      n_party_levels = ai(n_party_levels)
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p) {
@@ -3686,14 +3701,6 @@ generate_ModelOutcome_neural <- function(){
                              params = params)
     }
 
-    compute_matchup_idx <- function(pl, pr) {
-      p_min <- strenv$jnp$minimum(pl, pr)
-      p_max <- strenv$jnp$maximum(pl, pr)
-      half_term <- strenv$jnp$floor_divide(p_min * (p_min - 1L), ai(2L))
-      idx <- p_min * ai(n_party_levels) - half_term + (p_max - p_min)
-      strenv$jnp$astype(idx, strenv$jnp$int32)
-    }
-
     build_context_tokens <- function(stage_idx, resp_p, resp_c, matchup_idx = NULL) {
       neural_build_context_tokens_batch(model_info = model_info_local,
                                         resp_party_idx = resp_p,
@@ -3711,12 +3718,7 @@ generate_ModelOutcome_neural <- function(){
 
     encode_pair_cross <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
       N_batch <- ai(Xl$shape[[1]])
-      choice_vec <- if (!is.null(params$E_choice)) {
-        params$E_choice
-      } else {
-        strenv$jnp$zeros(list(ModelDims), dtype = strenv$dtj)
-      }
-      choice_tok <- strenv$jnp$reshape(choice_vec, list(1L, 1L, ModelDims))
+      choice_tok <- neural_build_choice_token(model_info_local, params)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
       ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, matchup_idx)
       left_tokens <- add_segment_embedding(embed_candidate(Xl, pl, resp_p), 0L)
@@ -3731,17 +3733,12 @@ generate_ModelOutcome_neural <- function(){
       tokens <- run_transformer(tokens)
       cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
       cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
-      b_out <- if (!is.null(params$b_out)) {
-        params$b_out
-      } else {
-        strenv$jnp$zeros(list(ai(params$W_out$shape[[2]])), dtype = strenv$dtj)
-      }
-      strenv$jnp$einsum("nm,mo->no", cls_out, params$W_out) + b_out
+      neural_linear_head(cls_out, params$W_out, params$b_out)
     }
 
     encode_candidate <- function(Xa, pa, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
       N_batch <- ai(Xa$shape[[1]])
-      choice_tok <- strenv$jnp$reshape(params$E_choice, list(1L, 1L, ModelDims))
+      choice_tok <- neural_build_choice_token(model_info_local, params)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
       ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, matchup_idx)
       cand_tokens <- embed_candidate(Xa, pa, resp_p)
@@ -3775,7 +3772,7 @@ generate_ModelOutcome_neural <- function(){
     stage_idx <- neural_stage_index(pl, pr, model_info_local)
     matchup_idx <- NULL
     if (!is.null(params$E_matchup)) {
-      matchup_idx <- compute_matchup_idx(pl, pr)
+      matchup_idx <- neural_matchup_index(pl, pr, model_info_local)
     }
     if (isTRUE(use_cross_encoder)) {
       logits <- encode_pair_cross(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
@@ -3783,23 +3780,13 @@ generate_ModelOutcome_neural <- function(){
       phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
       phi_l <- phi_pair$phi_left
       phi_r <- phi_pair$phi_right
-      b_out <- if (!is.null(params$b_out)) {
-        params$b_out
-      } else {
-        strenv$jnp$zeros(list(ai(params$W_out$shape[[2]])), dtype = strenv$dtj)
-      }
-      u_l <- strenv$jnp$einsum("nm,mo->no", phi_l, params$W_out) + b_out
-      u_r <- strenv$jnp$einsum("nm,mo->no", phi_r, params$W_out) + b_out
+      u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
+      u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)
       logits <- u_l - u_r
-      if (isTRUE(use_cross_term) && !is.null(params$M_cross)) {
-        cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_l, params$M_cross, phi_r)
-        cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
-        cross_out <- if (!is.null(params$W_cross_out)) {
-          strenv$jnp$reshape(params$W_cross_out, list(1L, -1L))
-        } else {
-          strenv$jnp$zeros(list(1L, ai(params$W_out$shape[[2]])), dtype = strenv$dtj)
-        }
-        logits <- logits + cross_term * cross_out
+      if (isTRUE(use_cross_term)) {
+        logits <- neural_apply_cross_term(logits, phi_l, phi_r,
+                                          params$M_cross, params$W_cross_out,
+                                          out_dim = ai(params$W_out$shape[[2]]))
       }
     }
     if (return_logits) {
@@ -3860,7 +3847,7 @@ generate_ModelOutcome_neural <- function(){
                                                     resp_party_idx = resp_p,
                                                     resp_cov = resp_c,
                                                     params = params)
-    choice_tok <- strenv$jnp$reshape(params$E_choice, list(1L, 1L, ModelDims))
+    choice_tok <- neural_build_choice_token(model_info_local, params)
     choice_tok <- choice_tok * strenv$jnp$ones(list(Xb$shape[[1]], 1L, 1L))
     cand_tokens <- embed_candidate(Xb, pb, resp_p)
     token_parts <- list(choice_tok)
@@ -3872,12 +3859,7 @@ generate_ModelOutcome_neural <- function(){
     tokens <- run_transformer(tokens)
     choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
     choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
-    b_out <- if (!is.null(params$b_out)) {
-      params$b_out
-    } else {
-      strenv$jnp$zeros(list(ai(params$W_out$shape[[2]])), dtype = strenv$dtj)
-    }
-    logits <- strenv$jnp$einsum("nm,mo->no", choice_out, params$W_out) + b_out
+    logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
 
     if (return_logits) {
       return(logits)
@@ -3894,35 +3876,26 @@ generate_ModelOutcome_neural <- function(){
     }
   }
 
-  coerce_party_idx <- function(party_vec, n_rows) {
+  coerce_party_idx_base <- function(party_vec, n_rows, levels, n_levels) {
     if (is.null(party_vec)) {
       return(rep(0L, n_rows))
     }
     if (is.numeric(party_vec)) {
       idx <- as.integer(party_vec)
-      if (any(idx >= n_party_levels)) {
+      if (any(idx >= n_levels)) {
         idx <- idx - 1L
       }
     } else {
-      idx <- match(as.character(party_vec), party_levels) - 1L
+      idx <- match(as.character(party_vec), levels) - 1L
     }
     idx[is.na(idx)] <- 0L
     idx
   }
+  coerce_party_idx <- function(party_vec, n_rows) {
+    coerce_party_idx_base(party_vec, n_rows, party_levels, n_party_levels)
+  }
   coerce_resp_party_idx <- function(party_vec, n_rows) {
-    if (is.null(party_vec)) {
-      return(rep(0L, n_rows))
-    }
-    if (is.numeric(party_vec)) {
-      idx <- as.integer(party_vec)
-      if (any(idx >= n_resp_party_levels)) {
-        idx <- idx - 1L
-      }
-    } else {
-      idx <- match(as.character(party_vec), resp_party_levels) - 1L
-    }
-    idx[is.na(idx)] <- 0L
-    idx
+    coerce_party_idx_base(party_vec, n_rows, resp_party_levels, n_resp_party_levels)
   }
 
   to_r_array <- function(x) {

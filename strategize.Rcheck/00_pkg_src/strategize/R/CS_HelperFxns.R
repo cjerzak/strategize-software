@@ -153,6 +153,42 @@ getMultinomialSamp_R <- function(pi_value,
   return(T_star_samp)
 }
 
+sample_pool_jax <- function(pi_vec, n_draws, n_pool, seed_in,
+                            temperature,
+                            ParameterizationType,
+                            d_locator_use,
+                            sampler = NULL) {
+  if (is.null(sampler)) {
+    sampler <- strenv$getMultinomialSamp
+  }
+  n_total <- as.integer(n_draws * n_pool)
+  all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
+  seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
+  seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
+  seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
+  samples <- strenv$jax$vmap(function(seed_row){
+    strenv$jax$vmap(function(seed_cell){
+      sampler(pi_vec, temperature, seed_cell, ParameterizationType, d_locator_use)
+    }, in_axes = list(0L))(seed_row)
+  }, in_axes = list(0L))(seeds)
+  list(samples = samples, seed_next = seed_next)
+}
+
+draw_profile_samples <- function(pi_vec, n_draws, seed_in,
+                                 temperature,
+                                 ParameterizationType,
+                                 d_locator_use,
+                                 sampler = NULL) {
+  if (is.null(sampler)) {
+    sampler <- strenv$getMultinomialSamp
+  }
+  samples <- strenv$jax$vmap(function(s_){
+    sampler(pi_vec, temperature, s_, ParameterizationType, d_locator_use)
+  }, in_axes = list(0L))(strenv$jax$random$split(seed_in, n_draws))
+  seed_next <- strenv$jax$random$split(seed_in)[[1L]]
+  list(samples = samples, seed_next = seed_next)
+}
+
 
 getPrettyPi <- function( pi_star_value, 
                          ParameterizationType,

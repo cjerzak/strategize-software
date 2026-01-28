@@ -78,23 +78,168 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   }
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
-  while(goOn == F){
-    if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
-      message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
+  if (use_rain) {
+    rain_gamma <- 1
+    rain_lambda0 <- as.numeric(optimism_coef)
+    if (!is.finite(rain_lambda0) || rain_lambda0 <= 0) {
+      rain_lambda0 <- 1e-8
     }
+    rain_L_est <- 1 / max(1e-8, as.numeric(learning_rate_max))
+    if (!is.finite(rain_L_est) || rain_L_est <= 0) {
+      rain_L_est <- 1
+    }
+    rain_eta <- 1 / (2 * rain_L_est)
+    rain_eta <- max(1e-8, as.numeric(rain_eta))
 
-    if (use_rain) {
-      rain_lambda_val <- if (nSGD <= 1) {
-        optimism_coef
-      } else {
-        max(0, optimism_coef * (1 - (i - 1) / (nSGD - 1)))
+    rain_weight_sum <- strenv$jnp$array(0., strenv$dtj)
+    rain_anchor_sum_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
+    rain_anchor_sum_dag <- strenv$jnp$multiply(a_i_dag, strenv$jnp$array(0., strenv$dtj))
+    rain_weight_pow <- strenv$jnp$array(1., strenv$dtj)
+    rain_gamma_step <- strenv$jnp$array(1 + rain_gamma, strenv$dtj)
+
+    rain_log_step <- function(step_idx) {
+      if (step_idx < 5 || step_idx %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) {
+        message(sprintf("SGD Iteration: %s of %s", step_idx, nSGD))
       }
-      rain_lambda_t <- strenv$jnp$array(rain_lambda_val, strenv$dtj)
-      strenv$rain_lambda_vec[i] <- list(rain_lambda_t)
     }
 
-    # do dag updates ("min" step - only do in adversarial mode)
-    if( i %% 1 == 0 & adversarial & !use_joint_extragrad ){
+    while (i < nSGD) {
+      i <- i + 1
+      rain_log_step(i)
+
+      a_start_ast <- a_i_ast
+      if (adversarial) {
+        a_start_dag <- a_i_dag
+      }
+
+      eta_t <- strenv$jnp$array(rain_eta, strenv$dtj)
+
+      if (adversarial) {
+        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        base_grad_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
+                                    INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                    INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                    P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                    SLATE_VEC_ast, SLATE_VEC_dag,
+                                    LAMBDA,
+                                    Q_SIGN_ <- strenv$jnp$array(-1.),
+                                    SEED
+                                    )
+        loss_dag_val <- base_grad_dag[[1]]
+        grad_dag <- base_grad_dag[[2]]
+        grad_dag <- strenv$jnp$subtract(
+          grad_dag,
+          strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+                              strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_i_dag),
+                                                 rain_anchor_sum_dag))
+        )
+      }
+
+      SEED <- strenv$jax$random$split(SEED)[[1L]]
+      base_grad_ast <- dQ_da_ast( a_i_ast, a_i_dag,
+                                  INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                  INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                  P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                  SLATE_VEC_ast, SLATE_VEC_dag,
+                                  LAMBDA,
+                                  Q_SIGN_ <- strenv$jnp$array(1.),
+                                  SEED
+                                  )
+      loss_ast_val <- base_grad_ast[[1]]
+      grad_ast <- base_grad_ast[[2]]
+      grad_ast <- strenv$jnp$subtract(
+        grad_ast,
+        strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+                            strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_i_ast),
+                                               rain_anchor_sum_ast))
+      )
+
+      if (adversarial) {
+        a_pred_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_dag))
+      } else {
+        a_pred_dag <- a_i_dag
+      }
+      a_pred_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_ast))
+
+      if (adversarial) {
+        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        grad_pred_dag <- dQ_da_dag(  a_pred_ast, a_pred_dag,
+                                     INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                     INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                     INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                     INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                     P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                     SLATE_VEC_ast, SLATE_VEC_dag,
+                                     LAMBDA,
+                                     Q_SIGN_ <- strenv$jnp$array(-1.),
+                                     SEED
+                                     )[[2]]
+        grad_pred_dag <- strenv$jnp$subtract(
+          grad_pred_dag,
+          strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+                              strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_pred_dag),
+                                                 rain_anchor_sum_dag))
+        )
+      }
+
+      SEED <- strenv$jax$random$split(SEED)[[1L]]
+      grad_pred_ast <- dQ_da_ast( a_pred_ast, a_pred_dag,
+                                  INTERCEPT_ast_,  COEFFICIENTS_ast_,
+                                  INTERCEPT_dag_,  COEFFICIENTS_dag_,
+                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                  P_VEC_FULL_ast, P_VEC_FULL_dag,
+                                  SLATE_VEC_ast, SLATE_VEC_dag,
+                                  LAMBDA,
+                                  Q_SIGN_ <- strenv$jnp$array(1.),
+                                  SEED
+                                  )[[2]]
+      grad_pred_ast <- strenv$jnp$subtract(
+        grad_pred_ast,
+        strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+                            strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_pred_ast),
+                                               rain_anchor_sum_ast))
+      )
+
+      if (adversarial) {
+        a_i_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_pred_dag))
+        strenv$grad_mag_dag_vec[i] <- list(strenv$jnp$linalg$norm(grad_pred_dag))
+        strenv$loss_dag_vec[i] <- list(loss_dag_val)
+      }
+      a_i_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_pred_ast))
+      strenv$grad_mag_ast_vec[i] <- list(strenv$jnp$linalg$norm(grad_pred_ast))
+      strenv$loss_ast_vec[i] <- list(loss_ast_val)
+
+      inv_lr_val <- strenv$jnp$reciprocal(eta_t)
+      strenv$inv_learning_rate_ast_vec[i] <- list(inv_lr_val)
+      if (adversarial) {
+        strenv$inv_learning_rate_dag_vec[i] <- list(inv_lr_val)
+      }
+
+      strenv$rain_lambda_vec[i] <- list(strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+                                                            rain_weight_pow))
+
+      rain_weight_sum <- strenv$jnp$add(rain_weight_sum, rain_weight_pow)
+      rain_anchor_sum_ast <- strenv$jnp$add(rain_anchor_sum_ast,
+                                            strenv$jnp$multiply(rain_weight_pow, a_start_ast))
+      if (adversarial) {
+        rain_anchor_sum_dag <- strenv$jnp$add(rain_anchor_sum_dag,
+                                              strenv$jnp$multiply(rain_weight_pow, a_start_dag))
+      }
+      rain_weight_pow <- strenv$jnp$multiply(rain_weight_pow, rain_gamma_step)
+    }
+  } else {
+    while(goOn == F){
+      if ((i <- i + 1) < 5 | i %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) { 
+        message(sprintf("SGD Iteration: %s of %s", i, nSGD) ) 
+      }
+
+      # do dag updates ("min" step - only do in adversarial mode)
+      if( i %% 1 == 0 & adversarial & !use_joint_extragrad ){
       # note: dQ_da_dag built off FullGetQStar_
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
       grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,                    #1,2
@@ -432,10 +577,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         dag = list(a_pred_ast = a_pred_ast, a_pred_dag = a_pred_dag)
       )
     }
-    if(i >= nSGD){goOn <- TRUE}
-    if (use_rain) {
-      anchor_ast <- a_i_ast
-      anchor_dag <- a_i_dag
+      if(i >= nSGD){goOn <- TRUE}
+      if (use_rain) {
+        anchor_ast <- a_i_ast
+        anchor_dag <- a_i_dag
+      }
     }
   }
 
@@ -470,26 +616,20 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
     }
     if(glm_family != "gaussian"){ 
-      pi_star_ast_f_all <- strenv$jax$vmap(function(s_){ 
-                                    strenv$getMultinomialSamp(pi_star_ast_, 
-                                                              MNtemp, 
-                                                              s_, 
-                                                              strenv$ParameterizationType, 
-                                                              strenv$d_locator_use
-                                                              )},
-                                in_axes = list(0L))(strenv$jax$random$split( SEED, 
-                                                                             nMonte_Qglm) )
-      SEED   <- strenv$jax$random$split(SEED)[[1L]]
-      pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ 
-                                    strenv$getMultinomialSamp(pi_star_dag_, 
-                                                              MNtemp, 
-                                                              s_, 
-                                                              strenv$ParameterizationType, 
-                                                              strenv$d_locator_use
-                                                              )}, 
-                               in_axes = list(0L))( strenv$jax$random$split( SEED, 
-                                                                             nMonte_Qglm) )
-      SEED   <- strenv$jax$random$split(SEED)[[1L]]
+      draw_ast <- draw_profile_samples(
+        pi_star_ast_, nMonte_Qglm, SEED,
+        MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+        sampler = strenv$getMultinomialSamp
+      )
+      pi_star_ast_f_all <- draw_ast$samples
+      SEED <- draw_ast$seed_next
+      draw_dag <- draw_profile_samples(
+        pi_star_dag_, nMonte_Qglm, SEED,
+        MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+        sampler = strenv$getMultinomialSamp
+      )
+      pi_star_dag_f_all <- draw_dag$samples
+      SEED <- draw_dag$seed_next
     }
     
     if(!adversarial){ 
@@ -501,48 +641,55 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     if(adversarial){ 
       n_q_samp <- as.integer(pi_star_ast_f_all$shape[[1L]])
       if (primary_pushforward == "multi") {
-        sample_pool <- function(pi_vec, n_draws, n_pool, seed_in) {
-          n_total <- as.integer(n_draws * n_pool)
-          all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
-          seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
-          seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
-          seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
-          samples <- strenv$jax$vmap(function(seed_row){
-            strenv$jax$vmap(function(seed_cell){
-              strenv$getMultinomialSamp(pi_vec, MNtemp,
-                                        seed_cell, strenv$ParameterizationType, strenv$d_locator_use)
-            }, in_axes = list(0L))(seed_row)
-          }, in_axes = list(0L))(seeds)
-          list(samples = samples, seed_next = seed_next)
-        }
-
-        samp_ast <- sample_pool(pi_star_ast_, n_q_samp, primary_n_entrants, SEED)
+        samp_ast <- sample_pool_jax(
+          pi_star_ast_, n_q_samp, primary_n_entrants, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_ast_all <- samp_ast$samples
         SEED <- samp_ast$seed_next
 
-        samp_dag <- sample_pool(pi_star_dag_, n_q_samp, primary_n_entrants, SEED)
+        samp_dag <- sample_pool_jax(
+          pi_star_dag_, n_q_samp, primary_n_entrants, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_dag_all <- samp_dag$samples
         SEED <- samp_dag$seed_next
 
-        samp_ast_field <- sample_pool(SLATE_VEC_ast, n_q_samp, primary_n_field, SEED)
+        samp_ast_field <- sample_pool_jax(
+          SLATE_VEC_ast, n_q_samp, primary_n_field, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
         SEED <- samp_ast_field$seed_next
 
-        samp_dag_field <- sample_pool(SLATE_VEC_dag, n_q_samp, primary_n_field, SEED)
+        samp_dag_field <- sample_pool_jax(
+          SLATE_VEC_dag, n_q_samp, primary_n_field, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
         SEED <- samp_dag_field$seed_next
       } else {
         TSAMP_ast_all <- pi_star_ast_f_all
         TSAMP_dag_all <- pi_star_dag_f_all
-        TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){
-          strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
-        }, in_axes = list(0L))(strenv$jax$random$split(SEED, n_q_samp))
-        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        draw_ast_field <- draw_profile_samples(
+          SLATE_VEC_ast, n_q_samp, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
+        TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
+        SEED <- draw_ast_field$seed_next
         
-        TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){
-          strenv$getMultinomialSamp(SLATE_VEC_dag, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
-        }, in_axes = list(0L))(strenv$jax$random$split(SEED, n_q_samp))
-        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        draw_dag_field <- draw_profile_samples(
+          SLATE_VEC_dag, n_q_samp, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
+        TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
+        SEED <- draw_dag_field$seed_next
       }
 
       Qres <- strenv$Vectorized_QMonteIter_MaxMin(
