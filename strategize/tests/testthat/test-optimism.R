@@ -189,3 +189,46 @@ test_that("rain uses increasing anchor weights (RAIN)", {
   expect_true(all(diff(rain_vals) >= -1e-8))
   expect_true(rain_vals[length(rain_vals)] >= rain_vals[1] - 1e-8)
 })
+
+test_that("rain respects rain_gamma and rain_eta", {
+  skip_if_no_jax()
+  withr::local_seed(790)
+
+  base <- generate_test_data(n = 50, n_factors = 2, n_levels = 2, seed = 322)
+  adv_data <- add_adversarial_structure(base, seed = 223)
+  p_list <- generate_test_p_list(adv_data$W)
+
+  eta_val <- 0.02
+  result <- strategize(
+    Y = adv_data$Y,
+    W = adv_data$W,
+    p_list = p_list,
+    lambda = 0.1,
+    nSGD = 3,
+    nMonte_Qglm = 5L,
+    nMonte_adversarial = 3L,
+    diff = TRUE,
+    adversarial = TRUE,
+    compute_se = FALSE,
+    pair_id = adv_data$pair_id,
+    respondent_id = adv_data$respondent_id,
+    respondent_task_id = adv_data$respondent_task_id,
+    profile_order = adv_data$profile_order,
+    competing_group_variable_respondent = adv_data$competing_group_variable_respondent,
+    competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
+    competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
+    optimism = "rain",
+    optimism_coef = 0.5,
+    rain_gamma = 0,
+    rain_eta = eta_val
+  )
+
+  rain_lambda <- Filter(Negate(is.null), result$strenv$rain_lambda_vec)
+  rain_vals <- vapply(rain_lambda, function(x) {
+    as.numeric(result$strenv$np$array(x))
+  }, numeric(1))
+  expect_true(all(abs(diff(rain_vals)) < 1e-8))
+
+  inv_lr <- result$convergence_history$inv_lr_ast
+  expect_true(all(abs(inv_lr - (1 / eta_val)) < 1e-6))
+})

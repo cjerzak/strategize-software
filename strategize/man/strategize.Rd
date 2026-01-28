@@ -56,6 +56,8 @@ strategize(
   optim_type = "gd",
   optimism = "extragrad",
   optimism_coef = 1,
+  rain_gamma = 1,
+  rain_eta = NULL,
   compute_hessian = TRUE,
   hessian_max_dim = 50L
 )
@@ -288,7 +290,13 @@ anchored extra-gradient and increasing quadratic anchor penalties), or \code{"no
 \item{optimism_coef}{Numeric scalar controlling the magnitude of optimism adjustments. For
 \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
 initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multiplicatively by
-\eqn{(1+\gamma)} each outer stage (\eqn{\gamma} fixed internally at 1).}
+\eqn{(1+\gamma)} each outer stage.}
+
+\item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+Only used when \code{optimism = "rain"}.}
+
+\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
+to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.}
 
 \item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
 geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions

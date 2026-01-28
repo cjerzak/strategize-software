@@ -51,6 +51,8 @@ NULL
 #' @param primary_strength Scalar controlling the decisiveness of primaries
 #' @param primary_n_entrants Number of entrant candidates sampled per party in multi-candidate primaries
 #' @param primary_n_field Number of field candidates sampled per party in multi-candidate primaries
+#' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN.
 #' @return TRUE invisibly if validation passes; stops with error otherwise
 #' @keywords internal
 validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
@@ -71,7 +73,9 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        primary_pushforward = "mc",
                                        primary_strength = 1.0,
                                        primary_n_entrants = 1L,
-                                       primary_n_field = 1L) {
+                                       primary_n_field = 1L,
+                                       rain_gamma = 1,
+                                       rain_eta = NULL) {
 
   # ---- Y validation ----
   if (missing(Y) || is.null(Y)) {
@@ -217,6 +221,34 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
           call. = FALSE
         )
       }
+    }
+  }
+
+  # ---- RAIN hyperparameters ----
+  if (!is.null(rain_gamma)) {
+    if (!is.numeric(rain_gamma) || length(rain_gamma) != 1) {
+      stop(
+        "'rain_gamma' must be a single non-negative numeric value. Got: ",
+        paste(head(rain_gamma, 3), collapse = ", "),
+        if (length(rain_gamma) > 3) "..." else "",
+        call. = FALSE
+      )
+    }
+    if (!is.finite(rain_gamma) || rain_gamma < 0) {
+      stop("'rain_gamma' must be finite and non-negative.", call. = FALSE)
+    }
+  }
+  if (!is.null(rain_eta)) {
+    if (!is.numeric(rain_eta) || length(rain_eta) != 1) {
+      stop(
+        "'rain_eta' must be a single positive numeric value or NULL. Got: ",
+        paste(head(rain_eta, 3), collapse = ", "),
+        if (length(rain_eta) > 3) "..." else "",
+        call. = FALSE
+      )
+    }
+    if (!is.finite(rain_eta) || rain_eta <= 0) {
+      stop("'rain_eta' must be finite and positive.", call. = FALSE)
     }
   }
 
