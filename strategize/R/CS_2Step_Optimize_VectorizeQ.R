@@ -1,58 +1,154 @@
-InitializeQMonteFxns <- function(){ 
-  # The linearized version exploits:                                                                                                                          
-  # 1. Independence of A and B primaries                                                                                                                      
-  # 2. Linearity of expectation                                                                                                                               
-  # 3. Precomputation of all C combinations 
-  
-  # Helper: population general-election value for a single (t, u) pair
-  Qpop_pair <- compile_fxn(function(t, u,
-                                    INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                    INTERCEPT_dag_, COEFFICIENTS_dag_){
+build_qpop_pair <- function(compile_fxn, getQStar_diff_MultiGroup) {
+  compile_fxn(function(t, u,
+                       INTERCEPT_ast_, COEFFICIENTS_ast_,
+                       INTERCEPT_dag_, COEFFICIENTS_dag_){
     strenv$jnp$take(
       getQStar_diff_MultiGroup(
         t, u,
         INTERCEPT_ast_,  COEFFICIENTS_ast_,
         INTERCEPT_dag_,  COEFFICIENTS_dag_
       ),
-      0L  # population component
+      0L
     )
   })
-  
-  # Helper: primary head-to-head win prob κ_A(t, t') within A's primary
-  TEMP_PUSHF <- strenv$primary_strength
+}
+
+build_primary_model_context <- function(model_env, outcome_model_type, GroupsPool = NULL) {
   use_neural <- outcome_model_type == "neural" &&
-    exists("neural_model_info_ast_jnp", inherits = TRUE)
-  if (use_neural) {
-    model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
-    model_dag <- if (exists("neural_model_info_dag_jnp", inherits = TRUE)) {
-      get("neural_model_info_dag_jnp", inherits = TRUE)
-    } else {
-      model_ast
-    }
-    model_ast_primary <- if (exists("neural_model_info_ast0_jnp", inherits = TRUE)) {
-      get("neural_model_info_ast0_jnp", inherits = TRUE)
-    } else {
-      model_ast
-    }
-    model_dag_primary <- if (exists("neural_model_info_dag0_jnp", inherits = TRUE)) {
-      get("neural_model_info_dag0_jnp", inherits = TRUE)
-    } else {
-      model_dag
-    }
-    party_label_ast <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
-      GroupsPool[1]
-    } else {
-      NULL
-    }
-    party_label_dag <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 1) {
-      GroupsPool[2]
-    } else {
-      party_label_ast
-    }
-    party_idx_ast <- neural_get_party_index(model_ast_primary, party_label_ast)
-    party_idx_dag <- neural_get_party_index(model_dag_primary, party_label_dag)
-    resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
-    resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
+    exists("neural_model_info_ast_jnp", envir = model_env, inherits = TRUE)
+  if (!use_neural) {
+    return(list(use_neural = FALSE))
+  }
+  model_ast <- get("neural_model_info_ast_jnp", envir = model_env, inherits = TRUE)
+  model_dag <- if (exists("neural_model_info_dag_jnp", envir = model_env, inherits = TRUE)) {
+    get("neural_model_info_dag_jnp", envir = model_env, inherits = TRUE)
+  } else {
+    model_ast
+  }
+  model_ast_primary <- if (exists("neural_model_info_ast0_jnp", envir = model_env, inherits = TRUE)) {
+    get("neural_model_info_ast0_jnp", envir = model_env, inherits = TRUE)
+  } else {
+    model_ast
+  }
+  model_dag_primary <- if (exists("neural_model_info_dag0_jnp", envir = model_env, inherits = TRUE)) {
+    get("neural_model_info_dag0_jnp", envir = model_env, inherits = TRUE)
+  } else {
+    model_dag
+  }
+  party_label_ast <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
+    GroupsPool[1]
+  } else {
+    NULL
+  }
+  party_label_dag <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 1) {
+    GroupsPool[2]
+  } else {
+    party_label_ast
+  }
+  party_idx_ast <- neural_get_party_index(model_ast_primary, party_label_ast)
+  party_idx_dag <- neural_get_party_index(model_dag_primary, party_label_dag)
+  resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
+  resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
+  list(
+    use_neural = TRUE,
+    model_ast = model_ast,
+    model_dag = model_dag,
+    model_ast_primary = model_ast_primary,
+    model_dag_primary = model_dag_primary,
+    party_label_ast = party_label_ast,
+    party_label_dag = party_label_dag,
+    party_idx_ast = party_idx_ast,
+    party_idx_dag = party_idx_dag,
+    resp_idx_ast = resp_idx_ast,
+    resp_idx_dag = resp_idx_dag
+  )
+}
+
+build_kappa_helpers <- function(compile_fxn, temp_pushf, ctx,
+                                getQStar_diff_SingleGroup,
+                                allow_utilities = FALSE) {
+  if (!isTRUE(ctx$use_neural)) {
+    kappa_pair <- compile_fxn(function(v, v_prime,
+                                       INTERCEPT_0_, COEFFICIENTS_0_){
+      v <- strenv$jnp$reshape(v, list(-1L, 1L))
+      v_prime <- strenv$jnp$reshape(v_prime, list(-1L, 1L))
+      strenv$jnp$take(
+        getQStar_diff_SingleGroup(
+          v,
+          v_prime,
+          INTERCEPT_0_ * temp_pushf, temp_pushf * COEFFICIENTS_0_,
+          INTERCEPT_0_ * temp_pushf, temp_pushf * COEFFICIENTS_0_
+        ), 0L)
+    })
+    return(list(use_neural = FALSE, use_utilities = FALSE, kappa_pair = kappa_pair))
+  }
+
+  model_ast_primary <- ctx$model_ast_primary
+  model_dag_primary <- ctx$model_dag_primary
+  party_idx_ast <- ctx$party_idx_ast
+  party_idx_dag <- ctx$party_idx_dag
+  resp_idx_ast <- ctx$resp_idx_ast
+  resp_idx_dag <- ctx$resp_idx_dag
+
+  use_utilities <- FALSE
+  utility_ast <- utility_dag <- NULL
+  kappa_pair_ast <- kappa_pair_dag <- NULL
+
+  if (isTRUE(allow_utilities)) {
+    mode_ast <- neural_cross_encoder_mode(model_ast_primary)
+    mode_dag <- neural_cross_encoder_mode(model_dag_primary)
+    use_utilities <- isTRUE(model_ast_primary$pairwise_mode) &&
+      isTRUE(model_dag_primary$pairwise_mode) &&
+      !is.null(model_ast_primary$params$W_out) &&
+      !is.null(model_dag_primary$params$W_out) &&
+      !identical(mode_ast, "full") &&
+      !identical(mode_dag, "full")
+  }
+
+  if (isTRUE(allow_utilities) && use_utilities) {
+    utility_from_logits_ast <- switch(model_ast_primary$likelihood,
+                                      categorical = function(logits) {
+                                        strenv$jnp$squeeze(strenv$jnp$take(logits, 1L, axis = 1L))
+                                      },
+                                      function(logits) {
+                                        strenv$jnp$squeeze(logits, axis = 1L)
+                                      })
+    utility_from_logits_dag <- switch(model_dag_primary$likelihood,
+                                      categorical = function(logits) {
+                                        strenv$jnp$squeeze(strenv$jnp$take(logits, 1L, axis = 1L))
+                                      },
+                                      function(logits) {
+                                        strenv$jnp$squeeze(logits, axis = 1L)
+                                      })
+    utility_ast <- compile_fxn(function(v, theta_ast0){
+      params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
+      matchup_idx <- neural_matchup_index(party_idx_ast, party_idx_ast, model_ast_primary)
+      logits <- neural_candidate_utility_soft(
+        v,
+        party_idx_ast,
+        resp_idx_ast,
+        1L,
+        model_ast_primary,
+        params = params_ast0,
+        matchup_idx = matchup_idx
+      )
+      utility_from_logits_ast(logits)
+    })
+    utility_dag <- compile_fxn(function(v, theta_dag0){
+      params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
+      matchup_idx <- neural_matchup_index(party_idx_dag, party_idx_dag, model_dag_primary)
+      logits <- neural_candidate_utility_soft(
+        v,
+        party_idx_dag,
+        resp_idx_dag,
+        1L,
+        model_dag_primary,
+        params = params_dag0,
+        matchup_idx = matchup_idx
+      )
+      utility_from_logits_dag(logits)
+    })
+  } else {
     kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
       params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
       logits <- neural_predict_pair_soft(
@@ -62,7 +158,7 @@ InitializeQMonteFxns <- function(){
         params = params_ast0,
         return_logits = TRUE
       )
-      scaled <- logits * TEMP_PUSHF
+      scaled <- logits * temp_pushf
       prob <- neural_logits_to_q(scaled, model_ast_primary$likelihood)
       strenv$jnp$squeeze(prob)
     })
@@ -75,24 +171,42 @@ InitializeQMonteFxns <- function(){
         params = params_dag0,
         return_logits = TRUE
       )
-      scaled <- logits * TEMP_PUSHF
+      scaled <- logits * temp_pushf
       prob <- neural_logits_to_q(scaled, model_dag_primary$likelihood)
       strenv$jnp$squeeze(prob)
     })
-  } else {
-    kappa_pair <- compile_fxn(function(v, v_prime,
-                                         INTERCEPT_0_, COEFFICIENTS_0_){
-      v <- strenv$jnp$reshape(v, list(-1L, 1L))
-      v_prime <- strenv$jnp$reshape(v_prime, list(-1L, 1L))
-      strenv$jnp$take(
-        getQStar_diff_SingleGroup(
-          v,            # entrant
-          v_prime,      # field draw
-          INTERCEPT_0_ * TEMP_PUSHF, TEMP_PUSHF * COEFFICIENTS_0_,
-          INTERCEPT_0_ * TEMP_PUSHF, TEMP_PUSHF * COEFFICIENTS_0_
-        ), 0L)
-    })
   }
+
+  list(
+    use_neural = TRUE,
+    use_utilities = use_utilities,
+    kappa_pair_ast = kappa_pair_ast,
+    kappa_pair_dag = kappa_pair_dag,
+    utility_ast = utility_ast,
+    utility_dag = utility_dag
+  )
+}
+
+InitializeQMonteFxns <- function(){ 
+  # The linearized version exploits:                                                                                                                          
+  # 1. Independence of A and B primaries                                                                                                                      
+  # 2. Linearity of expectation                                                                                                                               
+  # 3. Precomputation of all C combinations 
+  
+  Qpop_pair <- build_qpop_pair(compile_fxn, getQStar_diff_MultiGroup)
+  
+  # Helper: primary head-to-head win prob κ_A(t, t') within A's primary
+  TEMP_PUSHF <- strenv$primary_strength
+  groups_pool <- if (exists("GroupsPool", inherits = TRUE)) GroupsPool else NULL
+  ctx <- build_primary_model_context(environment(), outcome_model_type, groups_pool)
+  kappa_helpers <- build_kappa_helpers(
+    compile_fxn, TEMP_PUSHF, ctx, getQStar_diff_SingleGroup,
+    allow_utilities = FALSE
+  )
+  use_neural <- isTRUE(kappa_helpers$use_neural)
+  kappa_pair_ast <- kappa_helpers$kappa_pair_ast
+  kappa_pair_dag <- kappa_helpers$kappa_pair_dag
+  kappa_pair <- kappa_helpers$kappa_pair
   
   # === Core Monte-Carlo evaluator that respects the push-forward ===
   strenv$QMonteIter_MaxMin <- compile_fxn(function(
@@ -422,95 +536,19 @@ InitializeQMonteFxns_MCSampling <- function(){
     list(z, seed)
   })
   
-  Qpop_pair <- compile_fxn(function(t, u,
-                                    INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                    INTERCEPT_dag_, COEFFICIENTS_dag_){
-    strenv$jnp$take(
-      getQStar_diff_MultiGroup(
-        t, u,
-        INTERCEPT_ast_, COEFFICIENTS_ast_,
-        INTERCEPT_dag_, COEFFICIENTS_dag_
-      ),
-      0L
-    )
-  })
+  Qpop_pair <- build_qpop_pair(compile_fxn, getQStar_diff_MultiGroup)
   
   TEMP_PUSHF <- strenv$primary_strength
-  use_neural <- outcome_model_type == "neural" &&
-    exists("neural_model_info_ast_jnp", inherits = TRUE)
-  if (use_neural) {
-    model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
-    model_dag <- if (exists("neural_model_info_dag_jnp", inherits = TRUE)) {
-      get("neural_model_info_dag_jnp", inherits = TRUE)
-    } else {
-      model_ast
-    }
-    model_ast_primary <- if (exists("neural_model_info_ast0_jnp", inherits = TRUE)) {
-      get("neural_model_info_ast0_jnp", inherits = TRUE)
-    } else {
-      model_ast
-    }
-    model_dag_primary <- if (exists("neural_model_info_dag0_jnp", inherits = TRUE)) {
-      get("neural_model_info_dag0_jnp", inherits = TRUE)
-    } else {
-      model_dag
-    }
-    party_label_ast <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
-      GroupsPool[1]
-    } else {
-      NULL
-    }
-    party_label_dag <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 1) {
-      GroupsPool[2]
-    } else {
-      party_label_ast
-    }
-    party_idx_ast <- neural_get_party_index(model_ast_primary, party_label_ast)
-    party_idx_dag <- neural_get_party_index(model_dag_primary, party_label_dag)
-    resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
-    resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
-    kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
-      params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
-      logits <- neural_predict_pair_soft(
-        v, v_prime,
-        party_idx_ast, party_idx_ast,
-        resp_idx_ast, model_ast_primary,
-        params = params_ast0,
-        return_logits = TRUE
-      )
-      scaled <- logits * TEMP_PUSHF
-      prob <- neural_logits_to_q(scaled, model_ast_primary$likelihood)
-      strenv$jnp$squeeze(prob)
-    })
-    kappa_pair_dag <- compile_fxn(function(v, v_prime, theta_dag0){
-      params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
-      logits <- neural_predict_pair_soft(
-        v, v_prime,
-        party_idx_dag, party_idx_dag,
-        resp_idx_dag, model_dag_primary,
-        params = params_dag0,
-        return_logits = TRUE
-      )
-      scaled <- logits * TEMP_PUSHF
-      prob <- neural_logits_to_q(scaled, model_dag_primary$likelihood)
-      strenv$jnp$squeeze(prob)
-    })
-  } else {
-    kappa_pair <- compile_fxn(function(v, v_prime,
-                                      INTERCEPT_0_, COEFFICIENTS_0_){
-      v <- strenv$jnp$reshape(v, list(-1L, 1L))
-      v_prime <- strenv$jnp$reshape(v_prime, list(-1L, 1L))
-      strenv$jnp$take(
-        getQStar_diff_SingleGroup(
-          v,
-          v_prime,
-          INTERCEPT_0_ * TEMP_PUSHF, TEMP_PUSHF * COEFFICIENTS_0_,
-          INTERCEPT_0_ * TEMP_PUSHF, TEMP_PUSHF * COEFFICIENTS_0_
-        ),
-        0L
-      )
-    })
-  }
+  groups_pool <- if (exists("GroupsPool", inherits = TRUE)) GroupsPool else NULL
+  ctx <- build_primary_model_context(environment(), outcome_model_type, groups_pool)
+  kappa_helpers <- build_kappa_helpers(
+    compile_fxn, TEMP_PUSHF, ctx, getQStar_diff_SingleGroup,
+    allow_utilities = FALSE
+  )
+  use_neural <- isTRUE(kappa_helpers$use_neural)
+  kappa_pair_ast <- kappa_helpers$kappa_pair_ast
+  kappa_pair_dag <- kappa_helpers$kappa_pair_dag
+  kappa_pair <- kappa_helpers$kappa_pair
   
   strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn( strenv$jax$vmap(
     (strenv$QMonteIter_MaxMin <- compile_fxn(function(
@@ -581,151 +619,22 @@ InitializeQMonteFxns_MCSampling <- function(){
 InitializeQMonteFxns_MultiCandidate <- function(){
   # Multi-candidate primaries with nomination probabilities from pairwise win rates
 
-  Qpop_pair <- compile_fxn(function(t, u,
-                                    INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                    INTERCEPT_dag_, COEFFICIENTS_dag_){
-    strenv$jnp$take(
-      getQStar_diff_MultiGroup(
-        t, u,
-        INTERCEPT_ast_, COEFFICIENTS_ast_,
-        INTERCEPT_dag_, COEFFICIENTS_dag_
-      ),
-      0L
-    )
-  })
+  Qpop_pair <- build_qpop_pair(compile_fxn, getQStar_diff_MultiGroup)
 
   TEMP_PUSHF <- strenv$primary_strength
-  use_neural <- outcome_model_type == "neural" &&
-    exists("neural_model_info_ast_jnp", inherits = TRUE)
-  use_utilities <- FALSE
-  if (use_neural) {
-    model_ast <- get("neural_model_info_ast_jnp", inherits = TRUE)
-    model_dag <- if (exists("neural_model_info_dag_jnp", inherits = TRUE)) {
-      get("neural_model_info_dag_jnp", inherits = TRUE)
-    } else {
-      model_ast
-    }
-    model_ast_primary <- if (exists("neural_model_info_ast0_jnp", inherits = TRUE)) {
-      get("neural_model_info_ast0_jnp", inherits = TRUE)
-    } else {
-      model_ast
-    }
-    model_dag_primary <- if (exists("neural_model_info_dag0_jnp", inherits = TRUE)) {
-      get("neural_model_info_dag0_jnp", inherits = TRUE)
-    } else {
-      model_dag
-    }
-    party_label_ast <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
-      GroupsPool[1]
-    } else {
-      NULL
-    }
-    party_label_dag <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 1) {
-      GroupsPool[2]
-    } else {
-      party_label_ast
-    }
-    party_idx_ast <- neural_get_party_index(model_ast_primary, party_label_ast)
-    party_idx_dag <- neural_get_party_index(model_dag_primary, party_label_dag)
-    resp_idx_ast <- neural_get_resp_party_index(model_ast_primary, party_label_ast)
-    resp_idx_dag <- neural_get_resp_party_index(model_dag_primary, party_label_dag)
-
-    mode_ast <- neural_cross_encoder_mode(model_ast_primary)
-    mode_dag <- neural_cross_encoder_mode(model_dag_primary)
-    use_utilities <- isTRUE(model_ast_primary$pairwise_mode) &&
-      isTRUE(model_dag_primary$pairwise_mode) &&
-      !is.null(model_ast_primary$params$W_out) &&
-      !is.null(model_dag_primary$params$W_out) &&
-      !identical(mode_ast, "full") &&
-      !identical(mode_dag, "full")
-
-    if (use_utilities) {
-      utility_from_logits_ast <- switch(model_ast_primary$likelihood,
-                                        categorical = function(logits) {
-                                          strenv$jnp$squeeze(strenv$jnp$take(logits, 1L, axis = 1L))
-                                        },
-                                        function(logits) {
-                                          strenv$jnp$squeeze(logits, axis = 1L)
-                                        })
-      utility_from_logits_dag <- switch(model_dag_primary$likelihood,
-                                        categorical = function(logits) {
-                                          strenv$jnp$squeeze(strenv$jnp$take(logits, 1L, axis = 1L))
-                                        },
-                                        function(logits) {
-                                          strenv$jnp$squeeze(logits, axis = 1L)
-                                        })
-      utility_ast <- compile_fxn(function(v, theta_ast0){
-        params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
-        matchup_idx <- neural_matchup_index(party_idx_ast, party_idx_ast, model_ast_primary)
-        logits <- neural_candidate_utility_soft(
-          v,
-          party_idx_ast,
-          resp_idx_ast,
-          1L,
-          model_ast_primary,
-          params = params_ast0,
-          matchup_idx = matchup_idx
-        )
-        utility_from_logits_ast(logits)
-      })
-      utility_dag <- compile_fxn(function(v, theta_dag0){
-        params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
-        matchup_idx <- neural_matchup_index(party_idx_dag, party_idx_dag, model_dag_primary)
-        logits <- neural_candidate_utility_soft(
-          v,
-          party_idx_dag,
-          resp_idx_dag,
-          1L,
-          model_dag_primary,
-          params = params_dag0,
-          matchup_idx = matchup_idx
-        )
-        utility_from_logits_dag(logits)
-      })
-    } else {
-      kappa_pair_ast <- compile_fxn(function(v, v_prime, theta_ast0){
-        params_ast0 <- neural_params_from_theta(theta_ast0, model_ast_primary)
-        logits <- neural_predict_pair_soft(
-          v, v_prime,
-          party_idx_ast, party_idx_ast,
-          resp_idx_ast, model_ast_primary,
-          params = params_ast0,
-          return_logits = TRUE
-        )
-        scaled <- logits * TEMP_PUSHF
-        prob <- neural_logits_to_q(scaled, model_ast_primary$likelihood)
-        strenv$jnp$squeeze(prob)
-      })
-      kappa_pair_dag <- compile_fxn(function(v, v_prime, theta_dag0){
-        params_dag0 <- neural_params_from_theta(theta_dag0, model_dag_primary)
-        logits <- neural_predict_pair_soft(
-          v, v_prime,
-          party_idx_dag, party_idx_dag,
-          resp_idx_dag, model_dag_primary,
-          params = params_dag0,
-          return_logits = TRUE
-        )
-        scaled <- logits * TEMP_PUSHF
-        prob <- neural_logits_to_q(scaled, model_dag_primary$likelihood)
-        strenv$jnp$squeeze(prob)
-      })
-    }
-  } else {
-    kappa_pair <- compile_fxn(function(v, v_prime,
-                                      INTERCEPT_0_, COEFFICIENTS_0_){
-      v <- strenv$jnp$reshape(v, list(-1L, 1L))
-      v_prime <- strenv$jnp$reshape(v_prime, list(-1L, 1L))
-      strenv$jnp$take(
-        getQStar_diff_SingleGroup(
-          v,
-          v_prime,
-          INTERCEPT_0_ * TEMP_PUSHF, TEMP_PUSHF * COEFFICIENTS_0_,
-          INTERCEPT_0_ * TEMP_PUSHF, TEMP_PUSHF * COEFFICIENTS_0_
-        ),
-        0L
-      )
-    })
-  }
+  groups_pool <- if (exists("GroupsPool", inherits = TRUE)) GroupsPool else NULL
+  ctx <- build_primary_model_context(environment(), outcome_model_type, groups_pool)
+  kappa_helpers <- build_kappa_helpers(
+    compile_fxn, TEMP_PUSHF, ctx, getQStar_diff_SingleGroup,
+    allow_utilities = TRUE
+  )
+  use_neural <- isTRUE(kappa_helpers$use_neural)
+  use_utilities <- isTRUE(kappa_helpers$use_utilities)
+  kappa_pair_ast <- kappa_helpers$kappa_pair_ast
+  kappa_pair_dag <- kappa_helpers$kappa_pair_dag
+  kappa_pair <- kappa_helpers$kappa_pair
+  utility_ast <- kappa_helpers$utility_ast
+  utility_dag <- kappa_helpers$utility_dag
 
   strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn(strenv$jax$vmap(
     (strenv$QMonteIter_MaxMin <- compile_fxn(function(

@@ -616,26 +616,20 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
     }
     if(glm_family != "gaussian"){ 
-      pi_star_ast_f_all <- strenv$jax$vmap(function(s_){ 
-                                    strenv$getMultinomialSamp(pi_star_ast_, 
-                                                              MNtemp, 
-                                                              s_, 
-                                                              strenv$ParameterizationType, 
-                                                              strenv$d_locator_use
-                                                              )},
-                                in_axes = list(0L))(strenv$jax$random$split( SEED, 
-                                                                             nMonte_Qglm) )
-      SEED   <- strenv$jax$random$split(SEED)[[1L]]
-      pi_star_dag_f_all <- strenv$jax$vmap(function(s_){ 
-                                    strenv$getMultinomialSamp(pi_star_dag_, 
-                                                              MNtemp, 
-                                                              s_, 
-                                                              strenv$ParameterizationType, 
-                                                              strenv$d_locator_use
-                                                              )}, 
-                               in_axes = list(0L))( strenv$jax$random$split( SEED, 
-                                                                             nMonte_Qglm) )
-      SEED   <- strenv$jax$random$split(SEED)[[1L]]
+      draw_ast <- draw_profile_samples(
+        pi_star_ast_, nMonte_Qglm, SEED,
+        MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+        sampler = strenv$getMultinomialSamp
+      )
+      pi_star_ast_f_all <- draw_ast$samples
+      SEED <- draw_ast$seed_next
+      draw_dag <- draw_profile_samples(
+        pi_star_dag_, nMonte_Qglm, SEED,
+        MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+        sampler = strenv$getMultinomialSamp
+      )
+      pi_star_dag_f_all <- draw_dag$samples
+      SEED <- draw_dag$seed_next
     }
     
     if(!adversarial){ 
@@ -647,48 +641,55 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     if(adversarial){ 
       n_q_samp <- as.integer(pi_star_ast_f_all$shape[[1L]])
       if (primary_pushforward == "multi") {
-        sample_pool <- function(pi_vec, n_draws, n_pool, seed_in) {
-          n_total <- as.integer(n_draws * n_pool)
-          all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
-          seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
-          seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
-          seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
-          samples <- strenv$jax$vmap(function(seed_row){
-            strenv$jax$vmap(function(seed_cell){
-              strenv$getMultinomialSamp(pi_vec, MNtemp,
-                                        seed_cell, strenv$ParameterizationType, strenv$d_locator_use)
-            }, in_axes = list(0L))(seed_row)
-          }, in_axes = list(0L))(seeds)
-          list(samples = samples, seed_next = seed_next)
-        }
-
-        samp_ast <- sample_pool(pi_star_ast_, n_q_samp, primary_n_entrants, SEED)
+        samp_ast <- sample_pool_jax(
+          pi_star_ast_, n_q_samp, primary_n_entrants, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_ast_all <- samp_ast$samples
         SEED <- samp_ast$seed_next
 
-        samp_dag <- sample_pool(pi_star_dag_, n_q_samp, primary_n_entrants, SEED)
+        samp_dag <- sample_pool_jax(
+          pi_star_dag_, n_q_samp, primary_n_entrants, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_dag_all <- samp_dag$samples
         SEED <- samp_dag$seed_next
 
-        samp_ast_field <- sample_pool(SLATE_VEC_ast, n_q_samp, primary_n_field, SEED)
+        samp_ast_field <- sample_pool_jax(
+          SLATE_VEC_ast, n_q_samp, primary_n_field, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
         SEED <- samp_ast_field$seed_next
 
-        samp_dag_field <- sample_pool(SLATE_VEC_dag, n_q_samp, primary_n_field, SEED)
+        samp_dag_field <- sample_pool_jax(
+          SLATE_VEC_dag, n_q_samp, primary_n_field, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
         TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
         SEED <- samp_dag_field$seed_next
       } else {
         TSAMP_ast_all <- pi_star_ast_f_all
         TSAMP_dag_all <- pi_star_dag_f_all
-        TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){
-          strenv$getMultinomialSamp(SLATE_VEC_ast, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
-        }, in_axes = list(0L))(strenv$jax$random$split(SEED, n_q_samp))
-        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        draw_ast_field <- draw_profile_samples(
+          SLATE_VEC_ast, n_q_samp, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
+        TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
+        SEED <- draw_ast_field$seed_next
         
-        TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){
-          strenv$getMultinomialSamp(SLATE_VEC_dag, MNtemp, s_, strenv$ParameterizationType, strenv$d_locator_use)
-        }, in_axes = list(0L))(strenv$jax$random$split(SEED, n_q_samp))
-        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        draw_dag_field <- draw_profile_samples(
+          SLATE_VEC_dag, n_q_samp, SEED,
+          MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+          sampler = strenv$getMultinomialSamp
+        )
+        TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
+        SEED <- draw_dag_field$seed_next
       }
 
       Qres <- strenv$Vectorized_QMonteIter_MaxMin(

@@ -107,77 +107,47 @@ plot_convergence <- function(result,
 
   col_dag <- "#377EB8"  # Blue for DAG/Democrat
 
-  # Plot each metric for AST
-  for (metric in metrics) {
-    if (metric == "gradient") {
-      y_data <- data_list$grad_ast
-      main_title <- "Gradient Magnitude (AST)"
-      ylab <- expression("|" * nabla * "Q|")
-      if (log_scale && any(y_data > 0, na.rm = TRUE)) {
-        y_data <- log10(pmax(y_data, 1e-10))
-        ylab <- expression("log"[10] * "(|" * nabla * "Q|)")
-      }
-    } else if (metric == "loss") {
-      y_data <- data_list$loss_ast
-      main_title <- "Loss/Objective (AST)"
-      ylab <- "Q (objective)"
-    } else if (metric == "lr") {
-      y_data <- data_list$lr_ast
-      if (is.null(y_data) || all(is.na(y_data))) {
-        plot.new()
-        text(0.5, 0.5, "Learning rate data\nnot available\n(optax used?)")
-        next
-      }
-      main_title <- "Learning Rate (AST)"
-      ylab <- "Learning Rate"
-    }
-
-    plot(iterations, y_data, type = "l", col = col_ast, lwd = 1.5,
-         main = main_title, xlab = "Iteration", ylab = ylab,
-         xlim = c(1, nSGD))
-    grid(col = "gray90")
-
-    # Add reference line at 0 for gradients
-    if (metric == "gradient") {
-      abline(h = ifelse(log_scale, -10, 0), lty = 2, col = "gray50")
-    }
-  }
-
-  # Plot each metric for DAG (if adversarial)
-  if (adversarial) {
+  plot_metric_panels <- function(player_key, player_label, col_use) {
     for (metric in metrics) {
       if (metric == "gradient") {
-        y_data <- data_list$grad_dag
-        main_title <- "Gradient Magnitude (DAG)"
+        y_data <- data_list[[paste0("grad_", player_key)]]
+        main_title <- sprintf("Gradient Magnitude (%s)", player_label)
         ylab <- expression("|" * nabla * "Q|")
         if (log_scale && any(y_data > 0, na.rm = TRUE)) {
           y_data <- log10(pmax(y_data, 1e-10))
           ylab <- expression("log"[10] * "(|" * nabla * "Q|)")
         }
       } else if (metric == "loss") {
-        y_data <- data_list$loss_dag
-        main_title <- "Loss/Objective (DAG)"
+        y_data <- data_list[[paste0("loss_", player_key)]]
+        main_title <- sprintf("Loss/Objective (%s)", player_label)
         ylab <- "Q (objective)"
       } else if (metric == "lr") {
-        y_data <- data_list$lr_dag
+        y_data <- data_list[[paste0("lr_", player_key)]]
         if (is.null(y_data) || all(is.na(y_data))) {
           plot.new()
           text(0.5, 0.5, "Learning rate data\nnot available\n(optax used?)")
           next
         }
-        main_title <- "Learning Rate (DAG)"
+        main_title <- sprintf("Learning Rate (%s)", player_label)
         ylab <- "Learning Rate"
       }
 
-      plot(iterations, y_data, type = "l", col = col_dag, lwd = 1.5,
+      plot(iterations, y_data, type = "l", col = col_use, lwd = 1.5,
            main = main_title, xlab = "Iteration", ylab = ylab,
            xlim = c(1, nSGD))
       grid(col = "gray90")
 
+      # Add reference line at 0 for gradients
       if (metric == "gradient") {
         abline(h = ifelse(log_scale, -10, 0), lty = 2, col = "gray50")
       }
     }
+  }
+
+  plot_metric_panels("ast", "AST", col_ast)
+
+  if (adversarial) {
+    plot_metric_panels("dag", "DAG", col_dag)
   }
 
   invisible(NULL)
