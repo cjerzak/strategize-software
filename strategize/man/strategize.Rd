@@ -56,8 +56,6 @@ strategize(
   optim_type = "gd",
   optimism = "extragrad",
   optimism_coef = 1,
-  rain_gamma = 0.05,
-  rain_eta = NULL,
   compute_hessian = TRUE,
   hessian_max_dim = 50L
 )
@@ -293,7 +291,7 @@ initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multipli
 \eqn{(1+\gamma)} each outer stage.}
 
 \item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-Only used when \code{optimism = "rain"}.}
+Larger values grow anchor weights faster. Only used when \code{optimism = "rain"}.}
 
 \item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
 to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.}

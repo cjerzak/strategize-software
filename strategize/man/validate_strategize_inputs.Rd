@@ -27,7 +27,9 @@ validate_strategize_inputs(
   primary_pushforward = "mc",
   primary_strength = 1,
   primary_n_entrants = 1L,
-  primary_n_field = 1L
+  primary_n_field = 1L,
+  rain_gamma = 0.05,
+  rain_eta = NULL
 )
 }
 \arguments{
@@ -93,6 +95,10 @@ For variational inference (subsample_method = "batch_vi"), set
 \item{primary_n_entrants}{Number of entrant candidates sampled per party in multi-candidate primaries}
 
 \item{primary_n_field}{Number of field candidates sampled per party in multi-candidate primaries}
+
+\item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.}
+
+\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN.}
 }
 \value{
 TRUE invisibly if validation passes; stops with error otherwise
