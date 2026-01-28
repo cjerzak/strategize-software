@@ -174,17 +174,21 @@ FullGetQStar_ <- function(a_i_ast,                                #1
       } else {
         nMonte_Qglm
       }
-      TSAMP_ast_all <- strenv$jax$vmap(function(s_){
-        strenv$getMultinomialSamp(pi_star_i_ast, MNtemp,
-                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, n_draws))
-      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      draw_ast <- draw_profile_samples(
+        pi_star_i_ast, n_draws, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
+      TSAMP_ast_all <- draw_ast$samples
+      SEED_IN_LOOP <- draw_ast$seed_next
 
-      TSAMP_dag_all <- strenv$jax$vmap(function(s_){
-        strenv$getMultinomialSamp(pi_star_i_dag, MNtemp,
-                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, n_draws))
-      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      draw_dag <- draw_profile_samples(
+        pi_star_i_dag, n_draws, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
+      TSAMP_dag_all <- draw_dag$samples
+      SEED_IN_LOOP <- draw_dag$seed_next
 
       q_vec <- strenv$Vectorized_QMonteIter(
         TSAMP_ast_all,  TSAMP_dag_all,
@@ -208,73 +212,73 @@ FullGetQStar_ <- function(a_i_ast,                                #1
   if(adversarial){
     
     if (primary_pushforward == "multi") {
-      sample_pool <- function(pi_vec, n_draws, n_pool, seed_in) {
-        n_total <- as.integer(n_draws * n_pool)
-        # Split into n_total + 1 keys: n_total for sampling, 1 for advancing seed
-        all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
-        # Last key is seed_next (independent of keys used for sampling)
-        seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
-        # First n_total keys for sampling
-        seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
-        seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
-        samples <- strenv$jax$vmap(function(seed_row){
-          strenv$jax$vmap(function(seed_cell){
-            strenv$getMultinomialSamp(pi_vec, MNtemp,
-                                      seed_cell, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-          }, in_axes = list(0L))(seed_row)
-        }, in_axes = list(0L))(seeds)
-        list(samples = samples, seed_next = seed_next)
-      }
-
       # Draw policy samples (entrant pools)
-      samp_ast <- sample_pool(pi_star_i_ast, nMonte_adversarial, primary_n_entrants, SEED_IN_LOOP)
+      samp_ast <- sample_pool_jax(
+        pi_star_i_ast, nMonte_adversarial, primary_n_entrants, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
       TSAMP_ast_all <- samp_ast$samples
       SEED_IN_LOOP <- samp_ast$seed_next
 
-      samp_dag <- sample_pool(pi_star_i_dag, nMonte_adversarial, primary_n_entrants, SEED_IN_LOOP)
+      samp_dag <- sample_pool_jax(
+        pi_star_i_dag, nMonte_adversarial, primary_n_entrants, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
       TSAMP_dag_all <- samp_dag$samples
       SEED_IN_LOOP <- samp_dag$seed_next
 
       # Draw field (slate) samples
-      samp_ast_field <- sample_pool(SLATE_VEC_ast_, nMonte_adversarial, primary_n_field, SEED_IN_LOOP)
+      samp_ast_field <- sample_pool_jax(
+        SLATE_VEC_ast_, nMonte_adversarial, primary_n_field, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
       TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
       SEED_IN_LOOP <- samp_ast_field$seed_next
 
-      samp_dag_field <- sample_pool(SLATE_VEC_dag_, nMonte_adversarial, primary_n_field, SEED_IN_LOOP)
+      samp_dag_field <- sample_pool_jax(
+        SLATE_VEC_dag_, nMonte_adversarial, primary_n_field, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
       TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
       SEED_IN_LOOP <- samp_dag_field$seed_next
     } else {
       # Draw policy samples
-      TSAMP_ast_all <- strenv$jax$vmap(function(s_){ 
-        strenv$getMultinomialSamp(pi_star_i_ast, MNtemp, 
-                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
-      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      draw_ast <- draw_profile_samples(
+        pi_star_i_ast, nMonte_adversarial, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
+      TSAMP_ast_all <- draw_ast$samples
+      SEED_IN_LOOP <- draw_ast$seed_next
       
-      TSAMP_dag_all <- strenv$jax$vmap(function(s_){ 
-        strenv$getMultinomialSamp(pi_star_i_dag, MNtemp, 
-                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
-      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      draw_dag <- draw_profile_samples(
+        pi_star_i_dag, nMonte_adversarial, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
+      TSAMP_dag_all <- draw_dag$samples
+      SEED_IN_LOOP <- draw_dag$seed_next
       
       # Draw field (slate) samples
-      TSAMP_ast_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-        strenv$getMultinomialSamp(
-                                  #strenv$jax$lax$stop_gradient(pi_star_i_ast), # if using optimized dist
-                                  SLATE_VEC_ast_, # if using slate 
-                                  MNtemp, 
-                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
-      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      draw_ast_field <- draw_profile_samples(
+        SLATE_VEC_ast_, nMonte_adversarial, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
+      TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
+      SEED_IN_LOOP <- draw_ast_field$seed_next
       
-      TSAMP_dag_PrimaryComp_all <- strenv$jax$vmap(function(s_){ 
-        strenv$getMultinomialSamp(
-                                  #strenv$jax$lax$stop_gradient(pi_star_i_dag),  # if using optimized dist
-                                  SLATE_VEC_dag_,  # if using slate
-                                  MNtemp,
-                                  s_, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use))
-      }, in_axes = list(0L))(strenv$jax$random$split(SEED_IN_LOOP, nMonte_adversarial))
-      SEED_IN_LOOP   <- strenv$jax$random$split(SEED_IN_LOOP)[[1L]]
+      draw_dag_field <- draw_profile_samples(
+        SLATE_VEC_dag_, nMonte_adversarial, SEED_IN_LOOP,
+        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
+        sampler = strenv$getMultinomialSamp
+      )
+      TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
+      SEED_IN_LOOP <- draw_dag_field$seed_next
     }
     
     # Evaluate institutional objective (push-forward over nominees)

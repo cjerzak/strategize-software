@@ -180,42 +180,36 @@ compute_quadrant_breakdown <- function(result, nMonte, verbose) {
     return(simple_quadrant())
   }
 
+  safe_draw <- function(pi_vec, seed_in) {
+    res <- tryCatch({
+      draw_profile_samples(pi_vec, n_samples, seed_in,
+                           MNtemp, ParameterizationType, d_locator_use,
+                           sampler = getMNSamp)
+    }, error = function(e) NULL)
+    if (is.null(res)) {
+      list(samples = NULL, seed_next = strenv$jax$random$split(seed_in)[[1L]])
+    } else {
+      res
+    }
+  }
+
   # Sample from optimized (entrant) distributions
-  SEEDS_ent <- strenv$jax$random$split(SEED, n_samples)
+  res <- safe_draw(pi_star_ast, SEED)
+  sample_entrant_A <- res$samples
+  SEED <- res$seed_next
 
-  sample_entrant_A <- tryCatch({
-    strenv$jax$vmap(function(s) {
-      getMNSamp(pi_star_ast, MNtemp, s, ParameterizationType, d_locator_use)
-    }, in_axes = list(0L))(SEEDS_ent)
-  }, error = function(e) NULL)
-
-  SEED <- strenv$jax$random$split(SEED)[[1L]]
-  SEEDS_ent2 <- strenv$jax$random$split(SEED, n_samples)
-
-  sample_entrant_B <- tryCatch({
-    strenv$jax$vmap(function(s) {
-      getMNSamp(pi_star_dag, MNtemp, s, ParameterizationType, d_locator_use)
-    }, in_axes = list(0L))(SEEDS_ent2)
-  }, error = function(e) NULL)
+  res <- safe_draw(pi_star_dag, SEED)
+  sample_entrant_B <- res$samples
+  SEED <- res$seed_next
 
   # Sample from baseline (field) distributions
-  SEED <- strenv$jax$random$split(SEED)[[1L]]
-  SEEDS_field <- strenv$jax$random$split(SEED, n_samples)
+  res <- safe_draw(SLATE_VEC_ast, SEED)
+  sample_field_A <- res$samples
+  SEED <- res$seed_next
 
-  sample_field_A <- tryCatch({
-    strenv$jax$vmap(function(s) {
-      getMNSamp(SLATE_VEC_ast, MNtemp, s, ParameterizationType, d_locator_use)
-    }, in_axes = list(0L))(SEEDS_field)
-  }, error = function(e) NULL)
-
-  SEED <- strenv$jax$random$split(SEED)[[1L]]
-  SEEDS_field2 <- strenv$jax$random$split(SEED, n_samples)
-
-  sample_field_B <- tryCatch({
-    strenv$jax$vmap(function(s) {
-      getMNSamp(SLATE_VEC_dag, MNtemp, s, ParameterizationType, d_locator_use)
-    }, in_axes = list(0L))(SEEDS_field2)
-  }, error = function(e) NULL)
+  res <- safe_draw(SLATE_VEC_dag, SEED)
+  sample_field_B <- res$samples
+  SEED <- res$seed_next
 
   # Check if sampling succeeded
   if (is.null(sample_entrant_A) || is.null(sample_entrant_B) ||
@@ -279,36 +273,35 @@ compute_quadrant_breakdown <- function(result, nMonte, verbose) {
     n_entrants <- max(1L, n_entrants)
     n_field <- max(1L, n_field)
 
-    sample_pool <- function(pi_vec, n_draws, n_pool, seed_in) {
-      n_total <- as.integer(n_draws * n_pool)
-      # Split into n_total + 1 keys: n_total for sampling, 1 for advancing seed
-      all_keys <- strenv$jax$random$split(seed_in, as.integer(n_total + 1L))
-      # Last key is seed_next (independent of keys used for sampling)
-      seed_next <- strenv$jnp$take(all_keys, -1L, axis = 0L)
-      # First n_total keys for sampling
-      seeds <- strenv$jnp$take(all_keys, strenv$jnp$arange(n_total), axis = 0L)
-      seeds <- strenv$jnp$reshape(seeds, list(n_draws, n_pool, 2L))
-      samples <- strenv$jax$vmap(function(seed_row){
-        strenv$jax$vmap(function(seed_cell){
-          getMNSamp(pi_vec, MNtemp, seed_cell, ParameterizationType, d_locator_use)
-        }, in_axes = list(0L))(seed_row)
-      }, in_axes = list(0L))(seeds)
-      list(samples = samples, seed_next = seed_next)
-    }
-
-    samp_ast <- sample_pool(pi_star_ast, n_samples, n_entrants, SEED)
+    samp_ast <- sample_pool_jax(
+      pi_star_ast, n_samples, n_entrants, SEED,
+      MNtemp, ParameterizationType, d_locator_use,
+      sampler = getMNSamp
+    )
     TSAMP_ast_all <- samp_ast$samples
     SEED <- samp_ast$seed_next
 
-    samp_dag <- sample_pool(pi_star_dag, n_samples, n_entrants, SEED)
+    samp_dag <- sample_pool_jax(
+      pi_star_dag, n_samples, n_entrants, SEED,
+      MNtemp, ParameterizationType, d_locator_use,
+      sampler = getMNSamp
+    )
     TSAMP_dag_all <- samp_dag$samples
     SEED <- samp_dag$seed_next
 
-    samp_ast_field <- sample_pool(SLATE_VEC_ast, n_samples, n_field, SEED)
+    samp_ast_field <- sample_pool_jax(
+      SLATE_VEC_ast, n_samples, n_field, SEED,
+      MNtemp, ParameterizationType, d_locator_use,
+      sampler = getMNSamp
+    )
     TSAMP_ast_field_all <- samp_ast_field$samples
     SEED <- samp_ast_field$seed_next
 
-    samp_dag_field <- sample_pool(SLATE_VEC_dag, n_samples, n_field, SEED)
+    samp_dag_field <- sample_pool_jax(
+      SLATE_VEC_dag, n_samples, n_field, SEED,
+      MNtemp, ParameterizationType, d_locator_use,
+      sampler = getMNSamp
+    )
     TSAMP_dag_field_all <- samp_dag_field$samples
     SEED <- samp_dag_field$seed_next
 
