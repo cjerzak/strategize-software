@@ -2913,6 +2913,32 @@ generate_ModelOutcome_neural <- function(){
             fold_metrics$eval_note <- "oos"
             fold_metrics$n_test <- length(test_idx)
             fold_metrics$n_train <- length(train_idx)
+            fold_metric_items <- if (likelihood == "bernoulli") {
+              Filter(Negate(is.null), list(
+                format_metric("AUC", fold_metrics$auc, 4),
+                format_metric("LogLoss", fold_metrics$log_loss, 4),
+                format_metric("Acc", fold_metrics$accuracy, 3),
+                format_metric("Brier", fold_metrics$brier, 4)
+              ))
+            } else if (likelihood == "categorical") {
+              Filter(Negate(is.null), list(
+                format_metric("LogLoss", fold_metrics$log_loss, 4),
+                format_metric("Acc", fold_metrics$accuracy, 3)
+              ))
+            } else {
+              Filter(Negate(is.null), list(
+                format_metric("RMSE", fold_metrics$rmse, 4),
+                format_metric("MAE", fold_metrics$mae, 4),
+                format_metric("NLL", fold_metrics$nll, 4)
+              ))
+            }
+            if (length(fold_metric_items) > 0L) {
+              message(sprintf("Neural OOS fold %d/%d (%s): %s",
+                              fold,
+                              n_folds_use,
+                              ifelse(pairwise_mode, "pairwise", "single"),
+                              paste(fold_metric_items, collapse = ", ")))
+            }
             by_fold[[fold]] <- fold_metrics
           }
 
