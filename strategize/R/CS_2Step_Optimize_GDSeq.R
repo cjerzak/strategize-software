@@ -15,7 +15,9 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           gd_full_simplex, 
                           quiet = TRUE,
                           optimism = c("none", "ogda", "extragrad", "smp", "rain"),
-                          optimism_coef = 1
+                          optimism_coef = 1,
+                          rain_gamma = 1,
+                          rain_eta = NULL
                           ){
   optimism <- match.arg(optimism)
   optimism_coef <- as.numeric(optimism_coef)
@@ -79,23 +81,45 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
   if (use_rain) {
-    rain_gamma <- 1
-    rain_lambda0 <- as.numeric(optimism_coef)
-    if (!is.finite(rain_lambda0) || rain_lambda0 <= 0) {
-      rain_lambda0 <- 1e-8
+    rain_gamma <- as.numeric(rain_gamma)
+    if (!is.finite(rain_gamma) || rain_gamma < 0) {
+      rain_gamma <- 0
     }
-    rain_L_est <- 1 / max(1e-8, as.numeric(learning_rate_max))
-    if (!is.finite(rain_L_est) || rain_L_est <= 0) {
-      rain_L_est <- 1
+    rain_gamma_step_num <- 1 + rain_gamma
+    rain_gamma_step <- strenv$jnp$array(rain_gamma_step_num, strenv$dtj)
+
+    rain_lambda0_base <- as.numeric(optimism_coef)
+    if (!is.finite(rain_lambda0_base) || rain_lambda0_base <= 0) {
+      rain_lambda0_base <- 1e-8
     }
-    rain_eta <- 1 / (2 * rain_L_est)
+    rain_lambda0_scaled <- rain_lambda0_base
+
+    if (!is.null(rain_eta)) {
+      rain_eta <- as.numeric(rain_eta)
+    } else {
+      rain_eta <- as.numeric(learning_rate_max)
+    }
+    if (!is.finite(rain_eta) || rain_eta <= 0) {
+      rain_eta <- 1e-8
+    }
     rain_eta <- max(1e-8, as.numeric(rain_eta))
 
     rain_weight_sum <- strenv$jnp$array(0., strenv$dtj)
     rain_anchor_sum_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
     rain_anchor_sum_dag <- strenv$jnp$multiply(a_i_dag, strenv$jnp$array(0., strenv$dtj))
     rain_weight_pow <- strenv$jnp$array(1., strenv$dtj)
-    rain_gamma_step <- strenv$jnp$array(1 + rain_gamma, strenv$dtj)
+
+    rain_max_val <- tryCatch({
+      as.numeric(strenv$np$array(strenv$jnp$finfo(strenv$dtj)$max))
+    }, error = function(e) NA_real_)
+    if (!is.finite(rain_max_val) || rain_max_val <= 0) {
+      rain_max_val <- .Machine$double.xmax
+    }
+    rain_rescale_threshold <- rain_max_val * 0.1
+    rain_rescale_target <- sqrt(rain_rescale_threshold)
+    if (!is.finite(rain_rescale_target) || rain_rescale_target <= 0) {
+      rain_rescale_target <- rain_rescale_threshold
+    }
 
     rain_log_step <- function(step_idx) {
       if (step_idx < 5 || step_idx %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) {
@@ -112,10 +136,32 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         a_start_dag <- a_i_dag
       }
 
+      # Rescale weights if they are approaching dtype limits; preserves exact updates.
+      weight_pow_val <- as.numeric(strenv$np$array(rain_weight_pow))
+      if (!is.finite(weight_pow_val)) {
+        weight_pow_val <- rain_rescale_threshold * 10
+      }
+      if (weight_pow_val > rain_rescale_threshold) {
+        scale_factor <- weight_pow_val / rain_rescale_target
+        if (is.finite(scale_factor) && scale_factor > 1) {
+          scale_tf <- strenv$jnp$array(scale_factor, strenv$dtj)
+          rain_weight_pow <- strenv$jnp$divide(rain_weight_pow, scale_tf)
+          rain_weight_sum <- strenv$jnp$divide(rain_weight_sum, scale_tf)
+          rain_anchor_sum_ast <- strenv$jnp$divide(rain_anchor_sum_ast, scale_tf)
+          if (adversarial) {
+            rain_anchor_sum_dag <- strenv$jnp$divide(rain_anchor_sum_dag, scale_tf)
+          }
+          rain_lambda0_scaled <- rain_lambda0_scaled * scale_factor
+        }
+      }
+
+      rain_lambda0_tf <- strenv$jnp$array(rain_lambda0_scaled, strenv$dtj)
       eta_t <- strenv$jnp$array(rain_eta, strenv$dtj)
 
+      SEED <- strenv$jax$random$split(SEED)[[1L]]
+      seed_base <- SEED
+
       if (adversarial) {
-        SEED <- strenv$jax$random$split(SEED)[[1L]]
         base_grad_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
                                     INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                     INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -125,19 +171,18 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                     SLATE_VEC_ast, SLATE_VEC_dag,
                                     LAMBDA,
                                     Q_SIGN_ <- strenv$jnp$array(-1.),
-                                    SEED
+                                    seed_base
                                     )
         loss_dag_val <- base_grad_dag[[1]]
         grad_dag <- base_grad_dag[[2]]
         grad_dag <- strenv$jnp$subtract(
           grad_dag,
-          strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+          strenv$jnp$multiply(rain_lambda0_tf,
                               strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_i_dag),
                                                  rain_anchor_sum_dag))
         )
       }
 
-      SEED <- strenv$jax$random$split(SEED)[[1L]]
       base_grad_ast <- dQ_da_ast( a_i_ast, a_i_dag,
                                   INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                   INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -147,13 +192,13 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                   SLATE_VEC_ast, SLATE_VEC_dag,
                                   LAMBDA,
                                   Q_SIGN_ <- strenv$jnp$array(1.),
-                                  SEED
+                                  seed_base
                                   )
       loss_ast_val <- base_grad_ast[[1]]
       grad_ast <- base_grad_ast[[2]]
       grad_ast <- strenv$jnp$subtract(
         grad_ast,
-        strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+        strenv$jnp$multiply(rain_lambda0_tf,
                             strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_i_ast),
                                                rain_anchor_sum_ast))
       )
@@ -165,8 +210,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
       a_pred_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_ast))
 
+      SEED <- strenv$jax$random$split(SEED)[[1L]]
+      seed_look <- SEED
+
       if (adversarial) {
-        SEED <- strenv$jax$random$split(SEED)[[1L]]
         grad_pred_dag <- dQ_da_dag(  a_pred_ast, a_pred_dag,
                                      INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                      INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -176,17 +223,16 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                      SLATE_VEC_ast, SLATE_VEC_dag,
                                      LAMBDA,
                                      Q_SIGN_ <- strenv$jnp$array(-1.),
-                                     SEED
+                                     seed_look
                                      )[[2]]
         grad_pred_dag <- strenv$jnp$subtract(
           grad_pred_dag,
-          strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+          strenv$jnp$multiply(rain_lambda0_tf,
                               strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_pred_dag),
                                                  rain_anchor_sum_dag))
         )
       }
 
-      SEED <- strenv$jax$random$split(SEED)[[1L]]
       grad_pred_ast <- dQ_da_ast( a_pred_ast, a_pred_dag,
                                   INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                   INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -196,11 +242,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                   SLATE_VEC_ast, SLATE_VEC_dag,
                                   LAMBDA,
                                   Q_SIGN_ <- strenv$jnp$array(1.),
-                                  SEED
+                                  seed_look
                                   )[[2]]
       grad_pred_ast <- strenv$jnp$subtract(
         grad_pred_ast,
-        strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+        strenv$jnp$multiply(rain_lambda0_tf,
                             strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_pred_ast),
                                                rain_anchor_sum_ast))
       )
@@ -220,7 +266,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         strenv$inv_learning_rate_dag_vec[i] <- list(inv_lr_val)
       }
 
-      strenv$rain_lambda_vec[i] <- list(strenv$jnp$multiply(strenv$jnp$array(rain_lambda0, strenv$dtj),
+      strenv$rain_lambda_vec[i] <- list(strenv$jnp$multiply(rain_lambda0_tf,
                                                             rain_weight_pow))
 
       rain_weight_sum <- strenv$jnp$add(rain_weight_sum, rain_weight_pow)
@@ -229,6 +275,23 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       if (adversarial) {
         rain_anchor_sum_dag <- strenv$jnp$add(rain_anchor_sum_dag,
                                               strenv$jnp$multiply(rain_weight_pow, a_start_dag))
+      }
+      weight_pow_val <- as.numeric(strenv$np$array(rain_weight_pow))
+      if (!is.finite(weight_pow_val)) {
+        weight_pow_val <- rain_rescale_threshold * 10
+      }
+      if (weight_pow_val * rain_gamma_step_num > rain_rescale_threshold) {
+        scale_factor <- (weight_pow_val * rain_gamma_step_num) / rain_rescale_target
+        if (is.finite(scale_factor) && scale_factor > 1) {
+          scale_tf <- strenv$jnp$array(scale_factor, strenv$dtj)
+          rain_weight_pow <- strenv$jnp$divide(rain_weight_pow, scale_tf)
+          rain_weight_sum <- strenv$jnp$divide(rain_weight_sum, scale_tf)
+          rain_anchor_sum_ast <- strenv$jnp$divide(rain_anchor_sum_ast, scale_tf)
+          if (adversarial) {
+            rain_anchor_sum_dag <- strenv$jnp$divide(rain_anchor_sum_dag, scale_tf)
+          }
+          rain_lambda0_scaled <- rain_lambda0_scaled * scale_factor
+        }
       }
       rain_weight_pow <- strenv$jnp$multiply(rain_weight_pow, rain_gamma_step)
     }

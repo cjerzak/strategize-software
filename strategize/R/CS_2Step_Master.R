@@ -295,7 +295,11 @@
 #' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
 #'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
 #'   initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multiplicatively by
-#'   \eqn{(1+\gamma)} each outer stage (\eqn{\gamma} fixed internally at 1).
+#'   \eqn{(1+\gamma)} each outer stage.
+#' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+#'   Larger values grow anchor weights faster. Only used when \code{optimism = "rain"}.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
+#'   to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
 #'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
 #'   are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
@@ -482,6 +486,8 @@ strategize       <-          function(
   optim_type = "gd",
                                             optimism = "extragrad",
                                             optimism_coef = 1,
+                                            rain_gamma = 1,
+                                            rain_eta = NULL,
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
   # [1.] ast then dag 
@@ -509,7 +515,9 @@ strategize       <-          function(
     primary_pushforward = primary_pushforward,
     primary_strength = primary_strength,
     primary_n_entrants = primary_n_entrants,
-    primary_n_field = primary_n_field
+    primary_n_field = primary_n_field,
+    rain_gamma = rain_gamma,
+    rain_eta = rain_eta
   )
   if (isTRUE(adversarial) && is.null(competing_group_competition_variable_candidate)) {
     respondent_groups <- as.character(competing_group_variable_respondent)
@@ -1453,7 +1461,9 @@ strategize       <-          function(
       gd_full_simplex             = TRUE,                             # 15
       quiet                       = FALSE,                            # 16
       optimism                    = optimism,                         # 17
-      optimism_coef               = optimism_coef                     # 18
+      optimism_coef               = optimism_coef,                    # 18
+      rain_gamma                  = rain_gamma,                       # 19
+      rain_eta                    = rain_eta                          # 20
     )
     dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
     dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
@@ -1505,7 +1515,9 @@ strategize       <-          function(
                         gd_full_simplex = FALSE, 
                         quiet           = FALSE,
                         optimism        = optimism,                            # 
-                        optimism_coef   = optimism_coef
+                        optimism_coef   = optimism_coef,
+                        rain_gamma      = rain_gamma,
+                        rain_eta        = rain_eta
                         )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -2324,6 +2336,8 @@ strategize       <-          function(
                       "adversarial_model_strategy" = adversarial_model_strategy,
                       "optimism" = optimism,
                       "optimism_coef" = optimism_coef,
+                      "rain_gamma" = rain_gamma,
+                      "rain_eta" = rain_eta,
                       "rain_lambda" = if (!is.null(strenv$rain_lambda_vec)) {
                         unlist(lapply(strenv$rain_lambda_vec, safe_to_numeric))
                       } else {
@@ -2348,6 +2362,8 @@ strategize       <-          function(
                       "adversarial_model_strategy" = adversarial_model_strategy,
                       "optimism" = optimism,
                       "optimism_coef" = optimism_coef,
+                      "rain_gamma" = rain_gamma,
+                      "rain_eta" = rain_eta,
                       "rain_lambda" = rep(NA_real_, nSGD)
                     )
                   })

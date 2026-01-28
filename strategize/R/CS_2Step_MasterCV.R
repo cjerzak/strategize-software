@@ -160,7 +160,11 @@
 #' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
 #'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
 #'   initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \eqn{(1+\gamma)}
-#'   each outer stage (\eqn{\gamma} fixed internally at 1).
+#'   each outer stage.
+#' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+#'   Only used when \code{optimism = "rain"}.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
+#'   to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.
 #' 
 #' @details
 #' \code{cv_strategize} implements a cross-validation routine for
@@ -300,7 +304,9 @@ cv_strategize       <-          function(
                                             nMonte_Qglm = 100L,
                                             optim_type = "gd",
                                             optimism = "extragrad",
-                                            optimism_coef = 1){
+                                            optimism_coef = 1,
+                                            rain_gamma = 1,
+                                            rain_eta = NULL){
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
@@ -407,6 +413,8 @@ cv_strategize       <-          function(
             optim_type = optim_type,
             optimism = optimism,
             optimism_coef = optimism_coef,
+            rain_gamma = rain_gamma,
+            rain_eta = rain_eta,
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             nMonte_adversarial = nMonte_adversarial,
@@ -482,6 +490,8 @@ cv_strategize       <-          function(
                               optim_type = optim_type,
                               optimism = optimism,
                               optimism_coef = optimism_coef,
+                              rain_gamma = rain_gamma,
+                              rain_eta = rain_eta,
                               force_gaussian = force_gaussian,
                               use_regularization = use_regularization,
                               a_init_sd = a_init_sd,

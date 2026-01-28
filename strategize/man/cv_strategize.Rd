@@ -50,7 +50,9 @@ cv_strategize(
   nMonte_Qglm = 100L,
   optim_type = "gd",
   optimism = "extragrad",
-  optimism_coef = 1
+  optimism_coef = 1,
+  rain_gamma = 1,
+  rain_eta = NULL
 )
 }
 \arguments{
@@ -252,7 +254,13 @@ or \code{"none"}. Only supported when \code{use_optax = FALSE}.}
 \item{optimism_coef}{Numeric scalar controlling the magnitude of optimism adjustments. For
 \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
 initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \eqn{(1+\gamma)}
-each outer stage (\eqn{\gamma} fixed internally at 1).}
+each outer stage.}
+
+\item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+Only used when \code{optimism = "rain"}.}
+
+\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
+to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.}
 }
 \value{
 A named list with components:
