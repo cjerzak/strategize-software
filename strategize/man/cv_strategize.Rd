@@ -244,12 +244,14 @@ or \code{"SecondOrder"} for testing or advanced routines.}
 
 \item{optimism}{Character string controlling optimistic / extra-gradient updates for the
 gradient optimizer. Options: \code{"extragrad"} (default), \code{"smp"} (stochastic mirror-prox),
-\code{"ogda"}, \code{"rain"} (anchored extra-gradient with a decaying quadratic anchor penalty),
+\code{"ogda"}, \code{"rain"} (RAIN: Recursive Anchored Iteration with anchored extra-gradient and
+increasing quadratic anchor penalties),
 or \code{"none"}. Only supported when \code{use_optax = FALSE}.}
 
 \item{optimism_coef}{Numeric scalar controlling the magnitude of optimism adjustments. For
 \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
-initial anchor penalty \eqn{\lambda_0} that decays linearly to zero over \code{nSGD} iterations.}
+initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \eqn{(1+\gamma)}
+each outer stage (\eqn{\gamma} fixed internally at 1).}
 }
 \value{
 A named list with components:

@@ -103,6 +103,28 @@ neural_logits_to_q <- function(logits, likelihood){
   strenv$jnp$reshape(mu, list(1L, 1L))
 }
 
+apply_implicit_parameterization_jnp <- function(p_sub,
+                                                implicit = FALSE,
+                                                axis = -1L,
+                                                clip = TRUE) {
+  p_sub <- strenv$jnp$array(p_sub)
+  if (!isTRUE(implicit)) {
+    return(p_sub)
+  }
+  axis_use <- as.integer(axis)
+  ndim <- length(p_sub$shape)
+  if (axis_use < 0L) {
+    axis_use <- axis_use + ndim
+  }
+  holdout <- strenv$jnp$array(1., dtype = p_sub$dtype) -
+    strenv$jnp$sum(p_sub, axis = axis_use)
+  if (isTRUE(clip)) {
+    holdout <- strenv$jnp$clip(holdout, 0., 1.)
+  }
+  holdout_exp <- strenv$jnp$expand_dims(holdout, axis = axis_use)
+  strenv$jnp$concatenate(list(p_sub, holdout_exp), axis = axis_use)
+}
+
 neural_params_from_theta <- function(theta_vec, model_info){
   if (is.null(model_info)) {
     stop("neural_params_from_theta requires a non-null model_info.", call. = FALSE)
