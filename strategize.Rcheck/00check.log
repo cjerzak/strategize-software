@@ -49,7 +49,7 @@ Non-standard file/directory found at top level:
 * checking S3 generic/method consistency ... OK
 * checking replacement functions ... OK
 * checking foreign function calls ... OK
-* checking R code for possible problems ... [11s/11s] NOTE
+* checking R code for possible problems ... NOTE
 generate_ModelOutcome_neural: no visible global function definition for
   ‘tail’
 getQPiStar_gd: no visible binding for global variable
@@ -72,10 +72,10 @@ to your NAMESPACE file.
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [55s/25s] OK
+* checking examples with --run-donttest ... [48s/20s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... [36s/26s] OK
-  Running ‘testthat.R’ [36s/26s]
+* checking tests ... [29s/20s] OK
+  Running ‘testthat.R’ [29s/20s]
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK
