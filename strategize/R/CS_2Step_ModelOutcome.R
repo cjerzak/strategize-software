@@ -518,7 +518,7 @@ generate_ModelOutcome <- function(){
 
 	    # Cross-fitted out-of-sample fit metrics (computed before final full-data fit).
 	    fit_metrics <- NULL
-	    glm_eval_control <- list(enabled = TRUE, n_folds = NULL, seed = 123L)
+	    glm_eval_control <- list(enabled = TRUE, n_folds = NULL, seed = 123L, max_n = NULL)
 	    if (exists("nFolds_glm", inherits = TRUE) &&
 	        is.numeric(nFolds_glm) &&
 	        length(nFolds_glm) == 1L &&
@@ -532,6 +532,10 @@ generate_ModelOutcome <- function(){
 	    eval_seed_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_GLM_EVAL_SEED")))
 	    if (!is.na(eval_seed_env) && eval_seed_env > 0L) {
 	      glm_eval_control$seed <- eval_seed_env
+	    }
+	    eval_max_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_GLM_EVAL_MAX")))
+	    if (!is.na(eval_max_env) && eval_max_env > 0L) {
+	      glm_eval_control$max_n <- eval_max_env
 	    }
 	    eval_folds_env <- suppressWarnings(as.integer(Sys.getenv("STRATEGIZE_GLM_EVAL_FOLDS")))
 	    if (!is.na(eval_folds_env) && eval_folds_env > 0L) {
@@ -558,13 +562,46 @@ generate_ModelOutcome <- function(){
 	      }
 	      if (is.null(cluster_full) || length(cluster_full) != length(y_full)) {
 	        cluster_raw <- NULL
-	        if (exists("respondent_id", inherits = TRUE)) {
-	          cluster_raw <- get("respondent_id", inherits = TRUE)
+
+	        subset_by_indi <- function(x) {
+	          if (is.null(x) || length(x) == 0L) {
+	            return(NULL)
+	          }
+	          x <- as.vector(x)
+	          if (!exists("indi_", inherits = TRUE)) {
+	            return(x)
+	          }
+	          idx <- get("indi_", inherits = TRUE)
+	          if (is.null(idx) || length(idx) == 0L) {
+	            return(x)
+	          }
+	          if (exists("Y_", inherits = TRUE) && length(x) == length(Y_)) {
+	            return(x)
+	          }
+	          max_idx <- suppressWarnings(max(as.integer(idx), na.rm = TRUE))
+	          if (is.finite(max_idx) && length(x) >= max_idx) {
+	            return(x[idx])
+	          }
+	          x
 	        }
-	        if ((is.null(cluster_raw) || length(cluster_raw) == 0L) &&
-	            exists("respondent_task_id", inherits = TRUE)) {
-	          cluster_raw <- get("respondent_task_id", inherits = TRUE)
+
+	        resp_id <- if (exists("respondent_id", inherits = TRUE)) {
+	          subset_by_indi(get("respondent_id", inherits = TRUE))
+	        } else {
+	          NULL
 	        }
+	        task_id <- if (exists("respondent_task_id", inherits = TRUE)) {
+	          subset_by_indi(get("respondent_task_id", inherits = TRUE))
+	        } else {
+	          NULL
+	        }
+
+	        if (!is.null(resp_id) && length(resp_id) > 0L) {
+	          cluster_raw <- resp_id
+	        } else if (!is.null(task_id) && length(task_id) > 0L) {
+	          cluster_raw <- task_id
+	        }
+
 	        if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
 	          cluster_raw <- as.vector(cluster_raw)
 	          if (isTRUE(diff) &&
@@ -593,6 +630,47 @@ generate_ModelOutcome <- function(){
 	      }
 
 	      n_total <- length(y_full)
+	      eval_idx <- seq_len(n_total)
+	      if (!is.null(glm_eval_control$max_n) &&
+	          is.finite(glm_eval_control$max_n) &&
+	          glm_eval_control$max_n > 0L &&
+	          glm_eval_control$max_n < n_total) {
+	        restore_rng_state <- function(old_seed) {
+	          if (is.null(old_seed)) {
+	            if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+	              rm(".Random.seed", envir = .GlobalEnv)
+	            }
+	          } else {
+	            assign(".Random.seed", old_seed, envir = .GlobalEnv)
+	          }
+	        }
+	        old_seed_state <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+	          get(".Random.seed", envir = .GlobalEnv)
+	        } else {
+	          NULL
+	        }
+	        eval_seed <- glm_eval_control$seed
+	        if (is.null(eval_seed) || is.na(eval_seed) || !is.finite(eval_seed)) {
+	          eval_seed <- 123L
+	        }
+	        set.seed(as.integer(eval_seed))
+	        eval_idx <- sample.int(n_total,
+	                               size = as.integer(glm_eval_control$max_n),
+	                               replace = FALSE)
+	        restore_rng_state(old_seed_state)
+	      }
+	      n_eval_total <- length(eval_idx)
+	      subset_note <- if (n_eval_total < n_total) {
+	        sprintf("n=%d/%d", n_eval_total, n_total)
+	      } else {
+	        sprintf("n=%d", n_total)
+	      }
+	      cluster_eval <- if (!is.null(cluster_full) && length(cluster_full) == n_total) {
+	        cluster_full[eval_idx]
+	      } else {
+	        NULL
+	      }
+
 	      n_folds <- glm_eval_control$n_folds
 	      if (is.null(n_folds) || !is.finite(n_folds)) {
 	        n_folds <- 3L
@@ -648,7 +726,7 @@ generate_ModelOutcome <- function(){
 	        list(fold_id = as.integer(fold_id), n_folds = k)
 	      }
 
-	      folds_out <- make_folds(n_total, n_folds, cluster_full, glm_eval_control$seed)
+	      folds_out <- make_folds(n_eval_total, n_folds, cluster_eval, glm_eval_control$seed)
 
 	      compute_auc <- function(y_true, y_score) {
 	        y_true <- as.numeric(y_true)
@@ -710,7 +788,7 @@ generate_ModelOutcome <- function(){
 	        }
 	      }
 
-	      if (!is.null(folds_out) && folds_out$n_folds >= 2L) {
+	      if (!is.null(folds_out) && folds_out$n_folds >= 2L && n_eval_total >= 2L) {
 	        fold_id <- folds_out$fold_id
 	        n_folds_use <- folds_out$n_folds
 
@@ -724,11 +802,14 @@ generate_ModelOutcome <- function(){
 	        family_obj <- if (glm_family == "binomial") stats::binomial() else stats::gaussian()
 
 	        for (fold in seq_len(n_folds_use)) {
-	          test_idx <- which(fold_id == fold)
-	          train_idx <- which(fold_id != fold)
-	          if (!length(test_idx) || !length(train_idx)) {
+	          test_pos <- which(fold_id == fold)
+	          train_pos <- which(fold_id != fold)
+	          if (!length(test_pos) || !length(train_pos)) {
 	            next
 	          }
+
+	          test_idx <- eval_idx[test_pos]
+	          train_idx <- eval_idx[train_pos]
 
 	          X_train <- X_design[train_idx, , drop = FALSE]
 	          y_train <- y_full[train_idx]
@@ -761,25 +842,30 @@ generate_ModelOutcome <- function(){
 	          fold_metrics <- compute_metrics(y_test, pred_fold)
 	          fold_metrics$fold <- fold
 	          fold_metrics$eval_note <- "oos"
+	          fold_metrics$n_test <- length(test_idx)
+	          fold_metrics$n_train <- length(train_idx)
 	          by_fold[[fold]] <- fold_metrics
 	        }
 
-	        overall_metrics <- compute_metrics(y_full, pred_oos)
+	        pred_eval <- pred_oos[eval_idx]
+	        overall_metrics <- compute_metrics(y_full[eval_idx], pred_eval)
 	        overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
+	        overall_metrics$eval_subset <- subset_note
 	        overall_metrics$n_folds <- n_folds_use
 	        overall_metrics$seed <- glm_eval_control$seed
 	        overall_metrics$by_fold <- by_fold
 
 	        if (!is.null(stage_eval) && length(stage_eval) == n_total) {
-	          stage_eval <- as.integer(stage_eval)
+	          stage_eval <- as.integer(stage_eval[eval_idx])
+	          y_eval <- y_full[eval_idx]
 	          by_stage <- list()
 	          if (any(stage_eval == 0L)) {
 	            idx0 <- which(stage_eval == 0L)
-	            by_stage$primary <- compute_metrics(y_full[idx0], pred_oos[idx0])
+	            by_stage$primary <- compute_metrics(y_eval[idx0], pred_eval[idx0])
 	          }
 	          if (any(stage_eval == 1L)) {
 	            idx1 <- which(stage_eval == 1L)
-	            by_stage$general <- compute_metrics(y_full[idx1], pred_oos[idx1])
+	            by_stage$general <- compute_metrics(y_eval[idx1], pred_eval[idx1])
 	          }
 	          if (length(by_stage) > 0L) {
 	            overall_metrics$by_stage <- by_stage
@@ -802,9 +888,10 @@ generate_ModelOutcome <- function(){
 	          ))
 	        }
 	        if (!is.null(fit_metrics) && length(metric_items) > 0L) {
-	          message(sprintf("GLM OOS fit metrics (%s, %s): %s",
+	          message(sprintf("GLM OOS fit metrics (%s, %s, %s): %s",
 	                          mode_note,
 	                          fit_metrics$eval_note,
+	                          subset_note,
 	                          paste(metric_items, collapse = ", ")))
 	        }
 	      }
