@@ -2967,7 +2967,9 @@ generate_ModelOutcome_neural <- function(){
   t0_ <- Sys.time()
   output_only_mode <- identical(tolower(as.character(uncertainty_scope)), "output")
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
+  run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
   SVIParams <- NULL
+  SVIInitValues <- NULL
   svi_loss_curve <- NULL
   if (isTRUE(use_svi)) {
     if (isTRUE(output_only_mode)) {
@@ -3035,13 +3037,22 @@ generate_ModelOutcome_neural <- function(){
           identical(steps_tag, "optimal")) {
         n_obs_svi <- length(Y_use)
         pairwise_scaling <- pairwise_mode
-        if (isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
+        if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+          n_obs_svi <- nrow(pair_mat)
+          pairwise_scaling <- TRUE
+        }
+        if ((is.null(pair_mat) || nrow(pair_mat) < 1L) &&
+            isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
           pair_id_use <- pair_id_
           pair_id_use <- pair_id_use[!is.na(pair_id_use)]
           if (length(pair_id_use) > 0L) {
             n_obs_svi <- length(unique(pair_id_use))
             pairwise_scaling <- TRUE
           }
+        }
+        svi_subsample_method <- subsample_method
+        if (identical(svi_subsample_method, "batch")) {
+          svi_subsample_method <- "full"
         }
         svi_steps <- neural_optimal_svi_steps(
           n_obs = n_obs_svi,
@@ -3058,7 +3069,7 @@ generate_ModelOutcome_neural <- function(){
           use_cross_encoder = use_cross_encoder,
           use_cross_term = use_cross_term,
           batch_size = mcmc_control$batch_size,
-          subsample_method = subsample_method
+          subsample_method = svi_subsample_method
         )
         mcmc_control$svi_steps <- svi_steps
         message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
@@ -3210,28 +3221,68 @@ generate_ModelOutcome_neural <- function(){
       params,
       sample_shape = reticulate::tuple(ai(n_draws))
     )
-    PosteriorDraws <- lapply(posterior_samples, function(x) {
-      strenv$jnp$expand_dims(x, 0L)
-    })
-    names(PosteriorDraws) <- names(posterior_samples)
+    if (isTRUE(run_mcmc_after_svi)) {
+      SVIInitValues <- lapply(posterior_samples, function(x) {
+        strenv$jnp$mean(x, axis = 0L)
+      })
+      names(SVIInitValues) <- names(posterior_samples)
+    } else {
+      PosteriorDraws <- lapply(posterior_samples, function(x) {
+        strenv$jnp$expand_dims(x, 0L)
+      })
+      names(PosteriorDraws) <- names(posterior_samples)
+    }
     message(sprintf("\n SVI Runtime: %.3f min",
                     as.numeric(difftime(Sys.time(), t0_, units = "secs"))/60))
-  } else {
+  }
+
+  if (!isTRUE(use_svi) || isTRUE(run_mcmc_after_svi)) {
     strenv$numpyro$set_host_device_count(mcmc_control$n_chains)
+
+    init_strategy <- NULL
+    if (!is.null(SVIInitValues) && length(SVIInitValues) > 0L) {
+      init_to_value <- NULL
+      if (!is.null(strenv$numpyro$infer) &&
+          reticulate::py_has_attr(strenv$numpyro$infer, "initialization") &&
+          reticulate::py_has_attr(strenv$numpyro$infer$initialization, "init_to_value")) {
+        init_to_value <- strenv$numpyro$infer$initialization$init_to_value
+      } else if (!is.null(strenv$numpyro$infer) &&
+                 reticulate::py_has_attr(strenv$numpyro$infer, "init_to_value")) {
+        init_to_value <- strenv$numpyro$infer$init_to_value
+      }
+      if (!is.null(init_to_value)) {
+        init_strategy <- init_to_value(values = SVIInitValues)
+        message("Initializing MCMC with SVI posterior means...")
+      }
+    }
 
     if (identical(subsample_method, "batch")) {
       message("Enlisting HMCECS kernels for subsampled likelihood...")
+      nuts_kernel <- if (is.null(init_strategy)) {
+        strenv$numpyro$infer$NUTS(model_fn)
+      } else {
+        strenv$numpyro$infer$NUTS(model_fn, init_strategy = init_strategy)
+      }
       kernel <- strenv$numpyro$infer$HMCECS(
-        strenv$numpyro$infer$NUTS(model_fn),
+        nuts_kernel,
         num_blocks = if (!is.null(mcmc_control$num_blocks)) ai(mcmc_control$num_blocks) else ai(4L)
       )
     } else {
       message("Enlisting NUTS kernels for full-data likelihood...")
-      kernel <- strenv$numpyro$infer$NUTS(
-        model_fn,
-        max_tree_depth = ai(8L),
-        target_accept_prob = 0.85
-      )
+      kernel <- if (is.null(init_strategy)) {
+        strenv$numpyro$infer$NUTS(
+          model_fn,
+          max_tree_depth = ai(8L),
+          target_accept_prob = 0.85
+        )
+      } else {
+        strenv$numpyro$infer$NUTS(
+          model_fn,
+          max_tree_depth = ai(8L),
+          target_accept_prob = 0.85,
+          init_strategy = init_strategy
+        )
+      }
     }
 
     sampler <- strenv$numpyro$infer$MCMC(
