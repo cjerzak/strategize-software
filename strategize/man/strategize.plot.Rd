@@ -28,6 +28,9 @@ strategize.plot(
   level_name_transformer = function(x) {
      x
  },
+  label_wrap_width = 30,
+  label_line_height = 0.6,
+  cex.axis = 1.25,
   open_browser = FALSE
 )
 }
@@ -89,6 +92,16 @@ Should accept and return a character vector. Default is identity function.}
 
 \item{level_name_transformer}{Function to transform level names for display.
 Should accept and return a character vector. Default is identity function.}
+
+\item{label_wrap_width}{Numeric. If provided, long level labels are wrapped
+to this character width using line breaks. Default is \code{30}. Use
+\code{NULL} to disable wrapping.}
+
+\item{label_line_height}{Numeric. Additional vertical spacing (in plot units)
+added per wrapped line beyond the first. Default is \code{0.6}.}
+
+\item{cex.axis}{Numeric. Character expansion factor for axis labels.
+Default is \code{1.25}.}
 
 \item{open_browser}{Logical. If \code{TRUE}, opens a browser for debugging.
 Default is \code{FALSE}. Intended for development use only.}
