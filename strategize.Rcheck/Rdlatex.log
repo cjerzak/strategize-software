@@ -235,44 +235,43 @@ Overfull \hbox (15.05844pt too wide) in paragraph at lines 1737--1740
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
 [30] [31]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1879--1882
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1882--1885
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
-[32] [33]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 2030--2033
+[32] [33] [34]
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2043--2046
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
-[34]
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 2067--2070
+
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2080--2083
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
-
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 2099--2101
+[35]
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2112--2114
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
-[35] [36]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 2198--2200
+[36]
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2211--2213
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
-[37] [38] [39] [40] [41] [42] [43] [44]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2705--2719
+[37] [38] [39] [40] [41] [42] [43] [44] [45]
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 2705--2719
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (4.38026pt too wide) in paragraph at lines 2705--2719
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
 m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
-[45]
 No file Rd2.ind.
 [46]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -297,11 +296,11 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (46 pages, 277921 bytes).
+Output written on Rd2.pdf (46 pages, 278468 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (64 entries accepted, 0 rejected).
-Sorting entries....done (386 comparisons).
+Sorting entries....done (387 comparisons).
 Generating output file Rd2.ind....done (83 lines written, 0 warnings).
 Output written in Rd2.ind.
 Transcript written in Rd2.ilg.
@@ -373,22 +372,22 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.out)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
 pdftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/us
 r/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
@@ -544,44 +543,44 @@ Overfull \hbox (15.05844pt too wide) in paragraph at lines 1737--1740
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
 [31] [32]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1879--1882
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1882--1885
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
-[33] [34]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 2030--2033
+[33] [34] [35]
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2043--2046
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
-[35]
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 2067--2070
+
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2080--2083
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
-
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 2099--2101
+[36]
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2112--2114
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
-[36] [37]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 2198--2200
+[37]
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2211--2213
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
-[38] [39] [40] [41] [42] [43] [44] [45]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2705--2719
+[38] [39] [40] [41] [42] [43] [44] [45] [46]
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 2705--2719
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (4.38026pt too wide) in paragraph at lines 2705--2719
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
 m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
-[46]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.ind [47] [48])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.aux)
+
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.ind [47] [48])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -606,11 +605,11 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (48 pages, 286530 bytes).
+Output written on Rd2.pdf (48 pages, 287163 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (64 entries accepted, 0 rejected).
-Sorting entries....done (386 comparisons).
+Sorting entries....done (387 comparisons).
 Generating output file Rd2.ind....done (82 lines written, 0 warnings).
 Output written in Rd2.ind.
 Transcript written in Rd2.ilg.
@@ -682,22 +681,22 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.out)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/
 pdftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/us
 r/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
@@ -853,44 +852,44 @@ Overfull \hbox (15.05844pt too wide) in paragraph at lines 1737--1740
 across can-di-date val-ues of []\T1/zi4/m/n/10 lambda[]\T1/ptm/m/n/10 . See als
 o [][][]\T1/zi4/m/n/10 strategize_onestep[][][]
 [31] [32]
-Overfull \hbox (5.78822pt too wide) in paragraph at lines 1879--1882
+Overfull \hbox (5.78822pt too wide) in paragraph at lines 1882--1885
 []\T1/ptm/m/n/10 Optional char-ac-ter vec-tor of col-ors (one per set of prob-a
 -bil-i-ties in []\T1/zi4/m/n/10 pi_star_list[]\T1/ptm/m/n/10 ).
-[33] [34]
-Overfull \hbox (13.2476pt too wide) in paragraph at lines 2030--2033
+[33] [34] [35]
+Overfull \hbox (13.2476pt too wide) in paragraph at lines 2043--2046
 \T1/ptm/m/n/10 choice de-signs, each row gen-er-ally rep-re-sents a sin-gle pro
 -file or a sin-gle respondent-
-[35]
-Overfull \hbox (30.78735pt too wide) in paragraph at lines 2067--2070
+
+Overfull \hbox (30.78735pt too wide) in paragraph at lines 2080--2083
 []\T1/ptm/m/n/10 A char-ac-ter spec-i-fy-ing the type of penalty for shift-ing 
 prob-a-bil-i-ties (e.g., []\T1/zi4/m/n/10 "LogMaxProb"[]\T1/ptm/m/n/10 ,
-
-Overfull \hbox (3.72823pt too wide) in paragraph at lines 2099--2101
+[36]
+Overfull \hbox (3.72823pt too wide) in paragraph at lines 2112--2114
 []\T1/ptm/m/n/10 A char-ac-ter con-trol-ling the type of gra-di-ent up-dates (e
 .g., []\T1/zi4/m/n/10 "adanorm"[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 "wngrad"[]\T
 1/ptm/m/n/10 ).
-[36] [37]
-Overfull \hbox (24.49965pt too wide) in paragraph at lines 2198--2200
+[37]
+Overfull \hbox (24.49965pt too wide) in paragraph at lines 2211--2213
 []\T1/ptm/m/n/10 Advanced ar-gu-ments like []\T1/zi4/m/n/10 X_factorized[]\T1/p
 tm/m/n/10 , []\T1/zi4/m/n/10 conda_env[]\T1/ptm/m/n/10 , []\T1/zi4/m/n/10 optim
 _method[]\T1/ptm/m/n/10 , or spec-i-fy-ing []\T1/zi4/m/n/10 adaptive_momentum
-[38] [39] [40] [41] [42] [43] [44] [45]
-Overfull \hbox (46.38826pt too wide) in paragraph at lines 2705--2719
+[38] [39] [40] [41] [42] [43] [44] [45] [46]
+Overfull \hbox (46.38826pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 mod-els (de-fault is 1 for a sin-gle dif-fer-en-tial model). Set
  []\T1/zi4/m/n/10 neural_mcmc_control$ModelDims
 
-Overfull \hbox (4.99959pt too wide) in paragraph at lines 2705--2719
+Overfull \hbox (4.99959pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 "batch_vi"), set []\T1/zi4/m/n/10 neural_mcmc_control$optimizer 
 []\T1/ptm/m/n/10 to []\T1/zi4/m/n/10 "adam" []\T1/ptm/m/n/10 (numpyro.optim),
 
-Overfull \hbox (4.38026pt too wide) in paragraph at lines 2705--2719
+Overfull \hbox (4.38026pt too wide) in paragraph at lines 2718--2732
 \T1/ptm/m/n/10 by []\T1/zi4/m/n/10 neural_mcmc_control$svi_lr_schedule []\T1/pt
 m/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm/m/n/10 ), with
-[46]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.ind [47] [48])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmplNa9CE/Rd2pdf149b
-83a690a8e/Rd2.aux) )
+
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.ind [47] [48])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmp0aXUqD/Rd2pdf185d
+07fb92dc1/Rd2.aux) )
 (see the transcript file for additional information)
 pdfTeX warning (dest): name{Rfn.predict} has been referenced but does not exist
 , replaced by a fixed one
@@ -909,8 +908,8 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (48 pages, 286928 bytes).
+Output written on Rd2.pdf (48 pages, 287522 bytes).
 Transcript written on Rd2.log.
 Saving output to ‘strategize-manual.pdf’ ...
 Done
-You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//RtmplNa9CE/Rd2pdf149b83a690a8e'
+You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//Rtmp0aXUqD/Rd2pdf185d07fb92dc1'
