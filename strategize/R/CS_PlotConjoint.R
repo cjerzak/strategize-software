@@ -46,6 +46,13 @@
 #'   Should accept and return a character vector. Default is identity function.
 #' @param level_name_transformer Function to transform level names for display.
 #'   Should accept and return a character vector. Default is identity function.
+#' @param label_wrap_width Numeric. If provided, long level labels are wrapped
+#'   to this character width using line breaks. Default is \code{30}. Use
+#'   \code{NULL} to disable wrapping.
+#' @param label_line_height Numeric. Additional vertical spacing (in plot units)
+#'   added per wrapped line beyond the first. Default is \code{0.6}.
+#' @param cex.axis Numeric. Character expansion factor for axis labels.
+#'   Default is \code{1.25}.
 #' @param open_browser Logical. If \code{TRUE}, opens a browser for debugging.
 #'   Default is \code{FALSE}. Intended for development use only.
 #'
@@ -118,9 +125,21 @@ strategize.plot <- function(pi_star_list=NULL,
                             pch = 20,
                             factor_name_transformer = function(x){x},
                             level_name_transformer = function(x){x},
+                            label_wrap_width = 30,
+                            label_line_height = 0.6,
+                            cex.axis = 1.25,
                             open_browser = FALSE
                             ) {
   if(open_browser){browser()}
+  wrap_labels <- function(labels, width) {
+    if (is.null(width) || is.na(width) || !is.finite(width) || width <= 0) {
+      return(labels)
+    }
+    vapply(labels, function(lbl) {
+      if (is.na(lbl)) return(NA_character_)
+      paste(strwrap(lbl, width = width), collapse = "\n")
+    }, character(1))
+  }
   p_list_ <- lapply(1:length(p_list), function(ze) {
     names(p_list[[ze]]) <- gsub(names(p_list[[ze]]),
                                             pattern = names(p_list)[ze],
@@ -141,7 +160,8 @@ strategize.plot <- function(pi_star_list=NULL,
   par(mfrow = c(nrows, ncols))
 
   for(d_ in 1:length(p_list_)) {
-    ordering_d <- order(unlist(lapply(strsplit(names(pd_ <- p_list_[[d_]]),
+    pd_ <- p_list_[[d_]]
+    ordering_d <- order(unlist(lapply(strsplit(names(pd_),
                                                split = ""),
                                       function(zer) { zer[1] })),
                         decreasing = TRUE)
@@ -149,16 +169,32 @@ strategize.plot <- function(pi_star_list=NULL,
     # Apply factor name transformation
     prettyFactorNames <- factor_name_transformer(names(p_list)[d_])
 
+    # Apply level name transformation (and optional wrapping)
+    raw_level_names <- level_name_transformer(names(pd_)[ordering_d])
+    wrapped_level_names <- wrap_labels(raw_level_names, label_wrap_width)
+    label_line_counts <- vapply(wrapped_level_names, function(lbl) {
+      if (is.na(lbl)) return(1L)
+      length(strsplit(lbl, "\n", fixed = TRUE)[[1]])
+    }, integer(1))
+
     # Preliminary calculations
     zStar <- 1; yScale <- 0.2
     k_EST <- length(pi_star_list)
     p_d <- p_list[[d_]][ordering_d]
     ypos_grid <- expand.grid(k = 1:k_EST, l = 1:length(pd_))
-    ypos_grid$ypos <- (1.5 * ypos_grid$l + (yScale) * (ypos_grid$k - 1)/1)
+    base_gap <- 1.5
+    extra_gap <- ifelse(is.finite(label_line_height), label_line_height, 0)
+    level_gaps <- base_gap + (label_line_counts - 1) * extra_gap
+    level_centers <- cumsum(level_gaps)
+    ypos_grid$ypos <- level_centers[ypos_grid$l] + (yScale) * (ypos_grid$k - 1)/1
 
     # Calculate adaptive margins based on label lengths
-    max_label_len <- max(nchar(names(p_list_[[d_]])), na.rm = TRUE)
-    left_margin <- min(max(5, max_label_len * 0.6), 12)  # Cap at 12
+    max_label_len <- max(vapply(wrapped_level_names, function(lbl) {
+      if (is.na(lbl)) return(0L)
+      max(nchar(strsplit(lbl, "\n", fixed = TRUE)[[1]]))
+    }, integer(1)), na.rm = TRUE)
+    if (!is.finite(max_label_len)) max_label_len <- 0
+    left_margin <- min(max(5, max_label_len * 0.6), 18)  # Cap at 18
 
     # Use provided margins if available, otherwise use adaptive defaults
     if (!is.null(margins_vec)) {
@@ -201,7 +237,7 @@ strategize.plot <- function(pi_star_list=NULL,
     }
     
     # Apply level name transformation
-    my_names <- level_name_transformer(names(p_list_[[d_]][ordering_d]))
+    my_names <- wrapped_level_names
     
     if(plot_names && !add) {
       axis(2,
@@ -211,7 +247,7 @@ strategize.plot <- function(pi_star_list=NULL,
            col = "black",
            lwd = 1,
            las = 2,
-           cex.axis = 1.25)
+           cex.axis = cex.axis)
     }
   }
   
