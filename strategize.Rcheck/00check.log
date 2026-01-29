@@ -11,7 +11,7 @@
 * checking extension type ... Package
 * this is package ‘strategize’ version ‘0.0.1’
 * package encoding: UTF-8
-* checking CRAN incoming feasibility ... [3s/18s] NOTE
+* checking CRAN incoming feasibility ... [3s/14s] NOTE
 Maintainer: ‘Connor T. Jerzak <connor.jerzak@austin.utexas.edu>’
 
 New submission
@@ -72,7 +72,7 @@ to your NAMESPACE file.
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [72s/35s] OK
+* checking examples with --run-donttest ... [71s/34s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
 * checking tests ... [49s/33s] OK
   Running ‘testthat.R’ [49s/33s]
