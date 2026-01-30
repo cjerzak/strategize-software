@@ -73,6 +73,47 @@ getMultinomialSamp_R_DEPRECIATED <- function(
   return( T_star_samp <-  strenv$jnp$concatenate(unlist(T_star_samp),0L) ) 
 }
 
+scale_rain_params <- function(rain_gamma, rain_eta, nSGD,
+                              nSGD_ref = 100L,
+                              autoscale_gamma = TRUE,
+                              autoscale_eta = TRUE) {
+  nSGD_val <- as.numeric(nSGD)
+  if (!is.finite(nSGD_val) || nSGD_val <= 0) {
+    return(list(rain_gamma = rain_gamma, rain_eta = rain_eta))
+  }
+  n_ref <- as.numeric(nSGD_ref)
+  if (!is.finite(n_ref) || n_ref <= 0) {
+    n_ref <- nSGD_val
+  }
+  if (autoscale_gamma) {
+    gamma_base <- as.numeric(rain_gamma)
+    if (!is.finite(gamma_base) || gamma_base < 0) {
+      gamma_base <- 0
+    }
+    if (nSGD_val > n_ref) {
+      gamma_base <- (1 + gamma_base)^(n_ref / nSGD_val) - 1
+    }
+    if (!is.finite(gamma_base) || gamma_base < 0) {
+      gamma_base <- 0
+    }
+    rain_gamma <- gamma_base
+  }
+  if (autoscale_eta) {
+    eta_base <- as.numeric(rain_eta)
+    if (!is.finite(eta_base) || eta_base <= 0) {
+      eta_base <- 1e-8
+    }
+    if (nSGD_val > n_ref) {
+      eta_base <- eta_base * sqrt(n_ref / nSGD_val)
+    }
+    if (!is.finite(eta_base) || eta_base <= 0) {
+      eta_base <- 1e-8
+    }
+    rain_eta <- eta_base
+  }
+  list(rain_gamma = rain_gamma, rain_eta = rain_eta)
+}
+
 getMultinomialSamp_R <- function(pi_value, 
                                  temperature, 
                                  jax_seed, 

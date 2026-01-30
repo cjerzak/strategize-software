@@ -52,7 +52,9 @@ NULL
 #' @param primary_n_entrants Number of entrant candidates sampled per party in multi-candidate primaries
 #' @param primary_n_field Number of field candidates sampled per party in multi-candidate primaries
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN.
+#'   If not supplied, defaults are auto-scaled downward when \code{nSGD} exceeds 100.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+#'   \code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
 #' @return TRUE invisibly if validation passes; stops with error otherwise
 #' @keywords internal
 validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
@@ -74,8 +76,8 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        primary_strength = 1.0,
                                        primary_n_entrants = 1L,
                                        primary_n_field = 1L,
-                                       rain_gamma = 0.05,
-                                       rain_eta = NULL) {
+                                       rain_gamma = 0.01,
+                                       rain_eta = 0.0002) {
 
   # ---- Y validation ----
   if (missing(Y) || is.null(Y)) {
