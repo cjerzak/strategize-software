@@ -49,29 +49,7 @@ NULL
 #'
 #' @export
 create_p_list <- function(W, uniform = FALSE) {
-  if (!is.data.frame(W)) W <- as.data.frame(W)
-
-  if (ncol(W) == 0) {
-    stop("'W' must have at least one column.", call. = FALSE)
-  }
-
-  p_list <- lapply(seq_len(ncol(W)), function(i) {
-    tab <- table(W[[i]])
-    if (uniform) {
-      probs <- rep(1 / length(tab), length(tab))
-    } else {
-      probs <- as.numeric(prop.table(tab))
-    }
-    names(probs) <- names(tab)
-    probs
-  })
-
-  # Use column names if available
-  if (!is.null(colnames(W))) {
-    names(p_list) <- colnames(W)
-  } else {
-    names(p_list) <- paste0("Factor", seq_len(ncol(W)))
-  }
+  p_list <- cs_generate_p_list(W, uniform = uniform)
 
   # Print summary
   message(sprintf("Created p_list with %d factor(s):", length(p_list)))

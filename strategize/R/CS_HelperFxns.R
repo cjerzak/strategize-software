@@ -153,6 +153,84 @@ cs_prepare_W_encoding <- function(W,
   )
 }
 
+cs_generate_p_list <- function(W, uniform = FALSE, factor_names = NULL) {
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  W <- as.data.frame(W)
+  if (ncol(W) == 0) {
+    stop("'W' must have at least one column.", call. = FALSE)
+  }
+
+  p_list <- lapply(seq_len(ncol(W)), function(i) {
+    tab <- table(W[[i]])
+    if (uniform) {
+      probs <- rep(1 / length(tab), length(tab))
+    } else {
+      probs <- as.numeric(prop.table(tab))
+    }
+    names(probs) <- names(tab)
+    probs
+  })
+
+  if (!is.null(factor_names)) {
+    if (length(factor_names) != ncol(W)) {
+      stop(
+        sprintf("'factor_names' must have length %d (got %d).", ncol(W), length(factor_names)),
+        call. = FALSE
+      )
+    }
+    names(p_list) <- factor_names
+  } else if (!is.null(colnames(W))) {
+    names(p_list) <- colnames(W)
+  } else {
+    names(p_list) <- paste0("Factor", seq_len(ncol(W)))
+  }
+
+  p_list
+}
+
+cs_p_list_uniform_deviation <- function(W) {
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  W <- as.data.frame(W)
+  if (ncol(W) == 0) {
+    return(numeric(0))
+  }
+  vapply(seq_len(ncol(W)), function(i) {
+    tab <- table(W[[i]])
+    if (length(tab) == 0) {
+      return(0)
+    }
+    max(abs(prop.table(tab) - 1 / length(tab)))
+  }, numeric(1))
+}
+
+cs_default_p_list <- function(W, threshold = 0.1, warn = TRUE, factor_names = NULL) {
+  threshold <- as.numeric(threshold)
+  if (!is.finite(threshold) || threshold < 0) {
+    stop("'threshold' must be a finite non-negative numeric value.", call. = FALSE)
+  }
+  devs <- cs_p_list_uniform_deviation(W)
+  use_observed <- length(devs) > 0 && any(devs > threshold)
+  p_list <- cs_generate_p_list(W, uniform = !use_observed, factor_names = factor_names)
+  if (isTRUE(warn) && isTRUE(use_observed)) {
+    warning(
+      sprintf("Assignment probabilities deviate from uniform by more than %.2f; using observed frequencies for p_list.", threshold),
+      call. = FALSE
+    )
+  }
+  attr(p_list, "p_list_method") <- if (use_observed) "observed" else "uniform"
+  p_list
+}
+
 toSimplex = function(x){
   x[x>22] <- 22; x[x< -22] <- -22
   sim_x = exp(x)/sum(exp(x))

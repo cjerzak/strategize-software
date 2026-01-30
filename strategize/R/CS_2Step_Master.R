@@ -1073,13 +1073,8 @@ strategize       <-          function(
   message("Done initializing outcome models & starting optimization sequence...")
 
   n_main_params <- nrow( main_info )
-  if(is.null(p_list) & any(apply(W,2,function(zer){
-    max(abs(prop.table(table(zer))-1/length(unique(zer))))})>0.1)){
-    warning("Assignment probabilities don't seem uniform!")
-  }
   if(is.null(p_list)){
-    p_list <- p_list_full <- sapply(factor_levels,function(l_d){list(rep(1/l_d,times=l_d))})
-    p_vec <- unlist(p_list_red <- sapply(factor_levels,function(l_d){rep(1/l_d,times=l_d-1)}))
+    p_list <- cs_default_p_list(W = w_orig, threshold = 0.1, warn = TRUE, factor_names = colnames(W))
   }
   if(!is.null(p_list)){
     if(any(names(p_list) != colnames(W))){  stop("p_list and W not aligned") }
