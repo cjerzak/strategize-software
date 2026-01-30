@@ -660,23 +660,14 @@ strategize       <-          function(
     } }
 
   # ensure naming conventions are correct (i.e. in alignment with p_list if available)
-  if(is.null(p_list) | is.null(names(p_list[[1]]))){
-    names_list <- apply(w_orig,2,function(zer){ list(sort(names(table(as.factor(zer))),decreasing=F)) })
-  }
-  if(!is.null(p_list) & !is.null(names(p_list[[1]]))){
-    names_list <- lapply(p_list,function(zer){ list(names(zer)) })
-  }
-  W <- sapply(1:ncol(W),function(zer){ match(W[,zer],names_list[[zer]][[1]]) })
-  W <- as.matrix(W)
-  if(is.null(colnames(w_orig))){
-    if(!is.null(p_list) && !is.null(names(p_list))){
-      colnames(W) <- names(p_list)
-    } else {
-      colnames(W) <- paste0("V", seq_len(ncol(W)))
-    }
-  } else {
-    colnames(W) <- colnames(w_orig)
-  }
+  enc <- cs_prepare_W_encoding(
+    W = W,
+    p_list = p_list,
+    unknown = "na",
+    align = "none"
+  )
+  W <- enc$W_idx
+  names_list <- enc$names_list
 
   # get info about # of levels per factor
   # When p_list is provided, use its structure to ensure consistent dimensions across CV folds
