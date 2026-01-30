@@ -51,8 +51,8 @@ cv_strategize(
   optim_type = "gd",
   optimism = "extragrad",
   optimism_coef = 1,
-  rain_gamma = 0.05,
-  rain_eta = NULL
+  rain_gamma = 0.01,
+  rain_eta = 0.001
 )
 }
 \arguments{
@@ -199,7 +199,7 @@ the opponent-dependent cross-candidate term in pairwise mode, or set
 that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
-\code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+\code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
 \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
 a scaling-law heuristic based on model/data size; for minibatched VI this
 also scales with \code{batch_size}) and
@@ -257,10 +257,12 @@ initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \
 each outer stage.}
 
 \item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-Only used when \code{optimism = "rain"}.}
+If not supplied, the default is auto-scaled downward when \code{nSGD} exceeds 100
+to keep total anchor growth roughly constant. Only used when \code{optimism = "rain"}.}
 
-\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
-to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.}
+\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+\code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
+Only used when \code{optimism = "rain"}.}
 }
 \value{
 A named list with components:

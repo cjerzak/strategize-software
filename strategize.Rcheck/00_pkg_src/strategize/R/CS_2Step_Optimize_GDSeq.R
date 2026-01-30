@@ -16,8 +16,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           quiet = TRUE,
                           optimism = c("none", "ogda", "extragrad", "smp", "rain"),
                           optimism_coef = 1,
-                          rain_gamma = 0.05,
-                          rain_eta = NULL
+                          rain_gamma = 0.01,
+                          rain_eta = 0.001
                           ){
   optimism <- match.arg(optimism)
   optimism_coef <- as.numeric(optimism_coef)
@@ -81,18 +81,19 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
   if (use_rain) {
+    # Stage-wise RAIN (Alg. 1/10 style): increase lambda per *stage*, not per step.
+    # Within each stage, run extra-gradient updates on a strongly-monotone regularized game
+    # with a fixed anchor; then update the anchor and (optionally) increase lambda.
     rain_gamma <- as.numeric(rain_gamma)
     if (!is.finite(rain_gamma) || rain_gamma < 0) {
       rain_gamma <- 0
     }
     rain_gamma_step_num <- 1 + rain_gamma
-    rain_gamma_step <- strenv$jnp$array(rain_gamma_step_num, strenv$dtj)
 
     rain_lambda0_base <- as.numeric(optimism_coef)
     if (!is.finite(rain_lambda0_base) || rain_lambda0_base <= 0) {
       rain_lambda0_base <- 1e-8
     }
-    rain_lambda0_scaled <- rain_lambda0_base
 
     if (!is.null(rain_eta)) {
       rain_eta <- as.numeric(rain_eta)
@@ -104,35 +105,20 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     }
     rain_eta <- max(1e-8, as.numeric(rain_eta))
 
-    rain_weight_sum <- strenv$jnp$array(0., strenv$dtj)
-    rain_anchor_sum_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
-    rain_anchor_sum_dag <- strenv$jnp$multiply(a_i_dag, strenv$jnp$array(0., strenv$dtj))
-    rain_weight_pow <- strenv$jnp$array(1., strenv$dtj)
-
-    rain_max_val <- tryCatch({
-      as.numeric(strenv$np$array(strenv$jnp$finfo(strenv$dtj)$max))
-    }, error = function(e) NA_real_)
-    if (!is.finite(rain_max_val) || rain_max_val <= 0) {
-      rain_max_val <- .Machine$double.xmax
-    }
-    rain_rescale_threshold <- rain_max_val * 0.1
-    rain_rescale_target <- sqrt(rain_rescale_threshold)
-    if (!is.finite(rain_rescale_target) || rain_rescale_target <= 0) {
-      rain_rescale_target <- rain_rescale_threshold
+    # In the theory, eta = 1/(8L) and stages run for T_s = 16L/lambda_s iterations.
+    # Using the same relationship, we estimate L from eta and cap lambda at L to avoid
+    # per-step exponential growth when stages get too short.
+    L_est <- 1 / (8 * rain_eta)
+    if (!is.finite(L_est) || L_est <= 0) {
+      L_est <- 1 / (8 * 1e-8)
     }
 
-    clamp_scale_factor <- function(scale_factor, rain_max_val, rain_lambda0_scaled) {
-      safe_lambda <- max(rain_lambda0_scaled, 1e-30)
-      max_scale <- rain_max_val / safe_lambda
-      if (!is.finite(max_scale) || max_scale <= 0) {
-        max_scale <- rain_max_val
-      }
-      max_scale <- min(max_scale, rain_max_val)
-      if (!is.finite(scale_factor) || scale_factor <= 0) {
-        return(max_scale)
-      }
-      return(min(scale_factor, max_scale))
-    }
+    eta_t <- strenv$jnp$array(rain_eta, strenv$dtj)
+    inv_lr_val <- strenv$jnp$reciprocal(eta_t)
+
+    # Ensure anchor variables exist even in non-adversarial mode.
+    anchor_ast <- a_i_ast
+    anchor_dag <- a_i_dag
 
     rain_log_step <- function(step_idx) {
       if (step_idx < 5 || step_idx %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) {
@@ -140,175 +126,141 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
     }
 
+    lambda_stage_num <- rain_lambda0_base
     while (i < nSGD) {
-      i <- i + 1
-      rain_log_step(i)
-
-      a_start_ast <- a_i_ast
-      if (adversarial) {
-        a_start_dag <- a_i_dag
+      # Cap lambda at L (per the staged RAIN schedule) so the inner-loop length never collapses to 1.
+      lambda_use_num <- min(lambda_stage_num, L_est)
+      stage_len_num <- ceiling((16 * L_est) / lambda_use_num)
+      if (!is.finite(stage_len_num) || stage_len_num < 1) {
+        stage_len_num <- 1
       }
-
-      # Rescale weights if they are approaching dtype limits; preserves exact updates.
-      weight_pow_val <- as.numeric(strenv$np$array(rain_weight_pow))
-      if (!is.finite(weight_pow_val)) {
-        weight_pow_val <- rain_rescale_threshold * 10
-      }
-      if (weight_pow_val > rain_rescale_threshold) {
-        scale_factor <- weight_pow_val / rain_rescale_target
-        scale_factor <- clamp_scale_factor(scale_factor, rain_max_val, rain_lambda0_scaled)
-        if (is.finite(scale_factor) && scale_factor > 1) {
-          scale_tf <- strenv$jnp$array(scale_factor, strenv$dtj)
-          rain_weight_pow <- strenv$jnp$divide(rain_weight_pow, scale_tf)
-          rain_weight_sum <- strenv$jnp$divide(rain_weight_sum, scale_tf)
-          rain_anchor_sum_ast <- strenv$jnp$divide(rain_anchor_sum_ast, scale_tf)
-          if (adversarial) {
-            rain_anchor_sum_dag <- strenv$jnp$divide(rain_anchor_sum_dag, scale_tf)
-          }
-          rain_lambda0_scaled <- rain_lambda0_scaled * scale_factor
-        }
-      }
-
-      rain_lambda0_tf <- strenv$jnp$array(rain_lambda0_scaled, strenv$dtj)
-      eta_t <- strenv$jnp$array(rain_eta, strenv$dtj)
-
-      SEED <- strenv$jax$random$split(SEED)[[1L]]
-      seed_base <- SEED
-
-      if (adversarial) {
-        base_grad_dag <- dQ_da_dag(  a_i_ast, a_i_dag,
-                                    INTERCEPT_ast_,  COEFFICIENTS_ast_,
-                                    INTERCEPT_dag_,  COEFFICIENTS_dag_,
-                                    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                                    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                                    P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                    SLATE_VEC_ast, SLATE_VEC_dag,
-                                    LAMBDA,
-                                    Q_SIGN_ <- strenv$jnp$array(-1.),
-                                    seed_base
-                                    )
-        loss_dag_val <- base_grad_dag[[1]]
-        grad_dag <- base_grad_dag[[2]]
-        grad_dag <- strenv$jnp$subtract(
-          grad_dag,
-          strenv$jnp$multiply(rain_lambda0_tf,
-                              strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_i_dag),
-                                                 rain_anchor_sum_dag))
-        )
-      }
-
-      base_grad_ast <- dQ_da_ast( a_i_ast, a_i_dag,
-                                  INTERCEPT_ast_,  COEFFICIENTS_ast_,
-                                  INTERCEPT_dag_,  COEFFICIENTS_dag_,
-                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                                  P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                  SLATE_VEC_ast, SLATE_VEC_dag,
-                                  LAMBDA,
-                                  Q_SIGN_ <- strenv$jnp$array(1.),
-                                  seed_base
-                                  )
-      loss_ast_val <- base_grad_ast[[1]]
-      grad_ast <- base_grad_ast[[2]]
-      grad_ast <- strenv$jnp$subtract(
-        grad_ast,
-        strenv$jnp$multiply(rain_lambda0_tf,
-                            strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_i_ast),
-                                               rain_anchor_sum_ast))
-      )
-
-      if (adversarial) {
-        a_pred_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_dag))
+      is_final_stage <- isTRUE(lambda_stage_num >= L_est)
+      stage_len <- if (is_final_stage) {
+        as.integer(nSGD - i)
       } else {
-        a_pred_dag <- a_i_dag
+        as.integer(min(stage_len_num, nSGD - i))
       }
-      a_pred_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_ast))
+      lambda_use_tf <- strenv$jnp$array(lambda_use_num, strenv$dtj)
 
-      SEED <- strenv$jax$random$split(SEED)[[1L]]
-      seed_look <- SEED
+      for (t in seq_len(stage_len)) {
+        i <- i + 1
+        rain_log_step(i)
 
-      if (adversarial) {
-        grad_pred_dag <- dQ_da_dag(  a_pred_ast, a_pred_dag,
-                                     INTERCEPT_ast_,  COEFFICIENTS_ast_,
-                                     INTERCEPT_dag_,  COEFFICIENTS_dag_,
-                                     INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                                     INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                                     P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                     SLATE_VEC_ast, SLATE_VEC_dag,
-                                     LAMBDA,
-                                     Q_SIGN_ <- strenv$jnp$array(-1.),
-                                     seed_look
-                                     )[[2]]
-        grad_pred_dag <- strenv$jnp$subtract(
-          grad_pred_dag,
-          strenv$jnp$multiply(rain_lambda0_tf,
-                              strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_pred_dag),
-                                                 rain_anchor_sum_dag))
-        )
-      }
+        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        seed_base <- SEED
 
-      grad_pred_ast <- dQ_da_ast( a_pred_ast, a_pred_dag,
-                                  INTERCEPT_ast_,  COEFFICIENTS_ast_,
-                                  INTERCEPT_dag_,  COEFFICIENTS_dag_,
-                                  INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-                                  INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-                                  P_VEC_FULL_ast, P_VEC_FULL_dag,
-                                  SLATE_VEC_ast, SLATE_VEC_dag,
-                                  LAMBDA,
-                                  Q_SIGN_ <- strenv$jnp$array(1.),
-                                  seed_look
-                                  )[[2]]
-      grad_pred_ast <- strenv$jnp$subtract(
-        grad_pred_ast,
-        strenv$jnp$multiply(rain_lambda0_tf,
-                            strenv$jnp$subtract(strenv$jnp$multiply(rain_weight_sum, a_pred_ast),
-                                               rain_anchor_sum_ast))
-      )
-
-      if (adversarial) {
-        a_i_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_pred_dag))
-        strenv$grad_mag_dag_vec[i] <- list(strenv$jnp$linalg$norm(grad_pred_dag))
-        strenv$loss_dag_vec[i] <- list(loss_dag_val)
-      }
-      a_i_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_pred_ast))
-      strenv$grad_mag_ast_vec[i] <- list(strenv$jnp$linalg$norm(grad_pred_ast))
-      strenv$loss_ast_vec[i] <- list(loss_ast_val)
-
-      inv_lr_val <- strenv$jnp$reciprocal(eta_t)
-      strenv$inv_learning_rate_ast_vec[i] <- list(inv_lr_val)
-      if (adversarial) {
-        strenv$inv_learning_rate_dag_vec[i] <- list(inv_lr_val)
-      }
-
-      strenv$rain_lambda_vec[i] <- list(strenv$jnp$multiply(rain_lambda0_tf,
-                                                            rain_weight_pow))
-
-      rain_weight_sum <- strenv$jnp$add(rain_weight_sum, rain_weight_pow)
-      rain_anchor_sum_ast <- strenv$jnp$add(rain_anchor_sum_ast,
-                                            strenv$jnp$multiply(rain_weight_pow, a_start_ast))
-      if (adversarial) {
-        rain_anchor_sum_dag <- strenv$jnp$add(rain_anchor_sum_dag,
-                                              strenv$jnp$multiply(rain_weight_pow, a_start_dag))
-      }
-      weight_pow_val <- as.numeric(strenv$np$array(rain_weight_pow))
-      if (!is.finite(weight_pow_val)) {
-        weight_pow_val <- rain_rescale_threshold * 10
-      }
-      if (weight_pow_val * rain_gamma_step_num > rain_rescale_threshold) {
-        scale_factor <- (weight_pow_val * rain_gamma_step_num) / rain_rescale_target
-        scale_factor <- clamp_scale_factor(scale_factor, rain_max_val, rain_lambda0_scaled)
-        if (is.finite(scale_factor) && scale_factor > 1) {
-          scale_tf <- strenv$jnp$array(scale_factor, strenv$dtj)
-          rain_weight_pow <- strenv$jnp$divide(rain_weight_pow, scale_tf)
-          rain_weight_sum <- strenv$jnp$divide(rain_weight_sum, scale_tf)
-          rain_anchor_sum_ast <- strenv$jnp$divide(rain_anchor_sum_ast, scale_tf)
-          if (adversarial) {
-            rain_anchor_sum_dag <- strenv$jnp$divide(rain_anchor_sum_dag, scale_tf)
-          }
-          rain_lambda0_scaled <- rain_lambda0_scaled * scale_factor
+        if (adversarial) {
+          base_grad_dag <- dQ_da_dag(
+            a_i_ast, a_i_dag,
+            INTERCEPT_ast_,  COEFFICIENTS_ast_,
+            INTERCEPT_dag_,  COEFFICIENTS_dag_,
+            INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+            INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+            P_VEC_FULL_ast, P_VEC_FULL_dag,
+            SLATE_VEC_ast, SLATE_VEC_dag,
+            LAMBDA,
+            Q_SIGN_ <- strenv$jnp$array(-1.),
+            seed_base
+          )
+          loss_dag_val <- base_grad_dag[[1]]
+          grad_dag <- base_grad_dag[[2]]
+          grad_dag <- strenv$jnp$subtract(
+            grad_dag,
+            strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_i_dag, anchor_dag))
+          )
         }
+
+        base_grad_ast <- dQ_da_ast(
+          a_i_ast, a_i_dag,
+          INTERCEPT_ast_,  COEFFICIENTS_ast_,
+          INTERCEPT_dag_,  COEFFICIENTS_dag_,
+          INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+          INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+          P_VEC_FULL_ast, P_VEC_FULL_dag,
+          SLATE_VEC_ast, SLATE_VEC_dag,
+          LAMBDA,
+          Q_SIGN_ <- strenv$jnp$array(1.),
+          seed_base
+        )
+        loss_ast_val <- base_grad_ast[[1]]
+        grad_ast <- base_grad_ast[[2]]
+        grad_ast <- strenv$jnp$subtract(
+          grad_ast,
+          strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_i_ast, anchor_ast))
+        )
+
+        if (adversarial) {
+          a_pred_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_dag))
+        } else {
+          a_pred_dag <- a_i_dag
+        }
+        a_pred_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_ast))
+
+        SEED <- strenv$jax$random$split(SEED)[[1L]]
+        seed_look <- SEED
+
+        if (adversarial) {
+          grad_pred_dag <- dQ_da_dag(
+            a_pred_ast, a_pred_dag,
+            INTERCEPT_ast_,  COEFFICIENTS_ast_,
+            INTERCEPT_dag_,  COEFFICIENTS_dag_,
+            INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+            INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+            P_VEC_FULL_ast, P_VEC_FULL_dag,
+            SLATE_VEC_ast, SLATE_VEC_dag,
+            LAMBDA,
+            Q_SIGN_ <- strenv$jnp$array(-1.),
+            seed_look
+          )[[2]]
+          grad_pred_dag <- strenv$jnp$subtract(
+            grad_pred_dag,
+            strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_pred_dag, anchor_dag))
+          )
+        }
+
+        grad_pred_ast <- dQ_da_ast(
+          a_pred_ast, a_pred_dag,
+          INTERCEPT_ast_,  COEFFICIENTS_ast_,
+          INTERCEPT_dag_,  COEFFICIENTS_dag_,
+          INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+          INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+          P_VEC_FULL_ast, P_VEC_FULL_dag,
+          SLATE_VEC_ast, SLATE_VEC_dag,
+          LAMBDA,
+          Q_SIGN_ <- strenv$jnp$array(1.),
+          seed_look
+        )[[2]]
+        grad_pred_ast <- strenv$jnp$subtract(
+          grad_pred_ast,
+          strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_pred_ast, anchor_ast))
+        )
+
+        if (adversarial) {
+          a_i_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_pred_dag))
+          strenv$grad_mag_dag_vec[i] <- list(strenv$jnp$linalg$norm(grad_pred_dag))
+          strenv$loss_dag_vec[i] <- list(loss_dag_val)
+        }
+        a_i_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_pred_ast))
+        strenv$grad_mag_ast_vec[i] <- list(strenv$jnp$linalg$norm(grad_pred_ast))
+        strenv$loss_ast_vec[i] <- list(loss_ast_val)
+
+        strenv$inv_learning_rate_ast_vec[i] <- list(inv_lr_val)
+        if (adversarial) {
+          strenv$inv_learning_rate_dag_vec[i] <- list(inv_lr_val)
+        }
+
+        # Record the stage's lambda (constant within the stage).
+        strenv$rain_lambda_vec[i] <- list(lambda_use_tf)
       }
-      rain_weight_pow <- strenv$jnp$multiply(rain_weight_pow, rain_gamma_step)
+
+      # Stage boundary: update anchors to the last iterate, then grow lambda (up to L).
+      anchor_ast <- a_i_ast
+      if (adversarial) {
+        anchor_dag <- a_i_dag
+      }
+      if (!is_final_stage && lambda_stage_num < L_est) {
+        lambda_stage_num <- lambda_stage_num * rain_gamma_step_num
+      }
     }
   } else {
     while(goOn == F){

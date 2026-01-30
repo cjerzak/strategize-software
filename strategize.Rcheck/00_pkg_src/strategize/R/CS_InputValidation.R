@@ -43,7 +43,7 @@ NULL
 #'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
-#'   \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 #'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
 #' @param diff Difference mode flag
@@ -52,7 +52,9 @@ NULL
 #' @param primary_n_entrants Number of entrant candidates sampled per party in multi-candidate primaries
 #' @param primary_n_field Number of field candidates sampled per party in multi-candidate primaries
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN.
+#'   If not supplied, defaults are auto-scaled downward when \code{nSGD} exceeds 100.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+#'   \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
 #' @return TRUE invisibly if validation passes; stops with error otherwise
 #' @keywords internal
 validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
@@ -74,8 +76,8 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        primary_strength = 1.0,
                                        primary_n_entrants = 1L,
                                        primary_n_field = 1L,
-                                       rain_gamma = 0.05,
-                                       rain_eta = NULL) {
+                                       rain_gamma = 0.01,
+                                       rain_eta = 0.001) {
 
   # ---- Y validation ----
   if (missing(Y) || is.null(Y)) {
@@ -554,9 +556,9 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       !is.null(neural_mcmc_control$optimizer)) {
     optimizer_val <- tolower(as.character(neural_mcmc_control$optimizer))
     if (length(optimizer_val) != 1L || is.na(optimizer_val) ||
-        !optimizer_val %in% c("adam", "adamw", "adabelief")) {
+        !optimizer_val %in% c("adam", "adamw", "adabelief", "muon")) {
       stop(
-        "'neural_mcmc_control$optimizer' must be 'adam', 'adamw', or 'adabelief'.",
+        "'neural_mcmc_control$optimizer' must be 'adam', 'adamw', 'adabelief', or 'muon'.",
         call. = FALSE
       )
     }

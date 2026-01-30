@@ -28,8 +28,8 @@ validate_strategize_inputs(
   primary_strength = 1,
   primary_n_entrants = 1L,
   primary_n_field = 1L,
-  rain_gamma = 0.05,
-  rain_eta = NULL
+  rain_gamma = 0.01,
+  rain_eta = 0.001
 )
 }
 \arguments{
@@ -82,7 +82,7 @@ the opponent-dependent cross-candidate term in pairwise mode, or set
 that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
-\code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+\code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
 \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.}
 
@@ -96,9 +96,11 @@ For variational inference (subsample_method = "batch_vi"), set
 
 \item{primary_n_field}{Number of field candidates sampled per party in multi-candidate primaries}
 
-\item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.}
+\item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+If not supplied, defaults are auto-scaled downward when \code{nSGD} exceeds 100.}
 
-\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN.}
+\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+\code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
 }
 \value{
 TRUE invisibly if validation passes; stops with error otherwise
