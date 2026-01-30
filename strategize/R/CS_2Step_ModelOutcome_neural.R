@@ -3162,7 +3162,7 @@ generate_ModelOutcome_neural <- function(){
     if (length(optimizer_tag) != 1L || is.na(optimizer_tag) || !nzchar(optimizer_tag)) {
       optimizer_tag <- "adam"
     }
-    if (!optimizer_tag %in% c("adam", "adamw", "adabelief")) {
+    if (!optimizer_tag %in% c("adam", "adamw", "adabelief", "muon")) {
       stop(
         sprintf("Unknown optimizer '%s' for SVI.", optimizer_tag),
         call. = FALSE
@@ -3295,6 +3295,21 @@ generate_ModelOutcome_neural <- function(){
       } else {
         stop(
           "optimizer='adamw' requested, but neither numpyro.optim.AdamW nor optax.adamw is available.",
+          call. = FALSE
+        )
+      }
+    } else if (optimizer_tag == "muon") {
+      if (reticulate::py_has_attr(strenv$optax, "contrib") &&
+          reticulate::py_has_attr(strenv$optax$contrib, "muon")) {
+        optax_optim <- strenv$optax$contrib$muon(learning_rate = lr_schedule)
+        if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
+          strenv$numpyro$optim$optax_to_numpyro(optax_optim)
+        } else {
+          optax_optim
+        }
+      } else {
+        stop(
+          "optimizer='muon' requested, but optax.contrib.muon is unavailable.",
           call. = FALSE
         )
       }

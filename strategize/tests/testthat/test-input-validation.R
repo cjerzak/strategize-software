@@ -389,7 +389,7 @@ test_that("validate_strategize_inputs accepts optimizer options", {
 
   Y <- c(1, 0, 1, 0)
   W <- data.frame(Gender = c("M", "F", "M", "F"))
-  allowed <- c("adam", "adamw", "adabelief")
+  allowed <- c("adam", "adamw", "adabelief", "muon")
 
   for (val in allowed) {
     expect_true(
