@@ -97,7 +97,7 @@ For variational inference (subsample_method = "batch_vi"), set
 \item{primary_n_field}{Number of field candidates sampled per party in multi-candidate primaries}
 
 \item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-Defaults are auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
+If not supplied, defaults are auto-scaled downward when \code{nSGD} exceeds 100.}
 
 \item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
 \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
