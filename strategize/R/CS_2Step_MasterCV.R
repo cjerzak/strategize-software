@@ -162,9 +162,11 @@
 #'   initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \eqn{(1+\gamma)}
 #'   each outer stage.
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
+#'   If not supplied, the default is auto-scaled downward when \code{nSGD} exceeds 100
+#'   to keep total anchor growth roughly constant. Only used when \code{optimism = "rain"}.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+#'   \code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
 #'   Only used when \code{optimism = "rain"}.
-#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
-#'   to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.
 #' 
 #' @details
 #' \code{cv_strategize} implements a cross-validation routine for
@@ -305,12 +307,15 @@ cv_strategize       <-          function(
                                             optim_type = "gd",
                                             optimism = "extragrad",
                                             optimism_coef = 1,
-                                            rain_gamma = 0.05,
-                                            rain_eta = NULL){
+                                            rain_gamma = 0.01,
+                                            rain_eta = 0.0002){
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
   }
+
+  autoscale_rain_gamma <- missing(rain_gamma)
+  autoscale_rain_eta <- missing(rain_eta)
   # initialize environment
   if(!"jnp" %in% ls(envir = strenv)) {
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
@@ -381,8 +386,7 @@ cv_strategize       <-          function(
           if(type_ == 2){type_<-2}
           
           # strategize call
-          Qoptimized__[[split_]][[type_]] <- strategize(
-
+          strategize_args <- list(
             # input data
             Y = Y[use_indices],
             W = W[use_indices,],
@@ -413,8 +417,6 @@ cv_strategize       <-          function(
             optim_type = optim_type,
             optimism = optimism,
             optimism_coef = optimism_coef,
-            rain_gamma = rain_gamma,
-            rain_eta = rain_eta,
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             nMonte_adversarial = nMonte_adversarial,
@@ -430,6 +432,13 @@ cv_strategize       <-          function(
             conda_env = conda_env,
             conda_env_required = conda_env_required
           )
+          if (!autoscale_rain_gamma) {
+            strategize_args$rain_gamma <- rain_gamma
+          }
+          if (!autoscale_rain_eta) {
+            strategize_args$rain_eta <- rain_eta
+          }
+          Qoptimized__[[split_]][[type_]] <- do.call(strategize, strategize_args)
         }
         
         # out of sample test of pi* on new estimates 
@@ -463,53 +472,60 @@ cv_strategize       <-          function(
   }
 
   # final output
-  gc(); strenv$py_gc$collect(); Qoptimized_ <- strategize(
-                              # input data
-                              Y = Y,
-                              W = W,
-                              X = ifelse(K > 1, yes = list(X), no = list(NULL))[[1]],
-                              nSGD = nSGD,
-                              penalty_type = penalty_type,
-                              varcov_cluster_variable = varcov_cluster_variable,
-                              competing_group_variable_respondent = competing_group_variable_respondent,
-                              competing_group_variable_candidate = competing_group_variable_candidate,
-                              competing_group_competition_variable_candidate = competing_group_competition_variable_candidate,
-                              pair_id = pair_id,
-                              respondent_id = respondent_id,
-                              respondent_task_id = respondent_task_id,
-                              profile_order = profile_order,
-                              p_list = p_list,
-                              slate_list = slate_list, 
-                              use_optax = use_optax, 
-                              lambda = lambda__, # this lambda is the one chosen via CV
+  gc(); strenv$py_gc$collect();
+  strategize_args <- list(
+    # input data
+    Y = Y,
+    W = W,
+    X = ifelse(K > 1, yes = list(X), no = list(NULL))[[1]],
+    nSGD = nSGD,
+    penalty_type = penalty_type,
+    varcov_cluster_variable = varcov_cluster_variable,
+    competing_group_variable_respondent = competing_group_variable_respondent,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_competition_variable_candidate = competing_group_competition_variable_candidate,
+    pair_id = pair_id,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    profile_order = profile_order,
+    p_list = p_list,
+    slate_list = slate_list, 
+    use_optax = use_optax, 
+    lambda = lambda__, # this lambda is the one chosen via CV
 
-                              # hyperparameters
-                              outcome_model_type = outcome_model_type,
-                              neural_mcmc_control = neural_mcmc_control,
-                              temperature = temperature, 
-                              optim_type = optim_type,
-                              optimism = optimism,
-                              optimism_coef = optimism_coef,
-                              rain_gamma = rain_gamma,
-                              rain_eta = rain_eta,
-                              force_gaussian = force_gaussian,
-                              use_regularization = use_regularization,
-                              a_init_sd = a_init_sd,
-                              compute_se = compute_se,
-                              K = K,
-                              nMonte_adversarial = nMonte_adversarial,
-                              primary_pushforward = primary_pushforward,
-                              primary_strength = primary_strength,
-                              primary_n_entrants = primary_n_entrants,
-                              primary_n_field = primary_n_field,
-                              adversarial_model_strategy = adversarial_model_strategy,
-                              partial_pooling = partial_pooling,
-                              partial_pooling_strength = partial_pooling_strength,
-                              nFolds_glm = nFolds_glm,
-                              diff = diff,
-                              adversarial = adversarial,
-                              conda_env = conda_env,
-                              conda_env_required = conda_env_required)
+    # hyperparameters
+    outcome_model_type = outcome_model_type,
+    neural_mcmc_control = neural_mcmc_control,
+    temperature = temperature, 
+    optim_type = optim_type,
+    optimism = optimism,
+    optimism_coef = optimism_coef,
+    force_gaussian = force_gaussian,
+    use_regularization = use_regularization,
+    a_init_sd = a_init_sd,
+    compute_se = compute_se,
+    K = K,
+    nMonte_adversarial = nMonte_adversarial,
+    primary_pushforward = primary_pushforward,
+    primary_strength = primary_strength,
+    primary_n_entrants = primary_n_entrants,
+    primary_n_field = primary_n_field,
+    adversarial_model_strategy = adversarial_model_strategy,
+    partial_pooling = partial_pooling,
+    partial_pooling_strength = partial_pooling_strength,
+    nFolds_glm = nFolds_glm,
+    diff = diff,
+    adversarial = adversarial,
+    conda_env = conda_env,
+    conda_env_required = conda_env_required
+  )
+  if (!autoscale_rain_gamma) {
+    strategize_args$rain_gamma <- rain_gamma
+  }
+  if (!autoscale_rain_eta) {
+    strategize_args$rain_eta <- rain_eta
+  }
+  Qoptimized_ <- do.call(strategize, strategize_args)
   message("Done with strategic analysis!")
   return(c(Qoptimized_,
            list(lambda = lambda__,

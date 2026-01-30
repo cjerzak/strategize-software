@@ -69,8 +69,8 @@
 #'   optim_type = "gd",
 #'   optimism = "extragrad",
 #'   optimism_coef = 1,
-#'   rain_gamma = 0.05,
-#'   rain_eta = NULL,
+#'   rain_gamma = 0.01,
+#'   rain_eta = 0.0002,
 #'   compute_hessian = TRUE,
 #'   hessian_max_dim = 50L
 #' )
@@ -299,9 +299,12 @@
 #'   initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multiplicatively by
 #'   \eqn{(1+\gamma)} each outer stage.
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-#'   Larger values grow anchor weights faster. Only used when \code{optimism = "rain"}.
-#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
-#'   to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.
+#'   Larger values grow anchor weights faster. If not supplied, the default is
+#'   auto-scaled downward when \code{nSGD} exceeds 100 to keep total anchor growth
+#'   roughly constant. Only used when \code{optimism = "rain"}.
+#' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+#'   \code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
+#'   supplied. Only used when \code{optimism = "rain"}.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
 #'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
 #'   are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
@@ -485,11 +488,11 @@ strategize       <-          function(
                                             presaved_outcome_model = FALSE,
                                             outcome_model_key = NULL,
                                             use_optax = FALSE,
-  optim_type = "gd",
+                                            optim_type = "gd",
                                             optimism = "extragrad",
                                             optimism_coef = 1,
-                                            rain_gamma = 0.05,
-                                            rain_eta = NULL,
+                                            rain_gamma = 0.01,
+                                            rain_eta = 0.0002,
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
   # [1.] ast then dag 
@@ -498,6 +501,9 @@ strategize       <-          function(
   # [2.] when simplex constrained with holdout, LAST entry is held out 
   
   message("-------------\nstrategize() call has begun...")
+
+  autoscale_rain_gamma <- missing(rain_gamma)
+  autoscale_rain_eta <- missing(rain_eta)
 
   # Input validation with clear error messages
   validate_strategize_inputs(
@@ -521,6 +527,19 @@ strategize       <-          function(
     rain_gamma = rain_gamma,
     rain_eta = rain_eta
   )
+
+  if (autoscale_rain_gamma || autoscale_rain_eta) {
+    scaled_rain <- scale_rain_params(
+      rain_gamma = rain_gamma,
+      rain_eta = rain_eta,
+      nSGD = nSGD,
+      nSGD_ref = 100L,
+      autoscale_gamma = autoscale_rain_gamma,
+      autoscale_eta = autoscale_rain_eta
+    )
+    rain_gamma <- scaled_rain$rain_gamma
+    rain_eta <- scaled_rain$rain_eta
+  }
   if (isTRUE(adversarial) && is.null(competing_group_competition_variable_candidate)) {
     respondent_groups <- as.character(competing_group_variable_respondent)
     candidate_groups <- as.character(competing_group_variable_candidate)

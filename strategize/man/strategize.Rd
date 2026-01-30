@@ -56,8 +56,8 @@ strategize(
   optim_type = "gd",
   optimism = "extragrad",
   optimism_coef = 1,
-  rain_gamma = 0.05,
-  rain_eta = NULL,
+  rain_gamma = 0.01,
+  rain_eta = 0.0002,
   compute_hessian = TRUE,
   hessian_max_dim = 50L
 )
@@ -293,10 +293,13 @@ initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multipli
 \eqn{(1+\gamma)} each outer stage.}
 
 \item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
-Larger values grow anchor weights faster. Only used when \code{optimism = "rain"}.}
+Larger values grow anchor weights faster. If not supplied, the default is
+auto-scaled downward when \code{nSGD} exceeds 100 to keep total anchor growth
+roughly constant. Only used when \code{optimism = "rain"}.}
 
-\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. If \code{NULL}, defaults
-to \code{learning_rate_max}. Only used when \code{optimism = "rain"}.}
+\item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
+\code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
+supplied. Only used when \code{optimism = "rain"}.}
 
 \item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
 geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
