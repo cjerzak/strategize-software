@@ -165,7 +165,7 @@
 #'   If not supplied, the default is auto-scaled downward when \code{nSGD} exceeds 100
 #'   to keep total anchor growth roughly constant. Only used when \code{optimism = "rain"}.
 #' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
-#'   \code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
+#'   \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
 #'   Only used when \code{optimism = "rain"}.
 #' 
 #' @details
@@ -308,7 +308,7 @@ cv_strategize       <-          function(
                                             optimism = "extragrad",
                                             optimism_coef = 1,
                                             rain_gamma = 0.01,
-                                            rain_eta = 0.0002){
+                                            rain_eta = 0.001){
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")

@@ -29,7 +29,7 @@ validate_strategize_inputs(
   primary_n_entrants = 1L,
   primary_n_field = 1L,
   rain_gamma = 0.01,
-  rain_eta = 0.0002
+  rain_eta = 0.001
 )
 }
 \arguments{
@@ -100,7 +100,7 @@ For variational inference (subsample_method = "batch_vi"), set
 Defaults are auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
 
 \item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
-\code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
+\code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
 }
 \value{
 TRUE invisibly if validation passes; stops with error otherwise
