@@ -9,13 +9,7 @@
 NULL
 
 cs2step_build_names_list <- function(W) {
-  W <- as.data.frame(W)
-  out <- lapply(seq_len(ncol(W)), function(j) {
-    levs <- sort(names(table(as.factor(W[[j]]))), decreasing = FALSE)
-    list(levs)
-  })
-  names(out) <- if (!is.null(colnames(W))) colnames(W) else paste0("V", seq_len(ncol(W)))
-  out
+  cs_build_names_list(W = W)
 }
 
 cs2step_align_W <- function(W, factor_names) {
@@ -43,35 +37,14 @@ cs2step_align_W <- function(W, factor_names) {
 }
 
 cs2step_encode_W_indices <- function(W, names_list, unknown = c("holdout", "error"), pad_unknown = 0L) {
-  unknown <- match.arg(unknown)
-  W <- as.data.frame(W)
-  factor_names <- names(names_list)
-  if (is.null(colnames(W))) {
-    stop("'W' must have column names.", call. = FALSE)
-  }
-  W <- cs2step_align_W(W, factor_names)
-
-  W_idx <- sapply(seq_along(factor_names), function(j) {
-    levs <- names_list[[j]][[1]]
-    idx <- match(as.character(W[[j]]), levs)
-    if (unknown == "error" && any(is.na(idx))) {
-      bad <- unique(as.character(W[[j]])[is.na(idx)])
-      stop(
-        sprintf("Unseen levels in factor '%s': %s",
-                factor_names[[j]],
-                paste(bad, collapse = ", ")),
-        call. = FALSE
-      )
-    }
-    if (unknown == "holdout") {
-      holdout <- length(levs) + as.integer(pad_unknown)
-      idx[is.na(idx)] <- holdout
-    }
-    as.integer(idx)
-  })
-  W_idx <- as.matrix(W_idx)
-  colnames(W_idx) <- factor_names
-  W_idx
+  enc <- cs_encode_W_indices(
+    W = W,
+    names_list = names_list,
+    unknown = unknown,
+    pad_unknown = pad_unknown,
+    align = "by_name"
+  )
+  enc$W_idx
 }
 
 cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
