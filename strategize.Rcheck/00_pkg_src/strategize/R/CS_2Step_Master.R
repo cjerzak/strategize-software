@@ -660,23 +660,14 @@ strategize       <-          function(
     } }
 
   # ensure naming conventions are correct (i.e. in alignment with p_list if available)
-  if(is.null(p_list) | is.null(names(p_list[[1]]))){
-    names_list <- apply(w_orig,2,function(zer){ list(sort(names(table(as.factor(zer))),decreasing=F)) })
-  }
-  if(!is.null(p_list) & !is.null(names(p_list[[1]]))){
-    names_list <- lapply(p_list,function(zer){ list(names(zer)) })
-  }
-  W <- sapply(1:ncol(W),function(zer){ match(W[,zer],names_list[[zer]][[1]]) })
-  W <- as.matrix(W)
-  if(is.null(colnames(w_orig))){
-    if(!is.null(p_list) && !is.null(names(p_list))){
-      colnames(W) <- names(p_list)
-    } else {
-      colnames(W) <- paste0("V", seq_len(ncol(W)))
-    }
-  } else {
-    colnames(W) <- colnames(w_orig)
-  }
+  enc <- cs_prepare_W_encoding(
+    W = W,
+    p_list = p_list,
+    unknown = "na",
+    align = "none"
+  )
+  W <- enc$W_idx
+  names_list <- enc$names_list
 
   # get info about # of levels per factor
   # When p_list is provided, use its structure to ensure consistent dimensions across CV folds
@@ -1082,13 +1073,8 @@ strategize       <-          function(
   message("Done initializing outcome models & starting optimization sequence...")
 
   n_main_params <- nrow( main_info )
-  if(is.null(p_list) & any(apply(W,2,function(zer){
-    max(abs(prop.table(table(zer))-1/length(unique(zer))))})>0.1)){
-    warning("Assignment probabilities don't seem uniform!")
-  }
   if(is.null(p_list)){
-    p_list <- p_list_full <- sapply(factor_levels,function(l_d){list(rep(1/l_d,times=l_d))})
-    p_vec <- unlist(p_list_red <- sapply(factor_levels,function(l_d){rep(1/l_d,times=l_d-1)}))
+    p_list <- cs_default_p_list(W = w_orig, threshold = 0.1, warn = TRUE, factor_names = colnames(W))
   }
   if(!is.null(p_list)){
     if(any(names(p_list) != colnames(W))){  stop("p_list and W not aligned") }

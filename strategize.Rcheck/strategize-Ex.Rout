@@ -768,42 +768,42 @@ Done with strategic analysis!
 [1] 0.01
 > print(cv_result$CVInfo)       # Performance at each lambda
   lambda      Qhat         Qse selected   l_bound   u_bound
-1   0.01 0.4584590 0.003444552        1 0.4527933 0.4641248
-2   0.10 0.4521270 0.026622176        0 0.4083374 0.4959166
-3   0.50 0.4421884 0.027681470        0 0.3966565 0.4877204
-4   1.00 0.4405816 0.028149948        0 0.3942791 0.4868842
+1   0.01 0.4588162 0.001998499        1 0.4555290 0.4621035
+2   0.10 0.4522779 0.026413515        0 0.4088315 0.4957243
+3   0.50 0.4422550 0.027618930        0 0.3968259 0.4876841
+4   1.00 0.4402832 0.028344154        0 0.3936612 0.4869052
 > print(cv_result$pi_star_point) # Optimal distribution
 $k1
 $k1$Gender
    Female      Male 
-0.6520199 0.3479801 
+0.6791185 0.3208815 
 
 $k1$Age
         35         50         65 
-0.81183511 0.04789348 0.14027143 
+0.82548243 0.04748519 0.12703240 
 
 $k1$Party
-      Dem       Rep 
-0.3721826 0.6278174 
+     Dem      Rep 
+0.355786 0.644214 
 
 
 $k2
 $k2$Gender
-  Female     Male 
-0.477775 0.522225 
+Female   Male 
+ 0.505  0.495 
 
 $k2$Age
-      35       50       65 
-0.314375 0.329225 0.356400 
+   35    50    65 
+0.335 0.335 0.330 
 
 $k2$Party
-     Dem      Rep 
-0.512425 0.487575 
+  Dem   Rep 
+0.505 0.495 
 
 
 > print(cv_result$Q_point)       # Expected outcome
-          [,1]
-[1,] 0.4798898
+         [,1]
+[1,] 0.479793
 > ## End(No test)
 > 
 > 
@@ -1322,7 +1322,7 @@ $conf_level
 > cleanEx()
 > options(digits = 7L)
 > base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
-Time elapsed:  52.774 1.785 28.508 1.217 0.396 
+Time elapsed:  53.291 1.801 28.138 1.173 0.348 
 > grDevices::dev.off()
 null device 
           1 

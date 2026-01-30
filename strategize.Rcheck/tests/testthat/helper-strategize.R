@@ -170,21 +170,7 @@ add_adversarial_structure <- function(base_data, seed = 42) {
 #' @param W Factor matrix from generate_test_data
 #' @return List of named probability vectors for each factor
 generate_test_p_list <- function(W) {
-  n_factors <- ncol(W)
-
-  p_list <- lapply(seq_len(n_factors), function(d) {
-    factor_col <- W[, d]
-    levels_d <- sort(unique(factor_col))
-    n_levels <- length(levels_d)
-
-    # Create uniform probability vector (named)
-    probs <- rep(1 / n_levels, n_levels)
-    names(probs) <- levels_d
-    probs
-  })
-
-  names(p_list) <- colnames(W)
-  p_list
+  suppressMessages(create_p_list(W, uniform = TRUE))
 }
 
 # =============================================================================

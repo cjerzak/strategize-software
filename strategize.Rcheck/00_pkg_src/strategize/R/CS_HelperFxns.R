@@ -6,6 +6,231 @@ f2n <- function(x){as.numeric(as.character(x))}
 
 ess_fxn <- function(wz){ sum(wz)^2 / sum(wz^2)}
 
+cs_build_names_list <- function(W, p_list = NULL) {
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  W <- as.data.frame(W)
+  use_plist <- !is.null(p_list) &&
+    length(p_list) > 0 &&
+    !is.null(p_list[[1]]) &&
+    !is.null(names(p_list[[1]]))
+  if (use_plist) {
+    names_list <- lapply(p_list, function(zer) list(names(zer)))
+    if (!is.null(names(p_list))) {
+      names(names_list) <- names(p_list)
+    }
+  } else {
+    names_list <- lapply(seq_len(ncol(W)), function(j) {
+      levs <- sort(names(table(as.factor(W[[j]]))), decreasing = FALSE)
+      list(levs)
+    })
+    if (!is.null(colnames(W))) {
+      names(names_list) <- colnames(W)
+    }
+  }
+  if (is.null(names(names_list))) {
+    names(names_list) <- if (!is.null(colnames(W))) {
+      colnames(W)
+    } else {
+      paste0("V", seq_len(ncol(W)))
+    }
+  }
+  names_list
+}
+
+cs_encode_W_indices <- function(W,
+                                names_list,
+                                unknown = c("na", "holdout", "error"),
+                                pad_unknown = 0L,
+                                align = c("none", "by_name")) {
+  unknown <- match.arg(unknown)
+  align <- match.arg(align)
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  if (is.null(names_list) || length(names_list) == 0) {
+    stop("'names_list' must be a non-empty list.", call. = FALSE)
+  }
+
+  W_df <- as.data.frame(W)
+  factor_names <- NULL
+  names_list_names <- names(names_list)
+
+  if (align == "by_name") {
+    if (is.null(names_list_names)) {
+      if (is.null(colnames(W_df))) {
+        stop("'W' must have column names to align with names_list.", call. = FALSE)
+      }
+      names_list_names <- colnames(W_df)
+      names(names_list) <- names_list_names
+    }
+    factor_names <- names_list_names
+    if (is.null(colnames(W_df))) {
+      stop("'W' must have column names to align with names_list.", call. = FALSE)
+    }
+    missing_cols <- setdiff(factor_names, colnames(W_df))
+    if (length(missing_cols) > 0) {
+      stop(
+        "Missing factor columns in newdata: ",
+        paste(missing_cols, collapse = ", "),
+        call. = FALSE
+      )
+    }
+    W_df <- W_df[, factor_names, drop = FALSE]
+  } else {
+    if (!is.null(colnames(W_df))) {
+      factor_names <- colnames(W_df)
+    } else if (!is.null(names_list_names)) {
+      factor_names <- names_list_names
+    } else {
+      factor_names <- paste0("V", seq_len(ncol(W_df)))
+    }
+    if (is.null(names_list_names)) {
+      names(names_list) <- factor_names
+    }
+    if (is.null(colnames(W_df))) {
+      colnames(W_df) <- factor_names
+    }
+  }
+
+  if (ncol(W_df) != length(names_list)) {
+    stop(
+      sprintf("'W' has %d columns but names_list has %d element(s).",
+              ncol(W_df), length(names_list)),
+      call. = FALSE
+    )
+  }
+
+  W_idx <- sapply(seq_along(names_list), function(j) {
+    levs <- names_list[[j]]
+    if (is.list(levs)) {
+      levs <- levs[[1]]
+    }
+    idx <- match(as.character(W_df[[j]]), levs)
+    if (unknown == "error" && any(is.na(idx))) {
+      bad <- unique(as.character(W_df[[j]])[is.na(idx)])
+      stop(
+        sprintf("Unseen levels in factor '%s': %s",
+                factor_names[[j]],
+                paste(bad, collapse = ", ")),
+        call. = FALSE
+      )
+    }
+    if (unknown == "holdout") {
+      holdout <- length(levs) + as.integer(pad_unknown)
+      idx[is.na(idx)] <- holdout
+    }
+    as.integer(idx)
+  })
+
+  W_idx <- as.matrix(W_idx)
+  colnames(W_idx) <- factor_names
+  list(W_idx = W_idx, names_list = names_list, factor_names = factor_names, W_df = W_df)
+}
+
+cs_prepare_W_encoding <- function(W,
+                                  p_list = NULL,
+                                  names_list = NULL,
+                                  unknown = c("na", "holdout", "error"),
+                                  pad_unknown = 0L,
+                                  align = c("none", "by_name")) {
+  if (is.null(names_list)) {
+    names_list <- cs_build_names_list(W = W, p_list = p_list)
+  }
+  cs_encode_W_indices(
+    W = W,
+    names_list = names_list,
+    unknown = unknown,
+    pad_unknown = pad_unknown,
+    align = align
+  )
+}
+
+cs_generate_p_list <- function(W, uniform = FALSE, factor_names = NULL) {
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  W <- as.data.frame(W)
+  if (ncol(W) == 0) {
+    stop("'W' must have at least one column.", call. = FALSE)
+  }
+
+  p_list <- lapply(seq_len(ncol(W)), function(i) {
+    tab <- table(W[[i]])
+    if (uniform) {
+      probs <- rep(1 / length(tab), length(tab))
+    } else {
+      probs <- as.numeric(prop.table(tab))
+    }
+    names(probs) <- names(tab)
+    probs
+  })
+
+  if (!is.null(factor_names)) {
+    if (length(factor_names) != ncol(W)) {
+      stop(
+        sprintf("'factor_names' must have length %d (got %d).", ncol(W), length(factor_names)),
+        call. = FALSE
+      )
+    }
+    names(p_list) <- factor_names
+  } else if (!is.null(colnames(W))) {
+    names(p_list) <- colnames(W)
+  } else {
+    names(p_list) <- paste0("Factor", seq_len(ncol(W)))
+  }
+
+  p_list
+}
+
+cs_p_list_uniform_deviation <- function(W) {
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  W <- as.data.frame(W)
+  if (ncol(W) == 0) {
+    return(numeric(0))
+  }
+  vapply(seq_len(ncol(W)), function(i) {
+    tab <- table(W[[i]])
+    if (length(tab) == 0) {
+      return(0)
+    }
+    max(abs(prop.table(tab) - 1 / length(tab)))
+  }, numeric(1))
+}
+
+cs_default_p_list <- function(W, threshold = 0.1, warn = TRUE, factor_names = NULL) {
+  threshold <- as.numeric(threshold)
+  if (!is.finite(threshold) || threshold < 0) {
+    stop("'threshold' must be a finite non-negative numeric value.", call. = FALSE)
+  }
+  devs <- cs_p_list_uniform_deviation(W)
+  use_observed <- length(devs) > 0 && any(devs > threshold)
+  p_list <- cs_generate_p_list(W, uniform = !use_observed, factor_names = factor_names)
+  if (isTRUE(warn) && isTRUE(use_observed)) {
+    warning(
+      sprintf("Assignment probabilities deviate from uniform by more than %.2f; using observed frequencies for p_list.", threshold),
+      call. = FALSE
+    )
+  }
+  attr(p_list, "p_list_method") <- if (use_observed) "observed" else "uniform"
+  p_list
+}
+
 toSimplex = function(x){
   x[x>22] <- 22; x[x< -22] <- -22
   sim_x = exp(x)/sum(exp(x))

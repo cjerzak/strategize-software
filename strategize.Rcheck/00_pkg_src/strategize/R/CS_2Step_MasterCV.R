@@ -333,12 +333,7 @@ cv_strategize       <-          function(
   # Ensure p_list is computed from full data for consistent dimensions across folds
   # This prevents dimension mismatches when different CV folds see different factor levels
   if(is.null(p_list)){
-    p_list <- lapply(1:ncol(W), function(col_idx){
-      tab <- table(W[, col_idx])
-      p_vec <- prop.table(tab)
-      return(p_vec)
-    })
-    names(p_list) <- colnames(W)
+    p_list <- cs_default_p_list(W = W, threshold = 0.1, warn = TRUE, factor_names = colnames(W))
   }
 
   # CV sequence

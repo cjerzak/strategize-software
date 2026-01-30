@@ -321,11 +321,13 @@ strategize_onestep <- function(
     Y <-   (Y -  mean_Y) / sd_Y
   }
 
-  FactorsMat_numeric <- sapply(1:ncol(W),function(ze){ match(W[,ze], names(p_list[[ze]]))  })
-  # Ensure FactorsMat_numeric is a matrix even for single-column W
-  if(!is.matrix(FactorsMat_numeric)) {
-    FactorsMat_numeric <- matrix(FactorsMat_numeric, ncol = 1)
-  }
+  enc <- cs_prepare_W_encoding(
+    W = W,
+    p_list = p_list,
+    unknown = "na",
+    align = "none"
+  )
+  FactorsMat_numeric <- enc$W_idx
   }
 
   ### case 1 - the new multinomial probabilities ARE specified
@@ -474,12 +476,13 @@ strategize_onestep <- function(
     {
         # helper functions
         if(is.null(X)){X<-matrix(rnorm(length(Y)*max(2,K)),nrow=length(Y),ncol=max(2,K))}
-        FactorsMat_numeric <- sapply(1:ncol(FactorsMat_numeric <- W),function(zer){
-          match(FactorsMat_numeric[,zer], names(p_list[[zer]])) })
-        # Ensure FactorsMat_numeric is a matrix even for single-column W
-        if(!is.matrix(FactorsMat_numeric)) {
-          FactorsMat_numeric <- matrix(FactorsMat_numeric, ncol = 1)
-        }
+        enc <- cs_prepare_W_encoding(
+          W = W,
+          p_list = p_list,
+          unknown = "na",
+          align = "none"
+        )
+        FactorsMat_numeric <- enc$W_idx
         FactorsMat_numeric_0Indexed <- FactorsMat_numeric - 1L
 
         performance_matrix_out <- performance_matrix_in <- matrix(NA, ncol = length(lambda_seq), nrow = n_folds)
@@ -597,5 +600,3 @@ strategize_onestep <- function(
                "Output.Description"=c("")) )
   }
 }
-
-
