@@ -52,7 +52,7 @@ cv_strategize(
   optimism = "extragrad",
   optimism_coef = 1,
   rain_gamma = 0.01,
-  rain_eta = 0.0002
+  rain_eta = 0.001
 )
 }
 \arguments{
@@ -261,7 +261,7 @@ If not supplied, the default is auto-scaled downward when \code{nSGD} exceeds 10
 to keep total anchor growth roughly constant. Only used when \code{optimism = "rain"}.}
 
 \item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
-\code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
+\code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
 supplied. Only used when \code{optimism = "rain"}.}
 }
 \value{

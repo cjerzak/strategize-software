@@ -17,7 +17,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           optimism = c("none", "ogda", "extragrad", "smp", "rain"),
                           optimism_coef = 1,
                           rain_gamma = 0.01,
-                          rain_eta = 0.0002
+                          rain_eta = 0.001
                           ){
   optimism <- match.arg(optimism)
   optimism_coef <- as.numeric(optimism_coef)

@@ -70,7 +70,7 @@
 #'   optimism = "extragrad",
 #'   optimism_coef = 1,
 #'   rain_gamma = 0.01,
-#'   rain_eta = 0.0002,
+#'   rain_eta = 0.001,
 #'   compute_hessian = TRUE,
 #'   hessian_max_dim = 50L
 #' )
@@ -303,7 +303,7 @@
 #'   auto-scaled downward when \code{nSGD} exceeds 100 to keep total anchor growth
 #'   roughly constant. Only used when \code{optimism = "rain"}.
 #' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
-#'   \code{0.0002} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
+#'   \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
 #'   supplied. Only used when \code{optimism = "rain"}.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
 #'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
@@ -492,7 +492,7 @@ strategize       <-          function(
                                             optimism = "extragrad",
                                             optimism_coef = 1,
                                             rain_gamma = 0.01,
-                                            rain_eta = 0.0002,
+                                            rain_eta = 0.001,
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
   # [1.] ast then dag 
