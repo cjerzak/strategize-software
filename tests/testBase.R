@@ -4,7 +4,7 @@
 # strategize::build_backend()
 options(error=NULL)
 library(testthat); library(strategize)
-source(file.path("~/Documents/strategize-software/strategize", "R", "CS_HelperFxns.R"))
+source(file.path("~/Documents/strategize-software/strategize", "R", "helper_functions.R"))
 
 # =============================================================================
 # SECTION 1: Helper Function Tests

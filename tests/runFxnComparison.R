@@ -17,9 +17,9 @@ setwd("/Users/cjerzak/Documents/strategize-software")
 # Helper Functions
 # =============================================================================
 
-# Function to modify the implementation in CS_2Step_Master.R
+# Function to modify the implementation in two_step_master.R
 set_implementation <- function(impl_name) {
-  master_file <- "strategize/R/CS_2Step_Master.R"
+  master_file <- "strategize/R/two_step_master.R"
   lines <- readLines(master_file)
 
   for (i in seq_along(lines)) {
