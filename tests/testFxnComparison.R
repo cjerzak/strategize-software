@@ -283,15 +283,15 @@ generate_adversarial_data <- function(n = 2000, params, seed = 12345) {
 # =============================================================================
 
 # Path to the source file
-SOURCE_FILE <- "strategize/R/CS_2Step_Optimize_VectorizeQ.R"
+SOURCE_FILE <- "strategize/R/two_step_optimize_vectorize_q.R"
 
 # Function to modify the package to use a specific implementation
 modify_implementation <- function(impl_name) {
   # Read the file
   lines <- readLines(SOURCE_FILE)
 
-  # Find the line where InitializeQMonteFxns is called in CS_2Step_Master.R
-  master_file <- "strategize/R/CS_2Step_Master.R"
+  # Find the line where InitializeQMonteFxns is called in two_step_master.R
+  master_file <- "strategize/R/two_step_master.R"
   master_lines <- readLines(master_file)
 
   # Find and modify the line that calls InitializeQMonteFxns

@@ -195,7 +195,7 @@
 #'
 #' @param neural_mcmc_control Optional list overriding default MCMC settings used when
 #'   \code{outcome_model_type = "neural"}. Named entries override the defaults in
-#'   \code{CS_2Step_ModelOutcome_neural.R}. Set
+#'   \code{two_step_model_outcome_neural.R}. Set
 #'   \code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
 #'   uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
 #'   neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG

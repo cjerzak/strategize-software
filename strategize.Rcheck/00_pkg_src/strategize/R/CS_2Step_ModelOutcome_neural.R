@@ -3301,7 +3301,38 @@ generate_ModelOutcome_neural <- function(){
     } else if (optimizer_tag == "muon") {
       if (reticulate::py_has_attr(strenv$optax, "contrib") &&
           reticulate::py_has_attr(strenv$optax$contrib, "muon")) {
-        optax_optim <- strenv$optax$contrib$muon(learning_rate = lr_schedule)
+        muon_dimnums <- NULL
+        if (reticulate::py_has_attr(strenv$optax$contrib, "MuonDimensionNumbers")) {
+          muon_dimnums <- tryCatch({
+            reticulate::py_run_string(
+              "import re\nimport jax\nimport optax\n\n_STRATEGIZE_MUON_KEY_RE = re.compile(r'^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_out|M_cross_raw)$')\n\ndef _strategize_muon_dimnums(params):\n    tree_util = jax.tree_util\n\n    if hasattr(tree_util, 'tree_flatten_with_path'):\n        path_leaves, treedef = tree_util.tree_flatten_with_path(params)\n        out_leaves = []\n        for path, value in path_leaves:\n            name = ''\n            for entry in reversed(path):\n                if hasattr(entry, 'key'):\n                    name = str(entry.key)\n                    break\n\n            use_muon = False\n            try:\n                ndim = getattr(value, 'ndim', None)\n                if ndim == 2 and _STRATEGIZE_MUON_KEY_RE.match(name):\n                    use_muon = True\n            except Exception:\n                use_muon = False\n\n            out_leaves.append(optax.contrib.MuonDimensionNumbers() if use_muon else None)\n        return tree_util.tree_unflatten(treedef, out_leaves)\n\n    # Fallback: assume dict-like params and use last-level keys.\n    if hasattr(params, 'items'):\n        out = {}\n        for k, v in params.items():\n            name = str(k)\n            use_muon = getattr(v, 'ndim', None) == 2 and _STRATEGIZE_MUON_KEY_RE.match(name)\n            out[k] = optax.contrib.MuonDimensionNumbers() if use_muon else None\n        try:\n            return params.__class__(out)\n        except Exception:\n            return out\n\n    # Last resort: keep Muon off and fall back to AdamW.\n    return tree_util.tree_map(lambda _: None, params)\n"
+            )
+            reticulate::py_eval("_strategize_muon_dimnums")
+          }, error = function(e) NULL)
+        }
+
+        muon_kwargs <- list(
+          learning_rate = lr_schedule,
+          adam_weight_decay = 1e-4,
+          consistent_rms = 0.2
+        )
+        if (!is.null(muon_dimnums)) {
+          muon_kwargs$muon_weight_dimension_numbers <- muon_dimnums
+        }
+
+        optax_optim <- tryCatch(
+          do.call(strenv$optax$contrib$muon, muon_kwargs),
+          error = function(e) {
+            muon_kwargs_fallback <- list(learning_rate = lr_schedule)
+            if (!is.null(muon_dimnums)) {
+              muon_kwargs_fallback$muon_weight_dimension_numbers <- muon_dimnums
+            }
+            tryCatch(
+              do.call(strenv$optax$contrib$muon, muon_kwargs_fallback),
+              error = function(e2) strenv$optax$contrib$muon(learning_rate = lr_schedule)
+            )
+          }
+        )
         if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
           strenv$numpyro$optim$optax_to_numpyro(optax_optim)
         } else {
