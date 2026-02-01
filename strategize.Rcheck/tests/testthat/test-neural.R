@@ -35,8 +35,71 @@ get_neural_fit <- local({
   }
 })
 
+get_neural_fit_attn <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true",
+      STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+      STRATEGIZE_NEURAL_EVAL_SEED = "123"
+    ))
+
+    data <- generate_test_data(n = 30, seed = 321)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    params$neural_mcmc_control <- modifyList(
+      params$neural_mcmc_control,
+      list(cross_candidate_encoder = "attn", ModelDims = 16L, ModelDepth = 1L)
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    ))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
 test_that("strategize runs neural outcome model (non-adversarial)", {
   fit <- get_neural_fit()
+  res <- fit$res
+  data <- fit$data
+  p_list <- fit$p_list
+
+  expect_valid_strategize_output(res, n_factors = ncol(data$W))
+
+  model <- res$Y_models$my_model_ast_jnp
+  if (is.null(model)) {
+    model <- res$Y_models$my_model_dag_jnp
+  }
+  expect_true(is.function(model))
+
+  W_numeric <- as.matrix(sapply(seq_len(ncol(data$W)), function(d_) {
+    match(data$W[, d_], names(p_list[[d_]]))
+  }))
+  idx_left <- which(data$profile_order == 1L)
+  idx_right <- which(data$profile_order == 2L)
+  X_left <- W_numeric[idx_left, , drop = FALSE]
+  X_right <- W_numeric[idx_right, , drop = FALSE]
+  p_lr <- as.numeric(model(X_left_new = X_left, X_right_new = X_right))
+  p_rl <- as.numeric(model(X_left_new = X_right, X_right_new = X_left))
+  expect_equal(p_lr + p_rl, rep(1, length(p_lr)), tolerance = 1e-4)
+})
+
+test_that("neural attn predictor remains antisymmetric", {
+  fit <- get_neural_fit_attn()
   res <- fit$res
   data <- fit$data
   p_list <- fit$p_list
