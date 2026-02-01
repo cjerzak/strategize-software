@@ -81,6 +81,23 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+cs2step_has_reticulate <- function() {
+  requireNamespace("reticulate", quietly = TRUE)
+}
+
+cs2step_py_to_r <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (!cs2step_has_reticulate()) {
+    return(x)
+  }
+  if (reticulate::is_py_object(x)) {
+    return(tryCatch(reticulate::py_to_r(x), error = function(e) x))
+  }
+  x
+}
+
 cs2step_eval_outcome_model_glm <- function(Y,
                                           W_idx,
                                           factor_levels,
@@ -162,8 +179,10 @@ cs2step_eval_outcome_model_neural <- function(Y,
                                              X = NULL,
                                              conda_env = "strategize_env",
                                              conda_env_required = TRUE,
-                                             neural_mcmc_control = NULL) {
-  if (!"jnp" %in% ls(envir = strenv)) {
+                                             neural_mcmc_control = NULL,
+                                             varcov_cluster_variable = NULL,
+                                             nFolds_glm = 3L) {
+  if (!"jnp" %in% ls(envir = strenv) || !"np" %in% ls(envir = strenv)) {
     ok <- tryCatch({
       initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required)
       TRUE
@@ -204,10 +223,13 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$pair_id_ <- pair_id
   eval_env$profile_order <- profile_order
   eval_env$profile_order_ <- profile_order
+  eval_env$varcov_cluster_variable <- varcov_cluster_variable
+  eval_env$varcov_cluster_variable_ <- varcov_cluster_variable
   eval_env$competing_group_variable_candidate_ <- NULL
   eval_env$competing_group_competition_variable_candidate_ <- NULL
   eval_env$competing_group_variable_respondent_ <- NULL
   eval_env$neural_mcmc_control <- neural_mcmc_control
+  eval_env$nFolds_glm <- if (is.null(nFolds_glm)) NULL else as.integer(nFolds_glm)
   eval_env$X_ <- if (is.null(X)) NULL else as.matrix(X)
   eval_env$respondent_id <- NULL
   eval_env$respondent_task_id <- NULL
@@ -250,7 +272,8 @@ cs2step_eval_outcome_model_neural <- function(Y,
     predict_single = predict_single_fxn,
     neural_model_info = eval_env$neural_model_info,
     theta_mean = theta_mean,
-    theta_var = theta_var
+    theta_var = theta_var,
+    fit_metrics = eval_env$fit_metrics %||% eval_env$neural_model_info$fit_metrics
   )
 }
 
@@ -306,6 +329,11 @@ cs2step_validate_pairwise_ids <- function(pair_id, n) {
 #' @param neural_mcmc_control Optional list passed to neural backend.
 #' @param use_regularization Logical; run glinternet screening for GLM.
 #' @param nFolds_glm Number of folds for glinternet CV (GLM).
+#' @param cache_path Optional path to a cached predictor (.rds). If it exists and
+#'   \code{cache_overwrite} is \code{FALSE}, the cached model is loaded instead of refitting.
+#'   When a new model is fit, it is saved to this path.
+#' @param cache_overwrite Logical; refit and overwrite any existing cache at \code{cache_path}.
+#' @param cache_compress Compression setting passed to \code{saveRDS()}.
 #' @return An object of class \code{strategic_predictor}.
 #' @export
 strategic_prediction <- function(Y,
@@ -321,7 +349,23 @@ strategic_prediction <- function(Y,
                                 conda_env_required = TRUE,
                                 neural_mcmc_control = NULL,
                                 use_regularization = TRUE,
-                                nFolds_glm = 3L) {
+                                nFolds_glm = 3L,
+                                cache_path = NULL,
+                                cache_overwrite = FALSE,
+                                cache_compress = TRUE) {
+  if (!is.null(cache_path)) {
+    cache_path <- as.character(cache_path)
+    if (length(cache_path) != 1L || !nzchar(cache_path)) {
+      stop("'cache_path' must be a non-empty character path.", call. = FALSE)
+    }
+    if (!isTRUE(cache_overwrite) && file.exists(cache_path)) {
+      return(load_strategic_predictor(
+        cache_path,
+        conda_env = conda_env,
+        conda_env_required = conda_env_required
+      ))
+    }
+  }
   cs2step_validate_binary_outcome(Y)
   if (missing(W) || is.null(W)) {
     stop("'W' is required.", call. = FALSE)
@@ -381,11 +425,17 @@ strategic_prediction <- function(Y,
       X = X,
 	      conda_env = conda_env,
 	      conda_env_required = conda_env_required,
-	      neural_mcmc_control = neural_mcmc_control
+	      neural_mcmc_control = neural_mcmc_control,
+	      varcov_cluster_variable = varcov_cluster_variable,
+	      nFolds_glm = nFolds_glm
 	    )
 	  }
 
-	  structure(
+	  if (identical(model, "neural") && is.null(fit$fit_metrics)) {
+	    fit$fit_metrics <- fit$neural_model_info$fit_metrics %||% NULL
+	  }
+
+	  out <- structure(
 	    list(
 	      model_type = model,
 	      mode = mode_use,
@@ -398,11 +448,22 @@ strategic_prediction <- function(Y,
 	      fit = fit,
 	      metadata = list(
 	        call = match.call(),
-	        timestamp = Sys.time()
+	        timestamp = Sys.time(),
+	        conda_env = if (identical(model, "neural")) conda_env else NULL,
+	        conda_env_required = if (identical(model, "neural")) conda_env_required else NULL
 	      )
 	    ),
 	    class = "strategic_predictor"
 	  )
+	  if (!is.null(cache_path)) {
+	    save_strategic_predictor(
+	      out,
+	      file = cache_path,
+	      overwrite = TRUE,
+	      compress = cache_compress
+	    )
+	  }
+	  out
 	}
 
 cs2step_glm_build_design <- function(W_idx, main_info, interaction_info) {
@@ -545,6 +606,348 @@ cs2step_glm_predict_internal <- function(object,
   )
 }
 
+cs2step_neural_to_index_matrix <- function(x_mat, factor_levels) {
+  x_mat <- as.matrix(x_mat)
+  x_int <- matrix(as.integer(x_mat), nrow = nrow(x_mat), ncol = ncol(x_mat))
+  n_cols <- ncol(x_int)
+  n_levels <- as.integer(factor_levels)
+  if (length(n_levels) != n_cols) {
+    n_levels <- rep_len(n_levels, n_cols)
+  }
+  for (d_ in seq_len(n_cols)) {
+    max_level <- n_levels[[d_]]
+    missing_level <- max_level + 1L
+    col_vals <- x_int[, d_]
+    col_vals[is.na(col_vals) | col_vals < 1L | col_vals > max_level] <- missing_level
+    x_int[, d_] <- col_vals - 1L
+  }
+  x_int
+}
+
+cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
+  if (!is.null(resp_cov_new)) {
+    resp_cov_new <- as.matrix(resp_cov_new)
+    if (nrow(resp_cov_new) == 1L && n_rows > 1L) {
+      resp_cov_new <- matrix(rep(resp_cov_new, each = n_rows), nrow = n_rows)
+    }
+    return(resp_cov_new)
+  }
+  resp_cov_mean <- cs2step_py_to_r(model_info$resp_cov_mean)
+  if (!is.null(resp_cov_mean)) {
+    resp_cov_mean <- as.numeric(resp_cov_mean)
+    if (length(resp_cov_mean) == 0L) {
+      return(matrix(0, nrow = n_rows, ncol = 0L))
+    }
+    return(matrix(rep(resp_cov_mean, each = n_rows), nrow = n_rows))
+  }
+  matrix(0, nrow = n_rows, ncol = 0L)
+}
+
+cs2step_neural_prepare_prediction_data <- function(W_idx,
+                                                   model_info,
+                                                   pair_id = NULL,
+                                                   profile_order = NULL,
+                                                   mode = c("pairwise", "single")) {
+  mode <- match.arg(mode)
+  W_idx <- as.matrix(W_idx)
+
+  pairwise <- identical(mode, "pairwise")
+  if (pairwise) {
+    pair_info <- cs2step_build_pair_mat(
+      pair_id = pair_id,
+      W = W_idx,
+      profile_order = profile_order,
+      competing_group_variable_candidate = NULL
+    )
+    pair_mat <- pair_info$pair_mat
+    X_left_raw <- W_idx[pair_mat[, 1], , drop = FALSE]
+    X_right_raw <- W_idx[pair_mat[, 2], , drop = FALSE]
+    n_rows <- nrow(X_left_raw)
+    X_left <- strenv$jnp$array(
+      cs2step_neural_to_index_matrix(X_left_raw, model_info$factor_levels)
+    )$astype(strenv$jnp$int32)
+    X_right <- strenv$jnp$array(
+      cs2step_neural_to_index_matrix(X_right_raw, model_info$factor_levels)
+    )$astype(strenv$jnp$int32)
+    party_left <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+    party_right <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+    resp_party <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+    resp_cov <- cs2step_neural_prepare_resp_cov(NULL, model_info, n_rows)
+    resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov))$astype(strenv$dtj)
+
+    return(list(
+      pairwise = TRUE,
+      X_left = X_left,
+      X_right = X_right,
+      party_left = party_left,
+      party_right = party_right,
+      resp_party = resp_party,
+      resp_cov = resp_cov_jnp
+    ))
+  }
+
+  n_rows <- nrow(W_idx)
+  X_single <- strenv$jnp$array(
+    cs2step_neural_to_index_matrix(W_idx, model_info$factor_levels)
+  )$astype(strenv$jnp$int32)
+  party_single <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+  resp_party <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+  resp_cov <- cs2step_neural_prepare_resp_cov(NULL, model_info, n_rows)
+  resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov))$astype(strenv$dtj)
+
+  list(
+    pairwise = FALSE,
+    X_single = X_single,
+    party_single = party_single,
+    resp_party = resp_party,
+    resp_cov = resp_cov_jnp
+  )
+}
+
+cs2step_neural_prepare_params <- function(object,
+                                          conda_env = NULL,
+                                          conda_env_required = TRUE) {
+  if (!"jnp" %in% ls(envir = strenv)) {
+    env_use <- conda_env %||% object$metadata$conda_env %||% "strategize_env"
+    req_use <- if (is.null(conda_env_required)) TRUE else conda_env_required
+    initialize_jax(conda_env = env_use, conda_env_required = req_use)
+  }
+
+  model_info <- object$fit$neural_model_info
+  if (is.null(model_info)) {
+    stop("Neural predictor is missing model metadata.", call. = FALSE)
+  }
+
+  if (!is.null(object$fit$params)) {
+    params <- object$fit$params
+    if (is.list(params) && length(params) > 0L) {
+      needs_cast <- !(cs2step_has_reticulate() && reticulate::is_py_object(params[[1]]))
+      if (isTRUE(needs_cast)) {
+        params <- lapply(params, function(x) strenv$jnp$array(x)$astype(strenv$dtj))
+      }
+    }
+    return(list(params = params, model_info = model_info))
+  }
+
+  theta_mean <- object$fit$theta_mean
+  if (is.null(theta_mean) || !length(theta_mean)) {
+    if (!is.null(model_info$params)) {
+      params <- model_info$params
+      if (is.list(params) && length(params) > 0L) {
+        needs_cast <- !(cs2step_has_reticulate() && reticulate::is_py_object(params[[1]]))
+        if (isTRUE(needs_cast)) {
+          params <- lapply(params, function(x) strenv$jnp$array(x)$astype(strenv$dtj))
+        }
+      }
+      return(list(params = params, model_info = model_info))
+    }
+    stop("Neural predictor is missing fitted parameters.", call. = FALSE)
+  }
+  theta_jnp <- strenv$jnp$array(as.numeric(theta_mean))$astype(strenv$dtj)
+  params <- neural_params_from_theta(theta_jnp, model_info)
+  list(params = params, model_info = model_info)
+}
+
+cs2step_neural_to_r_array <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
+    return(tryCatch(reticulate::py_to_r(strenv$np$array(x)),
+                    error = function(e) reticulate::py_to_r(x)))
+  }
+  x
+}
+
+cs2step_neural_coerce_prediction_output <- function(pred, likelihood) {
+  if (likelihood == "bernoulli") {
+    return(as.numeric(cs2step_neural_to_r_array(pred)))
+  }
+  if (likelihood == "categorical") {
+    return(as.matrix(cs2step_neural_to_r_array(pred)))
+  }
+  if (likelihood == "normal") {
+    return(list(
+      mu = as.numeric(cs2step_neural_to_r_array(pred$mu)),
+      sigma = as.numeric(cs2step_neural_to_r_array(pred$sigma))
+    ))
+  }
+  pred
+}
+
+cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, return_logits = FALSE) {
+  Xl <- prep$X_left
+  Xr <- prep$X_right
+  pl <- prep$party_left
+  pr <- prep$party_right
+  resp_p <- prep$resp_party
+  resp_c <- prep$resp_cov
+
+  mode <- neural_cross_encoder_mode(model_info)
+  use_cross_encoder <- identical(mode, "full")
+  use_cross_term <- identical(mode, "term")
+  use_cross_attn <- identical(mode, "attn")
+
+  stage_idx <- neural_stage_index(pl, pr, model_info)
+  matchup_idx <- NULL
+  if (!is.null(params$E_matchup)) {
+    matchup_idx <- neural_matchup_index(pl, pr, model_info)
+  }
+
+  if (isTRUE(use_cross_encoder)) {
+    choice_tok <- neural_build_choice_token(model_info, params)
+    ctx_tokens <- neural_build_context_tokens_batch(model_info,
+                                                    resp_party_idx = resp_p,
+                                                    stage_idx = stage_idx,
+                                                    matchup_idx = matchup_idx,
+                                                    resp_cov = resp_c,
+                                                    params = params)
+    left_tokens <- neural_add_segment_embedding(
+      neural_build_candidate_tokens_hard(Xl, pl,
+                                         model_info = model_info,
+                                         resp_party_idx = resp_p,
+                                         params = params),
+      0L,
+      model_info = model_info,
+      params = params
+    )
+    right_tokens <- neural_add_segment_embedding(
+      neural_build_candidate_tokens_hard(Xr, pr,
+                                         model_info = model_info,
+                                         resp_party_idx = resp_p,
+                                         params = params),
+      1L,
+      model_info = model_info,
+      params = params
+    )
+    n_batch <- ai(Xl$shape[[1]])
+    sep_tok <- neural_build_sep_token(model_info, n_batch = n_batch, params = params)
+    token_parts <- list(choice_tok)
+    if (!is.null(ctx_tokens)) {
+      token_parts <- c(token_parts, list(ctx_tokens))
+    }
+    token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+    tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
+    tokens <- neural_run_transformer(tokens, model_info, params)
+    cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+    cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+    logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
+  } else {
+    choice_tok <- neural_build_choice_token(model_info, params)
+    ctx_tokens <- neural_build_context_tokens_batch(model_info,
+                                                    resp_party_idx = resp_p,
+                                                    stage_idx = stage_idx,
+                                                    matchup_idx = matchup_idx,
+                                                    resp_cov = resp_c,
+                                                    params = params)
+
+    encode_candidate <- function(X_idx, party_idx, return_tokens = FALSE) {
+      cand_tokens <- neural_build_candidate_tokens_hard(X_idx, party_idx,
+                                                        model_info = model_info,
+                                                        resp_party_idx = resp_p,
+                                                        params = params)
+      if (is.null(ctx_tokens)) {
+        tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
+      } else {
+        tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
+      }
+      tokens <- neural_run_transformer(tokens, model_info, params)
+      choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+      phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      if (!isTRUE(return_tokens)) {
+        return(list(phi = phi, cand_tokens_out = NULL))
+      }
+      T_total <- ai(tokens$shape[[2]])
+      T_cand <- ai(model_info$n_candidate_tokens)
+      cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
+      cand_out <- strenv$jnp$take(tokens, cand_idx, axis = 1L)
+      list(phi = phi, cand_tokens_out = cand_out)
+    }
+
+    left_out <- encode_candidate(Xl, pl, return_tokens = isTRUE(use_cross_attn))
+    right_out <- encode_candidate(Xr, pr, return_tokens = isTRUE(use_cross_attn))
+    phi_l <- left_out$phi
+    phi_r <- right_out$phi
+    if (isTRUE(use_cross_attn)) {
+      ctx_left <- neural_cross_attend_cls_to_tokens(phi_l, right_out$cand_tokens_out,
+                                                    model_info = model_info,
+                                                    params = params)
+      ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, left_out$cand_tokens_out,
+                                                     model_info = model_info,
+                                                     params = params)
+      alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
+      phi_l <- phi_l + alpha_cross * ctx_left
+      phi_r <- phi_r + alpha_cross * ctx_right
+    }
+    u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
+    u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)
+    logits <- u_l - u_r
+    if (isTRUE(use_cross_term)) {
+      logits <- neural_apply_cross_term(logits, phi_l, phi_r,
+                                        params$M_cross, params$W_cross_out,
+                                        out_dim = ai(params$W_out$shape[[2]]))
+    }
+  }
+
+  if (isTRUE(return_logits)) {
+    return(logits)
+  }
+  if (model_info$likelihood == "bernoulli") {
+    return(strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L)))
+  }
+  if (model_info$likelihood == "categorical") {
+    return(strenv$jax$nn$softmax(logits, axis = -1L))
+  }
+  list(mu = strenv$jnp$squeeze(logits, axis = 1L),
+       sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.))
+}
+
+cs2step_neural_predict_single_prepared <- function(params, model_info, prep, return_logits = FALSE) {
+  Xb <- prep$X_single
+  party_idx <- prep$party_single
+  resp_p <- prep$resp_party
+  resp_c <- prep$resp_cov
+
+  choice_tok <- neural_build_choice_token(model_info, params)
+  ctx_tokens <- neural_build_context_tokens_batch(model_info,
+                                                  resp_party_idx = resp_p,
+                                                  resp_cov = resp_c,
+                                                  params = params)
+  cand_tokens <- neural_build_candidate_tokens_hard(Xb, party_idx,
+                                                    model_info = model_info,
+                                                    resp_party_idx = resp_p,
+                                                    params = params)
+  token_parts <- list(choice_tok)
+  if (!is.null(ctx_tokens)) {
+    token_parts <- c(token_parts, list(ctx_tokens))
+  }
+  token_parts <- c(token_parts, list(cand_tokens))
+  tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
+  tokens <- neural_run_transformer(tokens, model_info, params)
+  choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+  choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+  logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
+
+  if (isTRUE(return_logits)) {
+    return(logits)
+  }
+  if (model_info$likelihood == "bernoulli") {
+    return(strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L)))
+  }
+  if (model_info$likelihood == "categorical") {
+    return(strenv$jax$nn$softmax(logits, axis = -1L))
+  }
+  list(mu = strenv$jnp$squeeze(logits, axis = 1L),
+       sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.))
+}
+
+cs2step_neural_predict_prepared <- function(params, model_info, prep, return_logits = FALSE) {
+  if (isTRUE(prep$pairwise)) {
+    return(cs2step_neural_predict_pair_prepared(params, model_info, prep, return_logits = return_logits))
+  }
+  cs2step_neural_predict_single_prepared(params, model_info, prep, return_logits = return_logits)
+}
+
 cs2step_neural_predict_internal <- function(object,
                                            W_new,
                                            pair_id = NULL,
@@ -565,6 +968,10 @@ cs2step_neural_predict_internal <- function(object,
   W_new <- cs2step_align_W(W_new, enc$factor_names)
   W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
 
+  use_internal <- is.function(object$fit$my_model)
+  model_info <- object$fit$neural_model_info
+  prep <- NULL
+
   if (identical(object$mode, "pairwise")) {
     cs2step_validate_pairwise_ids(pair_id, nrow(W_idx))
     pair_info <- cs2step_build_pair_mat(
@@ -576,24 +983,65 @@ cs2step_neural_predict_internal <- function(object,
     pair_mat <- pair_info$pair_mat
     X_left <- W_idx[pair_mat[, 1], , drop = FALSE]
     X_right <- W_idx[pair_mat[, 2], , drop = FALSE]
-    p <- object$fit$my_model(X_left_new = X_left, X_right_new = X_right)
+    if (isTRUE(use_internal)) {
+      p <- object$fit$my_model(X_left_new = X_left, X_right_new = X_right)
+    } else {
+      prep_params <- cs2step_neural_prepare_params(object)
+      model_info <- prep_params$model_info
+      prep <- cs2step_neural_prepare_prediction_data(
+        W_idx = W_idx,
+        model_info = model_info,
+        pair_id = pair_id,
+        profile_order = profile_order,
+        mode = "pairwise"
+      )
+      p <- cs2step_neural_predict_prepared(
+        params = prep_params$params,
+        model_info = model_info,
+        prep = prep,
+        return_logits = identical(type, "link")
+      )
+    }
   } else {
-    p <- object$fit$my_model(X_new = W_idx)
+    if (isTRUE(use_internal)) {
+      p <- object$fit$my_model(X_new = W_idx)
+    } else {
+      prep_params <- cs2step_neural_prepare_params(object)
+      model_info <- prep_params$model_info
+      prep <- cs2step_neural_prepare_prediction_data(
+        W_idx = W_idx,
+        model_info = model_info,
+        mode = "single"
+      )
+      p <- cs2step_neural_predict_prepared(
+        params = prep_params$params,
+        model_info = model_info,
+        prep = prep,
+        return_logits = identical(type, "link")
+      )
+    }
   }
 
-  if (type == "link") {
-    eps <- .Machine$double.eps
-    p <- pmin(pmax(p, eps), 1 - eps)
-    pred <- stats::qlogis(p)
+  if (isTRUE(use_internal)) {
+    if (type == "link") {
+      eps <- .Machine$double.eps
+      p <- pmin(pmax(p, eps), 1 - eps)
+      pred <- stats::qlogis(p)
+    } else {
+      pred <- as.numeric(p)
+    }
+  } else if (identical(type, "link")) {
+    pred <- as.numeric(cs2step_neural_to_r_array(p))
   } else {
-    pred <- as.numeric(p)
+    pred <- cs2step_neural_coerce_prediction_output(p, model_info$likelihood)
   }
 
   if (interval == "none") {
     return(pred)
   }
 
-  if (is.null(object$fit$predict_pair) && is.null(object$fit$predict_single)) {
+  draw_internal <- is.function(object$fit$predict_pair) || is.function(object$fit$predict_single)
+  if (!isTRUE(draw_internal) && isTRUE(use_internal)) {
     stop("Neural predictor does not expose draw-capable prediction functions.", call. = FALSE)
   }
 
@@ -612,34 +1060,55 @@ cs2step_neural_predict_internal <- function(object,
   theta_draws <- sweep(theta_draws, 2, theta_sd, `*`)
   theta_draws <- sweep(theta_draws, 2, theta_mean, `+`)
 
-  model_info <- object$fit$neural_model_info
+  if (is.null(model_info)) {
+    model_info <- object$fit$neural_model_info
+  }
   draw_pred <- matrix(NA_real_, nrow = length(pred), ncol = n_draws)
 
   party0 <- rep(0L, length(pred))
   resp0 <- rep(0L, length(pred))
+  if (!isTRUE(draw_internal)) {
+    if (is.null(prep)) {
+      prep <- cs2step_neural_prepare_prediction_data(
+        W_idx = W_idx,
+        model_info = model_info,
+        pair_id = pair_id,
+        profile_order = profile_order,
+        mode = object$mode
+      )
+    }
+  }
   for (i in seq_len(n_draws)) {
     theta_i <- strenv$jnp$array(theta_draws[i, ])$astype(strenv$dtj)
     params_i <- neural_params_from_theta(theta_i, model_info)
-    if (identical(object$mode, "pairwise")) {
-      logits_or_p <- object$fit$predict_pair(
-        params_i,
-        X_left, X_right,
-        party0, party0,
-        resp0, NULL,
-        return_logits = identical(type, "link")
-      )
+    if (isTRUE(draw_internal)) {
+      if (identical(object$mode, "pairwise")) {
+        logits_or_p <- object$fit$predict_pair(
+          params_i,
+          X_left, X_right,
+          party0, party0,
+          resp0, NULL,
+          return_logits = identical(type, "link")
+        )
+      } else {
+        logits_or_p <- object$fit$predict_single(
+          params_i,
+          W_idx,
+          party0,
+          resp0,
+          NULL,
+          return_logits = identical(type, "link")
+        )
+      }
     } else {
-      logits_or_p <- object$fit$predict_single(
-        params_i,
-        W_idx,
-        party0,
-        resp0,
-        NULL,
+      logits_or_p <- cs2step_neural_predict_prepared(
+        params = params_i,
+        model_info = model_info,
+        prep = prep,
         return_logits = identical(type, "link")
       )
     }
-    draw_pred[, i] <- as.numeric(tryCatch(reticulate::py_to_r(strenv$np$array(logits_or_p)),
-                                          error = function(e) logits_or_p))
+    draw_pred[, i] <- as.numeric(cs2step_neural_to_r_array(logits_or_p))
   }
 
   if (type == "response") {
@@ -794,4 +1263,233 @@ as_function <- function(fit) {
       predict(fit, newdata = W, ...)
     }
   }
+}
+
+cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
+  if (is.null(model_info)) {
+    return(NULL)
+  }
+  out <- model_info
+
+  if (!is.null(out$params)) {
+    out$params <- if (isTRUE(drop_params)) {
+      NULL
+    } else {
+      lapply(out$params, cs2step_py_to_r)
+    }
+  }
+  if (!is.null(out$factor_index_list)) {
+    out$factor_index_list <- lapply(out$factor_index_list, function(x) as.integer(cs2step_py_to_r(x)))
+  }
+  if (!is.null(out$cand_party_to_resp_idx)) {
+    out$cand_party_to_resp_idx <- as.integer(cs2step_py_to_r(out$cand_party_to_resp_idx))
+  }
+  if (!is.null(out$resp_cov_mean)) {
+    out$resp_cov_mean <- as.numeric(cs2step_py_to_r(out$resp_cov_mean))
+  }
+  if (!is.null(out$factor_levels)) {
+    out$factor_levels <- as.integer(out$factor_levels)
+  }
+  if (!is.null(out$param_shapes)) {
+    out$param_shapes <- lapply(out$param_shapes, function(x) as.integer(cs2step_py_to_r(x)))
+  }
+  if (!is.null(out$param_sizes)) {
+    out$param_sizes <- lapply(out$param_sizes, function(x) as.integer(cs2step_py_to_r(x)))
+  }
+  if (!is.null(out$param_offsets)) {
+    out$param_offsets <- lapply(out$param_offsets, function(x) as.integer(cs2step_py_to_r(x)))
+  }
+
+  int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
+                  "n_matchup_levels", "n_resp_covariates", "model_dims", "model_depth",
+                  "n_heads", "head_dim", "choice_token_index")
+  for (field in int_fields) {
+    if (!is.null(out[[field]])) {
+      out[[field]] <- as.integer(out[[field]])
+    }
+  }
+
+  out
+}
+
+cs2step_pack_predictor <- function(object, include_metrics = TRUE) {
+  if (!inherits(object, "strategic_predictor")) {
+    stop("Can only save objects of class 'strategic_predictor'.", call. = FALSE)
+  }
+
+  packed <- list(
+    schema_version = 1L,
+    model_type = object$model_type,
+    mode = object$mode,
+    encoder = object$encoder,
+    metadata = object$metadata
+  )
+
+  if (identical(object$model_type, "glm")) {
+    fit <- object$fit
+    packed$fit <- list(
+      intercept = fit$intercept,
+      coefficients = fit$coefficients,
+      vcov = fit$vcov,
+      main_info = fit$main_info,
+      interaction_info = fit$interaction_info,
+      family = fit$family
+    )
+    if (isTRUE(include_metrics) && !is.null(fit$fit_metrics)) {
+      packed$fit$fit_metrics <- fit$fit_metrics
+    }
+  } else {
+    fit <- object$fit
+    drop_params <- !is.null(fit$theta_mean) && length(fit$theta_mean) > 0L
+    model_info <- cs2step_neural_pack_model_info(fit$neural_model_info, drop_params = drop_params)
+    packed$fit <- list(
+      theta_mean = if (!is.null(fit$theta_mean)) as.numeric(fit$theta_mean) else NULL,
+      theta_var = if (!is.null(fit$theta_var)) as.numeric(fit$theta_var) else NULL,
+      neural_model_info = model_info
+    )
+    if (isTRUE(include_metrics)) {
+      metrics <- fit$fit_metrics %||% (if (!is.null(model_info)) model_info$fit_metrics else NULL)
+      if (!is.null(metrics)) {
+        packed$fit$fit_metrics <- metrics
+      }
+    }
+  }
+
+  class(packed) <- c("strategic_predictor_bundle", "list")
+  packed
+}
+
+cs2step_unpack_predictor <- function(bundle,
+                                     conda_env = "strategize_env",
+                                     conda_env_required = TRUE) {
+  if (inherits(bundle, "strategic_predictor")) {
+    return(bundle)
+  }
+  if (!is.list(bundle) || is.null(bundle$model_type)) {
+    stop("Unrecognized predictor cache format.", call. = FALSE)
+  }
+
+  if (identical(bundle$model_type, "glm")) {
+    fit <- list(
+      intercept = bundle$fit$intercept,
+      coefficients = bundle$fit$coefficients,
+      vcov = bundle$fit$vcov,
+      main_info = bundle$fit$main_info,
+      interaction_info = bundle$fit$interaction_info,
+      family = bundle$fit$family,
+      fit_metrics = bundle$fit$fit_metrics %||% NULL
+    )
+    return(structure(
+      list(
+        model_type = bundle$model_type,
+        mode = bundle$mode,
+        encoder = bundle$encoder,
+        fit = fit,
+        metadata = bundle$metadata
+      ),
+      class = "strategic_predictor"
+    ))
+  }
+
+  if (!cs2step_has_reticulate()) {
+    stop("Loading neural predictors requires the 'reticulate' package.", call. = FALSE)
+  }
+
+  fit <- list(
+    my_model = NULL,
+    predict_pair = NULL,
+    predict_single = NULL,
+    neural_model_info = bundle$fit$neural_model_info,
+    theta_mean = bundle$fit$theta_mean,
+    theta_var = bundle$fit$theta_var,
+    fit_metrics = bundle$fit$fit_metrics %||% (if (!is.null(bundle$fit$neural_model_info)) {
+      bundle$fit$neural_model_info$fit_metrics
+    } else {
+      NULL
+    })
+  )
+
+  metadata <- bundle$metadata %||% list()
+  env_use <- if (!is.null(conda_env) && nzchar(conda_env)) {
+    conda_env
+  } else {
+    metadata$conda_env
+  }
+  metadata$conda_env <- env_use %||% "strategize_env"
+  metadata$conda_env_required <- if (is.null(conda_env_required)) {
+    metadata$conda_env_required %||% TRUE
+  } else {
+    conda_env_required
+  }
+
+  out <- structure(
+    list(
+      model_type = bundle$model_type,
+      mode = bundle$mode,
+      encoder = bundle$encoder,
+      fit = fit,
+      metadata = metadata
+    ),
+    class = "strategic_predictor"
+  )
+
+  prep <- cs2step_neural_prepare_params(out,
+                                        conda_env = metadata$conda_env,
+                                        conda_env_required = metadata$conda_env_required)
+  out$fit$params <- prep$params
+  out
+}
+
+#' Save a strategic predictor to disk
+#'
+#' @param fit A fitted \code{strategic_predictor}.
+#' @param file Path to save the cache (typically ending in \code{.rds}).
+#' @param overwrite Logical; overwrite an existing file.
+#' @param compress Compression passed to \code{saveRDS()}.
+#' @param include_metrics Logical; include out-of-sample fit metrics when present.
+#' @return The cache path (invisibly).
+#' @export
+save_strategic_predictor <- function(fit,
+                                     file,
+                                     overwrite = FALSE,
+                                     compress = TRUE,
+                                     include_metrics = TRUE) {
+  if (!inherits(fit, "strategic_predictor")) {
+    stop("'fit' must be a strategic_predictor.", call. = FALSE)
+  }
+  file <- as.character(file)
+  if (length(file) != 1L || !nzchar(file)) {
+    stop("'file' must be a non-empty path.", call. = FALSE)
+  }
+  if (file.exists(file) && !isTRUE(overwrite)) {
+    stop("Cache file already exists; set overwrite = TRUE to replace it.", call. = FALSE)
+  }
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  bundle <- cs2step_pack_predictor(fit, include_metrics = include_metrics)
+  saveRDS(bundle, file = file, compress = compress)
+  invisible(file)
+}
+
+#' Load a strategic predictor from disk
+#'
+#' @param file Path to a cached predictor created by \code{save_strategic_predictor()}.
+#' @param conda_env Conda env name for neural predictors. Use \code{NULL} to
+#'   defer to the cached metadata.
+#' @param conda_env_required Require conda env to exist for neural predictors.
+#' @return A \code{strategic_predictor} ready for \code{predict()}.
+#' @export
+load_strategic_predictor <- function(file,
+                                     conda_env = "strategize_env",
+                                     conda_env_required = TRUE) {
+  file <- as.character(file)
+  if (length(file) != 1L || !nzchar(file)) {
+    stop("'file' must be a non-empty path.", call. = FALSE)
+  }
+  if (!file.exists(file)) {
+    stop("Cache file does not exist.", call. = FALSE)
+  }
+  bundle <- readRDS(file)
+  cs2step_unpack_predictor(bundle,
+                           conda_env = conda_env,
+                           conda_env_required = conda_env_required)
 }
