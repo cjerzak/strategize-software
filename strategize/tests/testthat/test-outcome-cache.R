@@ -5,7 +5,7 @@ test_that("GLM outcome cache reloads for adversarial four strategy", {
   td <- withr::local_tempdir()
   withr::local_dir(td)
 
-  data <- generate_test_data(n = 40, n_factors = 2, n_levels = 2, seed = 20260205)
+  data <- generate_test_data(n = 64, n_factors = 2, n_levels = 2, seed = 20260205)
   pair_ids <- data$pair_id
   resp_party <- ifelse(pair_ids %% 2L == 1L, "PartyA", "PartyB")
   comp_type <- ifelse(pair_ids %% 4L %in% c(1L, 2L), "Same", "Different")
