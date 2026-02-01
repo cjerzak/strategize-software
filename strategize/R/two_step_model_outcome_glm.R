@@ -19,7 +19,10 @@ generate_ModelOutcome <- function(){
   if (isTRUE(adversarial) && adversarial_model_strategy == "two") {
     file_suffix <- sprintf("%s_two", file_suffix)
   }
-  coef_cache_path <- if (isTRUE(adversarial) && adversarial_model_strategy == "two") {
+  # Cache coefficients for adversarial GLM strategies that fit separate models.
+  # "two" (stage-adjusted) and "four" (separate rounds) both benefit from reuse.
+  coef_cache_path <- if (isTRUE(adversarial) &&
+                         adversarial_model_strategy %in% c("two", "four")) {
     sprintf("./StrategizeInternals/coef_%s.rds", file_suffix)
   } else {
     NULL
