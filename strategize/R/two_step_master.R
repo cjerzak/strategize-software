@@ -69,8 +69,12 @@
 #'   optim_type = "gd",
 #'   optimism = "extragrad",
 #'   optimism_coef = 1,
+#'   rain_lambda = 1,
 #'   rain_gamma = 0.01,
+#'   rain_L = NULL,
 #'   rain_eta = 0.001,
+#'   rain_variant = "alg10_staged",
+#'   rain_output = "last",
 #'   compute_hessian = TRUE,
 #'   hessian_max_dim = 50L
 #' )
@@ -297,16 +301,30 @@
 #'   (standard updates). Only supported when
 #'   \code{use_optax = FALSE}.
 #' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
-#'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
-#'   initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multiplicatively by
-#'   \eqn{(1+\gamma)} each outer stage.
+#'   \code{"ogda"}, this scales the optimistic correction term. Ignored when
+#'   \code{optimism = "rain"}.
+#' @param rain_lambda Numeric scalar giving the base RAIN regularization scale \eqn{\lambda}.
+#'   The staged algorithm uses \eqn{\lambda_0 = \gamma \lambda} and grows by
+#'   \eqn{(1+\gamma)} each stage. Only used when \code{optimism = "rain"}.
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
 #'   Larger values grow anchor weights faster. If not supplied, the default is
 #'   auto-scaled downward when \code{nSGD} exceeds 100 to keep total anchor growth
 #'   roughly constant. Only used when \code{optimism = "rain"}.
+#' @param rain_L Optional numeric scalar for the Lipschitz constant \eqn{L} used by RAIN.
+#'   When supplied and \code{rain_eta} is missing, \code{rain_eta} defaults to
+#'   \eqn{1/(8L)} and stage lengths follow \eqn{T_s = 16L/\lambda_s}. If \code{NULL},
+#'   \eqn{L} is estimated from \code{rain_eta}. Only used when \code{optimism = "rain"}.
 #' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
 #'   \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
-#'   supplied. Only used when \code{optimism = "rain"}.
+#'   supplied. If \code{rain_L} is supplied and \code{rain_eta} is missing, defaults
+#'   to \eqn{1/(8L)}. Only used when \code{optimism = "rain"}.
+#' @param rain_variant Character string specifying the RAIN variant. Options:
+#'   \code{"alg10_staged"} (merged Algorithm 10 with recursive stage anchors; default) or
+#'   \code{"alg9_single_loop"} (single-loop variant; not yet implemented). Only used when
+#'   \code{optimism = "rain"}.
+#' @param rain_output Character string controlling the stage output for RAIN.
+#'   \code{"uniform_half"} samples uniformly from half-iterates within the stage (most faithful);
+#'   \code{"last"} returns the last iterate (default). Only used when \code{optimism = "rain"}.
 #' @param compute_hessian Logical. Whether to compute Hessian functions for equilibrium
 #'   geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
 #'   are JIT-compiled to enable \code{\link{check_hessian_geometry}} analysis. Set to
@@ -493,8 +511,12 @@ strategize       <-          function(
                                             optim_type = "gd",
                                             optimism = "extragrad",
                                             optimism_coef = 1,
+                                            rain_lambda = 1,
                                             rain_gamma = 0.01,
+                                            rain_L = NULL,
                                             rain_eta = 0.001,
+                                            rain_variant = "alg10_staged",
+                                            rain_output = "last",
                                             compute_hessian = TRUE,
                                             hessian_max_dim = 50L){
   # [1.] ast then dag 
@@ -526,9 +548,21 @@ strategize       <-          function(
     primary_strength = primary_strength,
     primary_n_entrants = primary_n_entrants,
     primary_n_field = primary_n_field,
+    rain_lambda = rain_lambda,
     rain_gamma = rain_gamma,
-    rain_eta = rain_eta
+    rain_L = rain_L,
+    rain_eta = rain_eta,
+    rain_variant = rain_variant,
+    rain_output = rain_output
   )
+
+  if (missing(rain_eta) && !is.null(rain_L)) {
+    rain_eta <- 1 / (8 * as.numeric(rain_L))
+    autoscale_rain_eta <- FALSE
+  }
+  if (!is.null(rain_L)) {
+    rain_L <- as.numeric(rain_L)
+  }
 
   if (autoscale_rain_gamma || autoscale_rain_eta) {
     scaled_rain <- scale_rain_params(
@@ -557,6 +591,13 @@ strategize       <-          function(
   primary_n_field <- ai(primary_n_field)
   adversarial_model_strategy <- match.arg(tolower(adversarial_model_strategy), c("two", "four", "neural"))
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
+  if (optimism == "rain") {
+    rain_variant <- match.arg(rain_variant, c("alg10_staged", "alg9_single_loop"))
+    rain_output <- match.arg(rain_output, c("uniform_half", "last"))
+    if (!missing(optimism_coef) && !is.null(optimism_coef)) {
+      warning("'optimism_coef' is ignored when optimism = \"rain\"; use rain_lambda instead.", call. = FALSE)
+    }
+  }
   se_method <- match.arg(se_method, c("full", "implicit"))
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
@@ -1471,8 +1512,12 @@ strategize       <-          function(
       quiet                       = FALSE,                            # 16
       optimism                    = optimism,                         # 17
       optimism_coef               = optimism_coef,                    # 18
-      rain_gamma                  = rain_gamma,                       # 19
-      rain_eta                    = rain_eta                          # 20
+      rain_lambda                 = rain_lambda,                      # 19
+      rain_gamma                  = rain_gamma,                       # 20
+      rain_L                      = rain_L,                           # 21
+      rain_eta                    = rain_eta,                         # 22
+      rain_variant                = rain_variant,                     # 23
+      rain_output                 = rain_output                       # 24
     )
     dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
     dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
@@ -1525,8 +1570,12 @@ strategize       <-          function(
                         quiet           = FALSE,
                         optimism        = optimism,                            # 
                         optimism_coef   = optimism_coef,
+                        rain_lambda     = rain_lambda,
                         rain_gamma      = rain_gamma,
-                        rain_eta        = rain_eta
+                        rain_L          = rain_L,
+                        rain_eta        = rain_eta,
+                        rain_variant    = rain_variant,
+                        rain_output     = rain_output
                         )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -1556,7 +1605,13 @@ strategize       <-          function(
         loss_ast_vec = strenv$loss_ast_vec,
         loss_dag_vec = strenv$loss_dag_vec,
         inv_learning_rate_ast_vec = strenv$inv_learning_rate_ast_vec,
-        inv_learning_rate_dag_vec = strenv$inv_learning_rate_dag_vec
+        inv_learning_rate_dag_vec = strenv$inv_learning_rate_dag_vec,
+        rain_lambda_vec = strenv$rain_lambda_vec,
+        rain_lambda_s_vec = strenv$rain_lambda_s_vec,
+        rain_lambda_sum_vec = strenv$rain_lambda_sum_vec,
+        rain_stage_idx = strenv$rain_stage_idx,
+        rain_anchor_bar_norm_ast = strenv$rain_anchor_bar_norm_ast,
+        rain_anchor_bar_norm_dag = strenv$rain_anchor_bar_norm_dag
       )
       # first, compute vcov
       if (is.null(dim(vcov_OutcomeModel_ast_jnp))) {
@@ -1596,7 +1651,15 @@ strategize       <-          function(
                                     a_i_ast = a_vec_init_ast, 
                                     a_i_dag = a_vec_init_dag, 
                                     gd_full_simplex = T,
-                                    quiet = F
+                                    quiet = F,
+                                    optimism = optimism,
+                                    optimism_coef = optimism_coef,
+                                    rain_lambda = rain_lambda,
+                                    rain_gamma = rain_gamma,
+                                    rain_L = rain_L,
+                                    rain_eta = rain_eta,
+                                    rain_variant = rain_variant,
+                                    rain_output = rain_output
                                     )
         jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
           strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })
@@ -1890,6 +1953,12 @@ strategize       <-          function(
       strenv$loss_dag_vec <- convergence_cache$loss_dag_vec
       strenv$inv_learning_rate_ast_vec <- convergence_cache$inv_learning_rate_ast_vec
       strenv$inv_learning_rate_dag_vec <- convergence_cache$inv_learning_rate_dag_vec
+      strenv$rain_lambda_vec <- convergence_cache$rain_lambda_vec
+      strenv$rain_lambda_s_vec <- convergence_cache$rain_lambda_s_vec
+      strenv$rain_lambda_sum_vec <- convergence_cache$rain_lambda_sum_vec
+      strenv$rain_stage_idx <- convergence_cache$rain_stage_idx
+      strenv$rain_anchor_bar_norm_ast <- convergence_cache$rain_anchor_bar_norm_ast
+      strenv$rain_anchor_bar_norm_dag <- convergence_cache$rain_anchor_bar_norm_dag
     }
   }
 
@@ -2345,10 +2414,34 @@ strategize       <-          function(
                       "adversarial_model_strategy" = adversarial_model_strategy,
                       "optimism" = optimism,
                       "optimism_coef" = optimism_coef,
+                      "rain_lambda_base" = rain_lambda,
                       "rain_gamma" = rain_gamma,
+                      "rain_L" = rain_L,
                       "rain_eta" = rain_eta,
+                      "rain_variant" = rain_variant,
+                      "rain_output" = rain_output,
                       "rain_lambda" = if (!is.null(strenv$rain_lambda_vec)) {
                         unlist(lapply(strenv$rain_lambda_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "rain_lambda_sum" = if (!is.null(strenv$rain_lambda_sum_vec)) {
+                        unlist(lapply(strenv$rain_lambda_sum_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "rain_stage_idx" = if (!is.null(strenv$rain_stage_idx)) {
+                        strenv$rain_stage_idx
+                      } else {
+                        rep(NA_integer_, nSGD)
+                      },
+                      "rain_anchor_bar_norm_ast" = if (!is.null(strenv$rain_anchor_bar_norm_ast)) {
+                        unlist(lapply(strenv$rain_anchor_bar_norm_ast, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "rain_anchor_bar_norm_dag" = if (!is.null(strenv$rain_anchor_bar_norm_dag)) {
+                        unlist(lapply(strenv$rain_anchor_bar_norm_dag, safe_to_numeric))
                       } else {
                         rep(NA_real_, nSGD)
                       }
@@ -2371,9 +2464,17 @@ strategize       <-          function(
                       "adversarial_model_strategy" = adversarial_model_strategy,
                       "optimism" = optimism,
                       "optimism_coef" = optimism_coef,
+                      "rain_lambda_base" = rain_lambda,
                       "rain_gamma" = rain_gamma,
+                      "rain_L" = rain_L,
                       "rain_eta" = rain_eta,
-                      "rain_lambda" = rep(NA_real_, nSGD)
+                      "rain_variant" = rain_variant,
+                      "rain_output" = rain_output,
+                      "rain_lambda" = rep(NA_real_, nSGD),
+                      "rain_lambda_sum" = rep(NA_real_, nSGD),
+                      "rain_stage_idx" = rep(NA_integer_, nSGD),
+                      "rain_anchor_bar_norm_ast" = rep(NA_real_, nSGD),
+                      "rain_anchor_bar_norm_dag" = rep(NA_real_, nSGD)
                     )
                   })
                   )  # end outout list 

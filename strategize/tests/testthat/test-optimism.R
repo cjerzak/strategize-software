@@ -175,19 +175,22 @@ test_that("rain uses increasing anchor weights (RAIN)", {
     competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
     competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
     optimism = "rain",
-    optimism_coef = 0.5
+    rain_lambda = 2,
+    rain_gamma = 1,
+    rain_eta = 0.5,
+    rain_output = "last"
   )
 
   expect_equal(result$convergence_history$optimism, "rain")
-  rain_lambda <- Filter(Negate(is.null), result$strenv$rain_lambda_vec)
+  rain_lambda <- Filter(Negate(is.null), result$strenv$rain_lambda_s_vec)
   expect_true(length(rain_lambda) > 0)
 
   rain_vals <- vapply(rain_lambda, function(x) {
     as.numeric(result$strenv$np$array(x))
   }, numeric(1))
-  expect_equal(rain_vals[1], 0.5, tolerance = 1e-6)
+  expect_equal(rain_vals[1], 2, tolerance = 1e-6)
   expect_true(all(diff(rain_vals) >= -1e-8))
-  expect_true(rain_vals[length(rain_vals)] >= rain_vals[1] - 1e-8)
+  expect_true(any(diff(rain_vals) > 1e-8))
 })
 
 test_that("rain respects rain_gamma and rain_eta", {
@@ -198,7 +201,7 @@ test_that("rain respects rain_gamma and rain_eta", {
   adv_data <- add_adversarial_structure(base, seed = 223)
   p_list <- generate_test_p_list(adv_data$W)
 
-  eta_val <- 0.02
+  eta_val <- 0.5
   result <- strategize(
     Y = adv_data$Y,
     W = adv_data$W,
@@ -218,17 +221,84 @@ test_that("rain respects rain_gamma and rain_eta", {
     competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
     competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
     optimism = "rain",
-    optimism_coef = 0.5,
-    rain_gamma = 0,
-    rain_eta = eta_val
+    rain_lambda = 4,
+    rain_gamma = 0.5,
+    rain_eta = eta_val,
+    rain_output = "last"
   )
 
-  rain_lambda <- Filter(Negate(is.null), result$strenv$rain_lambda_vec)
+  rain_lambda <- Filter(Negate(is.null), result$strenv$rain_lambda_s_vec)
   rain_vals <- vapply(rain_lambda, function(x) {
     as.numeric(result$strenv$np$array(x))
   }, numeric(1))
-  expect_true(all(abs(diff(rain_vals)) < 1e-8))
+  expect_true(all(diff(rain_vals) >= -1e-8))
+  expect_true(any(diff(rain_vals) > 1e-8))
 
   inv_lr <- result$convergence_history$inv_lr_ast
   expect_true(all(abs(inv_lr - (1 / eta_val)) < 1e-6))
+})
+
+test_that("rain stage indexing matches cumulative lambda sum", {
+  skip_if_no_jax()
+  withr::local_seed(791)
+
+  base <- generate_test_data(n = 50, n_factors = 2, n_levels = 2, seed = 323)
+  adv_data <- add_adversarial_structure(base, seed = 224)
+  p_list <- generate_test_p_list(adv_data$W)
+
+  result <- strategize(
+    Y = adv_data$Y,
+    W = adv_data$W,
+    p_list = p_list,
+    lambda = 0.1,
+    nSGD = 4,
+    nMonte_Qglm = 5L,
+    nMonte_adversarial = 3L,
+    diff = TRUE,
+    adversarial = TRUE,
+    compute_se = FALSE,
+    pair_id = adv_data$pair_id,
+    respondent_id = adv_data$respondent_id,
+    respondent_task_id = adv_data$respondent_task_id,
+    profile_order = adv_data$profile_order,
+    competing_group_variable_respondent = adv_data$competing_group_variable_respondent,
+    competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
+    competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
+    optimism = "rain",
+    rain_lambda = 4,
+    rain_gamma = 1,
+    rain_eta = 0.5,
+    rain_output = "last"
+  )
+
+  to_num <- function(x) {
+    if (is.null(x)) {
+      return(NA_real_)
+    }
+    tryCatch(as.numeric(result$strenv$np$array(x)), error = function(e) NA_real_)
+  }
+
+  lambda_s <- vapply(result$strenv$rain_lambda_s_vec, to_num, numeric(1))
+  lambda_sum <- vapply(result$strenv$rain_lambda_sum_vec, to_num, numeric(1))
+  stage_idx <- result$strenv$rain_stage_idx
+
+  keep <- !is.na(stage_idx) & !is.na(lambda_s) & !is.na(lambda_sum)
+  stage_idx <- stage_idx[keep]
+  lambda_s <- lambda_s[keep]
+  lambda_sum <- lambda_sum[keep]
+
+  stages <- sort(unique(stage_idx))
+  expect_true(length(stages) >= 2)
+
+  stage_lambda <- vapply(stages, function(s) lambda_s[which(stage_idx == s)[1]], numeric(1))
+  for (s in stages) {
+    vals <- lambda_s[stage_idx == s]
+    expect_true(max(vals) - min(vals) < 1e-8)
+  }
+
+  expected_sum <- cumsum(c(0, head(stage_lambda, -1)))
+  for (k in seq_along(stages)) {
+    s <- stages[k]
+    expect_true(all(abs(lambda_sum[stage_idx == s] - expected_sum[k]) < 1e-8))
+  }
 })
