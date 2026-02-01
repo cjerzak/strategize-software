@@ -1355,24 +1355,40 @@ generate_ModelOutcome <- function(){
         my_model <- glm(glm_formula, family = glm_family)
         coef_vec <- coef(my_model)
         coef_no_intercept <- if (force_no_intercept) coef_vec else coef_vec[-1]
-        if(any(is.na(coef_no_intercept))){
-          stop("Some coefficients NA... This case hasn't been sufficiently tested!")
+        if (any(is.na(coef_no_intercept))) {
           which_na <- which(is.na(coef_no_intercept))
+          warning(sprintf("GLM coefficients contained NA; refitting without %d column(s).",
+                          length(which_na)),
+                  call. = FALSE)
           glm_refit <- if (force_no_intercept) {
             Y_glm ~ 0 + cbind( main_dat, interacted_dat)[,-which_na]
           } else {
             Y_glm ~ cbind( main_dat, interacted_dat)[,-which_na]
           }
-          my_model <- try(glm(glm_refit, family = glm_family), T)
+          my_model <- try(glm(glm_refit, family = glm_family), silent = TRUE)
+          if (inherits(my_model, "try-error")) {
+            stop("GLM refit failed after dropping NA coefficients.", call. = FALSE)
+          }
+          if (any(is.na(coef(my_model)))) {
+            stop("GLM refit still produced NA coefficients.", call. = FALSE)
+          }
           Main_na <- which_na[which_na <= ncol(main_dat)]
           Inter_na <- which_na[which_na > ncol(main_dat)] - ncol(main_dat)
       
           # drop
           interaction_info <- interaction_info[-Inter_na,]
-          interaction_info$inter_index <- 1:nrow(interaction_info) # check
+          if (nrow(interaction_info) > 0L) {
+            interaction_info$inter_index <- seq_len(nrow(interaction_info))
+          } else {
+            interaction_info$inter_index <- integer(0)
+          }
       
           main_info <- main_info[-Main_na,]
-          main_info$d_index <- 1:nrow(main_info) # check
+          if (nrow(main_info) > 0L) {
+            main_info$d_index <- seq_len(nrow(main_info))
+          } else {
+            main_info$d_index <- integer(0)
+          }
         }
 	        if(!is.null(varcov_cluster_variable)){
 	          if(length(unique(varcov_cluster_variable))==1){ stop("Only 1 implied cluster in varcov_cluster_variable -- cannot compute cluster varcov")}
