@@ -124,6 +124,76 @@ test_that("neural attn predictor remains antisymmetric", {
   expect_equal(p_lr + p_rl, rep(1, length(p_lr)), tolerance = 1e-4)
 })
 
+test_that("neural outcome bundles save and reload cleanly", {
+  fit <- get_neural_fit()
+  res <- fit$res
+  data <- fit$data
+  p_list <- fit$p_list
+
+  model_info <- res$neural_model_info$ast
+  if (is.null(model_info)) model_info <- res$neural_model_info$dag
+  if (is.null(model_info)) model_info <- res$neural_model_info$ast0
+  if (is.null(model_info)) model_info <- res$neural_model_info$dag0
+  expect_true(!is.null(model_info))
+
+  theta_mean <- tryCatch(
+    as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
+    error = function(e) {
+      tryCatch(
+        as.numeric(res$est_coefficients_jnp),
+        error = function(e2) {
+          as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(res$est_coefficients_jnp)))
+        }
+      )
+    }
+  )
+  expect_true(is.numeric(theta_mean))
+
+  vcov_vec <- res$vcov_outcome_model
+  theta_var <- if (!is.null(vcov_vec) && length(vcov_vec) > 1L) {
+    as.numeric(vcov_vec[-1])
+  } else {
+    NULL
+  }
+
+  tmp <- tempfile(fileext = ".rds")
+  save_neural_outcome_bundle(
+    file = tmp,
+    theta_mean = theta_mean,
+    theta_var = theta_var,
+    neural_model_info = model_info,
+    p_list = p_list,
+    mode = "pairwise",
+    overwrite = TRUE
+  )
+
+  bundle <- readRDS(tmp)
+  has_py_object <- function(x) {
+    if (reticulate::is_py_object(x)) {
+      return(TRUE)
+    }
+    if (is.list(x)) {
+      return(any(vapply(x, has_py_object, logical(1))))
+    }
+    FALSE
+  }
+  expect_false(has_py_object(bundle))
+  expect_false(has_py_object(bundle$fit$neural_model_info))
+
+  fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
+  expect_true(inherits(fit_loaded, "strategic_predictor"))
+  expect_true(is.null(fit_loaded$fit$params))
+
+  idx_left <- which(data$profile_order == 1L)
+  idx_right <- which(data$profile_order == 2L)
+  W_left <- data$W[idx_left, , drop = FALSE]
+  W_right <- data$W[idx_right, , drop = FALSE]
+  p <- predict_pair(fit_loaded, W_left = W_left, W_right = W_right)
+  expect_true(is.numeric(p))
+  expect_true(all(is.finite(p)))
+  expect_true(all(p >= 0 & p <= 1))
+})
+
 test_that("neural prior predictive probabilities are not overly concentrated", {
   fit <- get_neural_fit()
   res <- fit$res

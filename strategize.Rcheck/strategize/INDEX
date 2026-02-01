@@ -12,6 +12,8 @@ cv_strategize           Cross-validation for Optimal Stochastic
 get_final_gradients     Get Final Gradient Norms
 helpers                 User-Facing Helper Functions for strategize
 is_adversarial          Check if Result is Adversarial
+load_neural_outcome_bundle
+                        Load a portable neural outcome bundle
 load_strategic_predictor
                         Load a strategic predictor from disk
 plot_best_response_curves
@@ -29,6 +31,8 @@ print.hessian_analysis
                         Print method for hessian_analysis objects
 print.strategize_result
                         Print Method for strategize Results
+save_neural_outcome_bundle
+                        Save a portable neural outcome bundle
 save_strategic_predictor
                         Save a strategic predictor to disk
 strategic_prediction    Fit a prediction-only outcome model
