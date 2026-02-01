@@ -325,6 +325,60 @@ SGD Iteration: 3 of 3
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 0 1
+ok_counter = 0
+Starting a glinternet fit...
+Done with glinternet fit...
+ok_counter = 1
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9411, LogLoss=0.3208, Acc=0.896, Brier=0.0840
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9329, LogLoss=0.2960, Acc=0.879, Brier=0.0902
+GLM OOS fit metrics (pairwise, oos_2fold, n=133): AUC=0.9390, LogLoss=0.3085, Acc=0.887, Brier=0.0871
+[1] 0 2
+ok_counter = 0
+Starting a glinternet fit...
+Done with glinternet fit...
+ok_counter = 1
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9347, LogLoss=0.3640, Acc=0.831, Brier=0.1122
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.8925, LogLoss=1.4978, Acc=0.810, Brier=0.1161
+GLM OOS fit metrics (pairwise, oos_2fold, n=117): AUC=0.9157, LogLoss=0.9260, Acc=0.821, Brier=0.1141
+[1] 1 1
+ok_counter = 0
+Starting a glinternet fit...
+Done with glinternet fit...
+ok_counter = 1
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9262, LogLoss=1.4039, Acc=0.898, Brier=0.0898
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9908, LogLoss=0.2100, Acc=0.948, Brier=0.0577
+GLM OOS fit metrics (pairwise, oos_2fold, n=117): AUC=0.9513, LogLoss=0.8121, Acc=0.923, Brier=0.0739
+[1] 1 2
+ok_counter = 0
+Starting a glinternet fit...
+Done with glinternet fit...
+ok_counter = 1
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.8170, LogLoss=0.6116, Acc=0.716, Brier=0.1660
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9085, LogLoss=0.4239, Acc=0.848, Brier=0.1256
+GLM OOS fit metrics (pairwise, oos_2fold, n=133): AUC=0.8584, LogLoss=0.5185, Acc=0.782, Brier=0.1459
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+Creating Hessian functions (D=2 parameters per player)
+SGD Iteration: 1 of 4
+SGD Iteration: 2 of 4
+SGD Iteration: 3 of 4
+SGD Iteration: 4 of 4
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 4
+SGD Iteration: 2 of 4
+SGD Iteration: 3 of 4
+SGD Iteration: 4 of 4
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
 ok_counter = 0
 GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9938, LogLoss=0.0807, Acc=0.970, Brier=0.0275
 GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9973, LogLoss=0.0762, Acc=0.955, Brier=0.0290
@@ -355,7 +409,17 @@ GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9731, LogLoss=0.1389, Acc=
 GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9964, LogLoss=0.0708, Acc=0.940, Brier=0.0267
 GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9815, LogLoss=0.1365, Acc=0.879, Brier=0.0492
 GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9833, LogLoss=0.1153, Acc=0.905, Brier=0.0422
-[ FAIL 0 | WARN 45 | SKIP 110 | PASS 113 ]
+ok_counter = 0
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8249, LogLoss=0.5027, Acc=0.790, Brier=0.1634
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8488, LogLoss=0.4960, Acc=0.750, Brier=0.1642
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8325, LogLoss=0.4941, Acc=0.740, Brier=0.1574
+GLM OOS fit metrics (single, oos_3fold, n=300): AUC=0.8217, LogLoss=0.4976, Acc=0.760, Brier=0.1616
+ok_counter = 0
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8105, LogLoss=0.5387, Acc=0.716, Brier=0.1771
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8574, LogLoss=0.4677, Acc=0.776, Brier=0.1505
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.7687, LogLoss=0.5953, Acc=0.636, Brier=0.2019
+GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.7953, LogLoss=0.5336, Acc=0.710, Brier=0.1764
+[ FAIL 0 | WARN 47 | SKIP 110 | PASS 126 ]
 
 ══ Skipped tests (110) ═════════════════════════════════════════════════════════
 • JAX available; neural fit is slow and not exercised here (1):
@@ -417,8 +481,8 @@ GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9833, LogLoss=0.1153, Ac
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 45 | SKIP 110 | PASS 113 ]
+[ FAIL 0 | WARN 47 | SKIP 110 | PASS 126 ]
 > 
 > proc.time()
    user  system elapsed 
- 46.739   5.574  37.211 
+ 35.812   4.111  25.860 

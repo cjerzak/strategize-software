@@ -9,6 +9,7 @@ get_final_gradients	get_final_gradients
 helpers	helpers
 input-validation	input-validation
 is_adversarial	is_adversarial
+load_strategic_predictor	load_strategic_predictor
 plot_best_response_curves	plot_best_response_curves
 plot_convergence	plot_convergence
 plot_quadrant_breakdown	plot_quadrant_breakdown
@@ -17,6 +18,7 @@ prediction-api	prediction-api
 predict_pair	predict_pair
 print.hessian_analysis	print.hessian_analysis
 print.strategize_result	print.strategize_result
+save_strategic_predictor	save_strategic_predictor
 strategic_prediction	strategic_prediction
 strategize	strategize
 strategize.plot	strategize.plot
