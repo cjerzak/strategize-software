@@ -850,6 +850,7 @@ cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, retur
       params = params
     )
     n_batch <- ai(Xl$shape[[1]])
+    choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
     sep_tok <- neural_build_sep_token(model_info, n_batch = n_batch, params = params)
     token_parts <- list(choice_tok)
     if (!is.null(ctx_tokens)) {
@@ -869,6 +870,8 @@ cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, retur
                                                     matchup_idx = matchup_idx,
                                                     resp_cov = resp_c,
                                                     params = params)
+    n_batch <- ai(Xl$shape[[1]])
+    choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
 
     encode_candidate <- function(X_idx, party_idx, return_tokens = FALSE) {
       cand_tokens <- neural_build_candidate_tokens_hard(X_idx, party_idx,
@@ -938,6 +941,8 @@ cs2step_neural_predict_single_prepared <- function(params, model_info, prep, ret
   resp_c <- prep$resp_cov
 
   choice_tok <- neural_build_choice_token(model_info, params)
+  n_batch <- ai(Xb$shape[[1]])
+  choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
   ctx_tokens <- neural_build_context_tokens_batch(model_info,
                                                   resp_party_idx = resp_p,
                                                   resp_cov = resp_c,
