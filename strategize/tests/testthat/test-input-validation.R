@@ -353,7 +353,8 @@ test_that("validate_strategize_inputs accepts cross_candidate_encoder options", 
 
   Y <- c(1, 0, 1, 0)
   W <- data.frame(Gender = c("M", "F", "M", "F"))
-  allowed <- list(TRUE, FALSE, "none", "term", "full", "true", "false")
+  allowed <- list(TRUE, FALSE, "none", "term", "attn", "lite", "cross_attn",
+                  "cls_attn", "cross-attn", "cls-attn", "full", "true", "false")
 
   for (val in allowed) {
     expect_true(

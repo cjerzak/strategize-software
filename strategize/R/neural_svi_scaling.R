@@ -11,6 +11,7 @@ neural_optimal_svi_steps <- function(n_obs,
                                      use_matchup_token = FALSE,
                                      use_cross_encoder = FALSE,
                                      use_cross_term = FALSE,
+                                     use_cross_attn = FALSE,
                                      batch_size = 512L,
                                      subsample_method = "full",
                                      tokens_per_param = 20,
@@ -114,6 +115,11 @@ neural_optimal_svi_steps <- function(n_obs,
   } else {
     0L
   }
+  n_params_cross_attn <- if (isTRUE(pairwise_mode) && isTRUE(use_cross_attn)) {
+    4L * model_dims * model_dims + model_dims + 1L
+  } else {
+    0L
+  }
   n_params_total <- n_params_factor_embed +
     n_params_feature_id +
     n_params_party +
@@ -128,7 +134,8 @@ neural_optimal_svi_steps <- function(n_obs,
     n_params_transformer +
     n_params_final_norm +
     n_params_out +
-    n_params_cross
+    n_params_cross +
+    n_params_cross_attn
   n_params_total <- max(1L, as.integer(n_params_total))
 
   # Approximate token length per observation passed through the transformer.

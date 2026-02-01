@@ -162,9 +162,9 @@ Overfull \hbox (5.17787pt too wide) in paragraph at lines 1543--1564
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1543--1564
+Overfull \hbox (43.9694pt too wide) in paragraph at lines 1543--1564
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
-lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
+lts in []\T1/zi4/m/n/10 two_step_model_outcome_neural.R[]\T1/ptm/m/n/10 .
 
 Overfull \hbox (2.41992pt too wide) in paragraph at lines 1543--1564
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
@@ -274,8 +274,8 @@ n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/zi4/m/n/10 svi_lr_end_factor
 []\T1/ptm/m/n/10 . 
 No file Rd2.ind.
 [46]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -300,7 +300,7 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (46 pages, 278871 bytes).
+Output written on Rd2.pdf (46 pages, 278868 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (64 entries accepted, 0 rejected).
@@ -376,22 +376,22 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.out)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/p
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/p
 dftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr
 /local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
@@ -474,9 +474,9 @@ Overfull \hbox (5.17787pt too wide) in paragraph at lines 1543--1564
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1543--1564
+Overfull \hbox (43.9694pt too wide) in paragraph at lines 1543--1564
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
-lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
+lts in []\T1/zi4/m/n/10 two_step_model_outcome_neural.R[]\T1/ptm/m/n/10 .
 
 Overfull \hbox (2.41992pt too wide) in paragraph at lines 1543--1564
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
@@ -585,10 +585,10 @@ Overfull \hbox (15.00026pt too wide) in paragraph at lines 2723--2737
 n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/zi4/m/n/10 svi_lr_end_factor
 []\T1/ptm/m/n/10 . 
 
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.ind [47] [48])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.ind [47] [48])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -613,7 +613,7 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (48 pages, 287733 bytes).
+Output written on Rd2.pdf (48 pages, 287724 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (64 entries accepted, 0 rejected).
@@ -689,22 +689,22 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.out)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/p
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/p
 dftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr
 /local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
@@ -787,9 +787,9 @@ Overfull \hbox (5.17787pt too wide) in paragraph at lines 1543--1564
 []\T1/ptm/m/n/10 Optional list over-rid-ing de-fault MCMC set-tings used when [
 ]\T1/zi4/m/n/10 outcome_model_type
 
-Overfull \hbox (38.9694pt too wide) in paragraph at lines 1543--1564
+Overfull \hbox (43.9694pt too wide) in paragraph at lines 1543--1564
 \T1/zi4/m/n/10 = "neural"[]\T1/ptm/m/n/10 . Named en-tries over-ride the de-fau
-lts in []\T1/zi4/m/n/10 CS_2Step_ModelOutcome_neural.R[]\T1/ptm/m/n/10 .
+lts in []\T1/zi4/m/n/10 two_step_model_outcome_neural.R[]\T1/ptm/m/n/10 .
 
 Overfull \hbox (2.41992pt too wide) in paragraph at lines 1543--1564
 \T1/ptm/m/n/10 Set []\T1/zi4/m/n/10 neural_mcmc_control$uncertainty_scope = "ou
@@ -898,10 +898,10 @@ Overfull \hbox (15.00026pt too wide) in paragraph at lines 2723--2737
 n/10 svi_lr_warmup_frac []\T1/ptm/m/n/10 and []\T1/zi4/m/n/10 svi_lr_end_factor
 []\T1/ptm/m/n/10 . 
 
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.ind [47] [48])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpdWSTnM/Rd2pdfd463
-4a8b9e7b/Rd2.aux) )
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.ind [47] [48])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpju2zfH/Rd2pdf7f3f
+212f06c8/Rd2.aux) )
 (see the transcript file for additional information)
 pdfTeX warning (dest): name{Rfn.predict} has been referenced but does not exist
 , replaced by a fixed one
@@ -920,8 +920,8 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (48 pages, 288037 bytes).
+Output written on Rd2.pdf (48 pages, 288038 bytes).
 Transcript written on Rd2.log.
 Saving output to ‘strategize-manual.pdf’ ...
 Done
-You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//RtmpdWSTnM/Rd2pdfd4634a8b9e7b'
+You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//Rtmpju2zfH/Rd2pdf7f3f212f06c8'

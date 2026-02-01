@@ -3389,6 +3389,7 @@ generate_ModelOutcome_neural <- function(){
         NULL
       }
     }, error = function(e) NULL)
+    browser()
     if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L &&
         identical(subsample_method, "batch_vi")) {
       svi_loss_curve <- as.numeric(svi_loss_curve)
