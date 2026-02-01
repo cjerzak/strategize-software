@@ -53,10 +53,14 @@ NULL
 #' @param primary_strength Scalar controlling the decisiveness of primaries
 #' @param primary_n_entrants Number of entrant candidates sampled per party in multi-candidate primaries
 #' @param primary_n_field Number of field candidates sampled per party in multi-candidate primaries
+#' @param rain_lambda Numeric scalar giving the base RAIN regularization scale \eqn{\lambda}.
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
 #'   If not supplied, defaults are auto-scaled downward when \code{nSGD} exceeds 100.
+#' @param rain_L Optional numeric scalar for the Lipschitz constant \eqn{L} used by RAIN.
 #' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
 #'   \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
+#' @param rain_variant Character string specifying the RAIN variant.
+#' @param rain_output Character string controlling the RAIN stage output.
 #' @return TRUE invisibly if validation passes; stops with error otherwise
 #' @keywords internal
 validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
@@ -78,8 +82,12 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
                                        primary_strength = 1.0,
                                        primary_n_entrants = 1L,
                                        primary_n_field = 1L,
+                                       rain_lambda = 1,
                                        rain_gamma = 0.01,
-                                       rain_eta = 0.001) {
+                                       rain_L = NULL,
+                                       rain_eta = 0.001,
+                                       rain_variant = "alg10_staged",
+                                       rain_output = "last") {
 
   # ---- Y validation ----
   if (missing(Y) || is.null(Y)) {
@@ -229,6 +237,19 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
   }
 
   # ---- RAIN hyperparameters ----
+  if (!is.null(rain_lambda)) {
+    if (!is.numeric(rain_lambda) || length(rain_lambda) != 1) {
+      stop(
+        "'rain_lambda' must be a single non-negative numeric value. Got: ",
+        paste(head(rain_lambda, 3), collapse = ", "),
+        if (length(rain_lambda) > 3) "..." else "",
+        call. = FALSE
+      )
+    }
+    if (!is.finite(rain_lambda) || rain_lambda < 0) {
+      stop("'rain_lambda' must be finite and non-negative.", call. = FALSE)
+    }
+  }
   if (!is.null(rain_gamma)) {
     if (!is.numeric(rain_gamma) || length(rain_gamma) != 1) {
       stop(
@@ -242,6 +263,19 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       stop("'rain_gamma' must be finite and non-negative.", call. = FALSE)
     }
   }
+  if (!is.null(rain_L)) {
+    if (!is.numeric(rain_L) || length(rain_L) != 1) {
+      stop(
+        "'rain_L' must be a single positive numeric value or NULL. Got: ",
+        paste(head(rain_L, 3), collapse = ", "),
+        if (length(rain_L) > 3) "..." else "",
+        call. = FALSE
+      )
+    }
+    if (!is.finite(rain_L) || rain_L <= 0) {
+      stop("'rain_L' must be finite and positive.", call. = FALSE)
+    }
+  }
   if (!is.null(rain_eta)) {
     if (!is.numeric(rain_eta) || length(rain_eta) != 1) {
       stop(
@@ -253,6 +287,22 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
     }
     if (!is.finite(rain_eta) || rain_eta <= 0) {
       stop("'rain_eta' must be finite and positive.", call. = FALSE)
+    }
+  }
+  if (!is.null(rain_variant)) {
+    if (!is.character(rain_variant) || length(rain_variant) != 1) {
+      stop("'rain_variant' must be a single character string.", call. = FALSE)
+    }
+    if (is.na(rain_variant) || !rain_variant %in% c("alg10_staged", "alg9_single_loop")) {
+      stop("'rain_variant' must be one of: 'alg10_staged', 'alg9_single_loop'.", call. = FALSE)
+    }
+  }
+  if (!is.null(rain_output)) {
+    if (!is.character(rain_output) || length(rain_output) != 1) {
+      stop("'rain_output' must be a single character string.", call. = FALSE)
+    }
+    if (is.na(rain_output) || !rain_output %in% c("uniform_half", "last")) {
+      stop("'rain_output' must be one of: 'uniform_half', 'last'.", call. = FALSE)
     }
   }
 

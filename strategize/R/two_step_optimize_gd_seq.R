@@ -16,8 +16,12 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           quiet = TRUE,
                           optimism = c("none", "ogda", "extragrad", "smp", "rain"),
                           optimism_coef = 1,
+                          rain_lambda = 1,
                           rain_gamma = 0.01,
-                          rain_eta = 0.001
+                          rain_L = NULL,
+                          rain_eta = 0.001,
+                          rain_variant = "alg10_staged",
+                          rain_output = "last"
                           ){
   optimism <- match.arg(optimism)
   optimism_coef <- as.numeric(optimism_coef)
@@ -64,9 +68,16 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     strenv$extragrad_eval_points <- vector("list", length = nSGD)
   }
   if (use_rain) {
-    anchor_ast <- a_i_ast
-    anchor_dag <- a_i_dag
-    strenv$rain_lambda_vec <- rep(NA, times = nSGD)
+    strenv$rain_lambda_vec <- vector("list", length = nSGD)
+    strenv$rain_lambda_s_vec <- vector("list", length = nSGD)
+    strenv$rain_lambda_sum_vec <- vector("list", length = nSGD)
+    strenv$rain_stage_idx <- rep(NA_integer_, times = nSGD)
+    strenv$rain_anchor_bar_norm_ast <- vector("list", length = nSGD)
+    if (adversarial) {
+      strenv$rain_anchor_bar_norm_dag <- vector("list", length = nSGD)
+    } else {
+      strenv$rain_anchor_bar_norm_dag <- NULL
+    }
   }
   if (use_smp) {
     smp_sum_weighted_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
@@ -81,34 +92,56 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   goOn <- F; i<-0
   INIT_MIN_GRAD_ACCUM <- strenv$jnp$array(0.1)
   if (use_rain) {
-    # Stage-wise RAIN (Alg. 1/10 style): increase lambda per *stage*, not per step.
-    # Within each stage, run extra-gradient updates on a strongly-monotone regularized game
-    # with a fixed anchor; then update the anchor and (optionally) increase lambda.
-    rain_gamma <- as.numeric(rain_gamma)
-    if (!is.finite(rain_gamma) || rain_gamma < 0) {
+    # Stage-wise RAIN (Algorithm 10): recursive anchoring with stage-constant SEG.
+    rain_variant <- match.arg(rain_variant, c("alg10_staged", "alg9_single_loop"))
+    rain_output <- match.arg(rain_output, c("uniform_half", "last"))
+    if (!identical(rain_variant, "alg10_staged")) {
+      stop("RAIN variant 'alg9_single_loop' is not implemented yet; use 'alg10_staged'.")
+    }
+
+    if (is.null(rain_gamma)) {
       rain_gamma <- 0
     }
-    rain_gamma_step_num <- 1 + rain_gamma
-
-    rain_lambda0_base <- as.numeric(optimism_coef)
-    if (!is.finite(rain_lambda0_base) || rain_lambda0_base <= 0) {
-      rain_lambda0_base <- 1e-8
+    rain_gamma <- as.numeric(rain_gamma)
+    if (length(rain_gamma) != 1 || !is.finite(rain_gamma) || rain_gamma < 0) {
+      rain_gamma <- 0
     }
 
-    if (!is.null(rain_eta)) {
-      rain_eta <- as.numeric(rain_eta)
+    if (is.null(rain_lambda)) {
+      rain_lambda <- 0
+    }
+    rain_lambda <- as.numeric(rain_lambda)
+    if (length(rain_lambda) != 1 || !is.finite(rain_lambda) || rain_lambda < 0) {
+      rain_lambda <- 0
+    }
+
+    rain_L_val <- NULL
+    if (!is.null(rain_L)) {
+      rain_L_val <- as.numeric(rain_L)
+      if (length(rain_L_val) != 1 || !is.finite(rain_L_val) || rain_L_val <= 0) {
+        rain_L_val <- NULL
+      }
+    }
+
+    if (is.null(rain_eta)) {
+      if (!is.null(rain_L_val)) {
+        rain_eta <- 1 / (8 * rain_L_val)
+      } else {
+        rain_eta <- as.numeric(learning_rate_max)
+      }
     } else {
-      rain_eta <- as.numeric(learning_rate_max)
+      rain_eta <- as.numeric(rain_eta)
     }
-    if (!is.finite(rain_eta) || rain_eta <= 0) {
+    if (length(rain_eta) != 1 || !is.finite(rain_eta) || rain_eta <= 0) {
       rain_eta <- 1e-8
     }
-    rain_eta <- max(1e-8, as.numeric(rain_eta))
 
     # In the theory, eta = 1/(8L) and stages run for T_s = 16L/lambda_s iterations.
-    # Using the same relationship, we estimate L from eta and cap lambda at L to avoid
-    # per-step exponential growth when stages get too short.
-    L_est <- 1 / (8 * rain_eta)
+    if (!is.null(rain_L_val)) {
+      L_est <- rain_L_val
+    } else {
+      L_est <- 1 / (8 * rain_eta)
+    }
     if (!is.finite(L_est) || L_est <= 0) {
       L_est <- 1 / (8 * 1e-8)
     }
@@ -116,9 +149,13 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     eta_t <- strenv$jnp$array(rain_eta, strenv$dtj)
     inv_lr_val <- strenv$jnp$reciprocal(eta_t)
 
-    # Ensure anchor variables exist even in non-adversarial mode.
-    anchor_ast <- a_i_ast
-    anchor_dag <- a_i_dag
+    Lambda_sum <- strenv$jnp$array(0., strenv$dtj)
+    B_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
+    if (adversarial) {
+      B_dag <- strenv$jnp$multiply(a_i_dag, strenv$jnp$array(0., strenv$dtj))
+    } else {
+      B_dag <- NULL
+    }
 
     rain_log_step <- function(step_idx) {
       if (step_idx < 5 || step_idx %in% unique(ceiling(c(0.25, 0.5, 0.75, 1) * nSGD))) {
@@ -126,21 +163,65 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
     }
 
-    lambda_stage_num <- rain_lambda0_base
-    while (i < nSGD) {
-      # Cap lambda at L (per the staged RAIN schedule) so the inner-loop length never collapses to 1.
-      lambda_use_num <- min(lambda_stage_num, L_est)
-      stage_len_num <- ceiling((16 * L_est) / lambda_use_num)
-      if (!is.finite(stage_len_num) || stage_len_num < 1) {
-        stage_len_num <- 1
+    stage_idx <- 0L
+    stage_cap <- Inf
+    if (!is.null(rain_L_val) && rain_gamma > 0 && rain_lambda > 0) {
+      ratio_val <- rain_L_val / rain_lambda
+      if (is.finite(ratio_val) && ratio_val > 0) {
+        stage_cap <- ceiling(log(ratio_val) / log(1 + rain_gamma))
+        if (!is.finite(stage_cap) || stage_cap < 1) {
+          stage_cap <- 1
+        }
       }
-      is_final_stage <- isTRUE(lambda_stage_num >= L_est)
-      stage_len <- if (is_final_stage) {
-        as.integer(nSGD - i)
+    }
+
+    lambda_stage_num <- rain_gamma * rain_lambda
+    if (!is.finite(lambda_stage_num) || lambda_stage_num < 0) {
+      lambda_stage_num <- 0
+    }
+
+    use_uniform_half <- identical(rain_output, "uniform_half")
+
+    while (i < nSGD && stage_idx < stage_cap) {
+      z_s_ast_start <- a_i_ast
+      if (adversarial) {
+        z_s_dag_start <- a_i_dag
+      }
+
+      Lambda_sum_num <- as.numeric(strenv$np$array(Lambda_sum))
+      has_anchors <- is.finite(Lambda_sum_num) && Lambda_sum_num > 0
+      if (has_anchors) {
+        zbar_ast <- strenv$jnp$divide(B_ast, Lambda_sum)
+        if (adversarial) {
+          zbar_dag <- strenv$jnp$divide(B_dag, Lambda_sum)
+        }
       } else {
-        as.integer(min(stage_len_num, nSGD - i))
+        zbar_ast <- NULL
+        zbar_dag <- NULL
       }
+
+      lambda_use_num <- lambda_stage_num
+      if (!is.finite(lambda_use_num) || lambda_use_num < 0) {
+        lambda_use_num <- 0
+      }
+      if (lambda_use_num > 0) {
+        stage_len_num <- ceiling((16 * L_est) / lambda_use_num)
+        if (!is.finite(stage_len_num) || stage_len_num < 1) {
+          stage_len_num <- 1
+        }
+      } else {
+        stage_len_num <- nSGD - i
+      }
+      stage_len <- as.integer(min(stage_len_num, nSGD - i))
+      if (!is.finite(stage_len) || stage_len < 1) {
+        stage_len <- as.integer(min(1, nSGD - i))
+      }
+
       lambda_use_tf <- strenv$jnp$array(lambda_use_num, strenv$dtj)
+
+      half_count <- 0L
+      half_sample_ast <- NULL
+      half_sample_dag <- NULL
 
       for (t in seq_len(stage_len)) {
         i <- i + 1
@@ -164,10 +245,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           )
           loss_dag_val <- base_grad_dag[[1]]
           grad_dag <- base_grad_dag[[2]]
-          grad_dag <- strenv$jnp$subtract(
-            grad_dag,
-            strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_i_dag, anchor_dag))
-          )
+          if (has_anchors) {
+            reg_dag <- strenv$jnp$multiply(Lambda_sum, strenv$jnp$subtract(a_i_dag, zbar_dag))
+            grad_dag <- strenv$jnp$subtract(grad_dag, reg_dag)
+          }
         }
 
         base_grad_ast <- dQ_da_ast(
@@ -184,10 +265,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         )
         loss_ast_val <- base_grad_ast[[1]]
         grad_ast <- base_grad_ast[[2]]
-        grad_ast <- strenv$jnp$subtract(
-          grad_ast,
-          strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_i_ast, anchor_ast))
-        )
+        if (has_anchors) {
+          reg_ast <- strenv$jnp$multiply(Lambda_sum, strenv$jnp$subtract(a_i_ast, zbar_ast))
+          grad_ast <- strenv$jnp$subtract(grad_ast, reg_ast)
+        }
 
         if (adversarial) {
           a_pred_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_dag))
@@ -195,6 +276,16 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           a_pred_dag <- a_i_dag
         }
         a_pred_ast <- strenv$jnp$add(a_i_ast, strenv$jnp$multiply(eta_t, grad_ast))
+
+        if (use_uniform_half) {
+          half_count <- half_count + 1L
+          if (stats::runif(1) <= 1 / half_count) {
+            half_sample_ast <- a_pred_ast
+            if (adversarial) {
+              half_sample_dag <- a_pred_dag
+            }
+          }
+        }
 
         SEED <- strenv$jax$random$split(SEED)[[1L]]
         seed_look <- SEED
@@ -212,10 +303,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
             Q_SIGN_ <- strenv$jnp$array(-1.),
             seed_look
           )[[2]]
-          grad_pred_dag <- strenv$jnp$subtract(
-            grad_pred_dag,
-            strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_pred_dag, anchor_dag))
-          )
+          if (has_anchors) {
+            reg_pred_dag <- strenv$jnp$multiply(Lambda_sum, strenv$jnp$subtract(a_pred_dag, zbar_dag))
+            grad_pred_dag <- strenv$jnp$subtract(grad_pred_dag, reg_pred_dag)
+          }
         }
 
         grad_pred_ast <- dQ_da_ast(
@@ -230,10 +321,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           Q_SIGN_ <- strenv$jnp$array(1.),
           seed_look
         )[[2]]
-        grad_pred_ast <- strenv$jnp$subtract(
-          grad_pred_ast,
-          strenv$jnp$multiply(lambda_use_tf, strenv$jnp$subtract(a_pred_ast, anchor_ast))
-        )
+        if (has_anchors) {
+          reg_pred_ast <- strenv$jnp$multiply(Lambda_sum, strenv$jnp$subtract(a_pred_ast, zbar_ast))
+          grad_pred_ast <- strenv$jnp$subtract(grad_pred_ast, reg_pred_ast)
+        }
 
         if (adversarial) {
           a_i_dag <- strenv$jnp$add(a_i_dag, strenv$jnp$multiply(eta_t, grad_pred_dag))
@@ -249,18 +340,41 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           strenv$inv_learning_rate_dag_vec[i] <- list(inv_lr_val)
         }
 
-        # Record the stage's lambda (constant within the stage).
         strenv$rain_lambda_vec[i] <- list(lambda_use_tf)
+        strenv$rain_lambda_s_vec[i] <- list(lambda_use_tf)
+        strenv$rain_lambda_sum_vec[i] <- list(Lambda_sum)
+        strenv$rain_stage_idx[i] <- stage_idx
+        if (has_anchors) {
+          strenv$rain_anchor_bar_norm_ast[i] <- list(
+            strenv$jnp$linalg$norm(strenv$jnp$subtract(a_i_ast, zbar_ast))
+          )
+          if (adversarial) {
+            strenv$rain_anchor_bar_norm_dag[i] <- list(
+              strenv$jnp$linalg$norm(strenv$jnp$subtract(a_i_dag, zbar_dag))
+            )
+          }
+        } else {
+          strenv$rain_anchor_bar_norm_ast[i] <- list(strenv$jnp$array(0., strenv$dtj))
+          if (adversarial) {
+            strenv$rain_anchor_bar_norm_dag[i] <- list(strenv$jnp$array(0., strenv$dtj))
+          }
+        }
       }
 
-      # Stage boundary: update anchors to the last iterate, then grow lambda (up to L).
-      anchor_ast <- a_i_ast
+      if (use_uniform_half && half_count > 0L) {
+        a_i_ast <- half_sample_ast
+        if (adversarial && !is.null(half_sample_dag)) {
+          a_i_dag <- half_sample_dag
+        }
+      }
+
+      Lambda_sum <- strenv$jnp$add(Lambda_sum, lambda_use_tf)
+      B_ast <- strenv$jnp$add(B_ast, strenv$jnp$multiply(lambda_use_tf, z_s_ast_start))
       if (adversarial) {
-        anchor_dag <- a_i_dag
+        B_dag <- strenv$jnp$add(B_dag, strenv$jnp$multiply(lambda_use_tf, z_s_dag_start))
       }
-      if (!is_final_stage && lambda_stage_num < L_est) {
-        lambda_stage_num <- lambda_stage_num * rain_gamma_step_num
-      }
+      lambda_stage_num <- lambda_stage_num * (1 + rain_gamma)
+      stage_idx <- stage_idx + 1L
     }
   } else {
     while(goOn == F){

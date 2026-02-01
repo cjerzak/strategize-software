@@ -160,15 +160,29 @@
 #'   increasing quadratic anchor penalties),
 #'   or \code{"none"}. Only supported when \code{use_optax = FALSE}.
 #' @param optimism_coef Numeric scalar controlling the magnitude of optimism adjustments. For
-#'   \code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
-#'   initial anchor weight \eqn{\lambda_0}; anchor weights grow multiplicatively by \eqn{(1+\gamma)}
-#'   each outer stage.
+#'   \code{"ogda"}, this scales the optimistic correction term. Ignored when
+#'   \code{optimism = "rain"}.
+#' @param rain_lambda Numeric scalar giving the base RAIN regularization scale \eqn{\lambda}.
+#'   The staged algorithm uses \eqn{\lambda_0 = \gamma \lambda} and grows by
+#'   \eqn{(1+\gamma)} each stage. Only used when \code{optimism = "rain"}.
 #' @param rain_gamma Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
 #'   If not supplied, the default is auto-scaled downward when \code{nSGD} exceeds 100
 #'   to keep total anchor growth roughly constant. Only used when \code{optimism = "rain"}.
+#' @param rain_L Optional numeric scalar for the Lipschitz constant \eqn{L} used by RAIN.
+#'   When supplied and \code{rain_eta} is missing, \code{rain_eta} defaults to
+#'   \eqn{1/(8L)} and stage lengths follow \eqn{T_s = 16L/\lambda_s}. If \code{NULL},
+#'   \eqn{L} is estimated from \code{rain_eta}. Only used when \code{optimism = "rain"}.
 #' @param rain_eta Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
 #'   \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.
-#'   Only used when \code{optimism = "rain"}.
+#'   If \code{rain_L} is supplied and \code{rain_eta} is missing, defaults to
+#'   \eqn{1/(8L)}. Only used when \code{optimism = "rain"}.
+#' @param rain_variant Character string specifying the RAIN variant. Options:
+#'   \code{"alg10_staged"} (merged Algorithm 10 with recursive stage anchors; default) or
+#'   \code{"alg9_single_loop"} (single-loop variant; not yet implemented). Only used when
+#'   \code{optimism = "rain"}.
+#' @param rain_output Character string controlling the stage output for RAIN.
+#'   \code{"uniform_half"} samples uniformly from half-iterates within the stage (most faithful);
+#'   \code{"last"} returns the last iterate (default). Only used when \code{optimism = "rain"}.
 #' 
 #' @details
 #' \code{cv_strategize} implements a cross-validation routine for
@@ -309,15 +323,33 @@ cv_strategize       <-          function(
                                             optim_type = "gd",
                                             optimism = "extragrad",
                                             optimism_coef = 1,
+                                            rain_lambda = 1,
                                             rain_gamma = 0.01,
-                                            rain_eta = 0.001){
+                                            rain_L = NULL,
+                                            rain_eta = 0.001,
+                                            rain_variant = "alg10_staged",
+                                            rain_output = "last"){
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
+  if (optimism == "rain") {
+    rain_variant <- match.arg(rain_variant, c("alg10_staged", "alg9_single_loop"))
+    rain_output <- match.arg(rain_output, c("uniform_half", "last"))
+    if (!missing(optimism_coef) && !is.null(optimism_coef)) {
+      warning("'optimism_coef' is ignored when optimism = \"rain\"; use rain_lambda instead.", call. = FALSE)
+    }
+  }
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
   }
 
   autoscale_rain_gamma <- missing(rain_gamma)
   autoscale_rain_eta <- missing(rain_eta)
+  if (missing(rain_eta) && !is.null(rain_L)) {
+    rain_eta <- 1 / (8 * as.numeric(rain_L))
+    autoscale_rain_eta <- FALSE
+  }
+  if (!is.null(rain_L)) {
+    rain_L <- as.numeric(rain_L)
+  }
   # initialize environment
   if(!"jnp" %in% ls(envir = strenv)) {
     initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required) 
@@ -413,7 +445,6 @@ cv_strategize       <-          function(
             use_regularization = use_regularization,
             optim_type = optim_type,
             optimism = optimism,
-            optimism_coef = optimism_coef,
             a_init_sd = a_init_sd,
             nFolds_glm = nFolds_glm,
             nMonte_adversarial = nMonte_adversarial,
@@ -429,6 +460,21 @@ cv_strategize       <-          function(
             conda_env = conda_env,
             conda_env_required = conda_env_required
           )
+          if (!missing(optimism_coef)) {
+            strategize_args$optimism_coef <- optimism_coef
+          }
+          if (!missing(rain_lambda)) {
+            strategize_args$rain_lambda <- rain_lambda
+          }
+          if (!missing(rain_L) && !is.null(rain_L)) {
+            strategize_args$rain_L <- rain_L
+          }
+          if (!missing(rain_variant)) {
+            strategize_args$rain_variant <- rain_variant
+          }
+          if (!missing(rain_output)) {
+            strategize_args$rain_output <- rain_output
+          }
           if (!autoscale_rain_gamma) {
             strategize_args$rain_gamma <- rain_gamma
           }
@@ -496,7 +542,6 @@ cv_strategize       <-          function(
     temperature = temperature, 
     optim_type = optim_type,
     optimism = optimism,
-    optimism_coef = optimism_coef,
     force_gaussian = force_gaussian,
     use_regularization = use_regularization,
     a_init_sd = a_init_sd,
@@ -516,6 +561,21 @@ cv_strategize       <-          function(
     conda_env = conda_env,
     conda_env_required = conda_env_required
   )
+  if (!missing(optimism_coef)) {
+    strategize_args$optimism_coef <- optimism_coef
+  }
+  if (!missing(rain_lambda)) {
+    strategize_args$rain_lambda <- rain_lambda
+  }
+  if (!missing(rain_L) && !is.null(rain_L)) {
+    strategize_args$rain_L <- rain_L
+  }
+  if (!missing(rain_variant)) {
+    strategize_args$rain_variant <- rain_variant
+  }
+  if (!missing(rain_output)) {
+    strategize_args$rain_output <- rain_output
+  }
   if (!autoscale_rain_gamma) {
     strategize_args$rain_gamma <- rain_gamma
   }
