@@ -38,9 +38,11 @@ NULL
 #'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override
 #'   the Transformer hidden width and depth. Set
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
-#'   the opponent-dependent cross-candidate term in pairwise mode, or set
-#'   \code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
-#'   that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
+#'   the opponent-dependent cross-candidate term in pairwise mode, set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
+#'   cross-attention step, or set \code{neural_mcmc_control$cross_candidate_encoder = "full"}
+#'   to enable a full cross-encoder that jointly encodes both candidates. Use
+#'   \code{"none"} (or \code{FALSE}) to disable.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
 #'   \code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
@@ -530,27 +532,28 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       if (length(cross_encoder) != 1L || is.na(cross_encoder)) {
         stop(
           "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
-          "'none', 'term', or 'full'.",
+          "'none', 'term', 'attn', or 'full'.",
           call. = FALSE
         )
       }
     } else if (is.character(cross_encoder)) {
       mode <- tolower(as.character(cross_encoder))
       if (length(mode) != 1L || is.na(mode) || !nzchar(mode) ||
-          !mode %in% c("none", "term", "full", "true", "false")) {
+          !mode %in% c("none", "term", "attn", "lite", "cross_attn", "cls_attn",
+                       "cross-attn", "cls-attn", "full", "true", "false")) {
         stop(
           "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
-          "'none', 'term', or 'full'.",
+          "'none', 'term', 'attn', or 'full'.",
           call. = FALSE
         )
       }
     } else {
       stop(
-        "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
-        "'none', 'term', or 'full'.",
-        call. = FALSE
-      )
-    }
+      "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
+      "'none', 'term', 'attn', or 'full'.",
+      call. = FALSE
+    )
+  }
   }
   if (!is.null(neural_mcmc_control) &&
       !is.null(neural_mcmc_control$optimizer)) {

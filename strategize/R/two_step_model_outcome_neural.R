@@ -257,6 +257,13 @@ neural_build_param_schema <- function(params,
                      paste0("W_ff1_l", l_),
                      paste0("W_ff2_l", l_))
   }
+  param_names <- c(param_names,
+                   "alpha_cross",
+                   "RMS_cross",
+                   "W_q_cross",
+                   "W_k_cross",
+                   "W_v_cross",
+                   "W_o_cross")
   param_names <- c(param_names, "RMS_final", "W_out", "b_out")
   if (!is.null(params$sigma)) {
     param_names <- c(param_names, "sigma")
@@ -314,6 +321,9 @@ neural_normalize_cross_encoder_mode <- function(value) {
     if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
       if (mode %in% c("none", "term", "full")) {
         return(mode)
+      }
+      if (mode %in% c("attn", "lite", "cross_attn", "cls_attn", "cross-attn", "cls-attn")) {
+        return("attn")
       }
       if (mode %in% c("true", "false")) {
         return(ifelse(mode == "true", "term", "none"))
@@ -768,6 +778,44 @@ neural_run_transformer <- function(tokens, model_info, params = NULL){
   tokens
 }
 
+neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
+                                              params = NULL, return_attn = FALSE) {
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  q_use <- q_vec
+  kv_use <- kv_tokens
+  if (!is.null(params$RMS_cross)) {
+    q_reshaped <- strenv$jnp$reshape(q_vec, list(q_vec$shape[[1]], 1L, ai(model_info$model_dims)))
+    q_reshaped <- neural_rms_norm(q_reshaped, params$RMS_cross, model_info$model_dims)
+    q_use <- strenv$jnp$squeeze(q_reshaped, axis = 1L)
+    kv_use <- neural_rms_norm(kv_tokens, params$RMS_cross, model_info$model_dims)
+  }
+
+  Q <- strenv$jnp$einsum("nd,dk->nk", q_use, params$W_q_cross)
+  K <- strenv$jnp$einsum("ntd,dk->ntk", kv_use, params$W_k_cross)
+  V <- strenv$jnp$einsum("ntd,dk->ntk", kv_use, params$W_v_cross)
+
+  Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], 1L,
+                                  ai(model_info$n_heads), ai(model_info$head_dim)))
+  Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]],
+                                  ai(model_info$n_heads), ai(model_info$head_dim)))
+  Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]],
+                                  ai(model_info$n_heads), ai(model_info$head_dim)))
+  scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
+  scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
+  attn <- strenv$jax$nn$softmax(scores, axis = -1L)
+  ctx_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
+  ctx <- strenv$jnp$reshape(ctx_h, list(ctx_h$shape[[1]], 1L, ai(model_info$model_dims)))
+  ctx <- strenv$jnp$squeeze(ctx, axis = 1L)
+
+  ctx_out <- strenv$jnp$einsum("nd,dk->nk", ctx, params$W_o_cross)
+  if (isTRUE(return_attn)) {
+    return(list(ctx = ctx_out, attn = attn))
+  }
+  ctx_out
+}
+
 neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
                                          resp_party_idx = NULL,
                                          stage_idx = NULL,
@@ -805,7 +853,8 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
                                             matchup_idx = NULL,
                                             resp_cov_vec = NULL,
                                             params = NULL,
-                                            use_role = FALSE){
+                                            use_role = FALSE,
+                                            return_tokens = FALSE){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -835,10 +884,20 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
   phi_all <- strenv$jnp$squeeze(choice_out, axis = 1L)
   idx_left <- strenv$jnp$arange(1L)
   idx_right <- strenv$jnp$arange(1L, 2L)
-  list(
+  out <- list(
     phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
     phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
   )
+  if (isTRUE(return_tokens)) {
+    T_total <- ai(tokens$shape[[2]])
+    T_cand <- ai(model_info$n_candidate_tokens)
+    cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
+    tokens_left <- strenv$jnp$take(tokens, idx_left, axis = 0L)
+    tokens_right <- strenv$jnp$take(tokens, idx_right, axis = 0L)
+    out$cand_left_out <- strenv$jnp$take(tokens_left, cand_idx, axis = 1L)
+    out$cand_right_out <- strenv$jnp$take(tokens_right, cand_idx, axis = 1L)
+  }
+  out
 }
 
 neural_candidate_utility_soft <- function(pi_vec, party_idx,
@@ -871,6 +930,7 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
   mode <- neural_cross_encoder_mode(model_info)
   use_cross_encoder <- identical(mode, "full")
   use_cross_term <- identical(mode, "term")
+  use_cross_attn <- identical(mode, "attn")
   stage_idx <- neural_stage_index(party_left_idx, party_right_idx, model_info)
   matchup_idx <- NULL
   if (!is.null(params$E_matchup)) {
@@ -917,9 +977,21 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                                 stage_idx = stage_idx,
                                                 matchup_idx = matchup_idx,
                                                 resp_cov_vec = resp_cov_vec,
-                                                params = params)
+                                                params = params,
+                                                return_tokens = isTRUE(use_cross_attn))
     phi_left <- phi_pair$phi_left
     phi_right <- phi_pair$phi_right
+    if (isTRUE(use_cross_attn)) {
+      ctx_left <- neural_cross_attend_cls_to_tokens(phi_left, phi_pair$cand_right_out,
+                                                    model_info = model_info,
+                                                    params = params)
+      ctx_right <- neural_cross_attend_cls_to_tokens(phi_right, phi_pair$cand_left_out,
+                                                     model_info = model_info,
+                                                     params = params)
+      alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
+      phi_left <- phi_left + alpha_cross * ctx_left
+      phi_right <- phi_right + alpha_cross * ctx_right
+    }
     u_left <- neural_linear_head(phi_left, params$W_out, params$b_out)
     u_right <- neural_linear_head(phi_right, params$W_out, params$b_out)
     logits <- u_left - u_right
@@ -1155,7 +1227,7 @@ generate_ModelOutcome_neural <- function(){
     }
     stop(
       "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
-      "'none', 'term', or 'full'.",
+      "'none', 'term', 'attn', or 'full'.",
       call. = FALSE
     )
   }
@@ -1308,6 +1380,7 @@ generate_ModelOutcome_neural <- function(){
     cross_candidate_encoder_mode <- "none"
   }
   use_cross_term <- identical(cross_candidate_encoder_mode, "term")
+  use_cross_attn <- identical(cross_candidate_encoder_mode, "attn")
   use_cross_encoder <- identical(cross_candidate_encoder_mode, "full")
   use_matchup_token <- isTRUE(pairwise_mode) &&
     !identical(cross_candidate_encoder_mode, "none")
@@ -2029,6 +2102,97 @@ generate_ModelOutcome_neural <- function(){
       layer_params[[paste0("alpha_ff_l", l_)]] <- alpha_ff_l
     }
 
+    alpha_cross <- NULL
+    RMS_cross <- NULL
+    W_q_cross <- NULL
+    W_k_cross <- NULL
+    W_v_cross <- NULL
+    W_o_cross <- NULL
+    if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
+      tau_cross_attn <- if (isTRUE(output_only_mode)) {
+        as.numeric(weight_sd_scale * depth_prior_scale)
+      } else {
+        strenv$numpyro$sample(
+          "tau_cross_attn",
+          strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale * depth_prior_scale))
+        )
+      }
+
+      alpha_cross <- p2d(
+        name = "alpha_cross",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "alpha_cross",
+            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
+          )
+        },
+        init_fxn = function() {
+          p2d_init_halfnormal("alpha_cross", gate_sd_scale, reticulate::tuple())
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      RMS_cross <- p2d(
+        name = "RMS_cross",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "RMS_cross",
+            strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+            sample_shape = reticulate::tuple(ModelDims)
+          )
+        },
+        init_fxn = function() {
+          p2d_init_lognormal("RMS_cross", RMS_scale, reticulate::tuple(ModelDims))
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      W_q_cross <- p2d(
+        name = "W_q_cross",
+        sample_fxn = function() {
+          sample_loc_scale("W_q_cross", tau_cross_attn,
+                           reticulate::tuple(ModelDims, ModelDims))
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_q_cross", tau_cross_attn,
+                          reticulate::tuple(ModelDims, ModelDims))
+        }
+      )
+      W_k_cross <- p2d(
+        name = "W_k_cross",
+        sample_fxn = function() {
+          sample_loc_scale("W_k_cross", tau_cross_attn,
+                           reticulate::tuple(ModelDims, ModelDims))
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_k_cross", tau_cross_attn,
+                          reticulate::tuple(ModelDims, ModelDims))
+        }
+      )
+      W_v_cross <- p2d(
+        name = "W_v_cross",
+        sample_fxn = function() {
+          sample_loc_scale("W_v_cross", tau_cross_attn,
+                           reticulate::tuple(ModelDims, ModelDims))
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_v_cross", tau_cross_attn,
+                          reticulate::tuple(ModelDims, ModelDims))
+        }
+      )
+      W_o_cross <- p2d(
+        name = "W_o_cross",
+        sample_fxn = function() {
+          sample_loc_scale("W_o_cross", tau_cross_attn,
+                           reticulate::tuple(ModelDims, ModelDims))
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_o_cross", tau_cross_attn,
+                          reticulate::tuple(ModelDims, ModelDims))
+        }
+      )
+    }
+
     RMS_final_shape <- reticulate::tuple(ModelDims)
     RMS_final <- p2d(
       name = "RMS_final",
@@ -2125,6 +2289,14 @@ generate_ModelOutcome_neural <- function(){
       params_view[[paste0("E_factor_", d_)]] <- E_factor_list[[d_]]
     }
     params_view <- c(params_view, layer_params)
+    if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
+      params_view$alpha_cross <- alpha_cross
+      params_view$RMS_cross <- RMS_cross
+      params_view$W_q_cross <- W_q_cross
+      params_view$W_k_cross <- W_k_cross
+      params_view$W_v_cross <- W_v_cross
+      params_view$W_o_cross <- W_o_cross
+    }
     params_view$RMS_final <- RMS_final
     params_view$W_out <- W_out
     params_view$b_out <- b_out
@@ -2225,7 +2397,8 @@ generate_ModelOutcome_neural <- function(){
       neural_linear_head(cls_out, W_out, b_out)
     }
 
-    encode_candidate <- function(Xa, pa, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
+    encode_candidate <- function(Xa, pa, resp_p, resp_c, stage_idx, matchup_idx = NULL,
+                                 return_tokens = FALSE) {
       N_batch <- ai(Xa$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -2234,7 +2407,15 @@ generate_ModelOutcome_neural <- function(){
       tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
       tokens <- run_transformer(tokens)
       choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      strenv$jnp$squeeze(choice_out, axis = 1L)
+      phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      if (!isTRUE(return_tokens)) {
+        return(phi)
+      }
+      T_total <- ai(tokens$shape[[2]])
+      T_cand <- ai(n_candidate_tokens)
+      cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
+      cand_out <- strenv$jnp$take(tokens, cand_idx, axis = 1L)
+      list(phi = phi, cand_tokens_out = cand_out)
     }
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
@@ -2245,13 +2426,26 @@ generate_ModelOutcome_neural <- function(){
       resp_c_all <- if (is.null(resp_c)) NULL else strenv$jnp$concatenate(list(resp_c, resp_c), axis = 0L)
       stage_all <- if (is.null(stage_idx)) NULL else strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
       matchup_all <- if (is.null(matchup_idx)) NULL else strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
-      phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+      if (isTRUE(use_cross_attn)) {
+        enc_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
+                                    stage_all, matchup_all, return_tokens = TRUE)
+        phi_all <- enc_all$phi
+        cand_all <- enc_all$cand_tokens_out
+      } else {
+        phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+        cand_all <- NULL
+      }
       idx_left <- strenv$jnp$arange(N_batch)
       idx_right <- strenv$jnp$arange(N_batch, 2L * N_batch)
-      list(
+      out <- list(
         phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
         phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
       )
+      if (isTRUE(use_cross_attn)) {
+        out$cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
+        out$cand_right_out <- strenv$jnp$take(cand_all, idx_right, axis = 0L)
+      }
+      out
     }
 
     do_forward_and_lik_ <- function(Xl, Xr, pl, pr, resp_p, resp_c, Yb) {
@@ -2266,6 +2460,17 @@ generate_ModelOutcome_neural <- function(){
         phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
         phi_l <- phi_pair$phi_left
         phi_r <- phi_pair$phi_right
+        if (isTRUE(use_cross_attn)) {
+          ctx_left <- neural_cross_attend_cls_to_tokens(phi_l, phi_pair$cand_right_out,
+                                                        model_info = transformer_model_info,
+                                                        params = params_view)
+          ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, phi_pair$cand_left_out,
+                                                         model_info = transformer_model_info,
+                                                         params = params_view)
+          alpha_cross <- neural_param_or_default(params_view, "alpha_cross", 1.0)
+          phi_l <- phi_l + alpha_cross * ctx_left
+          phi_r <- phi_r + alpha_cross * ctx_right
+        }
         u_l <- neural_linear_head(phi_l, W_out, b_out)
         u_r <- neural_linear_head(phi_r, W_out, b_out)
         logits <- u_l - u_r
@@ -3226,6 +3431,7 @@ generate_ModelOutcome_neural <- function(){
           use_matchup_token = use_matchup_token,
           use_cross_encoder = use_cross_encoder,
           use_cross_term = use_cross_term,
+          use_cross_attn = use_cross_attn,
           batch_size = mcmc_control$batch_size,
           subsample_method = svi_subsample_method
         )
@@ -3382,9 +3588,9 @@ generate_ModelOutcome_neural <- function(){
     }
     svi_loss_curve <- tryCatch({
       if (reticulate::py_has_attr(svi_result, "losses")) {
-        as.numeric(reticulate::py_to_r(svi_result$losses))
+        as.numeric(strenv$np$array(svi_result$losses))
       } else if (!is.null(svi_result$losses)) {
-        as.numeric(reticulate::py_to_r(svi_result$losses))
+        as.numeric(strenv$np$array(svi_result$losses))
       } else {
         NULL
       }
@@ -3397,6 +3603,7 @@ generate_ModelOutcome_neural <- function(){
                                 type = "l",
                                 main = "SVI ELBO loss",
                                 xlab = "Iteration",
+                                log = ifelse(any(svi_loss_curve<0),"","y"),
                                 ylab = "ELBO loss")), TRUE)
       finite_idx <- is.finite(svi_loss_curve)
       if (sum(finite_idx, na.rm = TRUE) >= 2L) {
@@ -3621,6 +3828,9 @@ generate_ModelOutcome_neural <- function(){
     if (identical(name, "b_out")) {
       return(get_loc_scale_draws("b_out", "tau_b"))
     }
+    if (name %in% c("W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
+      return(get_loc_scale_draws(name, "tau_cross_attn"))
+    }
     if (grepl("^W_(q|k|v|o)_l\\d+$", name) ||
         grepl("^W_ff(1|2)_l\\d+$", name)) {
       layer_id <- sub(".*_l", "", name)
@@ -3667,6 +3877,8 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("E_rel")
   maybe_site("E_stage")
   maybe_site("E_matchup")
+  maybe_site("alpha_cross")
+  maybe_site("RMS_cross")
 
   W_out_draws <- get_loc_scale_draws("W_out", "tau_w_out")
   if (!is.null(W_out_draws)) {
@@ -3735,6 +3947,17 @@ generate_ModelOutcome_neural <- function(){
       }
     }
   }
+  for (name in c("W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
+    draws <- get_loc_scale_draws(name, "tau_cross_attn")
+    if (!is.null(draws)) {
+      ParamsMean[[name]] <- mean_param(draws)
+    } else if (isTRUE(p2d_output_only)) {
+      value <- get_svi_param(name)
+      if (!is.null(value)) {
+        ParamsMean[[name]] <- value
+      }
+    }
+  }
   maybe_site("RMS_final")
 
   TransformerPredict_pair <- function(params, Xl_new, Xr_new, pl_new, pr_new,
@@ -3776,12 +3999,13 @@ generate_ModelOutcome_neural <- function(){
                                    params = params)
     }
 
+    transformer_model_info <- list(model_depth = ModelDepth,
+                                   model_dims = ModelDims,
+                                   n_heads = TransformerHeads,
+                                   head_dim = head_dim)
     run_transformer <- function(tokens) {
       neural_run_transformer(tokens,
-                             model_info = list(model_depth = ModelDepth,
-                                               model_dims = ModelDims,
-                                               n_heads = TransformerHeads,
-                                               head_dim = head_dim),
+                             model_info = transformer_model_info,
                              params = params)
     }
 
@@ -3820,7 +4044,8 @@ generate_ModelOutcome_neural <- function(){
       neural_linear_head(cls_out, params$W_out, params$b_out)
     }
 
-    encode_candidate <- function(Xa, pa, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
+    encode_candidate <- function(Xa, pa, resp_p, resp_c, stage_idx, matchup_idx = NULL,
+                                 return_tokens = FALSE) {
       N_batch <- ai(Xa$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -3833,7 +4058,15 @@ generate_ModelOutcome_neural <- function(){
       }
       tokens <- run_transformer(tokens)
       choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      strenv$jnp$squeeze(choice_out, axis = 1L)
+      phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      if (!isTRUE(return_tokens)) {
+        return(phi)
+      }
+      T_total <- ai(tokens$shape[[2]])
+      T_cand <- ai(n_candidate_tokens)
+      cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
+      cand_out <- strenv$jnp$take(tokens, cand_idx, axis = 1L)
+      list(phi = phi, cand_tokens_out = cand_out)
     }
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx = NULL) {
@@ -3844,13 +4077,26 @@ generate_ModelOutcome_neural <- function(){
       resp_c_all <- if (is.null(resp_c)) NULL else strenv$jnp$concatenate(list(resp_c, resp_c), axis = 0L)
       stage_all <- if (is.null(stage_idx)) NULL else strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
       matchup_all <- if (is.null(matchup_idx)) NULL else strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
-      phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+      if (isTRUE(use_cross_attn)) {
+        enc_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
+                                    stage_all, matchup_all, return_tokens = TRUE)
+        phi_all <- enc_all$phi
+        cand_all <- enc_all$cand_tokens_out
+      } else {
+        phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+        cand_all <- NULL
+      }
       idx_left <- strenv$jnp$arange(N_batch)
       idx_right <- strenv$jnp$arange(N_batch, 2L * N_batch)
-      list(
+      out <- list(
         phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
         phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
       )
+      if (isTRUE(use_cross_attn)) {
+        out$cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
+        out$cand_right_out <- strenv$jnp$take(cand_all, idx_right, axis = 0L)
+      }
+      out
     }
 
     stage_idx <- neural_stage_index(pl, pr, model_info_local)
@@ -3864,6 +4110,17 @@ generate_ModelOutcome_neural <- function(){
       phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c, stage_idx, matchup_idx)
       phi_l <- phi_pair$phi_left
       phi_r <- phi_pair$phi_right
+      if (isTRUE(use_cross_attn)) {
+        ctx_left <- neural_cross_attend_cls_to_tokens(phi_l, phi_pair$cand_right_out,
+                                                      model_info = transformer_model_info,
+                                                      params = params)
+        ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, phi_pair$cand_left_out,
+                                                       model_info = transformer_model_info,
+                                                       params = params)
+        alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
+        phi_l <- phi_l + alpha_cross * ctx_left
+        phi_r <- phi_r + alpha_cross * ctx_right
+      }
       u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
       u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)
       logits <- u_l - u_r
@@ -4195,6 +4452,7 @@ generate_ModelOutcome_neural <- function(){
     cross_candidate_encoder = isTRUE(use_cross_term),
     cross_candidate_encoder_mode = cross_candidate_encoder_mode,
     has_cross_encoder = isTRUE(use_cross_encoder),
+    has_cross_attn = !is.null(ParamsMean$W_q_cross),
     has_cross_term = !is.null(ParamsMean$M_cross),
     choice_token_index = 0L,
     likelihood = likelihood,

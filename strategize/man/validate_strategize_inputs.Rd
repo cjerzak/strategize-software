@@ -77,9 +77,11 @@ models (default is 1 for a single differential model). Set
 \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override
 the Transformer hidden width and depth. Set
 \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
-the opponent-dependent cross-candidate term in pairwise mode, or set
-\code{neural_mcmc_control$cross_candidate_encoder = "full"} to enable a full cross-encoder
-that jointly encodes both candidates. Use \code{"none"} (or \code{FALSE}) to disable.
+the opponent-dependent cross-candidate term in pairwise mode, set
+\code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
+cross-attention step, or set \code{neural_mcmc_control$cross_candidate_encoder = "full"}
+to enable a full cross-encoder that jointly encodes both candidates. Use
+\code{"none"} (or \code{FALSE}) to disable.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
 \code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
