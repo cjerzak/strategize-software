@@ -1217,6 +1217,76 @@ generate_ModelOutcome_neural <- function(){
   cross_candidate_encoder_mode <- "none"
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
+
+  file_suffix <- if (!is.null(outcome_model_key)) {
+    sprintf("%s_%s_%s", GroupsPool[GroupCounter], Round_, outcome_model_key)
+  } else {
+    sprintf("%s_%s", GroupsPool[GroupCounter], Round_)
+  }
+  if (isTRUE(adversarial) && adversarial_model_strategy == "two") {
+    file_suffix <- sprintf("%s_two", file_suffix)
+  }
+  bundle_path <- sprintf("./StrategizeInternals/neural_bundle_%s.rds", file_suffix)
+
+  if (isTRUE(presaved_outcome_model) && file.exists(bundle_path)) {
+    bundle <- tryCatch(readRDS(bundle_path), error = function(e) NULL)
+    if (is.list(bundle) && !is.null(bundle$fit) &&
+        !is.null(bundle$fit$theta_mean) &&
+        !is.null(bundle$fit$neural_model_info)) {
+      message(sprintf("Loading cached neural outcome bundle: %s", bundle_path))
+
+      # Main-info structure for downstream compatibility
+      for(nrp in 1:2){
+        main_info <- do.call(rbind, sapply(1:length(factor_levels), function(d_){
+          list(data.frame(
+            "d" = d_,
+            "l" = 1:max(1, factor_levels[d_] - ifelse(nrp == 1, yes = 1, no = holdout_indicator))
+          ))
+        }))
+        main_info <- cbind(main_info, "d_index" = 1:nrow(main_info))
+        if(nrp == 1){ a_structure <- main_info }
+      }
+      if(holdout_indicator == 0){
+        a_structure_leftoutLdminus1 <- main_info[which(c(base::diff(main_info$d),1)==0),]
+        a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
+      }
+      interaction_info <- data.frame()
+      interaction_info_PreRegularization <- interaction_info
+      regularization_adjust_hash <- main_info$d
+      names(regularization_adjust_hash) <- main_info$d
+      main_dat <- matrix(0, nrow = 0L, ncol = 0L)
+
+      theta_mean_num <- as.numeric(bundle$fit$theta_mean)
+      theta_var_num <- bundle$fit$theta_var
+      my_mean <- numeric(0)
+      my_mean_full <- NULL
+      vcov_OutcomeModel_by_k <- NULL
+      vcov_OutcomeModel <- if (!is.null(theta_var_num)) {
+        c(0, as.numeric(theta_var_num))
+      } else {
+        c(0, rep(0, length(theta_mean_num)))
+      }
+
+      EST_INTERCEPT_tf <- strenv$jnp$array(matrix(0, nrow = 1L, ncol = 1L), dtype = strenv$dtj)
+      EST_COEFFICIENTS_tf <- strenv$jnp$reshape(
+        strenv$jnp$array(theta_mean_num, dtype = strenv$dtj),
+        list(-1L, 1L)
+      )
+
+      if (exists("K", inherits = TRUE) && is.numeric(K) && K > 1) {
+        base_vec <- c(0, theta_mean_num)
+        my_mean_full <- matrix(rep(base_vec, K), ncol = K)
+        vcov_OutcomeModel_by_k <- replicate(K, vcov_OutcomeModel, simplify = FALSE)
+      }
+
+      neural_model_info <- bundle$fit$neural_model_info
+      fit_metrics <- bundle$fit$fit_metrics %||% neural_model_info$fit_metrics
+      my_model <- NULL
+
+      return(invisible(NULL))
+    }
+  }
+
   normalize_cross_candidate_encoder <- function(value) {
     if (is.null(value)) {
       return("none")
@@ -4464,6 +4534,36 @@ generate_ModelOutcome_neural <- function(){
     n_heads = TransformerHeads,
     head_dim = head_dim
   )
+
+  if (isTRUE(save_outcome_model)) {
+    dir.create("./StrategizeInternals", showWarnings = FALSE)
+    bundle_meta <- list(
+      outcome_model_key = outcome_model_key,
+      group = GroupsPool[GroupCounter],
+      round = Round_,
+      adversarial = isTRUE(adversarial),
+      adversarial_model_strategy = adversarial_model_strategy
+    )
+    tryCatch({
+      save_neural_outcome_bundle(
+        file = bundle_path,
+        theta_mean = theta_mean_num,
+        theta_var = param_var,
+        neural_model_info = neural_model_info,
+        names_list = names_list,
+        factor_levels = factor_levels,
+        mode = if (isTRUE(pairwise_mode)) "pairwise" else "single",
+        fit_metrics = fit_metrics,
+        conda_env = conda_env,
+        conda_env_required = conda_env_required,
+        overwrite = TRUE,
+        metadata = bundle_meta
+      )
+    }, error = function(e) {
+      warning(sprintf("Failed to save neural outcome bundle: %s", e$message),
+              call. = FALSE)
+    })
+  }
 
   message(sprintf("Bayesian Transformer complete. Pairwise=%s, Heads=%d, Depth=%d, Hidden=%d; likelihood=%s.",
                   pairwise_mode, TransformerHeads, ModelDepth, MD_int, likelihood))
