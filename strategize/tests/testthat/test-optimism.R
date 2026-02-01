@@ -242,8 +242,14 @@ test_that("rain stage indexing matches cumulative lambda sum", {
   skip_if_no_jax()
   withr::local_seed(791)
 
-  base <- generate_test_data(n = 50, n_factors = 2, n_levels = 2, seed = 323)
+  base <- generate_test_data(n = 1000, n_factors = 2, n_levels = 2, seed = 323)
   adv_data <- add_adversarial_structure(base, seed = 224)
+  # Add a touch of label noise to avoid degenerate folds in glinternet screening.
+  pair_ids <- unique(adv_data$pair_id)
+  n_flip <- max(1L, floor(0.05 * length(pair_ids)))
+  flip_pairs <- sample(pair_ids, n_flip)
+  flip_idx <- adv_data$pair_id %in% flip_pairs
+  adv_data$Y[flip_idx] <- 1 - adv_data$Y[flip_idx]
   p_list <- generate_test_p_list(adv_data$W)
 
   result <- strategize(
@@ -254,6 +260,7 @@ test_that("rain stage indexing matches cumulative lambda sum", {
     nSGD = 4,
     nMonte_Qglm = 5L,
     nMonte_adversarial = 3L,
+    nFolds_glm = 1L,
     diff = TRUE,
     adversarial = TRUE,
     compute_se = FALSE,
