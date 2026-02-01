@@ -81,6 +81,26 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+cs2step_neural_param_cache <- new.env(parent = emptyenv())
+
+cs2step_neural_cache_get <- function(cache_id) {
+  if (is.null(cache_id) || !nzchar(cache_id)) {
+    return(NULL)
+  }
+  if (exists(cache_id, envir = cs2step_neural_param_cache, inherits = FALSE)) {
+    return(get(cache_id, envir = cs2step_neural_param_cache, inherits = FALSE))
+  }
+  NULL
+}
+
+cs2step_neural_cache_set <- function(cache_id, params) {
+  if (is.null(cache_id) || !nzchar(cache_id)) {
+    return(invisible(NULL))
+  }
+  assign(cache_id, params, envir = cs2step_neural_param_cache)
+  invisible(NULL)
+}
+
 cs2step_has_reticulate <- function() {
   requireNamespace("reticulate", quietly = TRUE)
 }
@@ -729,6 +749,12 @@ cs2step_neural_prepare_params <- function(object,
     return(list(params = params, model_info = model_info))
   }
 
+  cache_id <- object$metadata$cache_id %||% NULL
+  cached_params <- cs2step_neural_cache_get(cache_id)
+  if (!is.null(cached_params)) {
+    return(list(params = cached_params, model_info = model_info))
+  }
+
   theta_mean <- object$fit$theta_mean
   if (is.null(theta_mean) || !length(theta_mean)) {
     if (!is.null(model_info$params)) {
@@ -745,6 +771,7 @@ cs2step_neural_prepare_params <- function(object,
   }
   theta_jnp <- strenv$jnp$array(as.numeric(theta_mean))$astype(strenv$dtj)
   params <- neural_params_from_theta(theta_jnp, model_info)
+  cs2step_neural_cache_set(cache_id, params)
   list(params = params, model_info = model_info)
 }
 
@@ -1361,7 +1388,8 @@ cs2step_pack_predictor <- function(object, include_metrics = TRUE) {
 
 cs2step_unpack_predictor <- function(bundle,
                                      conda_env = "strategize_env",
-                                     conda_env_required = TRUE) {
+                                     conda_env_required = TRUE,
+                                     preload_params = TRUE) {
   if (inherits(bundle, "strategic_predictor")) {
     return(bundle)
   }
@@ -1433,10 +1461,12 @@ cs2step_unpack_predictor <- function(bundle,
     class = "strategic_predictor"
   )
 
-  prep <- cs2step_neural_prepare_params(out,
-                                        conda_env = metadata$conda_env,
-                                        conda_env_required = metadata$conda_env_required)
-  out$fit$params <- prep$params
+  if (isTRUE(preload_params)) {
+    prep <- cs2step_neural_prepare_params(out,
+                                          conda_env = metadata$conda_env,
+                                          conda_env_required = metadata$conda_env_required)
+    out$fit$params <- prep$params
+  }
   out
 }
 
@@ -1492,4 +1522,271 @@ load_strategic_predictor <- function(file,
   cs2step_unpack_predictor(bundle,
                            conda_env = conda_env,
                            conda_env_required = conda_env_required)
+}
+
+cs2step_normalize_names_list <- function(names_list) {
+  if (is.null(names_list) || length(names_list) == 0L) {
+    return(NULL)
+  }
+  out <- lapply(names_list, function(x) {
+    if (is.list(x) && length(x) == 1L && is.atomic(x[[1]])) {
+      return(as.character(x[[1]]))
+    }
+    if (is.atomic(x)) {
+      return(as.character(x))
+    }
+    as.character(unlist(x))
+  })
+  if (is.null(names(out))) {
+    names(out) <- names(names_list)
+  }
+  out
+}
+
+cs2step_build_neural_outcome_bundle <- function(theta_mean,
+                                                theta_var = NULL,
+                                                neural_model_info,
+                                                names_list,
+                                                factor_levels = NULL,
+                                                mode = c("auto", "pairwise", "single"),
+                                                fit_metrics = NULL,
+                                                conda_env = "strategize_env",
+                                                conda_env_required = TRUE,
+                                                metadata = NULL) {
+  if (is.null(neural_model_info)) {
+    stop("'neural_model_info' is required.", call. = FALSE)
+  }
+  if (is.null(theta_mean)) {
+    stop("'theta_mean' is required.", call. = FALSE)
+  }
+  names_list_norm <- cs2step_normalize_names_list(names_list)
+  if (is.null(names_list_norm) || length(names_list_norm) == 0L) {
+    stop("'names_list' must be provided to build a portable bundle.", call. = FALSE)
+  }
+  if (is.null(names(names_list_norm))) {
+    names(names_list_norm) <- paste0("Factor", seq_len(length(names_list_norm)))
+  }
+
+  if (is.null(factor_levels)) {
+    factor_levels <- vapply(names_list_norm, length, integer(1))
+  }
+
+  theta_mean_num <- as.numeric(cs2step_py_to_r(theta_mean))
+  theta_var_num <- if (!is.null(theta_var)) {
+    as.numeric(cs2step_py_to_r(theta_var))
+  } else {
+    NULL
+  }
+
+  mode <- match.arg(mode)
+  if (identical(mode, "auto")) {
+    mode <- if (!is.null(neural_model_info$pairwise_mode) &&
+                isTRUE(neural_model_info$pairwise_mode)) {
+      "pairwise"
+    } else {
+      "single"
+    }
+  }
+
+  packed_info <- cs2step_neural_pack_model_info(neural_model_info, drop_params = TRUE)
+  fit_metrics <- fit_metrics %||% packed_info$fit_metrics %||% NULL
+
+  encoder <- list(
+    factor_names = names(names_list_norm),
+    names_list = lapply(names_list_norm, function(x) list(x)),
+    factor_levels = as.integer(factor_levels),
+    unknown_policy = "holdout"
+  )
+
+  meta_default <- list(
+    created_at = Sys.time(),
+    conda_env = conda_env,
+    conda_env_required = conda_env_required
+  )
+  meta <- modifyList(meta_default, metadata %||% list())
+
+  bundle <- list(
+    schema_version = 1L,
+    model_type = "neural",
+    mode = mode,
+    encoder = encoder,
+    fit = list(
+      theta_mean = theta_mean_num,
+      theta_var = theta_var_num,
+      neural_model_info = packed_info,
+      fit_metrics = fit_metrics
+    ),
+    metadata = meta
+  )
+  bundle$theta_mean <- theta_mean_num
+  bundle$theta_var <- theta_var_num
+  bundle$neural_model_info <- packed_info
+  bundle$fit_metrics <- fit_metrics
+  class(bundle) <- c("strategic_predictor_bundle", "list")
+  bundle
+}
+
+#' Save a portable neural outcome bundle
+#'
+#' @param file Path to save the bundle (typically ending in \code{.rds}).
+#' @param theta_mean Numeric vector of posterior means for neural parameters.
+#' @param theta_var Optional numeric vector of posterior variances.
+#' @param neural_model_info Neural model metadata (can include reticulate objects).
+#' @param names_list Optional list of factor level names (see \code{cs_prepare_W_encoding}).
+#' @param p_list Optional \code{p_list} to derive factor level names when \code{names_list} is missing.
+#' @param factor_levels Optional integer vector of factor levels (derived from \code{names_list} by default).
+#' @param mode \code{"auto"}, \code{"pairwise"}, or \code{"single"}.
+#' @param fit_metrics Optional fit metrics to include.
+#' @param conda_env Conda env name for neural backend (stored in metadata).
+#' @param conda_env_required Require conda env to exist (stored in metadata).
+#' @param overwrite Logical; overwrite existing file.
+#' @param compress Compression passed to \code{saveRDS()}.
+#' @param metadata Optional list of extra metadata to include.
+#' @return The bundle path (invisibly).
+#' @export
+save_neural_outcome_bundle <- function(file,
+                                       theta_mean,
+                                       theta_var = NULL,
+                                       neural_model_info,
+                                       names_list = NULL,
+                                       p_list = NULL,
+                                       factor_levels = NULL,
+                                       mode = c("auto", "pairwise", "single"),
+                                       fit_metrics = NULL,
+                                       conda_env = "strategize_env",
+                                       conda_env_required = TRUE,
+                                       overwrite = FALSE,
+                                       compress = TRUE,
+                                       metadata = NULL) {
+  file <- as.character(file)
+  if (length(file) != 1L || !nzchar(file)) {
+    stop("'file' must be a non-empty path.", call. = FALSE)
+  }
+  if (file.exists(file) && !isTRUE(overwrite)) {
+    stop("Bundle file already exists; set overwrite = TRUE to replace it.", call. = FALSE)
+  }
+
+  if (is.null(names_list)) {
+    if (!is.null(p_list) && length(p_list) > 0L) {
+      names_list <- lapply(p_list, function(zer) {
+        levs <- names(zer)
+        if (is.null(levs)) {
+          levs <- as.character(seq_len(length(zer)))
+        }
+        list(levs)
+      })
+      if (!is.null(names(p_list))) {
+        names(names_list) <- names(p_list)
+      }
+    }
+  }
+
+  bundle <- cs2step_build_neural_outcome_bundle(
+    theta_mean = theta_mean,
+    theta_var = theta_var,
+    neural_model_info = neural_model_info,
+    names_list = names_list,
+    factor_levels = factor_levels,
+    mode = mode,
+    fit_metrics = fit_metrics,
+    conda_env = conda_env,
+    conda_env_required = conda_env_required,
+    metadata = metadata
+  )
+
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(bundle, file = file, compress = compress)
+  invisible(file)
+}
+
+#' Load a portable neural outcome bundle
+#'
+#' @param file Path to a bundle created by \code{save_neural_outcome_bundle()}.
+#' @param conda_env Conda env name for neural backend. Use \code{NULL} to defer to metadata.
+#' @param conda_env_required Require conda env to exist for neural backend.
+#' @param preload_params Logical; if TRUE, reconstruct neural params immediately.
+#' @return A \code{strategic_predictor} ready for \code{predict()} / \code{predict_pair()}.
+#' @export
+load_neural_outcome_bundle <- function(file,
+                                       conda_env = "strategize_env",
+                                       conda_env_required = TRUE,
+                                       preload_params = FALSE) {
+  file <- as.character(file)
+  if (length(file) != 1L || !nzchar(file)) {
+    stop("'file' must be a non-empty path.", call. = FALSE)
+  }
+  if (!file.exists(file)) {
+    stop("Bundle file does not exist.", call. = FALSE)
+  }
+
+  bundle <- readRDS(file)
+  if (!is.list(bundle)) {
+    stop("Unrecognized bundle format.", call. = FALSE)
+  }
+  if (is.null(bundle$fit)) {
+    bundle$fit <- list(
+      theta_mean = bundle$theta_mean %||% NULL,
+      theta_var = bundle$theta_var %||% NULL,
+      neural_model_info = bundle$neural_model_info %||% NULL,
+      fit_metrics = bundle$fit_metrics %||% NULL
+    )
+  } else {
+    if (is.null(bundle$fit$theta_mean) && !is.null(bundle$theta_mean)) {
+      bundle$fit$theta_mean <- bundle$theta_mean
+    }
+    if (is.null(bundle$fit$theta_var) && !is.null(bundle$theta_var)) {
+      bundle$fit$theta_var <- bundle$theta_var
+    }
+    if (is.null(bundle$fit$neural_model_info) && !is.null(bundle$neural_model_info)) {
+      bundle$fit$neural_model_info <- bundle$neural_model_info
+    }
+    if (is.null(bundle$fit$fit_metrics) && !is.null(bundle$fit_metrics)) {
+      bundle$fit$fit_metrics <- bundle$fit_metrics
+    }
+  }
+  if (is.null(bundle$fit$neural_model_info)) {
+    stop("Bundle is missing neural_model_info.", call. = FALSE)
+  }
+  if (is.null(bundle$model_type)) {
+    bundle$model_type <- "neural"
+  }
+  if (is.null(bundle$mode) && !is.null(bundle$fit$neural_model_info$pairwise_mode)) {
+    bundle$mode <- if (isTRUE(bundle$fit$neural_model_info$pairwise_mode)) {
+      "pairwise"
+    } else {
+      "single"
+    }
+  }
+  if (is.null(bundle$mode)) {
+    bundle$mode <- "single"
+  }
+
+  if (is.null(bundle$encoder) || is.null(bundle$encoder$names_list)) {
+    factor_levels <- bundle$fit$neural_model_info$factor_levels
+    if (is.null(factor_levels)) {
+      stop("Bundle is missing encoder metadata.", call. = FALSE)
+    }
+    n_factors <- length(factor_levels)
+    names_list <- lapply(seq_len(n_factors), function(j) {
+      list(as.character(seq_len(factor_levels[[j]])))
+    })
+    names(names_list) <- paste0("Factor", seq_len(n_factors))
+    bundle$encoder <- list(
+      factor_names = names(names_list),
+      names_list = names_list,
+      factor_levels = as.integer(factor_levels),
+      unknown_policy = "holdout"
+    )
+  }
+
+  out <- cs2step_unpack_predictor(
+    bundle,
+    conda_env = conda_env,
+    conda_env_required = conda_env_required,
+    preload_params = preload_params
+  )
+  if (inherits(out, "strategic_predictor")) {
+    out$metadata$cache_id <- sprintf("neural_cache_%d", as.integer(stats::runif(1, 1, 1e9)))
+  }
+  out
 }
