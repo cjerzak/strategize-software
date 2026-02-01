@@ -113,6 +113,15 @@ cs2step_py_to_r <- function(x) {
     return(x)
   }
   if (reticulate::is_py_object(x)) {
+    has_np <- exists("strenv") && exists("np", envir = strenv, inherits = FALSE)
+    if (isTRUE(has_np)) {
+      return(tryCatch(
+        reticulate::py_to_r(strenv$np$array(x)),
+        error = function(e) {
+          tryCatch(reticulate::py_to_r(x), error = function(e2) x)
+        }
+      ))
+    }
     return(tryCatch(reticulate::py_to_r(x), error = function(e) x))
   }
   x
@@ -652,7 +661,7 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
     }
     return(resp_cov_new)
   }
-  resp_cov_mean <- cs2step_py_to_r(model_info$resp_cov_mean)
+  resp_cov_mean <- cs2step_neural_to_r_array(model_info$resp_cov_mean)
   if (!is.null(resp_cov_mean)) {
     resp_cov_mean <- as.numeric(resp_cov_mean)
     if (length(resp_cov_mean) == 0L) {
@@ -776,14 +785,7 @@ cs2step_neural_prepare_params <- function(object,
 }
 
 cs2step_neural_to_r_array <- function(x) {
-  if (is.null(x)) {
-    return(NULL)
-  }
-  if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
-    return(tryCatch(reticulate::py_to_r(strenv$np$array(x)),
-                    error = function(e) reticulate::py_to_r(x)))
-  }
-  x
+  cs2step_py_to_r(x)
 }
 
 cs2step_neural_coerce_prediction_output <- function(pred, likelihood) {
@@ -1302,29 +1304,29 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     out$params <- if (isTRUE(drop_params)) {
       NULL
     } else {
-      lapply(out$params, cs2step_py_to_r)
+      lapply(out$params, cs2step_neural_to_r_array)
     }
   }
   if (!is.null(out$factor_index_list)) {
-    out$factor_index_list <- lapply(out$factor_index_list, function(x) as.integer(cs2step_py_to_r(x)))
+    out$factor_index_list <- lapply(out$factor_index_list, function(x) as.integer(cs2step_neural_to_r_array(x)))
   }
   if (!is.null(out$cand_party_to_resp_idx)) {
-    out$cand_party_to_resp_idx <- as.integer(cs2step_py_to_r(out$cand_party_to_resp_idx))
+    out$cand_party_to_resp_idx <- as.integer(cs2step_neural_to_r_array(out$cand_party_to_resp_idx))
   }
   if (!is.null(out$resp_cov_mean)) {
-    out$resp_cov_mean <- as.numeric(cs2step_py_to_r(out$resp_cov_mean))
+    out$resp_cov_mean <- as.numeric(cs2step_neural_to_r_array(out$resp_cov_mean))
   }
   if (!is.null(out$factor_levels)) {
     out$factor_levels <- as.integer(out$factor_levels)
   }
   if (!is.null(out$param_shapes)) {
-    out$param_shapes <- lapply(out$param_shapes, function(x) as.integer(cs2step_py_to_r(x)))
+    out$param_shapes <- lapply(out$param_shapes, function(x) as.integer(cs2step_neural_to_r_array(x)))
   }
   if (!is.null(out$param_sizes)) {
-    out$param_sizes <- lapply(out$param_sizes, function(x) as.integer(cs2step_py_to_r(x)))
+    out$param_sizes <- lapply(out$param_sizes, function(x) as.integer(cs2step_neural_to_r_array(x)))
   }
   if (!is.null(out$param_offsets)) {
-    out$param_offsets <- lapply(out$param_offsets, function(x) as.integer(cs2step_py_to_r(x)))
+    out$param_offsets <- lapply(out$param_offsets, function(x) as.integer(cs2step_neural_to_r_array(x)))
   }
 
   int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
@@ -1571,9 +1573,9 @@ cs2step_build_neural_outcome_bundle <- function(theta_mean,
     factor_levels <- vapply(names_list_norm, length, integer(1))
   }
 
-  theta_mean_num <- as.numeric(cs2step_py_to_r(theta_mean))
+  theta_mean_num <- as.numeric(cs2step_neural_to_r_array(theta_mean))
   theta_var_num <- if (!is.null(theta_var)) {
-    as.numeric(cs2step_py_to_r(theta_var))
+    as.numeric(cs2step_neural_to_r_array(theta_var))
   } else {
     NULL
   }
