@@ -28,8 +28,12 @@ validate_strategize_inputs(
   primary_strength = 1,
   primary_n_entrants = 1L,
   primary_n_field = 1L,
+  rain_lambda = 1,
   rain_gamma = 0.01,
-  rain_eta = 0.001
+  rain_L = NULL,
+  rain_eta = 0.001,
+  rain_variant = "alg10_staged",
+  rain_output = "last"
 )
 }
 \arguments{
@@ -98,11 +102,19 @@ For variational inference (subsample_method = "batch_vi"), set
 
 \item{primary_n_field}{Number of field candidates sampled per party in multi-candidate primaries}
 
+\item{rain_lambda}{Numeric scalar giving the base RAIN regularization scale \eqn{\lambda}.}
+
 \item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
 If not supplied, defaults are auto-scaled downward when \code{nSGD} exceeds 100.}
 
+\item{rain_L}{Optional numeric scalar for the Lipschitz constant \eqn{L} used by RAIN.}
+
 \item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
 \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not supplied.}
+
+\item{rain_variant}{Character string specifying the RAIN variant.}
+
+\item{rain_output}{Character string controlling the RAIN stage output.}
 }
 \value{
 TRUE invisibly if validation passes; stops with error otherwise

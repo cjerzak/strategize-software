@@ -18,7 +18,10 @@ strategic_prediction(
   conda_env_required = TRUE,
   neural_mcmc_control = NULL,
   use_regularization = TRUE,
-  nFolds_glm = 3L
+  nFolds_glm = 3L,
+  cache_path = NULL,
+  cache_overwrite = FALSE,
+  cache_compress = TRUE
 )
 }
 \arguments{
@@ -49,6 +52,14 @@ strategic_prediction(
 \item{use_regularization}{Logical; run glinternet screening for GLM.}
 
 \item{nFolds_glm}{Number of folds for glinternet CV (GLM).}
+
+\item{cache_path}{Optional path to a cached predictor (.rds). If it exists and
+\code{cache_overwrite} is \code{FALSE}, the cached model is loaded instead of refitting.
+When a new model is fit, it is saved to this path.}
+
+\item{cache_overwrite}{Logical; refit and overwrite any existing cache at \code{cache_path}.}
+
+\item{cache_compress}{Compression setting passed to \code{saveRDS()}.}
 }
 \value{
 An object of class \code{strategic_predictor}.

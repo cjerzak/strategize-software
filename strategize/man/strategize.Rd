@@ -56,8 +56,12 @@ strategize(
   optim_type = "gd",
   optimism = "extragrad",
   optimism_coef = 1,
+  rain_lambda = 1,
   rain_gamma = 0.01,
+  rain_L = NULL,
   rain_eta = 0.001,
+  rain_variant = "alg10_staged",
+  rain_output = "last",
   compute_hessian = TRUE,
   hessian_max_dim = 50L
 )
@@ -290,18 +294,36 @@ anchored extra-gradient and increasing quadratic anchor penalties), or \code{"no
 \code{use_optax = FALSE}.}
 
 \item{optimism_coef}{Numeric scalar controlling the magnitude of optimism adjustments. For
-\code{"ogda"}, this scales the optimistic correction term. For \code{"rain"}, this is the
-initial anchor weight \eqn{\lambda_0} used by RAIN; anchor weights grow multiplicatively by
-\eqn{(1+\gamma)} each outer stage.}
+\code{"ogda"}, this scales the optimistic correction term. Ignored when
+\code{optimism = "rain"}.}
+
+\item{rain_lambda}{Numeric scalar giving the base RAIN regularization scale \eqn{\lambda}.
+The staged algorithm uses \eqn{\lambda_0 = \gamma \lambda} and grows by
+\eqn{(1+\gamma)} each stage. Only used when \code{optimism = "rain"}.}
 
 \item{rain_gamma}{Non-negative numeric scalar for the RAIN anchor-growth parameter \eqn{\gamma}.
 Larger values grow anchor weights faster. If not supplied, the default is
 auto-scaled downward when \code{nSGD} exceeds 100 to keep total anchor growth
 roughly constant. Only used when \code{optimism = "rain"}.}
 
+\item{rain_L}{Optional numeric scalar for the Lipschitz constant \eqn{L} used by RAIN.
+When supplied and \code{rain_eta} is missing, \code{rain_eta} defaults to
+\eqn{1/(8L)} and stage lengths follow \eqn{T_s = 16L/\lambda_s}. If \code{NULL},
+\eqn{L} is estimated from \code{rain_eta}. Only used when \code{optimism = "rain"}.}
+
 \item{rain_eta}{Optional numeric scalar step size \eqn{\eta} for RAIN. Defaults to
 \code{0.001} and is auto-scaled downward when \code{nSGD} exceeds 100 if not
-supplied. Only used when \code{optimism = "rain"}.}
+supplied. If \code{rain_L} is supplied and \code{rain_eta} is missing, defaults
+to \eqn{1/(8L)}. Only used when \code{optimism = "rain"}.}
+
+\item{rain_variant}{Character string specifying the RAIN variant. Options:
+\code{"alg10_staged"} (merged Algorithm 10 with recursive stage anchors; default) or
+\code{"alg9_single_loop"} (single-loop variant; not yet implemented). Only used when
+\code{optimism = "rain"}.}
+
+\item{rain_output}{Character string controlling the stage output for RAIN.
+\code{"uniform_half"} samples uniformly from half-iterates within the stage (most faithful);
+\code{"last"} returns the last iterate (default). Only used when \code{optimism = "rain"}.}
 
 \item{compute_hessian}{Logical. Whether to compute Hessian functions for equilibrium
 geometry analysis in adversarial mode. When \code{TRUE} (default), Hessian functions
