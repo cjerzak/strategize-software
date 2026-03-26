@@ -72,6 +72,60 @@ get_neural_fit_attn <- local({
   }
 })
 
+get_neural_fit_attn_output_vi <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true"
+    ))
+
+    data <- generate_test_data(n = 24, seed = 20260326)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    params$neural_mcmc_control <- modifyList(
+      params$neural_mcmc_control,
+      list(
+        cross_candidate_encoder = "attn",
+        ModelDims = 16L,
+        ModelDepth = 1L,
+        subsample_method = "batch_vi",
+        uncertainty_scope = "output",
+        svi_steps = "optimal",
+        batch_size = 16L,
+        eval_enabled = FALSE,
+        warn_stage_imbalance_pct = 0,
+        warn_min_cell_n = 0L
+      )
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- suppressWarnings(do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    )))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
+get_neural_model_info <- function(res) {
+  model_info <- res$neural_model_info$ast
+  if (is.null(model_info)) model_info <- res$neural_model_info$dag
+  if (is.null(model_info)) model_info <- res$neural_model_info$ast0
+  if (is.null(model_info)) model_info <- res$neural_model_info$dag0
+  model_info
+}
+
 test_that("strategize runs neural outcome model (non-adversarial)", {
   fit <- get_neural_fit()
   res <- fit$res
@@ -124,17 +178,25 @@ test_that("neural attn predictor remains antisymmetric", {
   expect_equal(p_lr + p_rl, rep(1, length(p_lr)), tolerance = 1e-4)
 })
 
+test_that("neural attn metadata marks the cross-candidate encoder as enabled", {
+  fit <- get_neural_fit_attn()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_false(is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "attn")
+  expect_true(isTRUE(model_info$cross_candidate_encoder))
+})
+
 test_that("neural outcome bundles save and reload cleanly", {
-  fit <- get_neural_fit()
+  fit <- get_neural_fit_attn()
   res <- fit$res
   data <- fit$data
   p_list <- fit$p_list
 
-  model_info <- res$neural_model_info$ast
-  if (is.null(model_info)) model_info <- res$neural_model_info$dag
-  if (is.null(model_info)) model_info <- res$neural_model_info$ast0
-  if (is.null(model_info)) model_info <- res$neural_model_info$dag0
+  model_info <- get_neural_model_info(res)
   expect_true(!is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "attn")
+  expect_true(isTRUE(model_info$cross_candidate_encoder))
 
   theta_mean <- tryCatch(
     as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
@@ -179,10 +241,14 @@ test_that("neural outcome bundles save and reload cleanly", {
   }
   expect_false(has_py_object(bundle))
   expect_false(has_py_object(bundle$fit$neural_model_info))
+  expect_identical(bundle$fit$neural_model_info$cross_candidate_encoder_mode, "attn")
+  expect_true(isTRUE(bundle$fit$neural_model_info$cross_candidate_encoder))
 
   fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
   expect_true(inherits(fit_loaded, "strategic_predictor"))
   expect_true(is.null(fit_loaded$fit$params))
+  expect_identical(fit_loaded$fit$neural_model_info$cross_candidate_encoder_mode, "attn")
+  expect_true(isTRUE(fit_loaded$fit$neural_model_info$cross_candidate_encoder))
 
   idx_left <- which(data$profile_order == 1L)
   idx_right <- which(data$profile_order == 2L)
@@ -192,6 +258,40 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_true(is.numeric(p))
   expect_true(all(is.finite(p)))
   expect_true(all(p >= 0 & p <= 1))
+})
+
+test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
+  fit <- get_neural_fit_attn_output_vi()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_false(is.null(model_info))
+  expect_true(isTRUE(model_info$pairwise_mode))
+  expect_identical(model_info$uncertainty_scope, "output")
+  expect_identical(model_info$cross_candidate_encoder_mode, "attn")
+  expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_true(is.numeric(model_info$svi_loss_curve))
+  expect_gt(length(model_info$svi_loss_curve), 0L)
+
+  expected_steps <- strategize:::neural_optimal_svi_steps(
+    n_obs = length(unique(fit$data$pair_id)),
+    n_factors = as.integer(model_info$n_factors),
+    factor_levels = as.integer(model_info$factor_levels),
+    model_dims = as.integer(model_info$model_dims),
+    model_depth = as.integer(model_info$model_depth),
+    n_party_levels = as.integer(model_info$n_party_levels),
+    n_resp_party_levels = length(model_info$resp_party_levels),
+    n_resp_covariates = as.integer(model_info$n_resp_covariates),
+    n_outcomes = 1L,
+    pairwise_mode = isTRUE(model_info$pairwise_mode),
+    use_matchup_token = isTRUE(model_info$has_matchup_token),
+    use_cross_encoder = identical(model_info$cross_candidate_encoder_mode, "full"),
+    use_cross_term = identical(model_info$cross_candidate_encoder_mode, "term"),
+    use_cross_attn = identical(model_info$cross_candidate_encoder_mode, "attn"),
+    batch_size = 16L,
+    subsample_method = "batch_vi"
+  )
+
+  expect_length(model_info$svi_loss_curve, expected_steps)
 })
 
 test_that("neural prior predictive probabilities are not overly concentrated", {
