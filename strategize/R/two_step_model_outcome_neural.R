@@ -4519,7 +4519,7 @@ generate_ModelOutcome_neural <- function(){
     has_stage_head = !is.null(ParamsMean$W_stage),
     has_ctx_head = !is.null(ParamsMean$W_ctx),
     has_choice_token = !is.null(ParamsMean$E_choice),
-    cross_candidate_encoder = isTRUE(use_cross_term),
+    cross_candidate_encoder = !identical(cross_candidate_encoder_mode, "none"),
     cross_candidate_encoder_mode = cross_candidate_encoder_mode,
     has_cross_encoder = isTRUE(use_cross_encoder),
     has_cross_attn = !is.null(ParamsMean$W_q_cross),
