@@ -385,6 +385,38 @@ test_that("validate_strategize_inputs rejects invalid cross_candidate_encoder va
   )
 })
 
+test_that("validate_strategize_inputs accepts qk_norm options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  for (val in list(TRUE, FALSE, "true", "false")) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(qk_norm = val)
+      ),
+      info = sprintf("Expected qk_norm=%s to be accepted", as.character(val))
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid qk_norm values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(qk_norm = "bad_value")
+    ),
+    "qk_norm"
+  )
+})
+
 test_that("validate_strategize_inputs accepts optimizer options", {
   skip_on_cran()
 

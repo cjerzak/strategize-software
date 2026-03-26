@@ -249,6 +249,8 @@ neural_build_param_schema <- function(params,
                      paste0("alpha_attn_l", l_),
                      paste0("alpha_ff_l", l_),
                      paste0("RMS_attn_l", l_),
+                     paste0("RMS_q_l", l_),
+                     paste0("RMS_k_l", l_),
                      paste0("RMS_ff_l", l_),
                      paste0("W_q_l", l_),
                      paste0("W_k_l", l_),
@@ -260,6 +262,8 @@ neural_build_param_schema <- function(params,
   param_names <- c(param_names,
                    "alpha_cross",
                    "RMS_cross",
+                   "RMS_q_cross",
+                   "RMS_k_cross",
                    "W_q_cross",
                    "W_k_cross",
                    "W_v_cross",
@@ -348,9 +352,10 @@ neural_rms_norm <- function(x, g, model_dims, eps = 1e-6) {
   if (is.null(g)) {
     return(x)
   }
+  x <- strenv$jnp$array(x)
+  g_use <- strenv$jnp$array(g, dtype = x$dtype)
   mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
   inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
-  g_use <- strenv$jnp$reshape(g, list(1L, 1L, ai(model_dims)))
   x * inv_rms * g_use
 }
 
@@ -744,6 +749,8 @@ neural_run_transformer <- function(tokens, model_info, params = NULL){
     Wff2 <- params[[paste0("W_ff2_l", l_)]]
     RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
     RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
+    RMS_q <- params[[paste0("RMS_q_l", l_)]]
+    RMS_k <- params[[paste0("RMS_k_l", l_)]]
     alpha_attn <- neural_param_or_default(params, paste0("alpha_attn_l", l_), 1.0)
     alpha_ff <- neural_param_or_default(params, paste0("alpha_ff_l", l_), 1.0)
 
@@ -758,6 +765,8 @@ neural_run_transformer <- function(tokens, model_info, params = NULL){
                                     ai(model_info$n_heads), ai(model_info$head_dim)))
     Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]],
                                     ai(model_info$n_heads), ai(model_info$head_dim)))
+    Qh <- neural_rms_norm(Qh, RMS_q, model_info$head_dim)
+    Kh <- neural_rms_norm(Kh, RMS_k, model_info$head_dim)
     scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
     scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
     attn <- strenv$jax$nn$softmax(scores, axis = -1L)
@@ -802,6 +811,8 @@ neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
                                   ai(model_info$n_heads), ai(model_info$head_dim)))
   Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]],
                                   ai(model_info$n_heads), ai(model_info$head_dim)))
+  Qh <- neural_rms_norm(Qh, params$RMS_q_cross, model_info$head_dim)
+  Kh <- neural_rms_norm(Kh, params$RMS_k_cross, model_info$head_dim)
   scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
   scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
   attn <- strenv$jax$nn$softmax(scores, axis = -1L)
@@ -1214,6 +1225,7 @@ generate_ModelOutcome_neural <- function(){
   eval_control <- list(enabled = TRUE, max_n = NULL, seed = 123L, n_folds = NULL)
   model_dims <- 128L
   model_depth <- 2L
+  qk_norm_enabled <- TRUE
   cross_candidate_encoder_mode <- "none"
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
@@ -1329,6 +1341,22 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(neural_mcmc_control$ModelDepth)) {
       model_depth <- neural_mcmc_control$ModelDepth
     }
+    if (!is.null(neural_mcmc_control$qk_norm)) {
+      qk_norm_value <- neural_mcmc_control$qk_norm
+      if (is.logical(qk_norm_value) && length(qk_norm_value) == 1L && !is.na(qk_norm_value)) {
+        qk_norm_enabled <- isTRUE(qk_norm_value)
+      } else if (is.character(qk_norm_value)) {
+        qk_norm_tag <- tolower(as.character(qk_norm_value))
+        if (length(qk_norm_tag) == 1L && !is.na(qk_norm_tag) &&
+            qk_norm_tag %in% c("true", "false")) {
+          qk_norm_enabled <- identical(qk_norm_tag, "true")
+        } else {
+          stop("'neural_mcmc_control$qk_norm' must be TRUE/FALSE.", call. = FALSE)
+        }
+      } else {
+        stop("'neural_mcmc_control$qk_norm' must be TRUE/FALSE.", call. = FALSE)
+      }
+    }
     if (!is.null(neural_mcmc_control$cross_candidate_encoder)) {
       cross_candidate_encoder_mode <- normalize_cross_candidate_encoder(
         neural_mcmc_control$cross_candidate_encoder
@@ -1345,6 +1373,7 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$n_bayesian_models <- NULL
     mcmc_overrides$ModelDims <- NULL
     mcmc_overrides$ModelDepth <- NULL
+    mcmc_overrides$qk_norm <- NULL
     mcmc_overrides$cross_candidate_encoder <- NULL
   }
   uncertainty_scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
@@ -2088,6 +2117,43 @@ generate_ModelOutcome_neural <- function(){
         constraint = p2d_constraint_positive
       )
 
+      RMS_q_l <- NULL
+      RMS_k_l <- NULL
+      if (isTRUE(qk_norm_enabled)) {
+        RMS_q_name <- paste0("RMS_q_l", l_)
+        RMS_head_shape <- reticulate::tuple(head_dim)
+        RMS_q_l <- p2d(
+          name = RMS_q_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              RMS_q_name,
+              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              sample_shape = RMS_head_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_lognormal(RMS_q_name, RMS_scale, RMS_head_shape)
+          },
+          constraint = p2d_constraint_positive
+        )
+
+        RMS_k_name <- paste0("RMS_k_l", l_)
+        RMS_k_l <- p2d(
+          name = RMS_k_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              RMS_k_name,
+              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              sample_shape = RMS_head_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_lognormal(RMS_k_name, RMS_scale, RMS_head_shape)
+          },
+          constraint = p2d_constraint_positive
+        )
+      }
+
       W_q_name <- paste0("W_q_l", l_)
       W_q_shape <- reticulate::tuple(ModelDims, ModelDims)
       W_q_l <- p2d(
@@ -2167,6 +2233,12 @@ generate_ModelOutcome_neural <- function(){
       layer_params[[paste0("W_ff1_l", l_)]] <- W_ff1_l
       layer_params[[paste0("W_ff2_l", l_)]] <- W_ff2_l
       layer_params[[paste0("RMS_attn_l", l_)]] <- RMS_attn_l
+      if (!is.null(RMS_q_l)) {
+        layer_params[[paste0("RMS_q_l", l_)]] <- RMS_q_l
+      }
+      if (!is.null(RMS_k_l)) {
+        layer_params[[paste0("RMS_k_l", l_)]] <- RMS_k_l
+      }
       layer_params[[paste0("RMS_ff_l", l_)]] <- RMS_ff_l
       layer_params[[paste0("alpha_attn_l", l_)]] <- alpha_attn_l
       layer_params[[paste0("alpha_ff_l", l_)]] <- alpha_ff_l
@@ -2174,6 +2246,8 @@ generate_ModelOutcome_neural <- function(){
 
     alpha_cross <- NULL
     RMS_cross <- NULL
+    RMS_q_cross <- NULL
+    RMS_k_cross <- NULL
     W_q_cross <- NULL
     W_k_cross <- NULL
     W_v_cross <- NULL
@@ -2216,6 +2290,37 @@ generate_ModelOutcome_neural <- function(){
         },
         constraint = p2d_constraint_positive
       )
+
+      if (isTRUE(qk_norm_enabled)) {
+        RMS_q_cross <- p2d(
+          name = "RMS_q_cross",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "RMS_q_cross",
+              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              sample_shape = reticulate::tuple(head_dim)
+            )
+          },
+          init_fxn = function() {
+            p2d_init_lognormal("RMS_q_cross", RMS_scale, reticulate::tuple(head_dim))
+          },
+          constraint = p2d_constraint_positive
+        )
+        RMS_k_cross <- p2d(
+          name = "RMS_k_cross",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "RMS_k_cross",
+              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              sample_shape = reticulate::tuple(head_dim)
+            )
+          },
+          init_fxn = function() {
+            p2d_init_lognormal("RMS_k_cross", RMS_scale, reticulate::tuple(head_dim))
+          },
+          constraint = p2d_constraint_positive
+        )
+      }
 
       W_q_cross <- p2d(
         name = "W_q_cross",
@@ -2362,6 +2467,8 @@ generate_ModelOutcome_neural <- function(){
     if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
       params_view$alpha_cross <- alpha_cross
       params_view$RMS_cross <- RMS_cross
+      params_view$RMS_q_cross <- RMS_q_cross
+      params_view$RMS_k_cross <- RMS_k_cross
       params_view$W_q_cross <- W_q_cross
       params_view$W_k_cross <- W_k_cross
       params_view$W_v_cross <- W_v_cross
@@ -3502,6 +3609,7 @@ generate_ModelOutcome_neural <- function(){
           use_cross_encoder = use_cross_encoder,
           use_cross_term = use_cross_term,
           use_cross_attn = use_cross_attn,
+          use_qk_norm = qk_norm_enabled,
           batch_size = mcmc_control$batch_size,
           subsample_method = svi_subsample_method
         )
@@ -3972,6 +4080,8 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("E_matchup")
   maybe_site("alpha_cross")
   maybe_site("RMS_cross")
+  maybe_site("RMS_q_cross")
+  maybe_site("RMS_k_cross")
 
   W_out_draws <- get_loc_scale_draws("W_out", "tau_w_out")
   if (!is.null(W_out_draws)) {
@@ -4024,6 +4134,8 @@ generate_ModelOutcome_neural <- function(){
     maybe_site(alpha_ff_name)
 
     maybe_site(paste0("RMS_attn_l", l_))
+    maybe_site(paste0("RMS_q_l", l_))
+    maybe_site(paste0("RMS_k_l", l_))
     maybe_site(paste0("RMS_ff_l", l_))
 
     for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
@@ -4052,6 +4164,18 @@ generate_ModelOutcome_neural <- function(){
     }
   }
   maybe_site("RMS_final")
+
+  has_qk_norm <- FALSE
+  for (l_ in 1L:ModelDepth) {
+    if (!is.null(ParamsMean[[paste0("RMS_q_l", l_)]]) ||
+        !is.null(ParamsMean[[paste0("RMS_k_l", l_)]])) {
+      has_qk_norm <- TRUE
+      break
+    }
+  }
+  if (!isTRUE(has_qk_norm)) {
+    has_qk_norm <- !is.null(ParamsMean$RMS_q_cross) || !is.null(ParamsMean$RMS_k_cross)
+  }
 
   TransformerPredict_pair <- function(params, Xl_new, Xr_new, pl_new, pr_new,
                                       resp_party_new = NULL, resp_cov_new = NULL,
@@ -4547,6 +4671,7 @@ generate_ModelOutcome_neural <- function(){
     has_cross_encoder = isTRUE(use_cross_encoder),
     has_cross_attn = !is.null(ParamsMean$W_q_cross),
     has_cross_term = !is.null(ParamsMean$M_cross),
+    has_qk_norm = isTRUE(has_qk_norm),
     choice_token_index = 0L,
     likelihood = likelihood,
     fit_metrics = fit_metrics,

@@ -252,6 +252,7 @@ test_that("neural attn metadata marks the cross-candidate encoder as enabled", {
   expect_false(is.null(model_info))
   expect_identical(model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_true(isTRUE(model_info$has_qk_norm))
 })
 
 test_that("neural outcome bundles save and reload cleanly", {
@@ -310,12 +311,14 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_false(has_py_object(bundle$fit$neural_model_info))
   expect_identical(bundle$fit$neural_model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(bundle$fit$neural_model_info$cross_candidate_encoder))
+  expect_true(isTRUE(bundle$fit$neural_model_info$has_qk_norm))
 
   fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
   expect_true(inherits(fit_loaded, "strategic_predictor"))
   expect_true(is.null(fit_loaded$fit$params))
   expect_identical(fit_loaded$fit$neural_model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(fit_loaded$fit$neural_model_info$cross_candidate_encoder))
+  expect_true(isTRUE(fit_loaded$fit$neural_model_info$has_qk_norm))
 
   idx_left <- which(data$profile_order == 1L)
   idx_right <- which(data$profile_order == 2L)
@@ -336,6 +339,7 @@ test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
   expect_identical(model_info$uncertainty_scope, "output")
   expect_identical(model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_true(isTRUE(model_info$has_qk_norm))
   expect_true(is.numeric(model_info$svi_loss_curve))
   expect_gt(length(model_info$svi_loss_curve), 0L)
 
@@ -354,6 +358,7 @@ test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
     use_cross_encoder = identical(model_info$cross_candidate_encoder_mode, "full"),
     use_cross_term = identical(model_info$cross_candidate_encoder_mode, "term"),
     use_cross_attn = identical(model_info$cross_candidate_encoder_mode, "attn"),
+    use_qk_norm = isTRUE(model_info$has_qk_norm),
     batch_size = 16L,
     subsample_method = "batch_vi"
   )
@@ -528,13 +533,16 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
     base_names <- c(
       "E_feature_id", "E_party", "E_rel", "E_resp_party", "E_stage", "E_matchup", "E_choice",
       "E_sep", "E_segment",
-      "W_resp_x", "RMS_final", "W_out", "b_out", "M_cross", "W_cross_out"
+      "W_resp_x", "RMS_final", "W_out", "b_out", "M_cross", "W_cross_out",
+      "RMS_q_cross", "RMS_k_cross"
     )
     for (nm in base_names) {
       params[[nm]] <- get_trace_value(trace, nm)
     }
     for (l_ in seq_len(model_depth)) {
       params[[paste0("RMS_attn_l", l_)]] <- get_trace_value(trace, paste0("RMS_attn_l", l_))
+      params[[paste0("RMS_q_l", l_)]] <- get_trace_value(trace, paste0("RMS_q_l", l_))
+      params[[paste0("RMS_k_l", l_)]] <- get_trace_value(trace, paste0("RMS_k_l", l_))
       params[[paste0("RMS_ff_l", l_)]] <- get_trace_value(trace, paste0("RMS_ff_l", l_))
       params[[paste0("W_q_l", l_)]] <- get_trace_value(trace, paste0("W_q_l", l_))
       params[[paste0("W_k_l", l_)]] <- get_trace_value(trace, paste0("W_k_l", l_))
@@ -547,10 +555,12 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
   }
 
   rms_norm <- function(x, g, eps = 1e-6) {
+    if (is.null(g)) {
+      return(x)
+    }
     mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
     inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
-    g_use <- strenv$jnp$reshape(g, list(1L, 1L, model_dims))
-    x * inv_rms * g_use
+    x * inv_rms * g
   }
 
   run_transformer <- function(tokens, params) {
@@ -562,6 +572,8 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
       Wff1 <- params[[paste0("W_ff1_l", l_)]]
       Wff2 <- params[[paste0("W_ff2_l", l_)]]
       RMS_attn <- params[[paste0("RMS_attn_l", l_)]]
+      RMS_q <- params[[paste0("RMS_q_l", l_)]]
+      RMS_k <- params[[paste0("RMS_k_l", l_)]]
       RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
 
       tokens_norm <- rms_norm(tokens, RMS_attn)
@@ -572,6 +584,8 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
       Qh <- strenv$jnp$reshape(Q, list(Q$shape[[1]], Q$shape[[2]], n_heads, head_dim))
       Kh <- strenv$jnp$reshape(K, list(K$shape[[1]], K$shape[[2]], n_heads, head_dim))
       Vh <- strenv$jnp$reshape(V, list(V$shape[[1]], V$shape[[2]], n_heads, head_dim))
+      Qh <- rms_norm(Qh, RMS_q)
+      Kh <- rms_norm(Kh, RMS_k)
       scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(head_dim)))
       scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
       attn <- strenv$jax$nn$softmax(scores, axis = -1L)

@@ -211,7 +211,9 @@
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
 #'   cross-attention step, or set \code{neural_mcmc_control$cross_candidate_encoder = "full"}
 #'   to enable a full cross-encoder that jointly encodes both candidates. Use
-#'   \code{"none"} (or \code{FALSE}) to disable.
+#'   \code{"none"} (or \code{FALSE}) to disable. Set
+#'   \code{neural_mcmc_control$qk_norm = TRUE} (default) to apply RMSNorm to projected
+#'   queries and keys before forming attention logits.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
 #'   \code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
