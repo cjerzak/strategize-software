@@ -42,7 +42,9 @@ NULL
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
 #'   cross-attention step, or set \code{neural_mcmc_control$cross_candidate_encoder = "full"}
 #'   to enable a full cross-encoder that jointly encodes both candidates. Use
-#'   \code{"none"} (or \code{FALSE}) to disable.
+#'   \code{"none"} (or \code{FALSE}) to disable. Set
+#'   \code{neural_mcmc_control$qk_norm = TRUE} (default) to apply RMSNorm to projected
+#'   queries and keys before attention logits are formed.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
 #'   \code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
@@ -571,6 +573,32 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
     if (model_depth != round(model_depth) || model_depth < 1) {
       stop(
         "'neural_mcmc_control$ModelDepth' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$qk_norm)) {
+    qk_norm <- neural_mcmc_control$qk_norm
+    if (is.logical(qk_norm)) {
+      if (length(qk_norm) != 1L || is.na(qk_norm)) {
+        stop(
+          "'neural_mcmc_control$qk_norm' must be TRUE/FALSE.",
+          call. = FALSE
+        )
+      }
+    } else if (is.character(qk_norm)) {
+      qk_norm_tag <- tolower(as.character(qk_norm))
+      if (length(qk_norm_tag) != 1L || is.na(qk_norm_tag) ||
+          !qk_norm_tag %in% c("true", "false")) {
+        stop(
+          "'neural_mcmc_control$qk_norm' must be TRUE/FALSE.",
+          call. = FALSE
+        )
+      }
+    } else {
+      stop(
+        "'neural_mcmc_control$qk_norm' must be TRUE/FALSE.",
         call. = FALSE
       )
     }

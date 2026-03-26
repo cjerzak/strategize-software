@@ -455,6 +455,73 @@ draw_profile_samples <- function(pi_vec, n_draws, seed_in,
   list(samples = samples, seed_next = seed_next)
 }
 
+average_case_q_uses_mc <- function(outcome_model_type,
+                                   glm_family,
+                                   nMonte_Qglm) {
+  n_draws <- suppressWarnings(as.integer(nMonte_Qglm))
+  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
+    n_draws <- 1L
+  }
+
+  identical(outcome_model_type, "neural") ||
+    (!identical(glm_family, "gaussian") && (n_draws > 1L))
+}
+
+draw_average_case_q_profiles <- function(pi_star_ast,
+                                         pi_star_dag,
+                                         outcome_model_type,
+                                         glm_family,
+                                         nMonte_Qglm,
+                                         seed_in,
+                                         temperature,
+                                         ParameterizationType,
+                                         d_locator_use,
+                                         sampler = NULL) {
+  use_mc_q <- average_case_q_uses_mc(
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm
+  )
+
+  n_draws <- suppressWarnings(as.integer(nMonte_Qglm))
+  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
+    n_draws <- 1L
+  }
+
+  if (!use_mc_q) {
+    return(list(
+      pi_star_ast_f_all = strenv$jnp$expand_dims(pi_star_ast, 0L),
+      pi_star_dag_f_all = strenv$jnp$expand_dims(pi_star_dag, 0L),
+      seed_next = seed_in,
+      use_mc_q = FALSE,
+      n_draws = 1L
+    ))
+  }
+
+  if (identical(outcome_model_type, "neural")) {
+    n_draws <- max(1L, n_draws)
+  }
+
+  draw_ast <- draw_profile_samples(
+    pi_star_ast, n_draws, seed_in,
+    temperature, ParameterizationType, d_locator_use,
+    sampler = sampler
+  )
+  draw_dag <- draw_profile_samples(
+    pi_star_dag, n_draws, draw_ast$seed_next,
+    temperature, ParameterizationType, d_locator_use,
+    sampler = sampler
+  )
+
+  list(
+    pi_star_ast_f_all = draw_ast$samples,
+    pi_star_dag_f_all = draw_dag$samples,
+    seed_next = draw_dag$seed_next,
+    use_mc_q = TRUE,
+    n_draws = n_draws
+  )
+}
+
 
 getPrettyPi <- function( pi_star_value, 
                          ParameterizationType,

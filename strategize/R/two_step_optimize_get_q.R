@@ -195,29 +195,22 @@ FullGetQStar_ <- function(a_i_ast,                                #1
   
   # Average-case path
   if(!adversarial){
-    use_mc_q <- (outcome_model_type == "neural") ||
-      ((glm_family != "gaussian") && (nMonte_Qglm > 1L))
-    if(use_mc_q){
-      n_draws <- if (outcome_model_type == "neural") {
-        max(1L, nMonte_Qglm)
-      } else {
-        nMonte_Qglm
-      }
-      draw_ast <- draw_profile_samples(
-        pi_star_i_ast, n_draws, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_ast_all <- draw_ast$samples
-      SEED_IN_LOOP <- draw_ast$seed_next
-
-      draw_dag <- draw_profile_samples(
-        pi_star_i_dag, n_draws, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_dag_all <- draw_dag$samples
-      SEED_IN_LOOP <- draw_dag$seed_next
+    q_profile_draws <- draw_average_case_q_profiles(
+      pi_star_ast = pi_star_i_ast,
+      pi_star_dag = pi_star_i_dag,
+      outcome_model_type = outcome_model_type,
+      glm_family = glm_family,
+      nMonte_Qglm = nMonte_Qglm,
+      seed_in = SEED_IN_LOOP,
+      temperature = MNtemp,
+      ParameterizationType = strenv$ParameterizationType,
+      d_locator_use = strenv$jnp$array(strenv$d_locator_use),
+      sampler = strenv$getMultinomialSamp
+    )
+    if (isTRUE(q_profile_draws$use_mc_q)) {
+      TSAMP_ast_all <- q_profile_draws$pi_star_ast_f_all
+      TSAMP_dag_all <- q_profile_draws$pi_star_dag_f_all
+      SEED_IN_LOOP <- q_profile_draws$seed_next
 
       q_vec <- strenv$Vectorized_QMonteIter(
         TSAMP_ast_all,  TSAMP_dag_all,

@@ -12,6 +12,7 @@ neural_optimal_svi_steps <- function(n_obs,
                                      use_cross_encoder = FALSE,
                                      use_cross_term = FALSE,
                                      use_cross_attn = FALSE,
+                                     use_qk_norm = TRUE,
                                      batch_size = 512L,
                                      subsample_method = "full",
                                      tokens_per_param = 20,
@@ -87,6 +88,10 @@ neural_optimal_svi_steps <- function(n_obs,
   if (is.na(ff_dim) || ff_dim < 1L) {
     ff_dim <- model_dims
   }
+  use_qk_norm <- isTRUE(use_qk_norm)
+  cand_heads <- (1:model_dims)[(model_dims %% (1:model_dims)) == 0L]
+  n_heads <- cand_heads[which.min(abs(cand_heads - 8L))]
+  head_dim <- as.integer(model_dims / n_heads)
 
   # Approximate learned-parameter count (enough for scaling).
   n_params_factor_embed <- sum((factor_levels + 1L) * model_dims)
@@ -107,6 +112,9 @@ neural_optimal_svi_steps <- function(n_obs,
   n_params_transformer_layer <- 4L * model_dims * model_dims +
     2L * model_dims * ff_dim +
     4L * model_dims
+  if (isTRUE(use_qk_norm)) {
+    n_params_transformer_layer <- n_params_transformer_layer + 2L * head_dim
+  }
   n_params_transformer <- model_depth * n_params_transformer_layer
   n_params_final_norm <- model_dims
   n_params_out <- model_dims * n_outcomes + n_outcomes
@@ -119,6 +127,9 @@ neural_optimal_svi_steps <- function(n_obs,
     4L * model_dims * model_dims + model_dims + 1L
   } else {
     0L
+  }
+  if (isTRUE(pairwise_mode) && isTRUE(use_cross_attn) && isTRUE(use_qk_norm)) {
+    n_params_cross_attn <- n_params_cross_attn + 2L * head_dim
   }
   n_params_total <- n_params_factor_embed +
     n_params_feature_id +

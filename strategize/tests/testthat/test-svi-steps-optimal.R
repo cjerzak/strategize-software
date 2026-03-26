@@ -137,6 +137,7 @@ test_that("neural_optimal_svi_steps pins exact pairwise batch_vi steps by mode",
     n_outcomes = 2,
     pairwise_mode = TRUE,
     use_matchup_token = TRUE,
+    use_qk_norm = TRUE,
     subsample_method = "batch_vi",
     batch_size = 128
   )
@@ -151,7 +152,7 @@ test_that("neural_optimal_svi_steps pins exact pairwise batch_vi steps by mode",
     ),
     full = list(
       args = list(use_cross_encoder = TRUE, use_cross_term = FALSE, use_cross_attn = FALSE),
-      expected = 2211L
+      expected = 2212L
     )
   )
 
@@ -167,6 +168,39 @@ test_that("neural_optimal_svi_steps pins exact pairwise batch_vi steps by mode",
       info = sprintf("Expected exact optimal SVI steps for %s mode", mode_name)
     )
   }
+})
+
+test_that("neural_optimal_svi_steps accounts for QK-norm parameters", {
+  base_args <- list(
+    n_obs = 500,
+    n_factors = 6,
+    factor_levels = rep(4L, 6),
+    model_dims = 96,
+    model_depth = 3,
+    n_party_levels = 3,
+    n_resp_party_levels = 3,
+    n_resp_covariates = 2,
+    n_outcomes = 2,
+    pairwise_mode = TRUE,
+    use_matchup_token = TRUE,
+    use_cross_encoder = TRUE,
+    use_cross_term = FALSE,
+    use_cross_attn = FALSE,
+    subsample_method = "batch_vi",
+    batch_size = 128
+  )
+
+  steps_without_qk <- do.call(
+    strategize:::neural_optimal_svi_steps,
+    c(base_args, list(use_qk_norm = FALSE))
+  )
+  steps_with_qk <- do.call(
+    strategize:::neural_optimal_svi_steps,
+    c(base_args, list(use_qk_norm = TRUE))
+  )
+
+  expect_gte(steps_with_qk, steps_without_qk)
+  expect_gt(steps_with_qk, steps_without_qk)
 })
 
 test_that("neural_optimal_svi_steps treats subsample_method='batch' like 'batch_vi'", {
