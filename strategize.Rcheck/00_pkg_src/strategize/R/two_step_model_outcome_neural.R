@@ -3637,6 +3637,25 @@ generate_ModelOutcome_neural <- function(){
       )
     )
     rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
+    svi_model_args <- if (pairwise_mode) {
+      list(
+        X_left = X_left_jnp,
+        X_right = X_right_jnp,
+        party_left = party_left_jnp,
+        party_right = party_right_jnp,
+        resp_party = resp_party_jnp,
+        resp_cov = resp_cov_jnp,
+        Y_obs = Y_jnp
+      )
+    } else {
+      list(
+        X = X_single_jnp,
+        party = party_single_jnp,
+        resp_party = resp_party_jnp,
+        resp_cov = resp_cov_jnp,
+        Y_obs = Y_jnp
+      )
+    }
     if (pairwise_mode) {
       svi_result <- svi$run(rng_key,
                             ai(svi_steps),
@@ -3697,11 +3716,15 @@ generate_ModelOutcome_neural <- function(){
       n_draws <- 1L
     }
     sample_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
-    posterior_samples <- guide$sample_posterior(
-      sample_key,
-      params,
-      sample_shape = reticulate::tuple(ai(n_draws))
+    posterior_sample_args <- c(
+      list(
+        sample_key,
+        params,
+        sample_shape = reticulate::tuple(ai(n_draws))
+      ),
+      svi_model_args
     )
+    posterior_samples <- do.call(guide$sample_posterior, posterior_sample_args)
     if (isTRUE(run_mcmc_after_svi)) {
       SVIInitValues <- lapply(posterior_samples, function(x) {
         strenv$jnp$mean(x, axis = 0L)
@@ -4519,7 +4542,7 @@ generate_ModelOutcome_neural <- function(){
     has_stage_head = !is.null(ParamsMean$W_stage),
     has_ctx_head = !is.null(ParamsMean$W_ctx),
     has_choice_token = !is.null(ParamsMean$E_choice),
-    cross_candidate_encoder = isTRUE(use_cross_term),
+    cross_candidate_encoder = !identical(cross_candidate_encoder_mode, "none"),
     cross_candidate_encoder_mode = cross_candidate_encoder_mode,
     has_cross_encoder = isTRUE(use_cross_encoder),
     has_cross_attn = !is.null(ParamsMean$W_q_cross),

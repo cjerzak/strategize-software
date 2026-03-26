@@ -606,6 +606,19 @@ strategize       <-          function(
     warning("Neural outcome models require gradient-based optimization; setting optim_type = \"gd\".")
     optim_type <- "gd"
   }
+  neural_vi_guide <- NULL
+  if (identical(outcome_model_type, "neural") &&
+      !is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$vi_guide)) {
+    neural_vi_guide <- tolower(as.character(neural_mcmc_control$vi_guide)[1L])
+  }
+  if (isTRUE(compute_se) && identical(neural_vi_guide, "auto_delta")) {
+    stop(
+      "compute_se = TRUE is not supported when neural_mcmc_control$vi_guide = 'auto_delta'. ",
+      "AutoDelta is a point-mass variational guide and does not provide posterior uncertainty for Q/pi SEs.",
+      call. = FALSE
+    )
+  }
 
   n_bayesian_models <- 1L
   if (!is.null(neural_mcmc_control) &&
@@ -1777,35 +1790,51 @@ strategize       <-          function(
                                                     strenv$main_comp_mat,
                                                     strenv$shadow_comp_mat)
 
-          if(glm_family=="gaussian"){
-            pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
-            pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
-          }
-          if(glm_family != "gaussian"){
-            draw_ast <- draw_profile_samples(
-              pi_star_ast_, nMonte_Qglm, SEED_IN_LOOP,
-              MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-              sampler = strenv$getMultinomialSamp
-            )
-            pi_star_ast_f_all <- draw_ast$samples
-            SEED_IN_LOOP <- draw_ast$seed_next
-
-            draw_dag <- draw_profile_samples(
-              pi_star_dag_, nMonte_Qglm, SEED_IN_LOOP,
-              MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-              sampler = strenv$getMultinomialSamp
-            )
-            pi_star_dag_f_all <- draw_dag$samples
-            SEED_IN_LOOP <- draw_dag$seed_next
-          }
-
           if(!adversarial){
+            q_profile_draws <- draw_average_case_q_profiles(
+              pi_star_ast = pi_star_ast_,
+              pi_star_dag = pi_star_dag_,
+              outcome_model_type = outcome_model_type,
+              glm_family = glm_family,
+              nMonte_Qglm = nMonte_Qglm,
+              seed_in = SEED_IN_LOOP,
+              temperature = MNtemp,
+              ParameterizationType = strenv$ParameterizationType,
+              d_locator_use = strenv$d_locator_use,
+              sampler = strenv$getMultinomialSamp
+            )
+            pi_star_ast_f_all <- q_profile_draws$pi_star_ast_f_all
+            pi_star_dag_f_all <- q_profile_draws$pi_star_dag_f_all
+            SEED_IN_LOOP <- q_profile_draws$seed_next
+
             q_star_f <- strenv$Vectorized_QMonteIter(
                                           pi_star_ast_f_all,  pi_star_dag_f_all,
                                           INTERCEPT_ast_, COEFFICIENTS_ast_,
                                           INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
           }
           if(adversarial){
+            if(glm_family=="gaussian"){
+              pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
+              pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
+            }
+            if(glm_family != "gaussian"){
+              draw_ast <- draw_profile_samples(
+                pi_star_ast_, nMonte_Qglm, SEED_IN_LOOP,
+                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+                sampler = strenv$getMultinomialSamp
+              )
+              pi_star_ast_f_all <- draw_ast$samples
+              SEED_IN_LOOP <- draw_ast$seed_next
+
+              draw_dag <- draw_profile_samples(
+                pi_star_dag_, nMonte_Qglm, SEED_IN_LOOP,
+                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
+                sampler = strenv$getMultinomialSamp
+              )
+              pi_star_dag_f_all <- draw_dag$samples
+              SEED_IN_LOOP <- draw_dag$seed_next
+            }
+
             n_q_samp <- as.integer(pi_star_ast_f_all$shape[[1L]])
             if (primary_pushforward == "multi") {
               samp_ast <- sample_pool_jax(

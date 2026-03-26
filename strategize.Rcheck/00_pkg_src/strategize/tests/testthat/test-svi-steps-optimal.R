@@ -124,6 +124,51 @@ test_that("neural_optimal_svi_steps handles pairwise cross-encoder configs", {
   expect_gte(steps, 1L)
 })
 
+test_that("neural_optimal_svi_steps pins exact pairwise batch_vi steps by mode", {
+  common_args <- list(
+    n_obs = 500,
+    n_factors = 6,
+    factor_levels = rep(4L, 6),
+    model_dims = 96,
+    model_depth = 3,
+    n_party_levels = 3,
+    n_resp_party_levels = 3,
+    n_resp_covariates = 2,
+    n_outcomes = 2,
+    pairwise_mode = TRUE,
+    use_matchup_token = TRUE,
+    subsample_method = "batch_vi",
+    batch_size = 128
+  )
+  cases <- list(
+    term = list(
+      args = list(use_cross_encoder = FALSE, use_cross_term = TRUE, use_cross_attn = FALSE),
+      expected = 2010L
+    ),
+    attn = list(
+      args = list(use_cross_encoder = FALSE, use_cross_term = FALSE, use_cross_attn = TRUE),
+      expected = 2177L
+    ),
+    full = list(
+      args = list(use_cross_encoder = TRUE, use_cross_term = FALSE, use_cross_attn = FALSE),
+      expected = 2211L
+    )
+  )
+
+  for (mode_name in names(cases)) {
+    case <- cases[[mode_name]]
+    steps <- do.call(
+      strategize:::neural_optimal_svi_steps,
+      c(common_args, case$args)
+    )
+    expect_identical(
+      steps,
+      case$expected,
+      info = sprintf("Expected exact optimal SVI steps for %s mode", mode_name)
+    )
+  }
+})
+
 test_that("neural_optimal_svi_steps treats subsample_method='batch' like 'batch_vi'", {
   steps_small_batch <- strategize:::neural_optimal_svi_steps(
     n_obs = 10000,
