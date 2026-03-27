@@ -1057,10 +1057,15 @@ test_that("hard profile draw mode emits one-hot average-case samples", {
   pi_ast <- strategize:::strenv$jnp$array(c(0.25, 0.75), dtype = strategize:::strenv$dtj)
   pi_dag <- strategize:::strenv$jnp$array(c(0.60, 0.40), dtype = strategize:::strenv$dtj)
   seed <- strategize:::strenv$jax$random$PRNGKey(123L)
-  local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
+  local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors", "getMultinomialSampHard"))
   set_strenv_bindings(list(
     nUniqueFactors = 3L,
-    nUniqueLevelsByFactors = c(2L, 2L, 2L)
+    nUniqueLevelsByFactors = c(2L, 2L, 2L),
+    getMultinomialSampHard = strategize:::strenv$jax$jit(
+      strategize:::getMultinomialSampHard_R,
+      static_argnums = 3L,
+      static_argnames = c("ParameterizationType")
+    )
   ))
 
   hard_draws <- strategize:::draw_average_case_q_profiles(
