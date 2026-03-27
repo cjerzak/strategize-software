@@ -161,6 +161,14 @@ local_strenv_bindings <- function(bindings) {
   })
 }
 
+# pkgload::load_all() can error on strategize:::strenv$foo <- value and surface
+# loadNamespace("*tmp*"), so use assign() for test-time strenv mutations.
+set_strenv_bindings <- function(values) {
+  for (binding in names(values)) {
+    assign(binding, values[[binding]], envir = strategize:::strenv)
+  }
+}
+
 generate_average_case_neural_data <- function(n = 24, n_factors = 3, seed = 20260326) {
   withr::local_seed(seed)
 
@@ -945,8 +953,10 @@ test_that("multinomial group spec prefers concrete locator over stale globals", 
   }
 
   local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
-  strategize:::strenv$nUniqueFactors <- 3L
-  strategize:::strenv$nUniqueLevelsByFactors <- c(2L, 2L, 2L)
+  set_strenv_bindings(list(
+    nUniqueFactors = 3L,
+    nUniqueLevelsByFactors = c(2L, 2L, 2L)
+  ))
 
   spec <- strategize:::resolve_multinomial_group_spec(
     d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L)),
@@ -959,8 +969,10 @@ test_that("multinomial group spec prefers concrete locator over stale globals", 
 
 test_that("multinomial group spec falls back to globals when locator unavailable", {
   local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
-  strategize:::strenv$nUniqueFactors <- 2L
-  strategize:::strenv$nUniqueLevelsByFactors <- c(2L, 3L)
+  set_strenv_bindings(list(
+    nUniqueFactors = 2L,
+    nUniqueLevelsByFactors = c(2L, 3L)
+  ))
 
   spec <- strategize:::resolve_multinomial_group_spec(
     d_locator_use = NULL,
@@ -979,8 +991,10 @@ test_that("multinomial group spec preserves implicit holdout levels", {
   }
 
   local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
-  strategize:::strenv$nUniqueFactors <- 2L
-  strategize:::strenv$nUniqueLevelsByFactors <- c(4L, 4L)
+  set_strenv_bindings(list(
+    nUniqueFactors = 2L,
+    nUniqueLevelsByFactors = c(4L, 4L)
+  ))
 
   spec <- strategize:::resolve_multinomial_group_spec(
     d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L)),
@@ -1044,8 +1058,10 @@ test_that("hard profile draw mode emits one-hot average-case samples", {
   pi_dag <- strategize:::strenv$jnp$array(c(0.60, 0.40), dtype = strategize:::strenv$dtj)
   seed <- strategize:::strenv$jax$random$PRNGKey(123L)
   local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
-  strategize:::strenv$nUniqueFactors <- 3L
-  strategize:::strenv$nUniqueLevelsByFactors <- c(2L, 2L, 2L)
+  set_strenv_bindings(list(
+    nUniqueFactors = 3L,
+    nUniqueLevelsByFactors = c(2L, 2L, 2L)
+  ))
 
   hard_draws <- strategize:::draw_average_case_q_profiles(
     pi_star_ast = pi_ast,
