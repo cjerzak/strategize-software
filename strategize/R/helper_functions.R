@@ -399,9 +399,37 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
   )
 }
 
-resolve_q_policy_sampler <- function(draw_mode) {
+resolve_q_policy_sampler <- function(draw_mode,
+                                     d_locator_use = NULL,
+                                     ParameterizationType = NULL) {
   if (is.null(draw_mode) || identical(draw_mode, "exact")) {
     return(NULL)
+  }
+
+  compiled_sampler_matches_locator <- function(d_locator_use,
+                                               ParameterizationType) {
+    if (is.null(d_locator_use)) {
+      return(TRUE)
+    }
+    if (is.null(ParameterizationType)) {
+      return(FALSE)
+    }
+
+    locator_spec <- tryCatch(
+      resolve_multinomial_group_spec(d_locator_use, ParameterizationType),
+      error = function(e) NULL
+    )
+    has_global_spec <- exists("nUniqueFactors", envir = strenv, inherits = FALSE) &&
+      exists("nUniqueLevelsByFactors", envir = strenv, inherits = FALSE)
+
+    if (is.null(locator_spec) || !isTRUE(has_global_spec)) {
+      return(FALSE)
+    }
+
+    identical(as.integer(locator_spec$n_unique_factors),
+              as.integer(strenv$nUniqueFactors)) &&
+      identical(as.integer(locator_spec$n_unique_levels_by_factors),
+                as.integer(strenv$nUniqueLevelsByFactors))
   }
 
   sampler_name <- switch(draw_mode,
@@ -411,7 +439,12 @@ resolve_q_policy_sampler <- function(draw_mode) {
                               call. = FALSE))
   if (exists("strenv", inherits = TRUE) &&
       exists(sampler_name, envir = strenv, inherits = FALSE)) {
-    return(get(sampler_name, envir = strenv, inherits = FALSE))
+    # Compiled samplers can only rely on strenv group metadata. If a concrete
+    # locator implies a different grouping, prefer the plain R sampler so stale
+    # globals do not widen profile draws.
+    if (compiled_sampler_matches_locator(d_locator_use, ParameterizationType)) {
+      return(get(sampler_name, envir = strenv, inherits = FALSE))
+    }
   }
 
   switch(draw_mode,
@@ -683,7 +716,11 @@ draw_average_case_q_profiles <- function(pi_star_ast,
   sampler_use <- if (!is.null(sampler)) {
     sampler
   } else {
-    resolve_q_policy_sampler(if (is.null(profile_draw_mode)) "relaxed" else profile_draw_mode)
+    resolve_q_policy_sampler(
+      if (is.null(profile_draw_mode)) "relaxed" else profile_draw_mode,
+      d_locator_use = d_locator_use,
+      ParameterizationType = ParameterizationType
+    )
   }
 
   draw_ast <- draw_profile_samples(
@@ -810,8 +847,16 @@ evaluate_adversarial_q <- function(pi_star_ast,
     nMonte_Qglm = nMonte_Qglm,
     nMonte_adversarial = nMonte_adversarial
   )
-  sampler_profile <- resolve_q_policy_sampler(spec$profile_draw_mode)
-  sampler_pool <- resolve_q_policy_sampler(spec$pool_draw_mode)
+  sampler_profile <- resolve_q_policy_sampler(
+    spec$profile_draw_mode,
+    d_locator_use = d_locator_use,
+    ParameterizationType = ParameterizationType
+  )
+  sampler_pool <- resolve_q_policy_sampler(
+    spec$pool_draw_mode,
+    d_locator_use = d_locator_use,
+    ParameterizationType = ParameterizationType
+  )
   seed_next <- seed_in
   n_q_samp <- spec$n_draws
 
