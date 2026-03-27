@@ -1,0 +1,66 @@
+pkgload::load_all("/Users/cjerzak/Documents/strategize-software/strategize", quiet = TRUE)
+source("/Users/cjerzak/Documents/strategize-software/strategize/tests/testthat/helper-strategize.R")
+
+extract_average_case_pi_hat <- function(res) {
+  pi_obj <- res[["pi_star_point"]]
+  if (is.list(pi_obj) && length(pi_obj) == 1L && is.list(pi_obj[[1L]])) {
+    pi_obj <- pi_obj[[1L]]
+  }
+  vapply(pi_obj, function(prob_vec) {
+    if (!is.null(names(prob_vec)) && "1" %in% names(prob_vec)) {
+      return(as.numeric(prob_vec[["1"]]))
+    }
+    as.numeric(prob_vec[[2L]])
+  }, numeric(1))
+}
+
+fx <- generate_linear_average_case_fixture()
+
+withr::local_seed(20260326L)
+res <- strategize(
+  Y = fx[["Y"]],
+  W = fx[["W"]],
+  lambda = fx[["lambda"]],
+  outcome_model_type = "neural",
+  diff = FALSE,
+  adversarial = FALSE,
+  compute_se = FALSE,
+  penalty_type = "L2",
+  use_regularization = FALSE,
+  use_optax = FALSE,
+  force_gaussian = FALSE,
+  nSGD = 1000L,
+  nMonte_Qglm = 1000L,
+  a_init_sd = 0.001,
+  optim_type = "gd",
+  neural_mcmc_control = list(
+    subsample_method = "batch_vi",
+    ModelDims = 64L,
+    ModelDepth = 2L,
+    qk_norm = FALSE,
+    batch_size = 512L,
+    optimizer = "adam",
+    vi_guide = "auto_diagonal",
+    svi_steps = 200L,
+    svi_num_draws = 100L,
+    uncertainty_scope = "output",
+    eval_enabled = FALSE
+  )
+)
+
+pi_hat <- extract_average_case_pi_hat(res)
+Q_point_mEst <- res[["Q_point_mEst"]]
+Q_point <- res[["Q_point"]]
+Q_hat <- if (!is.null(Q_point_mEst) && all(is.finite(Q_point_mEst))) {
+  as.numeric(Q_point_mEst)
+} else {
+  as.numeric(Q_point)
+}
+
+pi_rel_err <- mean(abs(pi_hat - fx[["pi_star_true"]]) / pmax(abs(fx[["pi_star_true"]]), 1e-8))
+Q_rel_err <- abs(Q_hat - fx[["trueQ"]]) / pmax(abs(fx[["trueQ"]]), 1e-8)
+
+cat(sprintf("neural pi_rel_err=%.6f Q_rel_err=%.6f Q_hat=%.6f trueQ=%.6f\n",
+            pi_rel_err, Q_rel_err, Q_hat, fx[["trueQ"]]))
+cat("pi_hat =", paste(round(pi_hat, 4), collapse = ", "), "\n")
+cat("pi_true =", paste(round(fx[["pi_star_true"]], 4), collapse = ", "), "\n")
