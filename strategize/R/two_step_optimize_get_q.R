@@ -195,133 +195,69 @@ FullGetQStar_ <- function(a_i_ast,                                #1
   
   # Average-case path
   if(!adversarial){
-    q_profile_draws <- draw_average_case_q_profiles(
+    average_case_eval <- evaluate_average_case_q(
       pi_star_ast = pi_star_i_ast,
       pi_star_dag = pi_star_i_dag,
+      INTERCEPT_ast_ = INTERCEPT_ast_,
+      COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+      INTERCEPT_dag_ = INTERCEPT_dag_,
+      COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+      seed_in = SEED_IN_LOOP,
+      phase = "objective",
       outcome_model_type = outcome_model_type,
       glm_family = glm_family,
       nMonte_Qglm = nMonte_Qglm,
-      seed_in = SEED_IN_LOOP,
       temperature = MNtemp,
       ParameterizationType = strenv$ParameterizationType,
       d_locator_use = strenv$jnp$array(strenv$d_locator_use),
-      sampler = strenv$getMultinomialSamp
+      q_fxn = QFXN
     )
-    if (isTRUE(q_profile_draws$use_mc_q)) {
-      TSAMP_ast_all <- q_profile_draws$pi_star_ast_f_all
-      TSAMP_dag_all <- q_profile_draws$pi_star_dag_f_all
-      SEED_IN_LOOP <- q_profile_draws$seed_next
-
-      q_vec <- strenv$Vectorized_QMonteIter(
-        TSAMP_ast_all,  TSAMP_dag_all,
-        INTERCEPT_ast_, COEFFICIENTS_ast_,
-        INTERCEPT_dag_, COEFFICIENTS_dag_
-      )$mean(0L)
-    } else {
-      q_vec <- QFXN(pi_star_ast =  pi_star_i_ast,
-                    pi_star_dag =  pi_star_i_dag,
-                    EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
-                    EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
-                    EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
-                    EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_)
-    }
-    q_max <- strenv$jnp$take(q_vec, 0L)
+    q_max <- average_case_eval$q_max
+    SEED_IN_LOOP <- average_case_eval$seed_next
     # In non-adversarial mode, we always optimize the "ast" player
     indicator_UseAst <- 1.0
   }
   
   # Adversarial path: institution-aware push-forward (four-quadrant mixture)
   if(adversarial){
-    
-    if (primary_pushforward == "multi") {
-      # Draw policy samples (entrant pools)
-      samp_ast <- sample_pool_jax(
-        pi_star_i_ast, nMonte_adversarial, primary_n_entrants, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_ast_all <- samp_ast$samples
-      SEED_IN_LOOP <- samp_ast$seed_next
-
-      samp_dag <- sample_pool_jax(
-        pi_star_i_dag, nMonte_adversarial, primary_n_entrants, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_dag_all <- samp_dag$samples
-      SEED_IN_LOOP <- samp_dag$seed_next
-
-      # Draw field (slate) samples
-      samp_ast_field <- sample_pool_jax(
-        SLATE_VEC_ast_, nMonte_adversarial, primary_n_field, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
-      SEED_IN_LOOP <- samp_ast_field$seed_next
-
-      samp_dag_field <- sample_pool_jax(
-        SLATE_VEC_dag_, nMonte_adversarial, primary_n_field, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
-      SEED_IN_LOOP <- samp_dag_field$seed_next
-    } else {
-      # Draw policy samples
-      draw_ast <- draw_profile_samples(
-        pi_star_i_ast, nMonte_adversarial, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_ast_all <- draw_ast$samples
-      SEED_IN_LOOP <- draw_ast$seed_next
-      
-      draw_dag <- draw_profile_samples(
-        pi_star_i_dag, nMonte_adversarial, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_dag_all <- draw_dag$samples
-      SEED_IN_LOOP <- draw_dag$seed_next
-      
-      # Draw field (slate) samples
-      draw_ast_field <- draw_profile_samples(
-        SLATE_VEC_ast_, nMonte_adversarial, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
-      SEED_IN_LOOP <- draw_ast_field$seed_next
-      
-      draw_dag_field <- draw_profile_samples(
-        SLATE_VEC_dag_, nMonte_adversarial, SEED_IN_LOOP,
-        MNtemp, strenv$ParameterizationType, strenv$jnp$array(strenv$d_locator_use),
-        sampler = strenv$getMultinomialSamp
-      )
-      TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
-      SEED_IN_LOOP <- draw_dag_field$seed_next
-    }
-    
-    # Evaluate institutional objective (push-forward over nominees)
-    QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
-      TSAMP_ast_all, TSAMP_dag_all,
-      TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+    adversarial_eval <- evaluate_adversarial_q(
+      pi_star_ast = pi_star_i_ast,
+      pi_star_dag = pi_star_i_dag,
       a_i_ast, a_i_dag,
-      INTERCEPT_ast_,  COEFFICIENTS_ast_,
-      INTERCEPT_dag_,  COEFFICIENTS_dag_,
-      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-      P_VEC_FULL_ast_, P_VEC_FULL_dag_,
-      LAMBDA_, Q_SIGN, 
-      strenv$jax$random$split(SEED_IN_LOOP, TSAMP_ast_PrimaryComp_all$shape[[1]])
+      INTERCEPT_ast_ = INTERCEPT_ast_,
+      COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+      INTERCEPT_dag_ = INTERCEPT_dag_,
+      COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+      INTERCEPT_ast0_ = INTERCEPT_ast0_,
+      COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
+      INTERCEPT_dag0_ = INTERCEPT_dag0_,
+      COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
+      P_VEC_FULL_ast_ = P_VEC_FULL_ast_,
+      P_VEC_FULL_dag_ = P_VEC_FULL_dag_,
+      SLATE_VEC_ast_ = SLATE_VEC_ast_,
+      SLATE_VEC_dag_ = SLATE_VEC_dag_,
+      LAMBDA_ = LAMBDA_,
+      Q_SIGN = Q_SIGN,
+      seed_in = SEED_IN_LOOP,
+      phase = "objective",
+      outcome_model_type = outcome_model_type,
+      glm_family = glm_family,
+      nMonte_Qglm = nMonte_Qglm,
+      nMonte_adversarial = nMonte_adversarial,
+      primary_pushforward = primary_pushforward,
+      primary_n_entrants = primary_n_entrants,
+      primary_n_field = primary_n_field,
+      temperature = MNtemp,
+      ParameterizationType = strenv$ParameterizationType,
+      d_locator_use = strenv$jnp$array(strenv$d_locator_use)
     )
-    q_max_ast <- QMonteRes$q_ast$mean()
-    q_max_dag <- QMonteRes$q_dag$mean()
+    q_max_ast <- adversarial_eval$q_ast
+    q_max_dag <- adversarial_eval$q_dag
     
     # Choose which side we’re optimizing in this call
     indicator_UseAst <- (0.5 * ( 1. + Q_SIGN ))
-    q_max <- (indicator_UseAst * q_max_ast) + ( (1. - indicator_UseAst)* q_max_dag)
+    q_max <- adversarial_eval$q_max
+    SEED_IN_LOOP <- adversarial_eval$seed_next
   }
   
   # ---- Regularization (unchanged), applied to the player being updated ----
