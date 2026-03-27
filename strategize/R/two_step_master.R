@@ -61,7 +61,7 @@
 #'   primary_n_field = 1L,
 #'   nMonte_Qglm = 100L,
 #'   learning_rate_max = 0.001,
-#'   temperature = 0.5, 
+#'   temperature = NULL, 
 #'   save_outcome_model = FALSE,
 #'   presaved_outcome_model = FALSE,
 #'   outcome_model_key = NULL,
@@ -505,7 +505,7 @@ strategize       <-          function(
                                             primary_n_field = 1L,
                                             nMonte_Qglm = 100L,
                                             learning_rate_max = 0.001, 
-                                            temperature = 0.5, 
+                                            temperature = NULL, 
                                             save_outcome_model = FALSE,
                                             presaved_outcome_model = FALSE,
                                             outcome_model_key = NULL,
@@ -708,7 +708,14 @@ strategize       <-          function(
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
-  MNtemp <- strenv$jnp$array( ifelse(!is.null(temperature), yes = temperature, no = 0.5)  ) 
+  temperature_effective <- if (!is.null(temperature)) {
+    as.numeric(temperature)
+  } else if (identical(outcome_model_type, "neural") && !isTRUE(adversarial)) {
+    0.05
+  } else {
+    0.5
+  }
+  MNtemp <- strenv$jnp$array(temperature_effective)
   strenv$primary_strength <- strenv$jnp$array(primary_strength, strenv$dtj)
   strenv$adversarial_model_strategy <- adversarial_model_strategy
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
@@ -2395,7 +2402,7 @@ strategize       <-          function(
                   "SLATE_VEC_ast"  = SLATE_VEC_ast_jnp,
                   "SLATE_VEC_dag"  = SLATE_VEC_dag_jnp,
                   
-                  "temperature" = temperature, 
+                  "temperature" = temperature_effective, 
                   "primary_strength" = primary_strength,
                   "primary_n_entrants" = primary_n_entrants,
                   "primary_n_field" = primary_n_field,
