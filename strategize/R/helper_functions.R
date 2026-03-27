@@ -339,11 +339,115 @@ scale_rain_params <- function(rain_gamma, rain_eta, nSGD,
   list(rain_gamma = rain_gamma, rain_eta = rain_eta)
 }
 
-getMultinomialSamp_R <- function(pi_value, 
-                                 temperature, 
-                                 jax_seed, 
-                                 ParameterizationType,
-                                 d_locator_use){
+sanitize_q_draw_count <- function(n_draws, default = 1L) {
+  n_draws <- suppressWarnings(as.integer(n_draws))
+  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
+    n_draws <- as.integer(default)
+  }
+  as.integer(n_draws)
+}
+
+resolve_q_eval_spec <- function(phase = c("objective", "report"),
+                                adversarial,
+                                outcome_model_type,
+                                glm_family,
+                                nMonte_Qglm,
+                                nMonte_adversarial = NULL) {
+  phase <- match.arg(phase)
+
+  if (!isTRUE(adversarial)) {
+    if (identical(outcome_model_type, "neural")) {
+      draw_mode <- if (identical(phase, "objective")) "relaxed" else "hard"
+      return(list(
+        use_exact_q = FALSE,
+        profile_draw_mode = draw_mode,
+        pool_draw_mode = draw_mode,
+        n_draws = sanitize_q_draw_count(nMonte_Qglm)
+      ))
+    }
+    if (identical(glm_family, "gaussian")) {
+      return(list(
+        use_exact_q = TRUE,
+        profile_draw_mode = "exact",
+        pool_draw_mode = "exact",
+        n_draws = 1L
+      ))
+    }
+    return(list(
+      use_exact_q = FALSE,
+      profile_draw_mode = "relaxed",
+      pool_draw_mode = "relaxed",
+      n_draws = sanitize_q_draw_count(nMonte_Qglm)
+    ))
+  }
+
+  draw_mode <- if (identical(outcome_model_type, "neural")) {
+    if (identical(phase, "objective")) "relaxed" else "hard"
+  } else {
+    "relaxed"
+  }
+  n_draws <- if (identical(phase, "objective")) {
+    nMonte_adversarial
+  } else {
+    nMonte_Qglm
+  }
+  list(
+    use_exact_q = FALSE,
+    profile_draw_mode = draw_mode,
+    pool_draw_mode = draw_mode,
+    n_draws = sanitize_q_draw_count(n_draws)
+  )
+}
+
+resolve_q_policy_sampler <- function(draw_mode) {
+  if (is.null(draw_mode) || identical(draw_mode, "exact")) {
+    return(NULL)
+  }
+
+  sampler_name <- switch(draw_mode,
+                         relaxed = "getMultinomialSamp",
+                         hard = "getMultinomialSampHard",
+                         stop(sprintf("Unknown policy draw mode '%s'.", draw_mode),
+                              call. = FALSE))
+  if (exists("strenv", inherits = TRUE) &&
+      exists(sampler_name, envir = strenv, inherits = FALSE)) {
+    return(get(sampler_name, envir = strenv, inherits = FALSE))
+  }
+
+  switch(draw_mode,
+         relaxed = getMultinomialSamp_R,
+         hard = getMultinomialSampHard_R)
+}
+
+sample_multinomial_group <- function(pi_selection,
+                                     temperature,
+                                     jax_seed,
+                                     draw_mode = c("relaxed", "hard")) {
+  draw_mode <- match.arg(draw_mode)
+  logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
+  gumbels <- strenv$jax$random$gumbel(key = jax_seed, shape = logits$shape)
+  scores <- logits + gumbels
+  soft_sample <- strenv$jax$nn$softmax(scores / temperature, axis = -1L)$transpose()
+  if (identical(draw_mode, "relaxed")) {
+    return(soft_sample)
+  }
+
+  n_categories <- ai(strenv$jnp$shape(scores)[[2L]])
+  hard_idx <- strenv$jnp$argmax(scores, axis = -1L)
+  hard_sample <- strenv$jax$nn$one_hot(hard_idx, n_categories,
+                                       dtype = soft_sample$dtype)$transpose()
+  if (identical(draw_mode, "hard")) {
+    return(hard_sample)
+  }
+}
+
+getMultinomialSamp_generic_R <- function(pi_value,
+                                         temperature,
+                                         jax_seed,
+                                         ParameterizationType,
+                                         d_locator_use,
+                                         draw_mode = c("relaxed", "hard")) {
+  draw_mode <- match.arg(draw_mode)
   # Ensure d_locator_use is at least 1D, in case it was a scalar
   d_locator_use <- strenv$jnp$atleast_1d(d_locator_use)
   
@@ -389,15 +493,8 @@ getMultinomialSamp_R <- function(pi_value,
       pi_selection <- strenv$jnp$concatenate(list(pi_selection, pi_implied), 0L)
     }
     
-    # Sample from RelaxedOneHotCategorical using oryx - depreciated 
-    # TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(probs = pi_selection$transpose(), temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
-    
-    # Sample from RelaxedOneHotCategorical using base JAX
-    # jax_seed <- strenv$jax$random$PRNGKey(4L) # for testing 
-    logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
-    gumbels <- strenv$jax$random$gumbel(key = jax_seed, shape = logits$shape)
-    TSamp <- strenv$jax$nn$softmax( ((logits + gumbels) / temperature),
-                                    axis = -1L)$transpose()
+    TSamp <- sample_multinomial_group(pi_selection, temperature, jax_seed,
+                                      draw_mode = draw_mode)
     jax_seed   <- strenv$jax$random$split(jax_seed)[[1L]]
     
     # If Implicit, remove that last extra dimension after sampling
@@ -417,6 +514,36 @@ getMultinomialSamp_R <- function(pi_value,
   # Concatenate all group samples along axis=0
   T_star_samp <- strenv$jnp$concatenate(T_star_samp_list, 0L)
   return(T_star_samp)
+}
+
+getMultinomialSamp_R <- function(pi_value,
+                                 temperature,
+                                 jax_seed,
+                                 ParameterizationType,
+                                 d_locator_use) {
+  getMultinomialSamp_generic_R(
+    pi_value = pi_value,
+    temperature = temperature,
+    jax_seed = jax_seed,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    draw_mode = "relaxed"
+  )
+}
+
+getMultinomialSampHard_R <- function(pi_value,
+                                     temperature,
+                                     jax_seed,
+                                     ParameterizationType,
+                                     d_locator_use) {
+  getMultinomialSamp_generic_R(
+    pi_value = pi_value,
+    temperature = temperature,
+    jax_seed = jax_seed,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    draw_mode = "hard"
+  )
 }
 
 sample_pool_jax <- function(pi_vec, n_draws, n_pool, seed_in,
@@ -458,10 +585,7 @@ draw_profile_samples <- function(pi_vec, n_draws, seed_in,
 average_case_q_uses_mc <- function(outcome_model_type,
                                    glm_family,
                                    nMonte_Qglm) {
-  n_draws <- suppressWarnings(as.integer(nMonte_Qglm))
-  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
-    n_draws <- 1L
-  }
+  n_draws <- sanitize_q_draw_count(nMonte_Qglm)
 
   identical(outcome_model_type, "neural") ||
     (!identical(glm_family, "gaussian") && (n_draws > 1L))
@@ -476,17 +600,19 @@ draw_average_case_q_profiles <- function(pi_star_ast,
                                          temperature,
                                          ParameterizationType,
                                          d_locator_use,
-                                         sampler = NULL) {
-  use_mc_q <- average_case_q_uses_mc(
-    outcome_model_type = outcome_model_type,
-    glm_family = glm_family,
-    nMonte_Qglm = nMonte_Qglm
-  )
-
-  n_draws <- suppressWarnings(as.integer(nMonte_Qglm))
-  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
-    n_draws <- 1L
+                                         sampler = NULL,
+                                         profile_draw_mode = NULL) {
+  use_mc_q <- if (is.null(profile_draw_mode)) {
+    average_case_q_uses_mc(
+      outcome_model_type = outcome_model_type,
+      glm_family = glm_family,
+      nMonte_Qglm = nMonte_Qglm
+    )
+  } else {
+    !identical(profile_draw_mode, "exact")
   }
+
+  n_draws <- sanitize_q_draw_count(nMonte_Qglm)
 
   if (!use_mc_q) {
     return(list(
@@ -502,15 +628,21 @@ draw_average_case_q_profiles <- function(pi_star_ast,
     n_draws <- max(1L, n_draws)
   }
 
+  sampler_use <- if (!is.null(sampler)) {
+    sampler
+  } else {
+    resolve_q_policy_sampler(if (is.null(profile_draw_mode)) "relaxed" else profile_draw_mode)
+  }
+
   draw_ast <- draw_profile_samples(
     pi_star_ast, n_draws, seed_in,
     temperature, ParameterizationType, d_locator_use,
-    sampler = sampler
+    sampler = sampler_use
   )
   draw_dag <- draw_profile_samples(
     pi_star_dag, n_draws, draw_ast$seed_next,
     temperature, ParameterizationType, d_locator_use,
-    sampler = sampler
+    sampler = sampler_use
   )
 
   list(
@@ -519,6 +651,206 @@ draw_average_case_q_profiles <- function(pi_star_ast,
     seed_next = draw_dag$seed_next,
     use_mc_q = TRUE,
     n_draws = n_draws
+  )
+}
+
+reshape_scalar_q_value <- function(q_val, template) {
+  q_dims <- if (length(template$shape) >= 2L) {
+    list(1L, 1L)
+  } else {
+    list(1L)
+  }
+  strenv$jnp$reshape(q_val, q_dims)
+}
+
+evaluate_average_case_q <- function(pi_star_ast,
+                                    pi_star_dag,
+                                    INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                    INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                    seed_in,
+                                    phase = c("objective", "report"),
+                                    outcome_model_type,
+                                    glm_family,
+                                    nMonte_Qglm,
+                                    temperature,
+                                    ParameterizationType,
+                                    d_locator_use,
+                                    q_fxn) {
+  phase <- match.arg(phase)
+  spec <- resolve_q_eval_spec(
+    phase = phase,
+    adversarial = FALSE,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm
+  )
+  q_profile_draws <- draw_average_case_q_profiles(
+    pi_star_ast = pi_star_ast,
+    pi_star_dag = pi_star_dag,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = spec$n_draws,
+    seed_in = seed_in,
+    temperature = temperature,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    profile_draw_mode = spec$profile_draw_mode
+  )
+
+  if (isTRUE(q_profile_draws$use_mc_q)) {
+    q_vec <- strenv$Vectorized_QMonteIter(
+      q_profile_draws$pi_star_ast_f_all,
+      q_profile_draws$pi_star_dag_f_all,
+      INTERCEPT_ast_,
+      COEFFICIENTS_ast_,
+      INTERCEPT_dag_,
+      COEFFICIENTS_dag_
+    )$mean(0L)
+  } else {
+    q_vec <- q_fxn(
+      pi_star_ast = pi_star_ast,
+      pi_star_dag = pi_star_dag,
+      EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
+      EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
+      EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
+      EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_
+    )
+  }
+
+  list(
+    q_vec = q_vec,
+    q_max = strenv$jnp$take(q_vec, 0L),
+    seed_next = q_profile_draws$seed_next,
+    spec = spec
+  )
+}
+
+evaluate_adversarial_q <- function(pi_star_ast,
+                                   pi_star_dag,
+                                   a_i_ast,
+                                   a_i_dag,
+                                   INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                   INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                   INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                   INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                   P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+                                   SLATE_VEC_ast_, SLATE_VEC_dag_,
+                                   LAMBDA_,
+                                   Q_SIGN,
+                                   seed_in,
+                                   phase = c("objective", "report"),
+                                   outcome_model_type,
+                                   glm_family,
+                                   nMonte_Qglm,
+                                   nMonte_adversarial,
+                                   primary_pushforward,
+                                   primary_n_entrants,
+                                   primary_n_field,
+                                   temperature,
+                                   ParameterizationType,
+                                   d_locator_use) {
+  phase <- match.arg(phase)
+  spec <- resolve_q_eval_spec(
+    phase = phase,
+    adversarial = TRUE,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm,
+    nMonte_adversarial = nMonte_adversarial
+  )
+  sampler_profile <- resolve_q_policy_sampler(spec$profile_draw_mode)
+  sampler_pool <- resolve_q_policy_sampler(spec$pool_draw_mode)
+  seed_next <- seed_in
+  n_q_samp <- spec$n_draws
+
+  if (primary_pushforward == "multi") {
+    samp_ast <- sample_pool_jax(
+      pi_star_ast, n_q_samp, primary_n_entrants, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_ast_all <- samp_ast$samples
+    seed_next <- samp_ast$seed_next
+
+    samp_dag <- sample_pool_jax(
+      pi_star_dag, n_q_samp, primary_n_entrants, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_dag_all <- samp_dag$samples
+    seed_next <- samp_dag$seed_next
+
+    samp_ast_field <- sample_pool_jax(
+      SLATE_VEC_ast_, n_q_samp, primary_n_field, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
+    seed_next <- samp_ast_field$seed_next
+
+    samp_dag_field <- sample_pool_jax(
+      SLATE_VEC_dag_, n_q_samp, primary_n_field, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
+    seed_next <- samp_dag_field$seed_next
+  } else {
+    draw_ast <- draw_profile_samples(
+      pi_star_ast, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_ast_all <- draw_ast$samples
+    seed_next <- draw_ast$seed_next
+
+    draw_dag <- draw_profile_samples(
+      pi_star_dag, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_dag_all <- draw_dag$samples
+    seed_next <- draw_dag$seed_next
+
+    draw_ast_field <- draw_profile_samples(
+      SLATE_VEC_ast_, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
+    seed_next <- draw_ast_field$seed_next
+
+    draw_dag_field <- draw_profile_samples(
+      SLATE_VEC_dag_, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
+    seed_next <- draw_dag_field$seed_next
+  }
+
+  QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
+    TSAMP_ast_all, TSAMP_dag_all,
+    TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+    a_i_ast, a_i_dag,
+    INTERCEPT_ast_, COEFFICIENTS_ast_,
+    INTERCEPT_dag_, COEFFICIENTS_dag_,
+    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+    P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+    LAMBDA_, Q_SIGN,
+    strenv$jax$random$split(seed_next, n_q_samp)
+  )
+  q_ast <- QMonteRes$q_ast$mean()
+  q_dag <- QMonteRes$q_dag$mean()
+  indicator_UseAst <- 0.5 * (1. + Q_SIGN)
+
+  list(
+    q_ast = q_ast,
+    q_dag = q_dag,
+    q_max = indicator_UseAst * q_ast + (1. - indicator_UseAst) * q_dag,
+    seed_next = seed_next,
+    spec = spec
   )
 }
 

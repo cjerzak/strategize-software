@@ -875,3 +875,78 @@ test_that("average-case neural gaussian Q helper uses MC sampling", {
   expect_identical(neural_n, 4L)
   expect_identical(glm_n, 1L)
 })
+
+test_that("Q evaluation resolver keeps neural objective relaxed and report hard", {
+  avg_obj <- strategize:::resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = FALSE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L
+  )
+  avg_report <- strategize:::resolve_q_eval_spec(
+    phase = "report",
+    adversarial = FALSE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L
+  )
+  adv_obj <- strategize:::resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = TRUE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L,
+    nMonte_adversarial = 5L
+  )
+  glm_exact <- strategize:::resolve_q_eval_spec(
+    phase = "report",
+    adversarial = FALSE,
+    outcome_model_type = "glm",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L
+  )
+
+  expect_identical(avg_obj$profile_draw_mode, "relaxed")
+  expect_identical(avg_report$profile_draw_mode, "hard")
+  expect_identical(adv_obj$profile_draw_mode, "relaxed")
+  expect_identical(avg_obj$n_draws, 9L)
+  expect_identical(avg_report$n_draws, 9L)
+  expect_identical(adv_obj$n_draws, 5L)
+  expect_true(isTRUE(glm_exact$use_exact_q))
+  expect_identical(glm_exact$profile_draw_mode, "exact")
+})
+
+test_that("hard profile draw mode emits one-hot average-case samples", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  if (!"jnp" %in% ls(envir = strategize:::strenv)) {
+    strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  }
+
+  pi_ast <- strategize:::strenv$jnp$array(c(0.25, 0.75), dtype = strategize:::strenv$dtj)
+  pi_dag <- strategize:::strenv$jnp$array(c(0.60, 0.40), dtype = strategize:::strenv$dtj)
+  seed <- strategize:::strenv$jax$random$PRNGKey(123L)
+
+  hard_draws <- strategize:::draw_average_case_q_profiles(
+    pi_star_ast = pi_ast,
+    pi_star_dag = pi_dag,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 8L,
+    seed_in = seed,
+    temperature = 0.5,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 2L)),
+    profile_draw_mode = "hard"
+  )
+
+  ast_mat <- unclass(strategize:::strenv$np$array(hard_draws$pi_star_ast_f_all))
+  dag_mat <- unclass(strategize:::strenv$np$array(hard_draws$pi_star_dag_f_all))
+
+  expect_true(all(ast_mat %in% c(0, 1)))
+  expect_true(all(dag_mat %in% c(0, 1)))
+  expect_true(all(rowSums(ast_mat) == 1))
+  expect_true(all(rowSums(dag_mat) == 1))
+})
