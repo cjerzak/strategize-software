@@ -711,7 +711,7 @@ strategize       <-          function(
   temperature_effective <- if (!is.null(temperature)) {
     as.numeric(temperature)
   } else if (identical(outcome_model_type, "neural") && !isTRUE(adversarial)) {
-    0.05
+    0.5
   } else {
     0.5
   }

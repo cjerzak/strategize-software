@@ -24,44 +24,47 @@ get_linear_average_case_fixture_cached <- local({
 test_that("strategize recovers linear average-case pi* and Q with glm", {
   fixture <- get_linear_average_case_fixture_cached()
 
-  withr::local_seed(20260326L)
-  res <- strategize(
-    Y = fixture$Y,
-    W = fixture$W,
-    lambda = fixture$lambda,
-    outcome_model_type = "glm",
-    diff = FALSE,
-    adversarial = FALSE,
-    compute_se = FALSE,
-    penalty_type = "L2",
-    use_regularization = FALSE,
-    use_optax = FALSE,
-    force_gaussian = FALSE,
-    nSGD = 1000L,
-    nMonte_Qglm = 1000L,
-    a_init_sd = 0.001
-  )
+  for (seed in 20260326L + 0:3) {
+    withr::local_seed(seed)
+    res <- strategize(
+      Y = fixture$Y,
+      W = fixture$W,
+      lambda = fixture$lambda,
+      outcome_model_type = "glm",
+      diff = FALSE,
+      adversarial = FALSE,
+      compute_se = FALSE,
+      penalty_type = "L2",
+      use_regularization = FALSE,
+      use_optax = FALSE,
+      force_gaussian = FALSE,
+      nSGD = 1000L,
+      nMonte_Qglm = 1000L,
+      a_init_sd = 0.001
+    )
 
-  pi_hat <- extract_average_case_pi_hat(res)
-  Q_hat <- if (!is.null(res$Q_point_mEst) && all(is.finite(res$Q_point_mEst))) {
-    as.numeric(res$Q_point_mEst)
-  } else {
-    as.numeric(res$Q_point)
+    pi_hat <- extract_average_case_pi_hat(res)
+    Q_hat <- if (!is.null(res$Q_point_mEst) && all(is.finite(res$Q_point_mEst))) {
+      as.numeric(res$Q_point_mEst)
+    } else {
+      as.numeric(res$Q_point)
+    }
+    pi_rel_err <- mean(
+      abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
+    )
+    Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
+    info_msg <- sprintf(
+      "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
+      seed,
+      pi_rel_err,
+      Q_rel_err,
+      Q_hat,
+      fixture$trueQ
+    )
+
+    expect_true(pi_rel_err <= 0.25, info = info_msg)
+    expect_true(Q_rel_err <= 0.25, info = info_msg)
   }
-  pi_rel_err <- mean(
-    abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
-  )
-  Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
-  info_msg <- sprintf(
-    "pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
-    pi_rel_err,
-    Q_rel_err,
-    Q_hat,
-    fixture$trueQ
-  )
-
-  expect_true(pi_rel_err <= 0.25, info = info_msg)
-  expect_true(Q_rel_err <= 0.25, info = info_msg)
 })
 
 test_that("strategize recovers linear average-case pi* and Q with neural", {
@@ -70,56 +73,59 @@ test_that("strategize recovers linear average-case pi* and Q with neural", {
 
   fixture <- get_linear_average_case_fixture_cached()
 
-  withr::local_seed(20260326L)
-  res <- strategize(
-    Y = fixture$Y,
-    W = fixture$W,
-    lambda = fixture$lambda,
-    outcome_model_type = "neural",
-    diff = FALSE,
-    adversarial = FALSE,
-    compute_se = FALSE,
-    penalty_type = "L2",
-    use_regularization = FALSE,
-    use_optax = FALSE,
-    force_gaussian = FALSE,
-    nSGD = 1000L,
-    nMonte_Qglm = 1000L,
-    a_init_sd = 0.001,
-    optim_type = "gd",
-    neural_mcmc_control = list(
-      subsample_method = "batch_vi",
-      ModelDims = 64L,
-      ModelDepth = 2L,
-      qk_norm = FALSE,
-      batch_size = 512L,
-      optimizer = "adam",
-      vi_guide = "auto_diagonal",
-      svi_steps = 200L,
-      svi_num_draws = 100L,
-      uncertainty_scope = "output",
-      eval_enabled = FALSE
+  for (seed in 20260326L + 0:3) {
+    withr::local_seed(seed)
+    res <- strategize(
+      Y = fixture$Y,
+      W = fixture$W,
+      lambda = fixture$lambda,
+      outcome_model_type = "neural",
+      diff = FALSE,
+      adversarial = FALSE,
+      compute_se = FALSE,
+      penalty_type = "L2",
+      use_regularization = FALSE,
+      use_optax = FALSE,
+      force_gaussian = FALSE,
+      nSGD = 1000L,
+      nMonte_Qglm = 1000L,
+      a_init_sd = 0.001,
+      optim_type = "gd",
+      neural_mcmc_control = list(
+        subsample_method = "batch_vi",
+        ModelDims = 64L,
+        ModelDepth = 2L,
+        qk_norm = FALSE,
+        batch_size = 512L,
+        optimizer = "adam",
+        vi_guide = "auto_diagonal",
+        svi_steps = 200L,
+        svi_num_draws = 100L,
+        uncertainty_scope = "output",
+        eval_enabled = FALSE
+      )
     )
-  )
 
-  pi_hat <- extract_average_case_pi_hat(res)
-  Q_hat <- if (!is.null(res$Q_point_mEst) && all(is.finite(res$Q_point_mEst))) {
-    as.numeric(res$Q_point_mEst)
-  } else {
-    as.numeric(res$Q_point)
+    pi_hat <- extract_average_case_pi_hat(res)
+    Q_hat <- if (!is.null(res$Q_point_mEst) && all(is.finite(res$Q_point_mEst))) {
+      as.numeric(res$Q_point_mEst)
+    } else {
+      as.numeric(res$Q_point)
+    }
+    pi_rel_err <- mean(
+      abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
+    )
+    Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
+    info_msg <- sprintf(
+      "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
+      seed,
+      pi_rel_err,
+      Q_rel_err,
+      Q_hat,
+      fixture$trueQ
+    )
+
+    expect_true(pi_rel_err <= 0.25, info = info_msg)
+    expect_true(Q_rel_err <= 0.25, info = info_msg)
   }
-  pi_rel_err <- mean(
-    abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
-  )
-  Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
-  info_msg <- sprintf(
-    "pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
-    pi_rel_err,
-    Q_rel_err,
-    Q_hat,
-    fixture$trueQ
-  )
-
-  expect_true(pi_rel_err <= 0.25, info = info_msg)
-  expect_true(Q_rel_err <= 0.25, info = info_msg)
 })
