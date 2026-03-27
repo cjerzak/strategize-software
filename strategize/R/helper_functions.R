@@ -432,13 +432,57 @@ sample_multinomial_group <- function(pi_selection,
     return(soft_sample)
   }
 
-  n_categories <- ai(strenv$jnp$shape(scores)[[2L]])
+  # Categories are stored on the first axis of pi_selection. Using the
+  # input shape keeps hard draws valid for both 1D vectors and transposed
+  # row-matrix intermediates.
+  n_categories <- ai(strenv$jnp$shape(pi_selection)[[1L]])
   hard_idx <- strenv$jnp$argmax(scores, axis = -1L)
   hard_sample <- strenv$jax$nn$one_hot(hard_idx, n_categories,
                                        dtype = soft_sample$dtype)$transpose()
   if (identical(draw_mode, "hard")) {
     return(hard_sample)
   }
+}
+
+resolve_multinomial_group_spec <- function(d_locator_use, ParameterizationType) {
+  has_global_spec <- exists("nUniqueFactors", envir = strenv, inherits = FALSE) &&
+    exists("nUniqueLevelsByFactors", envir = strenv, inherits = FALSE)
+
+  if (isTRUE(has_global_spec)) {
+    return(list(
+      n_unique_factors = as.integer(strenv$nUniqueFactors),
+      n_unique_levels_by_factors = as.integer(strenv$nUniqueLevelsByFactors)
+    ))
+  }
+
+  d_locator_r <- tryCatch(
+    as.integer(reticulate::py_to_r(strenv$np$array(d_locator_use))),
+    error = function(e) NULL
+  )
+  if (is.null(d_locator_r) || !length(d_locator_r)) {
+    stop(
+      paste(
+        "Could not infer multinomial group sizes from d_locator_use.",
+        "Initialize factor metadata or provide a concrete locator array."
+      ),
+      call. = FALSE
+    )
+  }
+
+  factor_ids <- sort(unique(d_locator_r))
+  group_counts <- vapply(
+    factor_ids,
+    function(group_id) sum(d_locator_r == group_id),
+    integer(1)
+  )
+  if (identical(ParameterizationType, "Implicit")) {
+    group_counts <- group_counts + 1L
+  }
+
+  list(
+    n_unique_factors = as.integer(length(factor_ids)),
+    n_unique_levels_by_factors = as.integer(group_counts)
+  )
 }
 
 getMultinomialSamp_generic_R <- function(pi_value,
@@ -448,13 +492,14 @@ getMultinomialSamp_generic_R <- function(pi_value,
                                          d_locator_use,
                                          draw_mode = c("relaxed", "hard")) {
   draw_mode <- match.arg(draw_mode)
+  group_spec <- resolve_multinomial_group_spec(d_locator_use, ParameterizationType)
   # Ensure d_locator_use is at least 1D, in case it was a scalar
   d_locator_use <- strenv$jnp$atleast_1d(d_locator_use)
   
   # Identify each unique group + the inverse indices
   unique_groups_inverse_indices <- strenv$jnp$unique(d_locator_use,
                                                      return_inverse=TRUE,
-                                                     size = strenv$nUniqueFactors)
+                                                     size = group_spec$n_unique_factors)
   unique_groups <- unique_groups_inverse_indices[[1]]
   inverse_indices <- unique_groups_inverse_indices[[2]]
   
@@ -476,7 +521,8 @@ getMultinomialSamp_generic_R <- function(pi_value,
     zer <- strenv$jnp$where(
       strenv$jnp$equal(inverse_indices, 
                        strenv$jnp$array(n2int(g_jax))),
-      size = ai(strenv$nUniqueLevelsByFactors[g_i]- 1L*(strenv$ParameterizationType == "Implicit"))
+      size = ai(group_spec$n_unique_levels_by_factors[g_i] -
+                  1L * (ParameterizationType == "Implicit"))
     )[[1]]
     
     # pi_selection for that group

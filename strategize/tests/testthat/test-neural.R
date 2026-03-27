@@ -126,6 +126,18 @@ get_neural_model_info <- function(res) {
   model_info
 }
 
+compute_binary_null_metrics <- function(y) {
+  y <- as.numeric(y)
+  y <- y[is.finite(y)]
+  p_null <- mean(y)
+  p_null <- min(max(p_null, 1e-6), 1 - 1e-6)
+  list(
+    log_loss = -mean(y * log(p_null) + (1 - y) * log(1 - p_null)),
+    accuracy = max(mean(y), 1 - mean(y)),
+    brier = mean((p_null - y) ^ 2)
+  )
+}
+
 generate_average_case_neural_data <- function(n = 24, n_factors = 3, seed = 20260326) {
   withr::local_seed(seed)
 
@@ -811,6 +823,32 @@ test_that("neural outcome model exports cross-fitted OOS fit metrics", {
   }
 })
 
+test_that("neural pairwise OOS fit beats an intercept-only observable baseline", {
+  fit <- get_neural_fit()
+  res <- fit$res
+  data <- fit$data
+
+  info <- get_neural_model_info(res)
+  if (is.null(info) || is.null(info$fit_metrics)) {
+    skip("Neural fit metrics unavailable for observable-fit check.")
+  }
+
+  metrics <- info$fit_metrics
+  if (!identical(metrics$likelihood, "bernoulli")) {
+    skip("Observable-fit baseline check currently supports bernoulli pairwise outcomes only.")
+  }
+
+  y_eval <- data$Y[data$profile_order == 1L]
+  null_metrics <- compute_binary_null_metrics(y_eval)
+
+  expect_equal(metrics$n_eval, length(y_eval))
+  expect_true(is.finite(metrics$auc))
+  expect_gt(metrics$auc, 0.5)
+  expect_lt(metrics$log_loss, null_metrics$log_loss)
+  expect_lt(metrics$brier, null_metrics$brier)
+  expect_gt(metrics$accuracy, null_metrics$accuracy)
+})
+
 test_that("non-pairwise AutoDelta runs on the average-case normal neural path", {
   fit <- run_average_case_neural_fit(vi_guide = "auto_delta", compute_se = FALSE)
   res <- fit$res
@@ -938,7 +976,7 @@ test_that("hard profile draw mode emits one-hot average-case samples", {
     seed_in = seed,
     temperature = 0.5,
     ParameterizationType = "Full",
-    d_locator_use = strategize:::strenv$jnp$array(c(1L, 2L)),
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L)),
     profile_draw_mode = "hard"
   )
 
