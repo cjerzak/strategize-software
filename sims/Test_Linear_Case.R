@@ -19,7 +19,7 @@ ConfLevel <- 0.95
 
 # simulation grid
 outer_grid <- expand.grid("kFactors" = (kFactors_seq <- c(5,10,20)),
-                          "nObs" = nObs_seq <- (5*round(10^seq(2, 3.3, length.out = 4),-2L)),
+                          "nObs" = nObs_seq <- c(1000L, 2000L, 5000L, 10000L),
                           
                           #"optimType" = (optimType_seq <- c("twoStep_default","oneStep")),
                           "optimType" = (optimType_seq <-  c("twoStep_default" )),
