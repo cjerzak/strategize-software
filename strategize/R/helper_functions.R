@@ -445,6 +445,33 @@ sample_multinomial_group <- function(pi_selection,
 }
 
 resolve_multinomial_group_spec <- function(d_locator_use, ParameterizationType) {
+  d_locator_r <- tryCatch(
+    if (is.null(d_locator_use)) {
+      NULL
+    } else {
+      as.integer(reticulate::py_to_r(strenv$np$array(d_locator_use)))
+    },
+    error = function(e) NULL
+  )
+  if (!is.null(d_locator_r) && length(d_locator_r)) {
+    factor_ids <- sort(unique(d_locator_r))
+    group_counts <- vapply(
+      factor_ids,
+      function(group_id) sum(d_locator_r == group_id),
+      integer(1)
+    )
+    if (identical(ParameterizationType, "Implicit")) {
+      group_counts <- group_counts + 1L
+    }
+
+    # Direct sampler calls may supply a concrete locator that differs from the
+    # current strenv metadata. Prefer the locator to avoid stale state leakage.
+    return(list(
+      n_unique_factors = as.integer(length(factor_ids)),
+      n_unique_levels_by_factors = as.integer(group_counts)
+    ))
+  }
+
   has_global_spec <- exists("nUniqueFactors", envir = strenv, inherits = FALSE) &&
     exists("nUniqueLevelsByFactors", envir = strenv, inherits = FALSE)
 
@@ -455,33 +482,12 @@ resolve_multinomial_group_spec <- function(d_locator_use, ParameterizationType) 
     ))
   }
 
-  d_locator_r <- tryCatch(
-    as.integer(reticulate::py_to_r(strenv$np$array(d_locator_use))),
-    error = function(e) NULL
-  )
-  if (is.null(d_locator_r) || !length(d_locator_r)) {
-    stop(
-      paste(
-        "Could not infer multinomial group sizes from d_locator_use.",
-        "Initialize factor metadata or provide a concrete locator array."
-      ),
-      call. = FALSE
-    )
-  }
-
-  factor_ids <- sort(unique(d_locator_r))
-  group_counts <- vapply(
-    factor_ids,
-    function(group_id) sum(d_locator_r == group_id),
-    integer(1)
-  )
-  if (identical(ParameterizationType, "Implicit")) {
-    group_counts <- group_counts + 1L
-  }
-
-  list(
-    n_unique_factors = as.integer(length(factor_ids)),
-    n_unique_levels_by_factors = as.integer(group_counts)
+  stop(
+    paste(
+      "Could not infer multinomial group sizes from d_locator_use.",
+      "Initialize factor metadata or provide a concrete locator array."
+    ),
+    call. = FALSE
   )
 }
 

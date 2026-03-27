@@ -138,6 +138,29 @@ compute_binary_null_metrics <- function(y) {
   )
 }
 
+local_strenv_bindings <- function(bindings) {
+  binding_names <- as.character(bindings)
+  had_binding <- setNames(logical(length(binding_names)), binding_names)
+  old_values <- setNames(vector("list", length(binding_names)), binding_names)
+
+  for (binding in binding_names) {
+    had_binding[[binding]] <- exists(binding, envir = strategize:::strenv, inherits = FALSE)
+    if (had_binding[[binding]]) {
+      old_values[[binding]] <- get(binding, envir = strategize:::strenv, inherits = FALSE)
+    }
+  }
+
+  withr::defer({
+    for (binding in binding_names) {
+      if (had_binding[[binding]]) {
+        assign(binding, old_values[[binding]], envir = strategize:::strenv)
+      } else if (exists(binding, envir = strategize:::strenv, inherits = FALSE)) {
+        rm(list = binding, envir = strategize:::strenv)
+      }
+    }
+  })
+}
+
 generate_average_case_neural_data <- function(n = 24, n_factors = 3, seed = 20260326) {
   withr::local_seed(seed)
 
@@ -914,6 +937,60 @@ test_that("average-case neural gaussian Q helper uses MC sampling", {
   expect_identical(glm_n, 1L)
 })
 
+test_that("multinomial group spec prefers concrete locator over stale globals", {
+  skip_if_no_jax()
+
+  if (!"jnp" %in% ls(envir = strategize:::strenv)) {
+    strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  }
+
+  local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
+  strategize:::strenv$nUniqueFactors <- 3L
+  strategize:::strenv$nUniqueLevelsByFactors <- c(2L, 2L, 2L)
+
+  spec <- strategize:::resolve_multinomial_group_spec(
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L)),
+    ParameterizationType = "Full"
+  )
+
+  expect_identical(spec$n_unique_factors, 1L)
+  expect_identical(spec$n_unique_levels_by_factors, 2L)
+})
+
+test_that("multinomial group spec falls back to globals when locator unavailable", {
+  local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
+  strategize:::strenv$nUniqueFactors <- 2L
+  strategize:::strenv$nUniqueLevelsByFactors <- c(2L, 3L)
+
+  spec <- strategize:::resolve_multinomial_group_spec(
+    d_locator_use = NULL,
+    ParameterizationType = "Full"
+  )
+
+  expect_identical(spec$n_unique_factors, 2L)
+  expect_identical(spec$n_unique_levels_by_factors, c(2L, 3L))
+})
+
+test_that("multinomial group spec preserves implicit holdout levels", {
+  skip_if_no_jax()
+
+  if (!"jnp" %in% ls(envir = strategize:::strenv)) {
+    strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  }
+
+  local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
+  strategize:::strenv$nUniqueFactors <- 2L
+  strategize:::strenv$nUniqueLevelsByFactors <- c(4L, 4L)
+
+  spec <- strategize:::resolve_multinomial_group_spec(
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L)),
+    ParameterizationType = "Implicit"
+  )
+
+  expect_identical(spec$n_unique_factors, 1L)
+  expect_identical(spec$n_unique_levels_by_factors, 3L)
+})
+
 test_that("Q evaluation resolver keeps neural objective relaxed and report hard", {
   avg_obj <- strategize:::resolve_q_eval_spec(
     phase = "objective",
@@ -966,6 +1043,9 @@ test_that("hard profile draw mode emits one-hot average-case samples", {
   pi_ast <- strategize:::strenv$jnp$array(c(0.25, 0.75), dtype = strategize:::strenv$dtj)
   pi_dag <- strategize:::strenv$jnp$array(c(0.60, 0.40), dtype = strategize:::strenv$dtj)
   seed <- strategize:::strenv$jax$random$PRNGKey(123L)
+  local_strenv_bindings(c("nUniqueFactors", "nUniqueLevelsByFactors"))
+  strategize:::strenv$nUniqueFactors <- 3L
+  strategize:::strenv$nUniqueLevelsByFactors <- c(2L, 2L, 2L)
 
   hard_draws <- strategize:::draw_average_case_q_profiles(
     pi_star_ast = pi_ast,
@@ -985,6 +1065,8 @@ test_that("hard profile draw mode emits one-hot average-case samples", {
 
   expect_true(all(ast_mat %in% c(0, 1)))
   expect_true(all(dag_mat %in% c(0, 1)))
+  expect_identical(dim(ast_mat), c(8L, 2L))
+  expect_identical(dim(dag_mat), c(8L, 2L))
   expect_true(all(rowSums(ast_mat) == 1))
   expect_true(all(rowSums(dag_mat) == 1))
 })
