@@ -11,6 +11,32 @@ extract_average_case_pi_hat <- function(res) {
   }, numeric(1))
 }
 
+extract_average_case_neural_mu_hat <- function(res, W) {
+  model <- res$Y_models$my_model_ast_jnp
+  if (is.null(model)) {
+    model <- res$Y_models$my_model_dag_jnp
+  }
+  if (!is.function(model)) {
+    stop("Neural average-case fit did not expose a prediction function.", call. = FALSE)
+  }
+
+  W_df <- as.data.frame(W, stringsAsFactors = FALSE)
+  if (!is.null(names(res$p_list)) && !is.null(colnames(W_df))) {
+    W_df <- W_df[, names(res$p_list), drop = FALSE]
+  }
+
+  W_num <- as.matrix(vapply(seq_along(res$p_list), function(d_) {
+    level_names <- names(res$p_list[[d_]])
+    match(as.character(W_df[[d_]]), level_names)
+  }, numeric(nrow(W_df))))
+
+  pred <- model(X_new = W_num)
+  if (is.list(pred) && !is.null(pred$mu)) {
+    return(as.numeric(pred$mu))
+  }
+  as.numeric(pred)
+}
+
 get_linear_average_case_fixture_cached <- local({
   fixture <- NULL
   function() {
@@ -53,17 +79,32 @@ test_that("strategize recovers linear average-case pi* and Q with glm", {
       abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
     )
     Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
+    mu_hat <- extract_average_case_neural_mu_hat(res, fixture$W)
+    rmse_y <- sqrt(mean((mu_hat - fixture$Y) ^ 2))
+    rmse_null <- sqrt(mean((mean(fixture$Y) - fixture$Y) ^ 2))
+    rmse_mu_true <- sqrt(mean((mu_hat - fixture$mu_true) ^ 2))
+    cor_mu <- stats::cor(mu_hat, fixture$mu_true)
     info_msg <- sprintf(
-      "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
+      paste0(
+        "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f; ",
+        "rmse_y=%.6f; rmse_null=%.6f; rmse_mu_true=%.6f; cor_mu=%.6f"
+      ),
       seed,
       pi_rel_err,
       Q_rel_err,
       Q_hat,
-      fixture$trueQ
+      fixture$trueQ,
+      rmse_y,
+      rmse_null,
+      rmse_mu_true,
+      cor_mu
     )
 
     expect_true(pi_rel_err <= 0.25, info = info_msg)
     expect_true(Q_rel_err <= 0.25, info = info_msg)
+    expect_true(rmse_y < 0.5 * rmse_null, info = info_msg)
+    expect_true(rmse_mu_true < 0.25 * rmse_null, info = info_msg)
+    expect_true(cor_mu > 0.90, info = info_msg)
   }
 })
 
