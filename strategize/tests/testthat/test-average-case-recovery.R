@@ -79,32 +79,17 @@ test_that("strategize recovers linear average-case pi* and Q with glm", {
       abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
     )
     Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
-    mu_hat <- extract_average_case_neural_mu_hat(res, fixture$W)
-    rmse_y <- sqrt(mean((mu_hat - fixture$Y) ^ 2))
-    rmse_null <- sqrt(mean((mean(fixture$Y) - fixture$Y) ^ 2))
-    rmse_mu_true <- sqrt(mean((mu_hat - fixture$mu_true) ^ 2))
-    cor_mu <- stats::cor(mu_hat, fixture$mu_true)
     info_msg <- sprintf(
-      paste0(
-        "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f; ",
-        "rmse_y=%.6f; rmse_null=%.6f; rmse_mu_true=%.6f; cor_mu=%.6f"
-      ),
+      "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
       seed,
       pi_rel_err,
       Q_rel_err,
       Q_hat,
-      fixture$trueQ,
-      rmse_y,
-      rmse_null,
-      rmse_mu_true,
-      cor_mu
+      fixture$trueQ
     )
 
     expect_true(pi_rel_err <= 0.25, info = info_msg)
     expect_true(Q_rel_err <= 0.25, info = info_msg)
-    expect_true(rmse_y < 0.5 * rmse_null, info = info_msg)
-    expect_true(rmse_mu_true < 0.25 * rmse_null, info = info_msg)
-    expect_true(cor_mu > 0.90, info = info_msg)
   }
 })
 
@@ -157,16 +142,31 @@ test_that("strategize recovers linear average-case pi* and Q with neural", {
       abs(pi_hat - fixture$pi_star_true) / pmax(abs(fixture$pi_star_true), 1e-8)
     )
     Q_rel_err <- abs(Q_hat - fixture$trueQ) / pmax(abs(fixture$trueQ), 1e-8)
+    mu_hat <- extract_average_case_neural_mu_hat(res, fixture$W)
+    rmse_y <- sqrt(mean((mu_hat - fixture$Y) ^ 2))
+    rmse_null <- sqrt(mean((mean(fixture$Y) - fixture$Y) ^ 2))
+    rmse_mu_true <- sqrt(mean((mu_hat - fixture$mu_true) ^ 2))
+    cor_mu <- stats::cor(mu_hat, fixture$mu_true)
     info_msg <- sprintf(
-      "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f",
+      paste0(
+        "seed=%d; pi_rel_err=%.6f; Q_rel_err=%.6f; Q_hat=%.6f; trueQ=%.6f; ",
+        "rmse_y=%.6f; rmse_null=%.6f; rmse_mu_true=%.6f; cor_mu=%.6f"
+      ),
       seed,
       pi_rel_err,
       Q_rel_err,
       Q_hat,
-      fixture$trueQ
+      fixture$trueQ,
+      rmse_y,
+      rmse_null,
+      rmse_mu_true,
+      cor_mu
     )
 
     expect_true(pi_rel_err <= 0.25, info = info_msg)
     expect_true(Q_rel_err <= 0.25, info = info_msg)
+    expect_true(rmse_y < 0.5 * rmse_null, info = info_msg)
+    expect_true(rmse_mu_true < 0.25 * rmse_null, info = info_msg)
+    expect_true(cor_mu > 0.90, info = info_msg)
   }
 })
