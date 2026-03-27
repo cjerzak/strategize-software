@@ -48,7 +48,7 @@ strategize(
   primary_n_field = 1L,
   nMonte_Qglm = 100L,
   learning_rate_max = 0.001,
-  temperature = 0.5, 
+  temperature = NULL, 
   save_outcome_model = FALSE,
   presaved_outcome_model = FALSE,
   outcome_model_key = NULL,
