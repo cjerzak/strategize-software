@@ -2406,6 +2406,10 @@ strategize       <-          function(
                       "loss_dag" = unlist(lapply(strenv$loss_dag_vec, safe_to_numeric)),
                       "inv_lr_ast" = unlist(lapply(strenv$inv_learning_rate_ast_vec, safe_to_numeric)),
                       "inv_lr_dag" = unlist(lapply(strenv$inv_learning_rate_dag_vec, safe_to_numeric)),
+                      # objective_gradient_mode records the estimator used for
+                      # the optimization objective. The REINFORCE fields are
+                      # optimizer diagnostics: EMA baselines, reward moments,
+                      # and counts of non-finite score-gradient steps.
                       "objective_gradient_mode" = if (!is.null(strenv$objective_gradient_mode)) {
                         strenv$objective_gradient_mode
                       } else {

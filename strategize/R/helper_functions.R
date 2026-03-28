@@ -382,6 +382,12 @@ is_large_policy_support <- function(ParameterizationType,
   !is.finite(support_size) || support_size > max_support
 }
 
+# Q evaluation uses the exact hard target whenever it is tractable:
+# exact Gaussian GLM Q, or exact hard-support enumeration for small-support
+# single-party neural average-case. When neural support is too large to
+# enumerate, the objective falls back to REINFORCE on hard samples because
+# those draws are not pathwise-differentiable; reporting still targets the
+# hard/exact estimand rather than a relaxed surrogate.
 resolve_q_eval_spec <- function(phase = c("objective", "report"),
                                 adversarial,
                                 outcome_model_type,
@@ -811,6 +817,9 @@ weighted_q_draw_average <- function(q_draws, weights = NULL) {
   )
 }
 
+# Score-function helper for REINFORCE. It evaluates grouped multinomial
+# log-probabilities of hard one-hot draws, supporting rank-2/3 profile
+# batches and rank-4 pooled batches from the large-support samplers.
 compute_policy_sample_log_probs <- function(pi_vec,
                                             profiles,
                                             ParameterizationType,
@@ -1239,6 +1248,9 @@ evaluate_average_case_q <- function(pi_star_ast,
   )
 }
 
+# Objective-only average-case sampler for REINFORCE. It returns hard-sample
+# reward draws and sampled profiles for the score-function gradient, not the
+# final reported Q estimator.
 evaluate_average_case_q_reinforce <- function(pi_star_ast,
                                               pi_star_dag,
                                               INTERCEPT_ast_, COEFFICIENTS_ast_,
@@ -1444,6 +1456,9 @@ evaluate_adversarial_q <- function(pi_star_ast,
   )
 }
 
+# Objective-only adversarial sampler for REINFORCE. It supplies hard-sample
+# reward draws and sampled profiles/pools for the score-function gradient; the
+# reported adversarial Q remains on the standard hard-sample report path.
 evaluate_adversarial_q_reinforce <- function(pi_star_ast,
                                              pi_star_dag,
                                              a_i_ast,
