@@ -546,6 +546,77 @@ test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
   )
 
   expect_length(model_info$svi_loss_curve, expected_steps)
+  expect_identical(as.integer(model_info$svi_steps), as.integer(expected_steps))
+})
+
+test_that("output-only single-model normal batch_vi applies the production SVI floor by default", {
+  budget <- strategize:::neural_resolve_svi_budget(
+    svi_steps_input = "optimal",
+    svi_num_draws_input = 100L,
+    user_supplied_svi_steps = FALSE,
+    user_supplied_svi_num_draws = FALSE,
+    n_obs = 2000L,
+    n_factors = 10L,
+    factor_levels = rep(2L, 10L),
+    model_dims = 64L,
+    model_depth = 2L,
+    n_party_levels = 1L,
+    n_resp_party_levels = 1L,
+    n_resp_covariates = 0L,
+    n_outcomes = 1L,
+    pairwise_mode = FALSE,
+    use_matchup_token = FALSE,
+    use_cross_encoder = FALSE,
+    use_cross_term = FALSE,
+    use_cross_attn = FALSE,
+    use_qk_norm = FALSE,
+    batch_size = 512L,
+    subsample_method = "batch_vi",
+    output_only_mode = TRUE,
+    likelihood = "normal"
+  )
+
+  expect_true(isTRUE(budget$used_optimal))
+  expect_true(isTRUE(budget$used_default_svi_steps))
+  expect_true(isTRUE(budget$used_default_svi_num_draws))
+  expect_true(isTRUE(budget$output_single_normal_batch_vi))
+  expect_true(isTRUE(budget$applied_output_single_normal_batch_vi_floor))
+  expect_true(isTRUE(budget$applied_output_single_normal_batch_vi_draw_floor))
+  expect_identical(as.integer(budget$svi_steps), 2000L)
+  expect_identical(as.integer(budget$svi_num_draws), 200L)
+})
+
+test_that("explicit SVI overrides are honored even when below the production floor", {
+  budget <- strategize:::neural_resolve_svi_budget(
+    svi_steps_input = 200L,
+    svi_num_draws_input = 100L,
+    user_supplied_svi_steps = TRUE,
+    user_supplied_svi_num_draws = TRUE,
+    n_obs = 2000L,
+    n_factors = 10L,
+    factor_levels = rep(2L, 10L),
+    model_dims = 64L,
+    model_depth = 2L,
+    n_party_levels = 1L,
+    n_resp_party_levels = 1L,
+    n_resp_covariates = 0L,
+    n_outcomes = 1L,
+    pairwise_mode = FALSE,
+    use_matchup_token = FALSE,
+    use_cross_encoder = FALSE,
+    use_cross_term = FALSE,
+    use_cross_attn = FALSE,
+    use_qk_norm = FALSE,
+    batch_size = 512L,
+    subsample_method = "batch_vi",
+    output_only_mode = TRUE,
+    likelihood = "normal"
+  )
+
+  expect_false(isTRUE(budget$applied_output_single_normal_batch_vi_floor))
+  expect_false(isTRUE(budget$applied_output_single_normal_batch_vi_draw_floor))
+  expect_identical(as.integer(budget$svi_steps), 200L)
+  expect_identical(as.integer(budget$svi_num_draws), 100L)
 })
 
 test_that("neural prior predictive probabilities are not overly concentrated", {
@@ -1246,7 +1317,7 @@ test_that("AutoDelta is rejected when neural SEs are requested", {
   )
 })
 
-test_that("average-case neural gaussian Q helper uses MC sampling", {
+test_that("average-case neural gaussian Q helper can enumerate exact single-party support", {
   skip_on_cran()
   skip_if_no_jax()
 
@@ -1254,9 +1325,10 @@ test_that("average-case neural gaussian Q helper uses MC sampling", {
     strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
   }
 
-  pi_ast <- strategize:::strenv$jnp$array(c(0.25, 0.75), dtype = strategize:::strenv$dtj)
-  pi_dag <- strategize:::strenv$jnp$array(c(0.60, 0.40), dtype = strategize:::strenv$dtj)
+  pi_ast <- strategize:::strenv$jnp$array(c(0.60, 0.40, 0.30, 0.70), dtype = strategize:::strenv$dtj)
+  pi_dag <- strategize:::strenv$jnp$array(c(0.55, 0.45, 0.20, 0.80), dtype = strategize:::strenv$dtj)
   seed <- strategize:::strenv$jax$random$PRNGKey(123L)
+  d_locator <- strategize:::strenv$jnp$array(c(1L, 1L, 2L, 2L))
 
   neural_draws <- strategize:::draw_average_case_q_profiles(
     pi_star_ast = pi_ast,
@@ -1267,29 +1339,27 @@ test_that("average-case neural gaussian Q helper uses MC sampling", {
     seed_in = seed,
     temperature = 0.5,
     ParameterizationType = "Full",
-    d_locator_use = strategize:::strenv$jnp$array(c(1L, 2L)),
-    sampler = strategize:::strenv$getMultinomialSamp
-  )
-  glm_draws <- strategize:::draw_average_case_q_profiles(
-    pi_star_ast = pi_ast,
-    pi_star_dag = pi_dag,
-    outcome_model_type = "glm",
-    glm_family = "gaussian",
-    nMonte_Qglm = 4L,
-    seed_in = seed,
-    temperature = 0.5,
-    ParameterizationType = "Full",
-    d_locator_use = strategize:::strenv$jnp$array(c(1L, 2L)),
-    sampler = strategize:::strenv$getMultinomialSamp
+    d_locator_use = d_locator,
+    sampler = strategize:::strenv$getMultinomialSamp,
+    use_exact_support = TRUE,
+    exact_support_single_party = TRUE
   )
 
-  neural_n <- as.integer(neural_draws$pi_star_ast_f_all$shape[[1L]])
-  glm_n <- as.integer(glm_draws$pi_star_ast_f_all$shape[[1L]])
+  ast_profiles <- reticulate::py_to_r(strategize:::strenv$np$array(neural_draws$pi_star_ast_f_all))
+  dag_profiles <- reticulate::py_to_r(strategize:::strenv$np$array(neural_draws$pi_star_dag_f_all))
+  profile_weights <- as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(neural_draws$profile_weights)))
 
   expect_true(isTRUE(neural_draws$use_mc_q))
-  expect_false(isTRUE(glm_draws$use_mc_q))
-  expect_identical(neural_n, 4L)
-  expect_identical(glm_n, 1L)
+  expect_true(isTRUE(neural_draws$exact_support))
+  expect_identical(as.integer(neural_draws$n_draws), 4L)
+  expect_identical(dim(ast_profiles), c(4L, 4L))
+  expect_identical(dim(dag_profiles), c(4L, 4L))
+  expect_equal(rowSums(ast_profiles[, 1:2, drop = FALSE]), rep(1, 4))
+  expect_equal(rowSums(ast_profiles[, 3:4, drop = FALSE]), rep(1, 4))
+  expect_true(all(vapply(seq_len(nrow(dag_profiles)), function(i) {
+    isTRUE(all.equal(dag_profiles[i, ], c(0.55, 0.45, 0.20, 0.80), tolerance = 1e-6))
+  }, logical(1))))
+  expect_equal(sum(profile_weights), 1, tolerance = 1e-6)
 })
 
 test_that("multinomial group spec prefers concrete locator over stale globals", {
@@ -1352,20 +1422,26 @@ test_that("multinomial group spec preserves implicit holdout levels", {
   expect_identical(spec$n_unique_levels_by_factors, 3L)
 })
 
-test_that("Q evaluation resolver keeps neural objective relaxed and report hard", {
+test_that("Q evaluation resolver aligns non-adversarial neural objective/report to hard semantics", {
   avg_obj <- strategize:::resolve_q_eval_spec(
     phase = "objective",
     adversarial = FALSE,
     outcome_model_type = "neural",
     glm_family = "gaussian",
-    nMonte_Qglm = 9L
+    nMonte_Qglm = 9L,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L, 2L, 2L)),
+    single_party = TRUE
   )
   avg_report <- strategize:::resolve_q_eval_spec(
     phase = "report",
     adversarial = FALSE,
     outcome_model_type = "neural",
     glm_family = "gaussian",
-    nMonte_Qglm = 9L
+    nMonte_Qglm = 9L,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L, 2L, 2L)),
+    single_party = TRUE
   )
   adv_obj <- strategize:::resolve_q_eval_spec(
     phase = "objective",
@@ -1383,11 +1459,13 @@ test_that("Q evaluation resolver keeps neural objective relaxed and report hard"
     nMonte_Qglm = 9L
   )
 
-  expect_identical(avg_obj$profile_draw_mode, "relaxed")
+  expect_identical(avg_obj$profile_draw_mode, "hard")
   expect_identical(avg_report$profile_draw_mode, "hard")
+  expect_true(isTRUE(avg_obj$use_exact_support))
+  expect_true(isTRUE(avg_report$use_exact_support))
+  expect_identical(as.integer(avg_obj$n_draws), 4L)
+  expect_identical(as.integer(avg_report$n_draws), 4L)
   expect_identical(adv_obj$profile_draw_mode, "relaxed")
-  expect_identical(avg_obj$n_draws, 9L)
-  expect_identical(avg_report$n_draws, 9L)
   expect_identical(adv_obj$n_draws, 5L)
   expect_true(isTRUE(glm_exact$use_exact_q))
   expect_identical(glm_exact$profile_draw_mode, "exact")

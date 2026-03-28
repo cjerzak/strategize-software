@@ -1820,7 +1820,8 @@ strategize       <-          function(
               temperature = MNtemp,
               ParameterizationType = strenv$ParameterizationType,
               d_locator_use = strenv$d_locator_use,
-              q_fxn = QFXN
+              q_fxn = QFXN,
+              single_party = !isTRUE(diff)
             )
             q_star_f <- average_case_eval$q_vec
             SEED_IN_LOOP <- average_case_eval$seed_next
