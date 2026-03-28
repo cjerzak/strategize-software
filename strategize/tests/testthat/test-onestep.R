@@ -85,6 +85,7 @@ test_that("strategize_onestep handles pi_list for evaluation", {
     Y = data$Y,
     p_list = p_list,
     pi_list = p_list,  # Evaluate at baseline
+    nSGD = 5L,
     quiet = TRUE
   )
 

@@ -271,6 +271,7 @@ generate_average_case_neural_data <- function(n = 24, n_factors = 3, seed = 2026
 run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
                                         compute_se = FALSE,
                                         nMonte_Qglm = 4L,
+                                        svi_steps = 20L,
                                         seed = 20260326) {
   skip_on_cran()
   skip_if_no_jax()
@@ -300,7 +301,7 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
       ModelDims = 8L,
       ModelDepth = 1L,
       batch_size = 16L,
-      svi_steps = 20L,
+      svi_steps = as.integer(svi_steps),
       svi_num_draws = 5L,
       eval_enabled = FALSE,
       warn_stage_imbalance_pct = 0,
@@ -1167,7 +1168,11 @@ test_that("neural pairwise OOS fit beats an intercept-only observable baseline",
 })
 
 test_that("non-pairwise AutoDelta runs on the average-case normal neural path", {
-  fit <- run_average_case_neural_fit(vi_guide = "auto_delta", compute_se = FALSE)
+  fit <- run_average_case_neural_fit(
+    vi_guide = "auto_delta",
+    compute_se = FALSE,
+    svi_steps = 5L
+  )
   res <- fit$res
   model_info <- get_neural_model_info(res)
 
@@ -1232,7 +1237,11 @@ test_that("full-data normal neural path runs with direct MCMC warm-start init", 
 
 test_that("AutoDelta is rejected when neural SEs are requested", {
   expect_error(
-    run_average_case_neural_fit(vi_guide = "auto_delta", compute_se = TRUE),
+    run_average_case_neural_fit(
+      vi_guide = "auto_delta",
+      compute_se = TRUE,
+      svi_steps = 5L
+    ),
     "compute_se = TRUE is not supported when neural_mcmc_control\\$vi_guide = 'auto_delta'"
   )
 })

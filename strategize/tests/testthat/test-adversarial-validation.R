@@ -123,7 +123,7 @@ test_that("convergence history is included in strategize output", {
   # Run non-adversarial strategize (simpler)
   result <- strategize(
     Y = Y, W = W, p_list = p_list,
-    lambda = 0.1, nSGD = 10, nMonte_Qglm = 5L
+    lambda = 0.1, nSGD = 5L, nMonte_Qglm = 5L
   )
 
   # Check convergence history exists
@@ -145,7 +145,7 @@ test_that("plot_convergence works with real strategize output", {
 
   result <- strategize(
     Y = Y, W = W, p_list = p_list,
-    lambda = 0.1, nSGD = 20, nMonte_Qglm = 5L
+    lambda = 0.1, nSGD = 5L, nMonte_Qglm = 5L
   )
 
   # Should not error
@@ -267,7 +267,7 @@ test_that("hessian_available flag is FALSE for non-adversarial mode", {
   # Run non-adversarial strategize
   result <- strategize(
     Y = Y, W = W, p_list = p_list,
-    lambda = 0.1, nSGD = 10, nMonte_Qglm = 5L
+    lambda = 0.1, nSGD = 5L, nMonte_Qglm = 5L
   )
 
   # Non-adversarial mode should have hessian_available = FALSE
