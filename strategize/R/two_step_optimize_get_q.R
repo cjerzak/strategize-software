@@ -210,7 +210,8 @@ FullGetQStar_ <- function(a_i_ast,                                #1
       temperature = MNtemp,
       ParameterizationType = strenv$ParameterizationType,
       d_locator_use = strenv$jnp$array(strenv$d_locator_use),
-      q_fxn = QFXN
+      q_fxn = QFXN,
+      single_party = !isTRUE(diff)
     )
     q_max <- average_case_eval$q_max
     SEED_IN_LOOP <- average_case_eval$seed_next

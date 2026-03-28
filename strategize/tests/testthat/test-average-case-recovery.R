@@ -126,8 +126,6 @@ test_that("strategize recovers linear average-case pi* and Q with neural", {
         batch_size = 512L,
         optimizer = "adam",
         vi_guide = "auto_diagonal",
-        svi_steps = 200L,
-        svi_num_draws = 100L,
         uncertainty_scope = "output",
         eval_enabled = FALSE
       )

@@ -1268,7 +1268,7 @@ generate_ModelOutcome_neural <- function(){
     subsample_method = "full",
     n_thin_by = 1L,
     n_chains = 2L,
-    svi_steps = 1000L,
+    svi_steps = "optimal",
     svi_lr = 0.01,
     svi_num_particles = 1L,
     svi_num_draws = 200L,
@@ -1454,6 +1454,9 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(mcmc_overrides) && length(mcmc_overrides) > 0) {
     mcmc_control <- modifyList(mcmc_control, mcmc_overrides)
   }
+  user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
+  user_supplied_svi_num_draws <- !is.null(mcmc_overrides) &&
+    !is.null(mcmc_overrides$svi_num_draws)
   skip_eval_flag <- tolower(Sys.getenv("STRATEGIZE_NEURAL_SKIP_EVAL")) %in%
     c("1", "true", "yes")
   if (isTRUE(skip_eval_flag)) {
@@ -3430,6 +3433,9 @@ generate_ModelOutcome_neural <- function(){
   SVIParams <- NULL
   SVIInitValues <- NULL
   svi_loss_curve <- NULL
+  resolved_svi_steps <- NULL
+  resolved_svi_num_draws <- NULL
+  svi_budget_info <- NULL
   if (isTRUE(use_svi)) {
     if (isTRUE(output_only_mode)) {
       message("Enlisting SVI with autoguide for output-only uncertainty...")
@@ -3500,60 +3506,64 @@ generate_ModelOutcome_neural <- function(){
         call. = FALSE
       )
     }
-    svi_steps_input <- mcmc_control$svi_steps
-    svi_steps <- NULL
-    if (is.character(svi_steps_input)) {
-      steps_tag <- tolower(as.character(svi_steps_input))
-      if (length(steps_tag) == 1L && !is.na(steps_tag) && nzchar(steps_tag) &&
-          identical(steps_tag, "optimal")) {
-        n_obs_svi <- length(Y_use)
-        pairwise_scaling <- pairwise_mode
-        if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
-          n_obs_svi <- nrow(pair_mat)
-          pairwise_scaling <- TRUE
-        }
-        if ((is.null(pair_mat) || nrow(pair_mat) < 1L) &&
-            isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
-          pair_id_use <- pair_id_
-          pair_id_use <- pair_id_use[!is.na(pair_id_use)]
-          if (length(pair_id_use) > 0L) {
-            n_obs_svi <- length(unique(pair_id_use))
-            pairwise_scaling <- TRUE
-          }
-        }
-        svi_subsample_method <- if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
-          "batch_vi"
-        } else {
-          subsample_method
-        }
-        svi_steps <- neural_optimal_svi_steps(
-          n_obs = n_obs_svi,
-          n_factors = length(factor_levels_int),
-          factor_levels = factor_levels_int,
-          model_dims = ModelDims,
-          model_depth = ModelDepth,
-          n_party_levels = n_party_levels,
-          n_resp_party_levels = n_resp_party_levels,
-          n_resp_covariates = n_resp_covariates,
-          n_outcomes = nOutcomes,
-          pairwise_mode = pairwise_scaling,
-          use_matchup_token = use_matchup_token,
-          use_cross_encoder = use_cross_encoder,
-          use_cross_term = use_cross_term,
-          use_cross_attn = use_cross_attn,
-          use_qk_norm = qk_norm_enabled,
-          batch_size = mcmc_control$batch_size,
-          subsample_method = svi_subsample_method
-        )
-        mcmc_control$svi_steps <- svi_steps
-        message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
+    n_obs_svi <- length(Y_use)
+    pairwise_scaling <- pairwise_mode
+    if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+      n_obs_svi <- nrow(pair_mat)
+      pairwise_scaling <- TRUE
+    }
+    if ((is.null(pair_mat) || nrow(pair_mat) < 1L) &&
+        isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
+      pair_id_use <- pair_id_
+      pair_id_use <- pair_id_use[!is.na(pair_id_use)]
+      if (length(pair_id_use) > 0L) {
+        n_obs_svi <- length(unique(pair_id_use))
+        pairwise_scaling <- TRUE
       }
     }
-    if (is.null(svi_steps)) {
-      svi_steps <- as.integer(svi_steps_input)
-      if (length(svi_steps) != 1L || is.na(svi_steps) || svi_steps < 1L) {
-        svi_steps <- 1L
-      }
+    svi_subsample_method <- if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
+      "batch_vi"
+    } else {
+      subsample_method
+    }
+    svi_budget_info <- neural_resolve_svi_budget(
+      svi_steps_input = mcmc_control$svi_steps,
+      svi_num_draws_input = mcmc_control$svi_num_draws,
+      user_supplied_svi_steps = user_supplied_svi_steps,
+      user_supplied_svi_num_draws = user_supplied_svi_num_draws,
+      n_obs = n_obs_svi,
+      n_factors = length(factor_levels_int),
+      factor_levels = factor_levels_int,
+      model_dims = ModelDims,
+      model_depth = ModelDepth,
+      n_party_levels = n_party_levels,
+      n_resp_party_levels = n_resp_party_levels,
+      n_resp_covariates = n_resp_covariates,
+      n_outcomes = nOutcomes,
+      pairwise_mode = pairwise_scaling,
+      use_matchup_token = use_matchup_token,
+      use_cross_encoder = use_cross_encoder,
+      use_cross_term = use_cross_term,
+      use_cross_attn = use_cross_attn,
+      use_qk_norm = qk_norm_enabled,
+      batch_size = mcmc_control$batch_size,
+      subsample_method = svi_subsample_method,
+      output_only_mode = output_only_mode,
+      likelihood = likelihood
+    )
+    svi_steps <- as.integer(svi_budget_info$svi_steps)
+    resolved_svi_steps <- svi_steps
+    resolved_svi_num_draws <- as.integer(svi_budget_info$svi_num_draws)
+    mcmc_control$svi_steps <- svi_steps
+    mcmc_control$svi_num_draws <- resolved_svi_num_draws
+    if (isTRUE(svi_budget_info$used_optimal)) {
+      message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
+    }
+    if (isTRUE(svi_budget_info$applied_output_single_normal_batch_vi_floor)) {
+      message(sprintf(
+        "Applying output-only single-model normal batch_vi SVI floor => %d steps.",
+        svi_steps
+      ))
     }
     warmup_frac <- if (!is.null(mcmc_control$svi_lr_warmup_frac)) {
       as.numeric(mcmc_control$svi_lr_warmup_frac)
@@ -3751,7 +3761,7 @@ generate_ModelOutcome_neural <- function(){
     }
     params <- svi$get_params(svi_state)
     SVIParams <- params
-    n_draws <- ai(mcmc_control$svi_num_draws)
+    n_draws <- ai(resolved_svi_num_draws)
     if (length(n_draws) != 1L || is.na(n_draws) || !is.finite(n_draws) || n_draws < 1L) {
       n_draws <- 1L
     }
@@ -4695,6 +4705,9 @@ generate_ModelOutcome_neural <- function(){
     likelihood = likelihood,
     fit_metrics = fit_metrics,
     svi_loss_curve = svi_loss_curve,
+    svi_steps = resolved_svi_steps,
+    svi_num_draws = resolved_svi_num_draws,
+    svi_budget_info = svi_budget_info,
     stage_diagnostics = stage_diagnostics,
     model_dims = ModelDims,
     model_depth = ModelDepth,

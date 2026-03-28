@@ -206,3 +206,107 @@ neural_optimal_svi_steps <- function(n_obs,
 
   max(min_steps, min(steps_raw, max_steps))
 }
+
+neural_resolve_svi_budget <- function(svi_steps_input,
+                                      svi_num_draws_input,
+                                      user_supplied_svi_steps = FALSE,
+                                      user_supplied_svi_num_draws = FALSE,
+                                      n_obs,
+                                      n_factors,
+                                      factor_levels,
+                                      model_dims,
+                                      model_depth,
+                                      n_party_levels = 1L,
+                                      n_resp_party_levels = 1L,
+                                      n_resp_covariates = 0L,
+                                      n_outcomes = 1L,
+                                      pairwise_mode = FALSE,
+                                      use_matchup_token = FALSE,
+                                      use_cross_encoder = FALSE,
+                                      use_cross_term = FALSE,
+                                      use_cross_attn = FALSE,
+                                      use_qk_norm = TRUE,
+                                      batch_size = 512L,
+                                      subsample_method = "full",
+                                      output_only_mode = FALSE,
+                                      likelihood = NULL,
+                                      output_single_normal_batch_vi_floor = 2000L,
+                                      output_single_normal_batch_vi_draw_floor = 200L) {
+  steps_input <- svi_steps_input
+  used_optimal <- FALSE
+
+  if (is.character(steps_input)) {
+    steps_tag <- tolower(as.character(steps_input))
+    if (length(steps_tag) == 1L && !is.na(steps_tag) && nzchar(steps_tag) &&
+        identical(steps_tag, "optimal")) {
+      used_optimal <- TRUE
+      resolved_steps <- neural_optimal_svi_steps(
+        n_obs = n_obs,
+        n_factors = n_factors,
+        factor_levels = factor_levels,
+        model_dims = model_dims,
+        model_depth = model_depth,
+        n_party_levels = n_party_levels,
+        n_resp_party_levels = n_resp_party_levels,
+        n_resp_covariates = n_resp_covariates,
+        n_outcomes = n_outcomes,
+        pairwise_mode = pairwise_mode,
+        use_matchup_token = use_matchup_token,
+        use_cross_encoder = use_cross_encoder,
+        use_cross_term = use_cross_term,
+        use_cross_attn = use_cross_attn,
+        use_qk_norm = use_qk_norm,
+        batch_size = batch_size,
+        subsample_method = subsample_method
+      )
+    } else {
+      resolved_steps <- suppressWarnings(as.integer(steps_input))
+    }
+  } else {
+    resolved_steps <- suppressWarnings(as.integer(steps_input))
+  }
+
+  if (length(resolved_steps) != 1L || is.na(resolved_steps) || resolved_steps < 1L) {
+    resolved_steps <- 1L
+  }
+
+  resolved_draws <- suppressWarnings(as.integer(svi_num_draws_input))
+  if (length(resolved_draws) != 1L || is.na(resolved_draws) ||
+      !is.finite(resolved_draws) || resolved_draws < 1L) {
+    resolved_draws <- 1L
+  }
+
+  output_single_normal_batch_vi <- isTRUE(output_only_mode) &&
+    !isTRUE(pairwise_mode) &&
+    identical(tolower(as.character(subsample_method)), "batch_vi") &&
+    identical(tolower(as.character(likelihood)), "normal")
+
+  applied_step_floor <- FALSE
+  if (!isTRUE(user_supplied_svi_steps) && isTRUE(output_single_normal_batch_vi)) {
+    floor_steps <- suppressWarnings(as.integer(output_single_normal_batch_vi_floor))
+    if (length(floor_steps) == 1L && !is.na(floor_steps) && floor_steps >= 1L) {
+      applied_step_floor <- resolved_steps < floor_steps
+      resolved_steps <- max(resolved_steps, floor_steps)
+    }
+  }
+
+  applied_draw_floor <- FALSE
+  if (!isTRUE(user_supplied_svi_num_draws) && isTRUE(output_single_normal_batch_vi)) {
+    floor_draws <- suppressWarnings(as.integer(output_single_normal_batch_vi_draw_floor))
+    if (length(floor_draws) == 1L && !is.na(floor_draws) && floor_draws >= 1L) {
+      applied_draw_floor <- resolved_draws < floor_draws
+      resolved_draws <- max(resolved_draws, floor_draws)
+    }
+  }
+
+  list(
+    svi_steps = as.integer(resolved_steps),
+    svi_num_draws = as.integer(resolved_draws),
+    used_optimal = isTRUE(used_optimal),
+    used_default_svi_steps = !isTRUE(user_supplied_svi_steps),
+    used_default_svi_num_draws = !isTRUE(user_supplied_svi_num_draws),
+    applied_output_single_normal_batch_vi_floor = isTRUE(applied_step_floor),
+    applied_output_single_normal_batch_vi_draw_floor = isTRUE(applied_draw_floor),
+    output_single_normal_batch_vi = isTRUE(output_single_normal_batch_vi)
+  )
+}
