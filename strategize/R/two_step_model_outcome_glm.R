@@ -689,53 +689,13 @@ generate_ModelOutcome <- function(){
 	        n_folds <- 2L
 	      }
 
-	      make_folds <- function(n, n_folds, cluster = NULL, seed = 123L) {
-	        n <- as.integer(n)
-	        n_folds <- as.integer(n_folds)
-	        if (n <= 1L || n_folds < 2L) {
-	          return(NULL)
-	        }
-
-	        restore_rng <- function(old_seed) {
-	          if (is.null(old_seed)) {
-	            if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
-	              rm(".Random.seed", envir = .GlobalEnv)
-	            }
-	          } else {
-	            assign(".Random.seed", old_seed, envir = .GlobalEnv)
-	          }
-	        }
-
-	        old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
-	          get(".Random.seed", envir = .GlobalEnv)
-	        } else {
-	          NULL
-	        }
-	        set.seed(as.integer(seed))
-	        on.exit(restore_rng(old_seed), add = TRUE)
-
-	        if (!is.null(cluster) && length(cluster) == n) {
-	          cluster <- as.character(cluster)
-	          if (any(is.na(cluster))) {
-	            na_idx <- which(is.na(cluster))
-	            cluster[na_idx] <- paste0("__missing__", na_idx)
-	          }
-	          uniq <- unique(cluster)
-	          k <- min(n_folds, length(uniq))
-	          if (k >= 2L) {
-	            uniq <- sample(uniq, length(uniq))
-	            fold_map <- rep(seq_len(k), length.out = length(uniq))
-	            names(fold_map) <- uniq
-	            return(list(fold_id = as.integer(fold_map[cluster]), n_folds = k))
-	          }
-	        }
-
-	        k <- min(n_folds, n)
-	        fold_id <- sample(rep(seq_len(k), length.out = n))
-	        list(fold_id = as.integer(fold_id), n_folds = k)
-	      }
-
-	      folds_out <- make_folds(n_eval_total, n_folds, cluster_eval, glm_eval_control$seed)
+		      folds_out <- cs_make_stratified_folds(
+		        n = n_eval_total,
+		        n_folds = n_folds,
+		        y = y_full[eval_idx],
+		        cluster = cluster_eval,
+		        seed = glm_eval_control$seed
+		      )
 
 	      format_metric <- function(label, value, digits = 4) {
 	        if (is.null(value) || !is.finite(value)) return(NULL)

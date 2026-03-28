@@ -108,6 +108,86 @@ generate_test_data <- function(n = 1000, n_factors = 3, n_levels = 2, seed = 123
   )
 }
 
+#' Generate large, non-degenerate pairwise test data for performance checks
+#'
+#' @param n_pairs Number of pairwise evaluation examples
+#' @param n_factors Number of treatment factors
+#' @param n_levels Number of levels per factor
+#' @param seed Random seed
+#' @return List with pairwise data and pair-level diagnostics
+generate_pairwise_performance_test_data <- function(n_pairs = 1000L,
+                                                    n_factors = 3,
+                                                    n_levels = 2,
+                                                    seed = 1234321) {
+  withr::local_seed(seed)
+
+  levels <- LETTERS[seq_len(n_levels)]
+  sample_profiles <- function(n_rows) {
+    mat <- matrix(
+      sample(levels, n_rows * n_factors, replace = TRUE),
+      nrow = n_rows,
+      ncol = n_factors
+    )
+    colnames(mat) <- paste0("V", seq_len(n_factors))
+    mat
+  }
+
+  effect_sizes <- seq(0.4, 0.2, length.out = n_factors)
+  latent_utility <- function(W) {
+    drop((W == "B") %*% effect_sizes)
+  }
+
+  W_left <- sample_profiles(n_pairs)
+  W_right <- sample_profiles(n_pairs)
+  bad_pairs <- rep(TRUE, n_pairs)
+  max_attempts <- 100L
+  for (attempt in seq_len(max_attempts)) {
+    if (!any(bad_pairs)) {
+      break
+    }
+    left_bad <- W_left[bad_pairs, , drop = FALSE]
+    right_bad <- W_right[bad_pairs, , drop = FALSE]
+    identical_bad <- rowSums(left_bad != right_bad) == 0L
+    margin_bad <- abs(latent_utility(left_bad) - latent_utility(right_bad))
+    bad_now <- identical_bad | (margin_bad <= 0)
+    bad_idx <- which(bad_pairs)[bad_now]
+    if (!length(bad_idx)) {
+      bad_pairs[] <- FALSE
+      break
+    }
+    W_right[bad_idx, ] <- sample_profiles(length(bad_idx))
+    bad_pairs[] <- FALSE
+    bad_pairs[bad_idx] <- TRUE
+  }
+
+  utility_left <- latent_utility(W_left)
+  utility_right <- latent_utility(W_right)
+  identical_pairs <- rowSums(W_left != W_right) == 0L
+  pair_margin <- abs(utility_left - utility_right)
+  if (any(identical_pairs) || any(pair_margin <= 0)) {
+    stop("Failed to generate non-degenerate pairwise performance data.", call. = FALSE)
+  }
+
+  pair_id <- c(seq_len(n_pairs), seq_len(n_pairs))
+  respondent_id <- pair_id
+  respondent_task_id <- pair_id
+  profile_order <- c(rep(1L, n_pairs), rep(2L, n_pairs))
+  Y_left <- as.numeric(utility_left > utility_right)
+  Y <- c(Y_left, 1 - Y_left)
+  W <- rbind(W_left, W_right)
+
+  list(
+    Y = Y,
+    W = W,
+    pair_id = pair_id,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    profile_order = profile_order,
+    pair_margin = pair_margin,
+    identical_pair = identical_pairs
+  )
+}
+
 #' Generate test data with respondent-level covariates for K > 1
 #'
 #' @param base_data Output from generate_test_data

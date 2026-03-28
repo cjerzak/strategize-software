@@ -1,5 +1,10 @@
 test_that("GLM outcome model exports overall fit metrics (pairwise)", {
-  dat <- generate_test_data(n = 200, n_factors = 3, n_levels = 2, seed = 20260127)
+  dat <- generate_pairwise_performance_test_data(
+    n_pairs = 1000L,
+    n_factors = 3,
+    n_levels = 2,
+    seed = 20260127
+  )
 
   predictor <- strategic_prediction(
     Y = dat$Y,
@@ -17,6 +22,7 @@ test_that("GLM outcome model exports overall fit metrics (pairwise)", {
   expect_type(metrics, "list")
   expect_identical(metrics$likelihood, "binomial")
   expect_equal(metrics$n_eval, length(dat$Y) / 2)
+  expect_gte(metrics$n_eval, 1000L)
   expect_true(is.list(metrics$in_sample_metrics), info = diag_info)
   expect_true(is.numeric(metrics$pred_quantiles), info = diag_info)
   expect_setequal(names(metrics$pred_quantiles), c("p05", "p25", "p50", "p75", "p95"))
