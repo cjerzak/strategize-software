@@ -3068,46 +3068,6 @@ generate_ModelOutcome_neural <- function(){
 
           init_model <- body(generate_ModelOutcome_neural)
 
-          compute_auc <- function(y_true, y_score) {
-            y_true <- as.numeric(y_true)
-            y_score <- as.numeric(y_score)
-            ok <- is.finite(y_true) & is.finite(y_score)
-            y_true <- y_true[ok]
-            y_score <- y_score[ok]
-            if (!length(y_true)) return(NA_real_)
-            pos <- y_true == 1
-            neg <- y_true == 0
-            n_pos <- sum(pos)
-            n_neg <- sum(neg)
-            if (n_pos == 0L || n_neg == 0L) return(NA_real_)
-            ranks <- rank(y_score, ties.method = "average")
-            (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-          }
-          compute_log_loss <- function(y_true, y_score, eps = 1e-12) {
-            y_true <- as.numeric(y_true)
-            y_score <- as.numeric(y_score)
-            ok <- is.finite(y_true) & is.finite(y_score)
-            y_true <- y_true[ok]
-            y_score <- y_score[ok]
-            if (!length(y_true)) return(NA_real_)
-            p <- pmin(pmax(y_score, eps), 1 - eps)
-            -mean(y_true * log(p) + (1 - y_true) * log(1 - p))
-          }
-          compute_multiclass_log_loss <- function(y_true, prob_mat, eps = 1e-12) {
-            if (is.null(dim(prob_mat))) {
-              prob_mat <- matrix(prob_mat, nrow = length(y_true), byrow = TRUE)
-            }
-            n_eval <- nrow(prob_mat)
-            if (length(y_true) != n_eval) return(NA_real_)
-            ok <- !is.na(y_true)
-            y_true <- y_true[ok]
-            prob_mat <- prob_mat[ok, , drop = FALSE]
-            if (!length(y_true)) return(NA_real_)
-            idx <- cbind(seq_along(y_true), y_true + 1L)
-            p <- prob_mat[idx]
-            p <- pmin(pmax(p, eps), 1 - eps)
-            -mean(log(p))
-          }
           format_metric <- function(label, value, digits = 4) {
             if (is.null(value) || !is.finite(value)) return(NULL)
             fmt <- paste0("%s=%.", digits, "f")
@@ -3115,75 +3075,10 @@ generate_ModelOutcome_neural <- function(){
           }
 
           compute_metrics <- function(y_eval, pred_eval) {
-            if (likelihood == "bernoulli") {
-              y_eval <- as.numeric(y_eval)
-              keep <- is.finite(y_eval) & (y_eval %in% c(0, 1))
-              y_eval <- y_eval[keep]
-              p <- as.numeric(pred_eval)[keep]
-              auc <- compute_auc(y_eval, p)
-              log_loss <- compute_log_loss(y_eval, p)
-              accuracy <- if (length(y_eval)) mean((p >= 0.5) == y_eval) else NA_real_
-              brier <- if (length(y_eval)) mean((p - y_eval) ^ 2) else NA_real_
-              return(list(
-                likelihood = likelihood,
-                n_eval = length(y_eval),
-                auc = auc,
-                log_loss = log_loss,
-                accuracy = accuracy,
-                brier = brier
-              ))
-            }
-            if (likelihood == "categorical") {
-              y_eval <- as.integer(y_eval)
-              prob_mat <- as.matrix(pred_eval)
-              keep <- !is.na(y_eval)
-              y_eval <- y_eval[keep]
-              prob_mat <- prob_mat[keep, , drop = FALSE]
-              if (length(y_eval)) {
-                log_loss <- compute_multiclass_log_loss(y_eval, prob_mat)
-                pred_class <- max.col(prob_mat) - 1L
-                accuracy <- mean(pred_class == y_eval, na.rm = TRUE)
-              } else {
-                log_loss <- NA_real_
-                accuracy <- NA_real_
-              }
-              return(list(
-                likelihood = likelihood,
-                n_eval = length(y_eval),
-                log_loss = log_loss,
-                accuracy = accuracy
-              ))
-            }
-            y_eval <- as.numeric(y_eval)
-            pred_mu <- as.numeric(pred_eval$mu)
-            pred_sigma <- as.numeric(pred_eval$sigma)
-            keep <- is.finite(y_eval) & is.finite(pred_mu)
-            y_eval <- y_eval[keep]
-            pred_mu <- pred_mu[keep]
-            if (length(pred_sigma) == 1L && length(y_eval) > 1L) {
-              pred_sigma <- rep(pred_sigma, length(y_eval))
-            } else if (length(pred_sigma) == length(keep)) {
-              pred_sigma <- pred_sigma[keep]
-            } else if (length(pred_sigma) == length(y_eval)) {
-              pred_sigma <- pred_sigma
-            } else {
-              pred_sigma <- rep(NA_real_, length(y_eval))
-            }
-            rmse <- if (length(y_eval)) sqrt(mean((pred_mu - y_eval) ^ 2)) else NA_real_
-            mae <- if (length(y_eval)) mean(abs(pred_mu - y_eval)) else NA_real_
-            nll <- NA_real_
-            if (length(y_eval) &&
-                length(pred_sigma) == length(y_eval) &&
-                all(is.finite(pred_sigma)) &&
-                all(pred_sigma > 0)) {
-              nll <- mean(0.5 * log(2 * pi * pred_sigma ^ 2) + (y_eval - pred_mu) ^ 2 / (2 * pred_sigma ^ 2))
-            }
-            list(
-              likelihood = likelihood,
-              n_eval = length(y_eval),
-              rmse = rmse,
-              mae = mae,
-              nll = nll
+            cs_compute_outcome_metrics(
+              y_eval = y_eval,
+              pred_eval = pred_eval,
+              likelihood = likelihood
             )
           }
 
@@ -3406,6 +3301,7 @@ generate_ModelOutcome_neural <- function(){
           overall_metrics$eval_subset <- subset_note
           overall_metrics$n_folds <- n_folds_use
           overall_metrics$seed <- eval_control$seed
+          overall_metrics$eval_index <- eval_idx
           overall_metrics$by_fold <- by_fold
 
           if (pairwise_mode) {
@@ -4613,6 +4509,99 @@ generate_ModelOutcome_neural <- function(){
     pred <- TransformerPredict_single(ParamsMean, X_new, party_new,
                                       resp_party_new, resp_cov_new)
     coerce_prediction_output(pred)
+  }
+
+  if (!is.null(fit_metrics) &&
+      !is.null(fit_metrics$eval_index) &&
+      length(fit_metrics$eval_index) > 0L) {
+    eval_idx_in <- as.integer(fit_metrics$eval_index)
+    pred_in_sample <- tryCatch({
+      if (pairwise_mode) {
+        my_model(
+          X_left_new = X_left[eval_idx_in, , drop = FALSE],
+          X_right_new = X_right[eval_idx_in, , drop = FALSE],
+          party_left_new = party_left[eval_idx_in],
+          party_right_new = party_right[eval_idx_in],
+          resp_party_new = resp_party_use[eval_idx_in],
+          resp_cov_new = if (!is.null(X_use) && n_resp_covariates > 0L) {
+            X_use[eval_idx_in, , drop = FALSE]
+          } else {
+            NULL
+          }
+        )
+      } else {
+        my_model(
+          X_new = X_single[eval_idx_in, , drop = FALSE],
+          party_new = party_single[eval_idx_in],
+          resp_party_new = resp_party_use[eval_idx_in],
+          resp_cov_new = if (!is.null(X_use) && n_resp_covariates > 0L) {
+            X_use[eval_idx_in, , drop = FALSE]
+          } else {
+            NULL
+          }
+        )
+      }
+    }, error = function(e) NULL)
+
+    if (!is.null(pred_in_sample)) {
+      in_sample_metrics <- cs_compute_outcome_metrics(
+        y_eval = Y_use[eval_idx_in],
+        pred_eval = pred_in_sample,
+        likelihood = likelihood
+      )
+      in_sample_metrics$eval_note <- "in_sample_full_fit"
+      in_sample_metrics$eval_subset <- fit_metrics$eval_subset
+
+      if (pairwise_mode) {
+        stage_primary <- party_left == party_right
+        if (length(stage_primary) == length(Y_use)) {
+          stage_primary <- stage_primary[eval_idx_in]
+          by_stage <- list()
+          if (any(stage_primary, na.rm = TRUE)) {
+            idx0 <- which(stage_primary)
+            pred_stage <- if (likelihood == "bernoulli") {
+              pred_in_sample[idx0]
+            } else if (likelihood == "categorical") {
+              pred_in_sample[idx0, , drop = FALSE]
+            } else {
+              list(
+                mu = pred_in_sample$mu[idx0],
+                sigma = pred_in_sample$sigma[idx0]
+              )
+            }
+            by_stage$primary <- cs_compute_outcome_metrics(
+              y_eval = Y_use[eval_idx_in][idx0],
+              pred_eval = pred_stage,
+              likelihood = likelihood
+            )
+          }
+          if (any(!stage_primary, na.rm = TRUE)) {
+            idx1 <- which(!stage_primary)
+            pred_stage <- if (likelihood == "bernoulli") {
+              pred_in_sample[idx1]
+            } else if (likelihood == "categorical") {
+              pred_in_sample[idx1, , drop = FALSE]
+            } else {
+              list(
+                mu = pred_in_sample$mu[idx1],
+                sigma = pred_in_sample$sigma[idx1]
+              )
+            }
+            by_stage$general <- cs_compute_outcome_metrics(
+              y_eval = Y_use[eval_idx_in][idx1],
+              pred_eval = pred_stage,
+              likelihood = likelihood
+            )
+          }
+          if (length(by_stage) > 0L) {
+            in_sample_metrics$by_stage <- by_stage
+          }
+        }
+      }
+
+      fit_metrics$in_sample_metrics <- in_sample_metrics
+    }
+    fit_metrics$eval_index <- NULL
   }
 
   # Neural parameter vector and diagonal posterior covariance

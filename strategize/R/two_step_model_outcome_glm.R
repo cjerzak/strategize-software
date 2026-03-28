@@ -737,31 +737,6 @@ generate_ModelOutcome <- function(){
 
 	      folds_out <- make_folds(n_eval_total, n_folds, cluster_eval, glm_eval_control$seed)
 
-	      compute_auc <- function(y_true, y_score) {
-	        y_true <- as.numeric(y_true)
-	        y_score <- as.numeric(y_score)
-	        ok <- is.finite(y_true) & is.finite(y_score)
-	        y_true <- y_true[ok]
-	        y_score <- y_score[ok]
-	        if (!length(y_true)) return(NA_real_)
-	        pos <- y_true == 1
-	        neg <- y_true == 0
-	        n_pos <- sum(pos)
-	        n_neg <- sum(neg)
-	        if (n_pos == 0L || n_neg == 0L) return(NA_real_)
-	        ranks <- rank(y_score, ties.method = "average")
-	        (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-	      }
-	      compute_log_loss <- function(y_true, y_score, eps = 1e-12) {
-	        y_true <- as.numeric(y_true)
-	        y_score <- as.numeric(y_score)
-	        ok <- is.finite(y_true) & is.finite(y_score)
-	        y_true <- y_true[ok]
-	        y_score <- y_score[ok]
-	        if (!length(y_true)) return(NA_real_)
-	        p <- pmin(pmax(y_score, eps), 1 - eps)
-	        -mean(y_true * log(p) + (1 - y_true) * log(1 - p))
-	      }
 	      format_metric <- function(label, value, digits = 4) {
 	        if (is.null(value) || !is.finite(value)) return(NULL)
 	        fmt <- paste0("%s=%.", digits, "f")
@@ -769,32 +744,11 @@ generate_ModelOutcome <- function(){
 	      }
 
 	      compute_metrics <- function(y_eval, pred_eval) {
-	        ok <- is.finite(y_eval) & is.finite(pred_eval)
-	        y_eval <- as.numeric(y_eval)[ok]
-	        pred_eval <- as.numeric(pred_eval)[ok]
-	        if (glm_family == "binomial") {
-	          auc <- compute_auc(y_eval, pred_eval)
-	          log_loss <- compute_log_loss(y_eval, pred_eval)
-	          accuracy <- if (length(y_eval)) mean((pred_eval >= 0.5) == y_eval) else NA_real_
-	          brier <- if (length(y_eval)) mean((pred_eval - y_eval) ^ 2) else NA_real_
-	          list(
-	            likelihood = "binomial",
-	            n_eval = length(y_eval),
-	            auc = auc,
-	            log_loss = log_loss,
-	            accuracy = accuracy,
-	            brier = brier
-	          )
-	        } else {
-	          rmse <- if (length(y_eval)) sqrt(mean((pred_eval - y_eval) ^ 2)) else NA_real_
-	          mae <- if (length(y_eval)) mean(abs(pred_eval - y_eval)) else NA_real_
-	          list(
-	            likelihood = glm_family,
-	            n_eval = length(y_eval),
-	            rmse = rmse,
-	            mae = mae
-	          )
-	        }
+	        cs_compute_outcome_metrics(
+	          y_eval = y_eval,
+	          pred_eval = pred_eval,
+	          likelihood = if (glm_family == "binomial") "binomial" else glm_family
+	        )
 	      }
 
 		      if (!is.null(folds_out) && folds_out$n_folds >= 2L && n_eval_total >= 2L) {
@@ -1583,7 +1537,83 @@ generate_ModelOutcome <- function(){
         vcov_OutcomeModel_general <- vcov_OutcomeModel
       }
       my_model <- NULL
-    }
+	    }
+
+	    if (!is.null(fit_metrics) &&
+	        exists("eval_idx", inherits = FALSE) &&
+	        length(eval_idx) > 0L) {
+	      predict_in_sample_glm <- function() {
+	        if (!is.null(my_model)) {
+	          return(as.numeric(stats::predict(my_model, type = "response")))
+	        }
+	        if (!exists("EST_COEFFICIENTS_tf", inherits = FALSE)) {
+	          return(NULL)
+	        }
+	        x_all <- as.matrix(glm_input)
+	        if (!nrow(x_all)) {
+	          return(NULL)
+	        }
+	        coef_base <- as.numeric(strenv$np$array(EST_COEFFICIENTS_tf))
+	        intercept_base <- as.numeric(strenv$np$array(EST_INTERCEPT_tf))
+	        if (!length(intercept_base)) {
+	          intercept_base <- 0
+	        }
+	        n_base <- length(coef_base)
+	        x_base <- x_all
+	        if (ncol(x_base) > n_base) {
+	          x_base <- x_base[, seq_len(n_base), drop = FALSE]
+	        }
+	        eta_base <- as.numeric(intercept_base[1] + x_base %*% coef_base)
+
+	        pred_full <- eta_base
+	        has_general <- exists("EST_COEFFICIENTS_tf_general", inherits = FALSE) &&
+	          exists("EST_INTERCEPT_tf_general", inherits = FALSE)
+	        if (isTRUE(has_general) &&
+	            exists("stage_vec", inherits = FALSE) &&
+	            length(stage_vec) == nrow(x_all)) {
+	          coef_general <- as.numeric(strenv$np$array(EST_COEFFICIENTS_tf_general))
+	          intercept_general <- as.numeric(strenv$np$array(EST_INTERCEPT_tf_general))
+	          if (!length(intercept_general)) {
+	            intercept_general <- intercept_base
+	          }
+	          eta_general <- as.numeric(intercept_general[1] + x_base %*% coef_general)
+	          stage_idx <- which(as.integer(stage_vec) == 1L)
+	          if (length(stage_idx) > 0L) {
+	            pred_full[stage_idx] <- eta_general[stage_idx]
+	          }
+	        }
+	        if (glm_family == "binomial") {
+	          stats::plogis(pred_full)
+	        } else {
+	          pred_full
+	        }
+	      }
+
+	      pred_in_sample <- tryCatch(predict_in_sample_glm(), error = function(e) NULL)
+	      if (!is.null(pred_in_sample) && length(pred_in_sample) >= max(eval_idx)) {
+	        in_sample_metrics <- compute_metrics(y_full[eval_idx], pred_in_sample[eval_idx])
+	        in_sample_metrics$eval_note <- "in_sample_full_fit"
+	        in_sample_metrics$eval_subset <- fit_metrics$eval_subset
+	        if (exists("stage_eval", inherits = FALSE) &&
+	            !is.null(stage_eval) &&
+	            length(stage_eval) == length(y_full)) {
+	          stage_eval_sub <- as.integer(stage_eval[eval_idx])
+	          by_stage <- list()
+	          if (any(stage_eval_sub == 0L, na.rm = TRUE)) {
+	            idx0 <- which(stage_eval_sub == 0L)
+	            by_stage$primary <- compute_metrics(y_full[eval_idx][idx0], pred_in_sample[eval_idx][idx0])
+	          }
+	          if (any(stage_eval_sub == 1L, na.rm = TRUE)) {
+	            idx1 <- which(stage_eval_sub == 1L)
+	            by_stage$general <- compute_metrics(y_full[eval_idx][idx1], pred_in_sample[eval_idx][idx1])
+	          }
+	          if (length(by_stage) > 0L) {
+	            in_sample_metrics$by_stage <- by_stage
+	          }
+	        }
+	        fit_metrics$in_sample_metrics <- in_sample_metrics
+	      }
+	    }
 
     # reset names
     main_info <- main_info_PreRegularization

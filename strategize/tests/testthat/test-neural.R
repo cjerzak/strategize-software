@@ -891,6 +891,10 @@ test_that("neural outcome model exports cross-fitted OOS fit metrics", {
   }
 
   metrics <- info$fit_metrics
+  diag_info <- format_oos_failure_details(
+    metrics,
+    stage_diagnostics = info$stage_diagnostics
+  )
   expect_type(metrics, "list")
   expect_true(is.character(metrics$eval_note))
   expect_match(metrics$eval_note, "^oos_\\d+fold$")
@@ -898,16 +902,20 @@ test_that("neural outcome model exports cross-fitted OOS fit metrics", {
   expect_equal(metrics$seed, 123L)
   expect_true(is.list(metrics$by_fold))
   expect_true(length(metrics$by_fold) >= 2L)
+  expect_true(is.list(metrics$in_sample_metrics), info = diag_info)
 
   if (identical(metrics$likelihood, "bernoulli")) {
-    expect_true(is.finite(metrics$log_loss))
-    expect_gte(metrics$log_loss, 0)
+    expect_true(is.numeric(metrics$pred_quantiles), info = diag_info)
+    expect_setequal(names(metrics$pred_quantiles), c("p05", "p25", "p50", "p75", "p95"))
+    expect_setequal(names(metrics$confusion_0_5), c("tn", "fp", "fn", "tp"))
+    expect_true(is.finite(metrics$log_loss), info = diag_info)
+    expect_true(metrics$log_loss >= 0, info = diag_info)
   } else if (identical(metrics$likelihood, "categorical")) {
-    expect_true(is.finite(metrics$log_loss))
-    expect_gte(metrics$log_loss, 0)
+    expect_true(is.finite(metrics$log_loss), info = diag_info)
+    expect_true(metrics$log_loss >= 0, info = diag_info)
   } else if (identical(metrics$likelihood, "normal")) {
-    expect_true(is.finite(metrics$rmse))
-    expect_gte(metrics$rmse, 0)
+    expect_true(is.finite(metrics$rmse), info = diag_info)
+    expect_true(metrics$rmse >= 0, info = diag_info)
   }
 })
 
@@ -928,13 +936,19 @@ test_that("neural pairwise OOS fit beats an intercept-only observable baseline",
 
   y_eval <- data$Y[data$profile_order == 1L]
   null_metrics <- compute_binary_null_metrics(y_eval)
+  diag_info <- format_oos_failure_details(
+    metrics,
+    null_metrics = null_metrics,
+    stage_diagnostics = info$stage_diagnostics,
+    label = "Neural pairwise observable-baseline comparison"
+  )
 
   expect_equal(metrics$n_eval, length(y_eval))
-  expect_true(is.finite(metrics$auc))
-  expect_gt(metrics$auc, 0.5)
-  expect_lt(metrics$log_loss, null_metrics$log_loss)
-  expect_lt(metrics$brier, null_metrics$brier)
-  expect_gt(metrics$accuracy, null_metrics$accuracy)
+  expect_true(is.finite(metrics$auc), info = diag_info)
+  expect_true(metrics$auc > 0.5, info = diag_info)
+  expect_true(metrics$log_loss < null_metrics$log_loss, info = diag_info)
+  expect_true(metrics$brier < null_metrics$brier, info = diag_info)
+  expect_true(metrics$accuracy > null_metrics$accuracy, info = diag_info)
 })
 
 test_that("non-pairwise AutoDelta runs on the average-case normal neural path", {
