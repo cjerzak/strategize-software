@@ -956,6 +956,131 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
   )
 })
 
+test_that("non-pairwise neural prior trace handles NULL obs under minibatching", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_SKIP_EVAL = "true"
+  ))
+
+  data <- generate_test_data(n = 24, seed = 20260329)
+  params <- default_strategize_params(fast = TRUE)
+  params$diff <- FALSE
+  params$outcome_model_type <- "neural"
+  base_neural_control <- params$neural_mcmc_control
+  if (is.null(base_neural_control)) {
+    base_neural_control <- list()
+  }
+  params$neural_mcmc_control <- modifyList(
+    base_neural_control,
+    list(
+      subsample_method = "batch_vi",
+      batch_size = 16L,
+      ModelDims = 16L,
+      ModelDepth = 1L,
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+
+  p_list <- generate_test_p_list(data$W)
+  res <- suppressWarnings(do.call(strategize, c(
+    list(Y = data$Y, W = data$W, p_list = p_list),
+    data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+    params
+  )))
+
+  model <- res$Y_models$my_model_ast_jnp
+  if (is.null(model)) {
+    model <- res$Y_models$my_model_dag_jnp
+  }
+  expect_true(is.function(model))
+
+  model_env <- environment(model)
+  strenv <- get("strenv", envir = model_env)
+  likelihood <- get("likelihood", envir = model_env)
+  pairwise_mode <- isTRUE(get("pairwise_mode", envir = model_env))
+  expect_identical(likelihood, "bernoulli")
+  expect_false(pairwise_mode)
+
+  model_fn <- get("BayesianSingleTransformerModel", envir = model_env)
+  expect_true(is.function(model_fn))
+
+  W_numeric <- as.matrix(sapply(seq_len(ncol(data$W)), function(d_) {
+    match(data$W[, d_], names(p_list[[d_]]))
+  }))
+  to_index_matrix <- if (exists("to_index_matrix", envir = model_env, inherits = TRUE)) {
+    get("to_index_matrix", envir = model_env)
+  } else {
+    function(x_mat) {
+      x_mat <- as.matrix(x_mat)
+      if (anyNA(x_mat)) {
+        x_mat[is.na(x_mat)] <- 1L
+      }
+      x_int <- matrix(as.integer(x_mat) - 1L, nrow = nrow(x_mat), ncol = ncol(x_mat))
+      x_int[x_int < 0L] <- 0L
+      x_int
+    }
+  }
+
+  coerce_prob_numeric <- function(x) {
+    if (is.null(x)) {
+      return(numeric(0))
+    }
+    out <- tryCatch(
+      reticulate::py_to_r(strenv$np$asarray(x)),
+      error = function(e) NULL
+    )
+    if (is.null(out)) {
+      out <- tryCatch(reticulate::py_to_r(x), error = function(e) NULL)
+    }
+    if (is.null(out)) {
+      return(numeric(0))
+    }
+    if (is.list(out)) {
+      out <- unlist(out, use.names = FALSE)
+    }
+    if (!is.numeric(out)) {
+      return(numeric(0))
+    }
+    as.numeric(out)
+  }
+
+  n_obs <- nrow(W_numeric)
+  X_single_jnp <- strenv$jnp$array(to_index_matrix(W_numeric))$astype(strenv$jnp$int32)
+  party_single_jnp <- strenv$jnp$zeros(list(n_obs), dtype = strenv$jnp$int32)
+  resp_party_jnp <- strenv$jnp$zeros(list(n_obs), dtype = strenv$jnp$int32)
+  resp_cov_jnp <- strenv$jnp$zeros(list(n_obs, 0L), dtype = strenv$jnp$float32)
+
+  rng_key <- strenv$jax$random$PRNGKey(20260329L)
+  tracer <- strenv$numpyro$handlers$trace(
+    strenv$numpyro$handlers$seed(model_fn, rng_key)
+  )
+  trace <- tracer$get_trace(
+    X = X_single_jnp,
+    party = party_single_jnp,
+    resp_party = resp_party_jnp,
+    resp_cov = resp_cov_jnp,
+    Y_obs = NULL
+  )
+
+  prob_obj <- tryCatch(trace$obs$fn$probs, error = function(e) NULL)
+  if (is.null(prob_obj)) {
+    logits_obj <- tryCatch(trace$obs$fn$logits, error = function(e) NULL)
+    if (!is.null(logits_obj)) {
+      prob_obj <- strenv$jax$nn$sigmoid(logits_obj)
+    }
+  }
+  probs <- coerce_prob_numeric(prob_obj)
+
+  expect_true(length(probs) > 0L)
+  expect_true(all(is.finite(probs)))
+  expect_true(all(probs >= 0 & probs <= 1))
+})
+
 test_that("neural outcome model exports cross-fitted OOS fit metrics", {
   fit <- get_neural_fit_perf()
   res <- fit$res
