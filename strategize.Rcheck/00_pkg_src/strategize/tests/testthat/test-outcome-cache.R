@@ -144,7 +144,14 @@ test_that("neural outcome cache reloads from bundle", {
   params$outcome_model_type <- "neural"
   params$neural_mcmc_control <- modifyList(
     params$neural_mcmc_control,
-    list(n_samples_warmup = 2L, n_samples_mcmc = 2L, ModelDims = 8L, ModelDepth = 1L)
+    list(
+      subsample_method = "batch_vi",
+      batch_size = 16L,
+      n_samples_warmup = 2L,
+      n_samples_mcmc = 2L,
+      ModelDims = 8L,
+      ModelDepth = 1L
+    )
   )
 
   key <- "neural_cache_test"

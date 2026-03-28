@@ -347,6 +347,41 @@ sanitize_q_draw_count <- function(n_draws, default = 1L) {
   as.integer(n_draws)
 }
 
+estimate_policy_support_size <- function(ParameterizationType,
+                                         d_locator_use) {
+  if (is.null(ParameterizationType)) {
+    return(NA_real_)
+  }
+
+  support_counts <- tryCatch(
+    resolve_multinomial_group_spec(d_locator_use, ParameterizationType)$n_unique_levels_by_factors,
+    error = function(e) NULL
+  )
+  if (is.null(support_counts) || length(support_counts) < 1L) {
+    return(NA_real_)
+  }
+
+  support_size <- prod(as.numeric(support_counts))
+  if (!is.finite(support_size) || support_size < 1) {
+    return(Inf)
+  }
+  as.numeric(support_size)
+}
+
+is_large_policy_support <- function(ParameterizationType,
+                                    d_locator_use,
+                                    max_support = 2048L) {
+  max_support <- sanitize_q_draw_count(max_support, default = 2048L)
+  support_size <- estimate_policy_support_size(
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use
+  )
+  if (is.na(support_size)) {
+    return(FALSE)
+  }
+  !is.finite(support_size) || support_size > max_support
+}
+
 resolve_q_eval_spec <- function(phase = c("objective", "report"),
                                 adversarial,
                                 outcome_model_type,
@@ -358,6 +393,15 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
                                 single_party = FALSE,
                                 q_exact_support_max = 2048L) {
   phase <- match.arg(phase)
+  support_size <- estimate_policy_support_size(
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use
+  )
+  is_large_support <- is_large_policy_support(
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    max_support = q_exact_support_max
+  )
 
   if (!isTRUE(adversarial)) {
     if (identical(outcome_model_type, "neural")) {
@@ -373,6 +417,15 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
         exact_support_single_party = isTRUE(single_party) && !is.null(exact_support_n),
         profile_draw_mode = "hard",
         pool_draw_mode = "hard",
+        objective_gradient_mode = if (!is.null(exact_support_n)) {
+          "exact"
+        } else if (identical(phase, "objective") && isTRUE(is_large_support)) {
+          "reinforce"
+        } else {
+          "pathwise"
+        },
+        support_size = support_size,
+        is_large_support = is_large_support,
         n_draws = if (is.null(exact_support_n)) {
           sanitize_q_draw_count(nMonte_Qglm)
         } else {
@@ -387,6 +440,9 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
         exact_support_single_party = FALSE,
         profile_draw_mode = "exact",
         pool_draw_mode = "exact",
+        objective_gradient_mode = "exact",
+        support_size = support_size,
+        is_large_support = FALSE,
         n_draws = 1L
       ))
     }
@@ -396,12 +452,25 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
       exact_support_single_party = FALSE,
       profile_draw_mode = "relaxed",
       pool_draw_mode = "relaxed",
+      objective_gradient_mode = "pathwise",
+      support_size = support_size,
+      is_large_support = FALSE,
       n_draws = sanitize_q_draw_count(nMonte_Qglm)
     ))
   }
 
+  use_reinforce <- identical(outcome_model_type, "neural") &&
+    identical(phase, "objective") &&
+    isTRUE(is_large_support)
+
   draw_mode <- if (identical(outcome_model_type, "neural")) {
-    if (identical(phase, "objective")) "relaxed" else "hard"
+    if (use_reinforce) {
+      "hard"
+    } else if (identical(phase, "objective")) {
+      "relaxed"
+    } else {
+      "hard"
+    }
   } else {
     "relaxed"
   }
@@ -416,6 +485,9 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
     exact_support_single_party = FALSE,
     profile_draw_mode = draw_mode,
     pool_draw_mode = draw_mode,
+    objective_gradient_mode = if (use_reinforce) "reinforce" else "pathwise",
+    support_size = support_size,
+    is_large_support = is_large_support,
     n_draws = sanitize_q_draw_count(n_draws)
   )
 }
@@ -737,6 +809,98 @@ weighted_q_draw_average <- function(q_draws, weights = NULL) {
     q_draws * strenv$jnp$reshape(norm_weights, as.list(weight_dims)),
     axis = 0L
   )
+}
+
+compute_policy_sample_log_probs <- function(pi_vec,
+                                            profiles,
+                                            ParameterizationType,
+                                            d_locator_use = NULL,
+                                            index_spec = NULL) {
+  if (is.null(index_spec)) {
+    index_spec <- resolve_multinomial_group_index_spec(
+      d_locator_use = d_locator_use,
+      ParameterizationType = ParameterizationType
+    )
+  }
+
+  profile_rank <- length(profiles$shape)
+  if (!(profile_rank %in% c(2L, 3L, 4L))) {
+    stop(
+      sprintf(
+        paste(
+          "Policy log-prob scoring expects rank-2/3 profile batches",
+          "or rank-4 pooled batches; got rank %d."
+        ),
+        profile_rank
+      ),
+      call. = FALSE
+    )
+  }
+
+  n_outer <- ai(profiles$shape[[1L]])
+  if (profile_rank %in% c(2L, 3L)) {
+    n_inner <- 1L
+    param_dims <- vapply(seq.int(2L, profile_rank), function(idx) {
+      ai(profiles$shape[[idx]])
+    }, integer(1))
+  } else {
+    n_inner <- ai(profiles$shape[[2L]])
+    param_dims <- vapply(seq.int(3L, profile_rank), function(idx) {
+      ai(profiles$shape[[idx]])
+    }, integer(1))
+  }
+  n_params <- as.integer(prod(param_dims))
+  flat_profiles <- strenv$jnp$reshape(profiles, list(-1L, n_params))
+  n_flat <- as.integer(reticulate::py_to_r(strenv$np$array(flat_profiles$shape[[1L]])))
+  log_probs <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
+  eps <- strenv$jnp$array(1e-8, dtype = pi_vec$dtype)
+
+  for (g_i in seq_along(index_spec$index_list)) {
+    idx_r <- index_spec$index_list[[g_i]]
+    if (length(idx_r) > 0L) {
+      idx_j <- strenv$jnp$array(as.integer(idx_r))
+      group_profiles <- strenv$jnp$take(flat_profiles, idx_j, axis = 1L)
+      pi_selection <- strenv$jnp$take(pi_vec, idx_j, axis = 0L)
+      if (length(group_profiles$shape) == 1L) {
+        group_profiles <- strenv$jnp$expand_dims(group_profiles, 1L)
+      }
+      pi_selection <- strenv$jnp$atleast_1d(pi_selection)
+      active_prob <- strenv$jnp$sum(
+        group_profiles * strenv$jnp$reshape(pi_selection, list(1L, -1L)),
+        axis = 1L
+      )
+      group_sum <- strenv$jnp$sum(group_profiles, axis = 1L)
+    } else {
+      pi_selection <- strenv$jnp$zeros(list(0L), dtype = pi_vec$dtype)
+      active_prob <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
+      group_sum <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
+    }
+
+    if (identical(ParameterizationType, "Implicit")) {
+      holdout_prob <- strenv$jnp$array(1., dtype = pi_vec$dtype) - strenv$jnp$sum(pi_selection)
+      use_holdout <- strenv$jnp$equal(group_sum, strenv$jnp$array(0., dtype = group_sum$dtype))
+      group_prob <- strenv$jnp$where(use_holdout, holdout_prob, active_prob)
+    } else {
+      group_prob <- active_prob
+    }
+
+    log_probs <- log_probs + strenv$jnp$log(strenv$jnp$clip(group_prob, eps, 1.0))
+  }
+
+  if (n_inner == 1L) {
+    return(strenv$jnp$reshape(log_probs, list(n_outer)))
+  }
+
+  reshaped <- strenv$jnp$reshape(log_probs, list(n_outer, n_inner))
+  strenv$jnp$sum(reshaped, axis = 1L)
+}
+
+extract_objective_reward_draws <- function(q_draws,
+                                           component = 0L) {
+  n_draws <- ai(q_draws$shape[[1L]])
+  reward_draws <- strenv$jnp$take(q_draws, as.integer(component), axis = 1L)
+  reward_draws <- strenv$jnp$reshape(reward_draws, list(n_draws, -1L))
+  strenv$jnp$take(reward_draws, 0L, axis = 1L)
 }
 
 getMultinomialSamp_generic_R <- function(pi_value,
@@ -1075,6 +1239,74 @@ evaluate_average_case_q <- function(pi_star_ast,
   )
 }
 
+evaluate_average_case_q_reinforce <- function(pi_star_ast,
+                                              pi_star_dag,
+                                              INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                              INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                              seed_in,
+                                              outcome_model_type,
+                                              glm_family,
+                                              nMonte_Qglm,
+                                              temperature,
+                                              ParameterizationType,
+                                              d_locator_use,
+                                              q_fxn,
+                                              single_party = FALSE,
+                                              player = c("ast", "dag")) {
+  player <- match.arg(player)
+  spec <- resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = FALSE,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    single_party = single_party
+  )
+  if (!identical(spec$objective_gradient_mode, "reinforce")) {
+    stop("Average-case REINFORCE evaluation requires objective_gradient_mode='reinforce'.",
+         call. = FALSE)
+  }
+
+  q_profile_draws <- draw_average_case_q_profiles(
+    pi_star_ast = pi_star_ast,
+    pi_star_dag = pi_star_dag,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = spec$n_draws,
+    seed_in = seed_in,
+    temperature = temperature,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    profile_draw_mode = "hard",
+    use_exact_support = FALSE,
+    exact_support_single_party = FALSE
+  )
+
+  q_draws <- strenv$Vectorized_QMonteIter(
+    q_profile_draws$pi_star_ast_f_all,
+    q_profile_draws$pi_star_dag_f_all,
+    INTERCEPT_ast_,
+    COEFFICIENTS_ast_,
+    INTERCEPT_dag_,
+    COEFFICIENTS_dag_
+  )
+  reward_draws <- extract_objective_reward_draws(q_draws, component = 0L)
+
+  list(
+    reward_draws = reward_draws,
+    reward_mean = reward_draws$mean(),
+    policy_samples = if (identical(player, "ast")) {
+      q_profile_draws$pi_star_ast_f_all
+    } else {
+      q_profile_draws$pi_star_dag_f_all
+    },
+    seed_next = q_profile_draws$seed_next,
+    spec = spec
+  )
+}
+
 evaluate_adversarial_q <- function(pi_star_ast,
                                    pi_star_dag,
                                    a_i_ast,
@@ -1207,6 +1439,151 @@ evaluate_adversarial_q <- function(pi_star_ast,
     q_ast = q_ast,
     q_dag = q_dag,
     q_max = indicator_UseAst * q_ast + (1. - indicator_UseAst) * q_dag,
+    seed_next = seed_next,
+    spec = spec
+  )
+}
+
+evaluate_adversarial_q_reinforce <- function(pi_star_ast,
+                                             pi_star_dag,
+                                             a_i_ast,
+                                             a_i_dag,
+                                             INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                             INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                             INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                             INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                             P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+                                             SLATE_VEC_ast_, SLATE_VEC_dag_,
+                                             LAMBDA_,
+                                             seed_in,
+                                             outcome_model_type,
+                                             glm_family,
+                                             nMonte_Qglm,
+                                             nMonte_adversarial,
+                                             primary_pushforward,
+                                             primary_n_entrants,
+                                             primary_n_field,
+                                             temperature,
+                                             ParameterizationType,
+                                             d_locator_use,
+                                             player = c("ast", "dag")) {
+  player <- match.arg(player)
+  spec <- resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = TRUE,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm,
+    nMonte_adversarial = nMonte_adversarial,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use
+  )
+  if (!identical(spec$objective_gradient_mode, "reinforce")) {
+    stop("Adversarial REINFORCE evaluation requires objective_gradient_mode='reinforce'.",
+         call. = FALSE)
+  }
+
+  sampler_profile <- resolve_q_policy_sampler(
+    "hard",
+    d_locator_use = d_locator_use,
+    ParameterizationType = ParameterizationType
+  )
+  sampler_pool <- resolve_q_policy_sampler(
+    "hard",
+    d_locator_use = d_locator_use,
+    ParameterizationType = ParameterizationType
+  )
+  seed_next <- seed_in
+  n_q_samp <- spec$n_draws
+
+  if (primary_pushforward == "multi") {
+    samp_ast <- sample_pool_jax(
+      pi_star_ast, n_q_samp, primary_n_entrants, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_ast_all <- samp_ast$samples
+    seed_next <- samp_ast$seed_next
+
+    samp_dag <- sample_pool_jax(
+      pi_star_dag, n_q_samp, primary_n_entrants, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_dag_all <- samp_dag$samples
+    seed_next <- samp_dag$seed_next
+
+    samp_ast_field <- sample_pool_jax(
+      SLATE_VEC_ast_, n_q_samp, primary_n_field, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
+    seed_next <- samp_ast_field$seed_next
+
+    samp_dag_field <- sample_pool_jax(
+      SLATE_VEC_dag_, n_q_samp, primary_n_field, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
+    seed_next <- samp_dag_field$seed_next
+  } else {
+    draw_ast <- draw_profile_samples(
+      pi_star_ast, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_ast_all <- draw_ast$samples
+    seed_next <- draw_ast$seed_next
+
+    draw_dag <- draw_profile_samples(
+      pi_star_dag, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_dag_all <- draw_dag$samples
+    seed_next <- draw_dag$seed_next
+
+    draw_ast_field <- draw_profile_samples(
+      SLATE_VEC_ast_, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
+    seed_next <- draw_ast_field$seed_next
+
+    draw_dag_field <- draw_profile_samples(
+      SLATE_VEC_dag_, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
+    seed_next <- draw_dag_field$seed_next
+  }
+
+  QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
+    TSAMP_ast_all, TSAMP_dag_all,
+    TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+    a_i_ast, a_i_dag,
+    INTERCEPT_ast_, COEFFICIENTS_ast_,
+    INTERCEPT_dag_, COEFFICIENTS_dag_,
+    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+    P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+    LAMBDA_, strenv$jnp$array(if (identical(player, "ast")) 1. else -1.),
+    strenv$jax$random$split(seed_next, n_q_samp)
+  )
+  reward_draws <- if (identical(player, "ast")) {
+    QMonteRes$q_ast
+  } else {
+    QMonteRes$q_dag
+  }
+
+  list(
+    reward_draws = reward_draws,
+    reward_mean = reward_draws$mean(),
+    policy_samples = if (identical(player, "ast")) TSAMP_ast_all else TSAMP_dag_all,
     seed_next = seed_next,
     spec = spec
   )

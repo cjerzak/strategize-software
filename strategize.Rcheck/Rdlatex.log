@@ -295,8 +295,8 @@ r_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm
 [50]
 No file Rd2.ind.
 [51]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -321,7 +321,7 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (51 pages, 287982 bytes).
+Output written on Rd2.pdf (51 pages, 287974 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (68 entries accepted, 0 rejected).
@@ -397,24 +397,23 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.out)
-(/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
-(/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.out) (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd
+) (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/p
-dftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr
-/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pd
+ftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr/
+local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
 ) [5] [6{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-ts1.
 enc}] [7] [8]
@@ -626,10 +625,10 @@ Overfull \hbox (51.37975pt too wide) in paragraph at lines 2947--2965
 r_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm
 /m/n/10 ),
 [50]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.ind [51] [52])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.ind [51] [52])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.aux)
 
 Package rerunfilecheck Warning: File `Rd2.out' has changed.
 (rerunfilecheck)                Rerun to get outlines right
@@ -654,7 +653,7 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (52 pages, 296536 bytes).
+Output written on Rd2.pdf (52 pages, 296539 bytes).
 Transcript written on Rd2.log.
 This is makeindex, version 2.17 [TeX Live 2024] (kpathsea + Thai support).
 Scanning input file Rd2.idx....done (68 entries accepted, 0 rejected).
@@ -730,24 +729,23 @@ ty (/usr/local/texlive/2024/texmf-dist/tex/latex/kvoptions/kvoptions.sty)))
 Writing index file Rd2.idx
 (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/t1ptm.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.aux)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.aux)
 (/usr/local/texlive/2024/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
 )
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.out)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.out)
-(/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd)
-(/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.out)
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.out) (/usr/local/texlive/2024/texmf-dist/tex/latex/psnfss/ts1ptm.fd
+) (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/t1zi4.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsa.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/amsfonts/umsb.fd)
 (/usr/local/texlive/2024/texmf-dist/tex/latex/jknapltx/ursfs.fd)
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/p
-dftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr
-/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.toc [1{/usr/local/texlive/2024/texmf-var/fonts/map/pdftex/updmap/pd
+ftex.map}{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/base/8r.enc}{/usr/
+local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-t1-0.enc}])
 [2] [3] [4] (/usr/local/texlive/2024/texmf-dist/tex/latex/inconsolata/ts1zi4.fd
 ) [5] [6{/usr/local/texlive/2024/texmf-dist/fonts/enc/dvips/inconsolata/i4-ts1.
 enc}] [7] [8]
@@ -959,10 +957,10 @@ Overfull \hbox (51.37975pt too wide) in paragraph at lines 2947--2965
 r_schedule []\T1/ptm/m/n/10 (de-fault []\T1/zi4/m/n/10 "warmup_cosine"[]\T1/ptm
 /m/n/10 ),
 [50]
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.ind [51] [52])
-(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/Rtmpp1JyNF/Rd2pdf2f9c
-309093d0/Rd2.aux) )
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.ind [51] [52])
+(/private/var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T/RtmpmqZo1m/Rd2pdf7be1
+c155fef/Rd2.aux) )
 (see the transcript file for additional information)
 pdfTeX warning (dest): name{Rfn.predict} has been referenced but does not exist
 , replaced by a fixed one
@@ -981,8 +979,8 @@ sr/local/texlive/2024/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr
 live/2024/texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/
 texmf-dist/fonts/type1/urw/times/utmr8a.pfb></usr/local/texlive/2024/texmf-dist
 /fonts/type1/urw/times/utmri8a.pfb>
-Output written on Rd2.pdf (52 pages, 296706 bytes).
+Output written on Rd2.pdf (52 pages, 296703 bytes).
 Transcript written on Rd2.log.
 Saving output to ‘strategize-manual.pdf’ ...
 Done
-You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//Rtmpp1JyNF/Rd2pdf2f9c309093d0'
+You may want to clean up by 'rm -Rf /var/folders/gv/l5wlstr55gl_g0pgx6k47z9m0000gn/T//RtmpmqZo1m/Rd2pdf7be1c155fef'

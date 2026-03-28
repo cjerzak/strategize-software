@@ -61,7 +61,7 @@
 #'   primary_n_field = 1L,
 #'   nMonte_Qglm = 100L,
 #'   learning_rate_max = 0.001,
-#'   temperature = 0.5, 
+#'   temperature = NULL, 
 #'   save_outcome_model = FALSE,
 #'   presaved_outcome_model = FALSE,
 #'   outcome_model_key = NULL,
@@ -505,7 +505,7 @@ strategize       <-          function(
                                             primary_n_field = 1L,
                                             nMonte_Qglm = 100L,
                                             learning_rate_max = 0.001, 
-                                            temperature = 0.5, 
+                                            temperature = NULL, 
                                             save_outcome_model = FALSE,
                                             presaved_outcome_model = FALSE,
                                             outcome_model_key = NULL,
@@ -708,7 +708,14 @@ strategize       <-          function(
   w_orig <- W
   MaxMinType <- "TwoRoundSingle"
 
-  MNtemp <- strenv$jnp$array( ifelse(!is.null(temperature), yes = temperature, no = 0.5)  ) 
+  temperature_effective <- if (!is.null(temperature)) {
+    as.numeric(temperature)
+  } else if (identical(outcome_model_type, "neural") && !isTRUE(adversarial)) {
+    0.5
+  } else {
+    0.5
+  }
+  MNtemp <- strenv$jnp$array(temperature_effective)
   strenv$primary_strength <- strenv$jnp$array(primary_strength, strenv$dtj)
   strenv$adversarial_model_strategy <- adversarial_model_strategy
   glm_family = "gaussian"; glm_outcome_transform <- function(x){x} # identity function
@@ -1372,6 +1379,11 @@ strategize       <-          function(
     static_argnums = 3L,
     static_argnames = c("ParameterizationType")
   )
+  strenv$getMultinomialSampHard <- strenv$jax$jit(
+    getMultinomialSampHard_R,
+    static_argnums = 3L,
+    static_argnames = c("ParameterizationType")
+  )
   environment(getQPiStar_gd) <- evaluation_environment
   }
 
@@ -1793,123 +1805,63 @@ strategize       <-          function(
                                                     strenv$shadow_comp_mat)
 
           if(!adversarial){
-            q_profile_draws <- draw_average_case_q_profiles(
+            average_case_eval <- evaluate_average_case_q(
               pi_star_ast = pi_star_ast_,
               pi_star_dag = pi_star_dag_,
+              INTERCEPT_ast_ = INTERCEPT_ast_,
+              COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+              INTERCEPT_dag_ = INTERCEPT_dag_,
+              COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+              seed_in = SEED_IN_LOOP,
+              phase = "report",
               outcome_model_type = outcome_model_type,
               glm_family = glm_family,
               nMonte_Qglm = nMonte_Qglm,
-              seed_in = SEED_IN_LOOP,
               temperature = MNtemp,
               ParameterizationType = strenv$ParameterizationType,
               d_locator_use = strenv$d_locator_use,
-              sampler = strenv$getMultinomialSamp
+              q_fxn = QFXN,
+              single_party = !isTRUE(diff)
             )
-            pi_star_ast_f_all <- q_profile_draws$pi_star_ast_f_all
-            pi_star_dag_f_all <- q_profile_draws$pi_star_dag_f_all
-            SEED_IN_LOOP <- q_profile_draws$seed_next
-
-            q_star_f <- strenv$Vectorized_QMonteIter(
-                                          pi_star_ast_f_all,  pi_star_dag_f_all,
-                                          INTERCEPT_ast_, COEFFICIENTS_ast_,
-                                          INTERCEPT_dag_, COEFFICIENTS_dag_)$mean(0L)
+            q_star_f <- average_case_eval$q_vec
+            SEED_IN_LOOP <- average_case_eval$seed_next
           }
           if(adversarial){
-            if(glm_family=="gaussian"){
-              pi_star_ast_f_all <- strenv$jnp$expand_dims(pi_star_ast_,0L)
-              pi_star_dag_f_all <- strenv$jnp$expand_dims(pi_star_dag_,0L)
-            }
-            if(glm_family != "gaussian"){
-              draw_ast <- draw_profile_samples(
-                pi_star_ast_, nMonte_Qglm, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              pi_star_ast_f_all <- draw_ast$samples
-              SEED_IN_LOOP <- draw_ast$seed_next
-
-              draw_dag <- draw_profile_samples(
-                pi_star_dag_, nMonte_Qglm, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              pi_star_dag_f_all <- draw_dag$samples
-              SEED_IN_LOOP <- draw_dag$seed_next
-            }
-
-            n_q_samp <- as.integer(pi_star_ast_f_all$shape[[1L]])
-            if (primary_pushforward == "multi") {
-              samp_ast <- sample_pool_jax(
-                pi_star_ast_, n_q_samp, primary_n_entrants, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              TSAMP_ast_all <- samp_ast$samples
-              SEED_IN_LOOP <- samp_ast$seed_next
-
-              samp_dag <- sample_pool_jax(
-                pi_star_dag_, n_q_samp, primary_n_entrants, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              TSAMP_dag_all <- samp_dag$samples
-              SEED_IN_LOOP <- samp_dag$seed_next
-
-              samp_ast_field <- sample_pool_jax(
-                SLATE_VEC_ast_jnp, n_q_samp, primary_n_field, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
-              SEED_IN_LOOP <- samp_ast_field$seed_next
-
-              samp_dag_field <- sample_pool_jax(
-                SLATE_VEC_dag_jnp, n_q_samp, primary_n_field, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
-              SEED_IN_LOOP <- samp_dag_field$seed_next
-            } else {
-              TSAMP_ast_all <- pi_star_ast_f_all
-              TSAMP_dag_all <- pi_star_dag_f_all
-              draw_ast_field <- draw_profile_samples(
-                SLATE_VEC_ast_jnp, n_q_samp, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
-              SEED_IN_LOOP <- draw_ast_field$seed_next
-
-              draw_dag_field <- draw_profile_samples(
-                SLATE_VEC_dag_jnp, n_q_samp, SEED_IN_LOOP,
-                MNtemp, strenv$ParameterizationType, strenv$d_locator_use,
-                sampler = strenv$getMultinomialSamp
-              )
-              TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
-              SEED_IN_LOOP <- draw_dag_field$seed_next
-            }
-
-            Qres <- strenv$Vectorized_QMonteIter_MaxMin(
-              TSAMP_ast_all, TSAMP_dag_all,
-              TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+            adversarial_eval <- evaluate_adversarial_q(
+              pi_star_ast = pi_star_ast_,
+              pi_star_dag = pi_star_dag_,
               a_i_ast, a_i_dag,
-              INTERCEPT_ast_, COEFFICIENTS_ast_,
-              INTERCEPT_dag_, COEFFICIENTS_dag_,
-              INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-              INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-              p_vec_full_ast_jnp, p_vec_full_dag_jnp,
-              strenv$jnp$array(  lambda  ), strenv$jnp$array(1.),
-              strenv$jax$random$split(SEED_IN_LOOP, n_q_samp)
+              INTERCEPT_ast_ = INTERCEPT_ast_,
+              COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+              INTERCEPT_dag_ = INTERCEPT_dag_,
+              COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+              INTERCEPT_ast0_ = INTERCEPT_ast0_,
+              COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
+              INTERCEPT_dag0_ = INTERCEPT_dag0_,
+              COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
+              P_VEC_FULL_ast_ = p_vec_full_ast_jnp,
+              P_VEC_FULL_dag_ = p_vec_full_dag_jnp,
+              SLATE_VEC_ast_ = SLATE_VEC_ast_jnp,
+              SLATE_VEC_dag_ = SLATE_VEC_dag_jnp,
+              LAMBDA_ = strenv$jnp$array(lambda),
+              Q_SIGN = strenv$jnp$array(1.),
+              seed_in = SEED_IN_LOOP,
+              phase = "report",
+              outcome_model_type = outcome_model_type,
+              glm_family = glm_family,
+              nMonte_Qglm = nMonte_Qglm,
+              nMonte_adversarial = nMonte_adversarial,
+              primary_pushforward = primary_pushforward,
+              primary_n_entrants = primary_n_entrants,
+              primary_n_field = primary_n_field,
+              temperature = MNtemp,
+              ParameterizationType = strenv$ParameterizationType,
+              d_locator_use = strenv$d_locator_use
             )
-            q_star_val <- Qres$q_ast$mean(0L)
-            q_star_dims <- if (length(pi_star_ast_full_simplex_$shape) >= 2L) {
-              list(1L, 1L)
-            } else {
-              list(1L)
-            }
-            q_star_val <- strenv$jnp$reshape(q_star_val, q_star_dims)
+            q_star_val <- reshape_scalar_q_value(adversarial_eval$q_ast,
+                                                 pi_star_ast_full_simplex_)
             q_star_f <- strenv$jnp$concatenate(list(q_star_val, q_star_val, q_star_val), 0L)
+            SEED_IN_LOOP <- adversarial_eval$seed_next
           }
 
           strenv$jnp$concatenate(list(q_star_f,
@@ -2395,7 +2347,7 @@ strategize       <-          function(
                   "SLATE_VEC_ast"  = SLATE_VEC_ast_jnp,
                   "SLATE_VEC_dag"  = SLATE_VEC_dag_jnp,
                   
-                  "temperature" = temperature, 
+                  "temperature" = temperature_effective, 
                   "primary_strength" = primary_strength,
                   "primary_n_entrants" = primary_n_entrants,
                   "primary_n_field" = primary_n_field,

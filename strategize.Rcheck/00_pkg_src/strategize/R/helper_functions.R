@@ -339,18 +339,421 @@ scale_rain_params <- function(rain_gamma, rain_eta, nSGD,
   list(rain_gamma = rain_gamma, rain_eta = rain_eta)
 }
 
-getMultinomialSamp_R <- function(pi_value, 
-                                 temperature, 
-                                 jax_seed, 
-                                 ParameterizationType,
-                                 d_locator_use){
+sanitize_q_draw_count <- function(n_draws, default = 1L) {
+  n_draws <- suppressWarnings(as.integer(n_draws))
+  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
+    n_draws <- as.integer(default)
+  }
+  as.integer(n_draws)
+}
+
+resolve_q_eval_spec <- function(phase = c("objective", "report"),
+                                adversarial,
+                                outcome_model_type,
+                                glm_family,
+                                nMonte_Qglm,
+                                nMonte_adversarial = NULL,
+                                ParameterizationType = NULL,
+                                d_locator_use = NULL,
+                                single_party = FALSE,
+                                q_exact_support_max = 2048L) {
+  phase <- match.arg(phase)
+
+  if (!isTRUE(adversarial)) {
+    if (identical(outcome_model_type, "neural")) {
+      exact_support_n <- average_case_q_exact_support_size(
+        ParameterizationType = ParameterizationType,
+        d_locator_use = d_locator_use,
+        single_party = single_party,
+        max_support = q_exact_support_max
+      )
+      return(list(
+        use_exact_q = FALSE,
+        use_exact_support = !is.null(exact_support_n),
+        exact_support_single_party = isTRUE(single_party) && !is.null(exact_support_n),
+        profile_draw_mode = "hard",
+        pool_draw_mode = "hard",
+        n_draws = if (is.null(exact_support_n)) {
+          sanitize_q_draw_count(nMonte_Qglm)
+        } else {
+          as.integer(exact_support_n)
+        }
+      ))
+    }
+    if (identical(glm_family, "gaussian")) {
+      return(list(
+        use_exact_q = TRUE,
+        use_exact_support = FALSE,
+        exact_support_single_party = FALSE,
+        profile_draw_mode = "exact",
+        pool_draw_mode = "exact",
+        n_draws = 1L
+      ))
+    }
+    return(list(
+      use_exact_q = FALSE,
+      use_exact_support = FALSE,
+      exact_support_single_party = FALSE,
+      profile_draw_mode = "relaxed",
+      pool_draw_mode = "relaxed",
+      n_draws = sanitize_q_draw_count(nMonte_Qglm)
+    ))
+  }
+
+  draw_mode <- if (identical(outcome_model_type, "neural")) {
+    if (identical(phase, "objective")) "relaxed" else "hard"
+  } else {
+    "relaxed"
+  }
+  n_draws <- if (identical(phase, "objective")) {
+    nMonte_adversarial
+  } else {
+    nMonte_Qglm
+  }
+  list(
+    use_exact_q = FALSE,
+    use_exact_support = FALSE,
+    exact_support_single_party = FALSE,
+    profile_draw_mode = draw_mode,
+    pool_draw_mode = draw_mode,
+    n_draws = sanitize_q_draw_count(n_draws)
+  )
+}
+
+resolve_q_policy_sampler <- function(draw_mode,
+                                     d_locator_use = NULL,
+                                     ParameterizationType = NULL) {
+  if (is.null(draw_mode) || identical(draw_mode, "exact")) {
+    return(NULL)
+  }
+
+  compiled_sampler_matches_locator <- function(d_locator_use,
+                                               ParameterizationType) {
+    if (is.null(d_locator_use)) {
+      return(TRUE)
+    }
+    if (is.null(ParameterizationType)) {
+      return(FALSE)
+    }
+
+    locator_spec <- tryCatch(
+      resolve_multinomial_group_spec(d_locator_use, ParameterizationType),
+      error = function(e) NULL
+    )
+    has_global_spec <- exists("nUniqueFactors", envir = strenv, inherits = FALSE) &&
+      exists("nUniqueLevelsByFactors", envir = strenv, inherits = FALSE)
+
+    if (is.null(locator_spec) || !isTRUE(has_global_spec)) {
+      return(FALSE)
+    }
+
+    identical(as.integer(locator_spec$n_unique_factors),
+              as.integer(strenv$nUniqueFactors)) &&
+      identical(as.integer(locator_spec$n_unique_levels_by_factors),
+                as.integer(strenv$nUniqueLevelsByFactors))
+  }
+
+  sampler_name <- switch(draw_mode,
+                         relaxed = "getMultinomialSamp",
+                         hard = "getMultinomialSampHard",
+                         stop(sprintf("Unknown policy draw mode '%s'.", draw_mode),
+                              call. = FALSE))
+  if (exists("strenv", inherits = TRUE) &&
+      exists(sampler_name, envir = strenv, inherits = FALSE)) {
+    # Compiled samplers can only rely on strenv group metadata. If a concrete
+    # locator implies a different grouping, prefer the plain R sampler so stale
+    # globals do not widen profile draws.
+    if (compiled_sampler_matches_locator(d_locator_use, ParameterizationType)) {
+      return(get(sampler_name, envir = strenv, inherits = FALSE))
+    }
+  }
+
+  switch(draw_mode,
+         relaxed = getMultinomialSamp_R,
+         hard = getMultinomialSampHard_R)
+}
+
+sample_multinomial_group <- function(pi_selection,
+                                     temperature,
+                                     jax_seed,
+                                     draw_mode = c("relaxed", "hard")) {
+  draw_mode <- match.arg(draw_mode)
+  logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
+  gumbels <- strenv$jax$random$gumbel(key = jax_seed, shape = logits$shape)
+  scores <- logits + gumbels
+  soft_sample <- strenv$jax$nn$softmax(scores / temperature, axis = -1L)$transpose()
+  if (identical(draw_mode, "relaxed")) {
+    return(soft_sample)
+  }
+
+  # Categories are stored on the first axis of pi_selection. Using the
+  # input shape keeps hard draws valid for both 1D vectors and transposed
+  # row-matrix intermediates.
+  n_categories <- ai(strenv$jnp$shape(pi_selection)[[1L]])
+  hard_idx <- strenv$jnp$argmax(scores, axis = -1L)
+  hard_sample <- strenv$jax$nn$one_hot(hard_idx, n_categories,
+                                       dtype = soft_sample$dtype)$transpose()
+  if (identical(draw_mode, "hard")) {
+    return(hard_sample)
+  }
+}
+
+resolve_multinomial_group_spec <- function(d_locator_use, ParameterizationType) {
+  d_locator_r <- tryCatch(
+    if (is.null(d_locator_use)) {
+      NULL
+    } else {
+      as.integer(reticulate::py_to_r(strenv$np$array(d_locator_use)))
+    },
+    error = function(e) NULL
+  )
+  if (!is.null(d_locator_r) && length(d_locator_r)) {
+    factor_ids <- sort(unique(d_locator_r))
+    group_counts <- vapply(
+      factor_ids,
+      function(group_id) sum(d_locator_r == group_id),
+      integer(1)
+    )
+    if (identical(ParameterizationType, "Implicit")) {
+      group_counts <- group_counts + 1L
+    }
+
+    # Direct sampler calls may supply a concrete locator that differs from the
+    # current strenv metadata. Prefer the locator to avoid stale state leakage.
+    return(list(
+      n_unique_factors = as.integer(length(factor_ids)),
+      n_unique_levels_by_factors = as.integer(group_counts)
+    ))
+  }
+
+  has_global_spec <- exists("nUniqueFactors", envir = strenv, inherits = FALSE) &&
+    exists("nUniqueLevelsByFactors", envir = strenv, inherits = FALSE)
+
+  if (isTRUE(has_global_spec)) {
+    return(list(
+      n_unique_factors = as.integer(strenv$nUniqueFactors),
+      n_unique_levels_by_factors = as.integer(strenv$nUniqueLevelsByFactors)
+    ))
+  }
+
+  stop(
+    paste(
+      "Could not infer multinomial group sizes from d_locator_use.",
+      "Initialize factor metadata or provide a concrete locator array."
+    ),
+    call. = FALSE
+  )
+}
+
+resolve_multinomial_group_index_spec <- function(d_locator_use, ParameterizationType) {
+  group_spec <- resolve_multinomial_group_spec(d_locator_use, ParameterizationType)
+  support_counts <- as.integer(group_spec$n_unique_levels_by_factors)
+  explicit_counts <- if (identical(ParameterizationType, "Implicit")) {
+    pmax(0L, support_counts - 1L)
+  } else {
+    support_counts
+  }
+
+  d_locator_r <- tryCatch(
+    if (is.null(d_locator_use)) {
+      NULL
+    } else {
+      as.integer(reticulate::py_to_r(strenv$np$array(d_locator_use)))
+    },
+    error = function(e) NULL
+  )
+
+  if (!is.null(d_locator_r) && length(d_locator_r)) {
+    factor_ids <- sort(unique(d_locator_r))
+    index_list <- lapply(
+      factor_ids,
+      function(group_id) as.integer(which(d_locator_r == group_id) - 1L)
+    )
+  } else {
+    idx_stop <- cumsum(explicit_counts)
+    idx_start <- idx_stop - explicit_counts + 1L
+    index_list <- Map(
+      function(start_i, stop_i) {
+        if (stop_i < start_i) {
+          integer(0)
+        } else {
+          seq.int(start_i, stop_i) - 1L
+        }
+      },
+      idx_start,
+      idx_stop
+    )
+  }
+
+  list(
+    support_counts = support_counts,
+    explicit_counts = explicit_counts,
+    index_list = index_list
+  )
+}
+
+average_case_q_exact_support_size <- function(ParameterizationType,
+                                              d_locator_use,
+                                              single_party = FALSE,
+                                              max_support = 2048L) {
+  if (!isTRUE(single_party) || is.null(ParameterizationType)) {
+    return(NULL)
+  }
+
+  support_counts <- tryCatch(
+    resolve_multinomial_group_spec(d_locator_use, ParameterizationType)$n_unique_levels_by_factors,
+    error = function(e) NULL
+  )
+  if (is.null(support_counts) || length(support_counts) < 1L) {
+    return(NULL)
+  }
+
+  max_support <- suppressWarnings(as.integer(max_support))
+  if (length(max_support) != 1L || is.na(max_support) || max_support < 1L) {
+    max_support <- 2048L
+  }
+
+  support_size <- prod(as.numeric(support_counts))
+  if (!is.finite(support_size) || support_size < 1 || support_size > max_support) {
+    return(NULL)
+  }
+  as.integer(support_size)
+}
+
+enumerate_policy_support_profiles <- function(ParameterizationType,
+                                              d_locator_use,
+                                              dtype = NULL) {
+  index_spec <- resolve_multinomial_group_index_spec(d_locator_use, ParameterizationType)
+  explicit_counts <- as.integer(index_spec$explicit_counts)
+
+  build_group_block <- function(explicit_count) {
+    explicit_count <- as.integer(explicit_count)
+    if (explicit_count < 1L) {
+      return(matrix(0, nrow = 1L, ncol = 0L))
+    }
+    eye <- diag(explicit_count)
+    if (identical(ParameterizationType, "Implicit")) {
+      rbind(eye, matrix(0, nrow = 1L, ncol = explicit_count))
+    } else {
+      eye
+    }
+  }
+
+  group_blocks <- lapply(explicit_counts, build_group_block)
+  selector_grid <- expand.grid(
+    lapply(group_blocks, function(block) seq_len(nrow(block))),
+    KEEP.OUT.ATTRS = FALSE,
+    stringsAsFactors = FALSE
+  )
+  n_profiles <- nrow(selector_grid)
+  n_params <- sum(explicit_counts)
+
+  if (n_params < 1L) {
+    profiles_r <- matrix(numeric(0), nrow = n_profiles, ncol = 0L)
+  } else {
+    profiles_r <- t(vapply(seq_len(n_profiles), function(i) {
+      selectors <- as.integer(unlist(selector_grid[i, ], use.names = FALSE))
+      as.numeric(unlist(Map(function(block, idx) {
+        block[idx, , drop = TRUE]
+      }, group_blocks, selectors), use.names = FALSE))
+    }, numeric(n_params)))
+    if (is.null(dim(profiles_r))) {
+      profiles_r <- matrix(profiles_r, nrow = 1L)
+    }
+  }
+
+  profiles <- if (is.null(dtype)) {
+    strenv$jnp$array(profiles_r)
+  } else {
+    strenv$jnp$array(profiles_r, dtype = dtype)
+  }
+
+  list(
+    profiles = profiles,
+    n_profiles = as.integer(n_profiles),
+    index_spec = index_spec
+  )
+}
+
+compute_policy_support_weights <- function(pi_vec,
+                                           profiles,
+                                           ParameterizationType,
+                                           d_locator_use) {
+  index_spec <- resolve_multinomial_group_index_spec(d_locator_use, ParameterizationType)
+  n_profiles <- ai(profiles$shape[[1L]])
+  weights <- NULL
+
+  for (g_i in seq_along(index_spec$index_list)) {
+    idx_r <- index_spec$index_list[[g_i]]
+    if (length(idx_r) > 0L) {
+      idx_j <- strenv$jnp$array(as.integer(idx_r))
+      group_profiles <- strenv$jnp$take(profiles, idx_j, axis = 1L)
+      pi_selection <- strenv$jnp$take(pi_vec, idx_j, axis = 0L)
+      if (length(group_profiles$shape) == 1L) {
+        group_profiles <- strenv$jnp$expand_dims(group_profiles, 1L)
+      }
+      pi_selection <- strenv$jnp$atleast_1d(pi_selection)
+      active_prob <- strenv$jnp$sum(
+        group_profiles * strenv$jnp$reshape(pi_selection, list(1L, -1L)),
+        axis = 1L
+      )
+    } else {
+      group_profiles <- strenv$jnp$zeros(list(n_profiles, 0L), dtype = profiles$dtype)
+      pi_selection <- strenv$jnp$zeros(list(0L), dtype = pi_vec$dtype)
+      active_prob <- strenv$jnp$zeros(list(n_profiles), dtype = pi_vec$dtype)
+    }
+
+    if (identical(ParameterizationType, "Implicit")) {
+      holdout_prob <- strenv$jnp$array(1., dtype = pi_vec$dtype) - strenv$jnp$sum(pi_selection)
+      group_sum <- if (length(idx_r) > 0L) {
+        strenv$jnp$sum(group_profiles, axis = 1L)
+      } else {
+        strenv$jnp$zeros(list(n_profiles), dtype = pi_vec$dtype)
+      }
+      is_holdout <- strenv$jnp$equal(group_sum, strenv$jnp$array(0., dtype = group_sum$dtype))
+      group_prob <- strenv$jnp$where(is_holdout, holdout_prob, active_prob)
+    } else {
+      group_prob <- active_prob
+    }
+
+    weights <- if (is.null(weights)) {
+      group_prob
+    } else {
+      weights * group_prob
+    }
+  }
+
+  weights
+}
+
+weighted_q_draw_average <- function(q_draws, weights = NULL) {
+  if (is.null(weights)) {
+    return(q_draws$mean(0L))
+  }
+
+  norm_weights <- weights / strenv$jnp$sum(weights)
+  weight_dims <- c(ai(norm_weights$shape[[1L]]), rep(1L, max(0L, length(q_draws$shape) - 1L)))
+  strenv$jnp$sum(
+    q_draws * strenv$jnp$reshape(norm_weights, as.list(weight_dims)),
+    axis = 0L
+  )
+}
+
+getMultinomialSamp_generic_R <- function(pi_value,
+                                         temperature,
+                                         jax_seed,
+                                         ParameterizationType,
+                                         d_locator_use,
+                                         draw_mode = c("relaxed", "hard")) {
+  draw_mode <- match.arg(draw_mode)
+  group_spec <- resolve_multinomial_group_spec(d_locator_use, ParameterizationType)
   # Ensure d_locator_use is at least 1D, in case it was a scalar
   d_locator_use <- strenv$jnp$atleast_1d(d_locator_use)
   
   # Identify each unique group + the inverse indices
   unique_groups_inverse_indices <- strenv$jnp$unique(d_locator_use,
                                                      return_inverse=TRUE,
-                                                     size = strenv$nUniqueFactors)
+                                                     size = group_spec$n_unique_factors)
   unique_groups <- unique_groups_inverse_indices[[1]]
   inverse_indices <- unique_groups_inverse_indices[[2]]
   
@@ -372,7 +775,8 @@ getMultinomialSamp_R <- function(pi_value,
     zer <- strenv$jnp$where(
       strenv$jnp$equal(inverse_indices, 
                        strenv$jnp$array(n2int(g_jax))),
-      size = ai(strenv$nUniqueLevelsByFactors[g_i]- 1L*(strenv$ParameterizationType == "Implicit"))
+      size = ai(group_spec$n_unique_levels_by_factors[g_i] -
+                  1L * (ParameterizationType == "Implicit"))
     )[[1]]
     
     # pi_selection for that group
@@ -389,15 +793,8 @@ getMultinomialSamp_R <- function(pi_value,
       pi_selection <- strenv$jnp$concatenate(list(pi_selection, pi_implied), 0L)
     }
     
-    # Sample from RelaxedOneHotCategorical using oryx - depreciated 
-    # TSamp <- strenv$oryx$distributions$RelaxedOneHotCategorical(probs = pi_selection$transpose(), temperature = temperature)$sample(size = 1L, seed = jax_seed)$transpose()
-    
-    # Sample from RelaxedOneHotCategorical using base JAX
-    # jax_seed <- strenv$jax$random$PRNGKey(4L) # for testing 
-    logits <- strenv$jnp$log(pi_selection$transpose() + 1e-8)
-    gumbels <- strenv$jax$random$gumbel(key = jax_seed, shape = logits$shape)
-    TSamp <- strenv$jax$nn$softmax( ((logits + gumbels) / temperature),
-                                    axis = -1L)$transpose()
+    TSamp <- sample_multinomial_group(pi_selection, temperature, jax_seed,
+                                      draw_mode = draw_mode)
     jax_seed   <- strenv$jax$random$split(jax_seed)[[1L]]
     
     # If Implicit, remove that last extra dimension after sampling
@@ -417,6 +814,36 @@ getMultinomialSamp_R <- function(pi_value,
   # Concatenate all group samples along axis=0
   T_star_samp <- strenv$jnp$concatenate(T_star_samp_list, 0L)
   return(T_star_samp)
+}
+
+getMultinomialSamp_R <- function(pi_value,
+                                 temperature,
+                                 jax_seed,
+                                 ParameterizationType,
+                                 d_locator_use) {
+  getMultinomialSamp_generic_R(
+    pi_value = pi_value,
+    temperature = temperature,
+    jax_seed = jax_seed,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    draw_mode = "relaxed"
+  )
+}
+
+getMultinomialSampHard_R <- function(pi_value,
+                                     temperature,
+                                     jax_seed,
+                                     ParameterizationType,
+                                     d_locator_use) {
+  getMultinomialSamp_generic_R(
+    pi_value = pi_value,
+    temperature = temperature,
+    jax_seed = jax_seed,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    draw_mode = "hard"
+  )
 }
 
 sample_pool_jax <- function(pi_vec, n_draws, n_pool, seed_in,
@@ -458,10 +885,7 @@ draw_profile_samples <- function(pi_vec, n_draws, seed_in,
 average_case_q_uses_mc <- function(outcome_model_type,
                                    glm_family,
                                    nMonte_Qglm) {
-  n_draws <- suppressWarnings(as.integer(nMonte_Qglm))
-  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
-    n_draws <- 1L
-  }
+  n_draws <- sanitize_q_draw_count(nMonte_Qglm)
 
   identical(outcome_model_type, "neural") ||
     (!identical(glm_family, "gaussian") && (n_draws > 1L))
@@ -476,16 +900,53 @@ draw_average_case_q_profiles <- function(pi_star_ast,
                                          temperature,
                                          ParameterizationType,
                                          d_locator_use,
-                                         sampler = NULL) {
-  use_mc_q <- average_case_q_uses_mc(
-    outcome_model_type = outcome_model_type,
-    glm_family = glm_family,
-    nMonte_Qglm = nMonte_Qglm
-  )
+                                         sampler = NULL,
+                                         profile_draw_mode = NULL,
+                                         use_exact_support = FALSE,
+                                         exact_support_single_party = FALSE) {
+  use_mc_q <- if (is.null(profile_draw_mode)) {
+    average_case_q_uses_mc(
+      outcome_model_type = outcome_model_type,
+      glm_family = glm_family,
+      nMonte_Qglm = nMonte_Qglm
+    )
+  } else {
+    !identical(profile_draw_mode, "exact")
+  }
 
-  n_draws <- suppressWarnings(as.integer(nMonte_Qglm))
-  if (length(n_draws) != 1L || is.na(n_draws) || n_draws < 1L) {
-    n_draws <- 1L
+  n_draws <- sanitize_q_draw_count(nMonte_Qglm)
+
+  if (isTRUE(use_exact_support)) {
+    if (!isTRUE(exact_support_single_party)) {
+      stop("Exact average-case support enumeration currently requires single-party mode.",
+           call. = FALSE)
+    }
+    support_ast <- enumerate_policy_support_profiles(
+      ParameterizationType = ParameterizationType,
+      d_locator_use = d_locator_use,
+      dtype = pi_star_ast$dtype
+    )
+    n_profiles <- as.integer(support_ast$n_profiles)
+    dag_shape <- as.integer(reticulate::py_to_r(strenv$np$array(pi_star_dag$shape)))
+    dag_profiles <- strenv$jnp$broadcast_to(
+      strenv$jnp$expand_dims(pi_star_dag, 0L),
+      as.list(c(as.integer(n_profiles), dag_shape))
+    )
+    profile_weights <- compute_policy_support_weights(
+      pi_vec = pi_star_ast,
+      profiles = support_ast$profiles,
+      ParameterizationType = ParameterizationType,
+      d_locator_use = d_locator_use
+    )
+    return(list(
+      pi_star_ast_f_all = support_ast$profiles,
+      pi_star_dag_f_all = dag_profiles,
+      seed_next = seed_in,
+      use_mc_q = TRUE,
+      n_draws = n_profiles,
+      profile_weights = profile_weights,
+      exact_support = TRUE
+    ))
   }
 
   if (!use_mc_q) {
@@ -494,7 +955,9 @@ draw_average_case_q_profiles <- function(pi_star_ast,
       pi_star_dag_f_all = strenv$jnp$expand_dims(pi_star_dag, 0L),
       seed_next = seed_in,
       use_mc_q = FALSE,
-      n_draws = 1L
+      n_draws = 1L,
+      profile_weights = NULL,
+      exact_support = FALSE
     ))
   }
 
@@ -502,15 +965,25 @@ draw_average_case_q_profiles <- function(pi_star_ast,
     n_draws <- max(1L, n_draws)
   }
 
+  sampler_use <- if (!is.null(sampler)) {
+    sampler
+  } else {
+    resolve_q_policy_sampler(
+      if (is.null(profile_draw_mode)) "relaxed" else profile_draw_mode,
+      d_locator_use = d_locator_use,
+      ParameterizationType = ParameterizationType
+    )
+  }
+
   draw_ast <- draw_profile_samples(
     pi_star_ast, n_draws, seed_in,
     temperature, ParameterizationType, d_locator_use,
-    sampler = sampler
+    sampler = sampler_use
   )
   draw_dag <- draw_profile_samples(
     pi_star_dag, n_draws, draw_ast$seed_next,
     temperature, ParameterizationType, d_locator_use,
-    sampler = sampler
+    sampler = sampler_use
   )
 
   list(
@@ -518,7 +991,224 @@ draw_average_case_q_profiles <- function(pi_star_ast,
     pi_star_dag_f_all = draw_dag$samples,
     seed_next = draw_dag$seed_next,
     use_mc_q = TRUE,
-    n_draws = n_draws
+    n_draws = n_draws,
+    profile_weights = NULL,
+    exact_support = FALSE
+  )
+}
+
+reshape_scalar_q_value <- function(q_val, template) {
+  q_dims <- if (length(template$shape) >= 2L) {
+    list(1L, 1L)
+  } else {
+    list(1L)
+  }
+  strenv$jnp$reshape(q_val, q_dims)
+}
+
+evaluate_average_case_q <- function(pi_star_ast,
+                                    pi_star_dag,
+                                    INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                    INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                    seed_in,
+                                    phase = c("objective", "report"),
+                                    outcome_model_type,
+                                    glm_family,
+                                    nMonte_Qglm,
+                                    temperature,
+                                    ParameterizationType,
+                                    d_locator_use,
+                                    q_fxn,
+                                    single_party = FALSE) {
+  phase <- match.arg(phase)
+  spec <- resolve_q_eval_spec(
+    phase = phase,
+    adversarial = FALSE,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    single_party = single_party
+  )
+  q_profile_draws <- draw_average_case_q_profiles(
+    pi_star_ast = pi_star_ast,
+    pi_star_dag = pi_star_dag,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = spec$n_draws,
+    seed_in = seed_in,
+    temperature = temperature,
+    ParameterizationType = ParameterizationType,
+    d_locator_use = d_locator_use,
+    profile_draw_mode = spec$profile_draw_mode,
+    use_exact_support = isTRUE(spec$use_exact_support),
+    exact_support_single_party = isTRUE(spec$exact_support_single_party)
+  )
+
+  if (isTRUE(q_profile_draws$use_mc_q)) {
+    q_draws <- strenv$Vectorized_QMonteIter(
+      q_profile_draws$pi_star_ast_f_all,
+      q_profile_draws$pi_star_dag_f_all,
+      INTERCEPT_ast_,
+      COEFFICIENTS_ast_,
+      INTERCEPT_dag_,
+      COEFFICIENTS_dag_
+    )
+    q_vec <- weighted_q_draw_average(q_draws, q_profile_draws$profile_weights)
+  } else {
+    q_vec <- q_fxn(
+      pi_star_ast = pi_star_ast,
+      pi_star_dag = pi_star_dag,
+      EST_INTERCEPT_tf_ast = INTERCEPT_ast_,
+      EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_,
+      EST_INTERCEPT_tf_dag = INTERCEPT_dag_,
+      EST_COEFFICIENTS_tf_dag = COEFFICIENTS_dag_
+    )
+  }
+
+  list(
+    q_vec = q_vec,
+    q_max = strenv$jnp$take(q_vec, 0L),
+    seed_next = q_profile_draws$seed_next,
+    spec = spec
+  )
+}
+
+evaluate_adversarial_q <- function(pi_star_ast,
+                                   pi_star_dag,
+                                   a_i_ast,
+                                   a_i_dag,
+                                   INTERCEPT_ast_, COEFFICIENTS_ast_,
+                                   INTERCEPT_dag_, COEFFICIENTS_dag_,
+                                   INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                                   INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                                   P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+                                   SLATE_VEC_ast_, SLATE_VEC_dag_,
+                                   LAMBDA_,
+                                   Q_SIGN,
+                                   seed_in,
+                                   phase = c("objective", "report"),
+                                   outcome_model_type,
+                                   glm_family,
+                                   nMonte_Qglm,
+                                   nMonte_adversarial,
+                                   primary_pushforward,
+                                   primary_n_entrants,
+                                   primary_n_field,
+                                   temperature,
+                                   ParameterizationType,
+                                   d_locator_use) {
+  phase <- match.arg(phase)
+  spec <- resolve_q_eval_spec(
+    phase = phase,
+    adversarial = TRUE,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm,
+    nMonte_adversarial = nMonte_adversarial
+  )
+  sampler_profile <- resolve_q_policy_sampler(
+    spec$profile_draw_mode,
+    d_locator_use = d_locator_use,
+    ParameterizationType = ParameterizationType
+  )
+  sampler_pool <- resolve_q_policy_sampler(
+    spec$pool_draw_mode,
+    d_locator_use = d_locator_use,
+    ParameterizationType = ParameterizationType
+  )
+  seed_next <- seed_in
+  n_q_samp <- spec$n_draws
+
+  if (primary_pushforward == "multi") {
+    samp_ast <- sample_pool_jax(
+      pi_star_ast, n_q_samp, primary_n_entrants, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_ast_all <- samp_ast$samples
+    seed_next <- samp_ast$seed_next
+
+    samp_dag <- sample_pool_jax(
+      pi_star_dag, n_q_samp, primary_n_entrants, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_dag_all <- samp_dag$samples
+    seed_next <- samp_dag$seed_next
+
+    samp_ast_field <- sample_pool_jax(
+      SLATE_VEC_ast_, n_q_samp, primary_n_field, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_ast_PrimaryComp_all <- samp_ast_field$samples
+    seed_next <- samp_ast_field$seed_next
+
+    samp_dag_field <- sample_pool_jax(
+      SLATE_VEC_dag_, n_q_samp, primary_n_field, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_dag_PrimaryComp_all <- samp_dag_field$samples
+    seed_next <- samp_dag_field$seed_next
+  } else {
+    draw_ast <- draw_profile_samples(
+      pi_star_ast, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_ast_all <- draw_ast$samples
+    seed_next <- draw_ast$seed_next
+
+    draw_dag <- draw_profile_samples(
+      pi_star_dag, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_profile
+    )
+    TSAMP_dag_all <- draw_dag$samples
+    seed_next <- draw_dag$seed_next
+
+    draw_ast_field <- draw_profile_samples(
+      SLATE_VEC_ast_, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_ast_PrimaryComp_all <- draw_ast_field$samples
+    seed_next <- draw_ast_field$seed_next
+
+    draw_dag_field <- draw_profile_samples(
+      SLATE_VEC_dag_, n_q_samp, seed_next,
+      temperature, ParameterizationType, d_locator_use,
+      sampler = sampler_pool
+    )
+    TSAMP_dag_PrimaryComp_all <- draw_dag_field$samples
+    seed_next <- draw_dag_field$seed_next
+  }
+
+  QMonteRes <- strenv$Vectorized_QMonteIter_MaxMin(
+    TSAMP_ast_all, TSAMP_dag_all,
+    TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
+    a_i_ast, a_i_dag,
+    INTERCEPT_ast_, COEFFICIENTS_ast_,
+    INTERCEPT_dag_, COEFFICIENTS_dag_,
+    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+    P_VEC_FULL_ast_, P_VEC_FULL_dag_,
+    LAMBDA_, Q_SIGN,
+    strenv$jax$random$split(seed_next, n_q_samp)
+  )
+  q_ast <- QMonteRes$q_ast$mean()
+  q_dag <- QMonteRes$q_dag$mean()
+  indicator_UseAst <- 0.5 * (1. + Q_SIGN)
+
+  list(
+    q_ast = q_ast,
+    q_dag = q_dag,
+    q_max = indicator_UseAst * q_ast + (1. - indicator_UseAst) * q_dag,
+    seed_next = seed_next,
+    spec = spec
   )
 }
 

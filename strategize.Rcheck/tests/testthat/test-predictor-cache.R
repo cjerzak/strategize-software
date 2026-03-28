@@ -18,6 +18,7 @@ test_that("strategic predictors can be saved and loaded (GLM)", {
 
   expect_equal(preds1, preds2, tolerance = 1e-8)
   expect_true(is.list(fit_loaded$fit$fit_metrics))
+  expect_true(is.list(fit_loaded$fit$fit_metrics$in_sample_metrics))
 })
 
 test_that("strategic_prediction() can reuse cached predictors", {

@@ -367,6 +367,66 @@ neural_param_or_default <- function(params, name, default) {
   val
 }
 
+neural_build_output_site_init_values <- function(Y,
+                                                 likelihood,
+                                                 nOutcomes = 1L,
+                                                 b_out_site_name = "b_out",
+                                                 tau_b_scale = 0.5,
+                                                 sigma_floor = 1e-3) {
+  if (!identical(likelihood, "normal")) {
+    return(list())
+  }
+  if (length(nOutcomes) != 1L || is.na(nOutcomes) || as.integer(nOutcomes) != 1L) {
+    return(list())
+  }
+
+  y_numeric <- suppressWarnings(as.numeric(Y))
+  finite_y <- y_numeric[is.finite(y_numeric)]
+  mean_y <- if (length(finite_y)) {
+    mean(finite_y)
+  } else {
+    0.0
+  }
+  sigma0 <- suppressWarnings(stats::mad(finite_y, na.rm = TRUE))
+  if (!is.finite(sigma0) || sigma0 <= 0) {
+    sigma0 <- suppressWarnings(stats::sd(finite_y, na.rm = TRUE))
+  }
+  if (!is.finite(sigma0) || sigma0 <= 0) {
+    sigma0 <- 1.0
+  }
+  sigma0 <- max(as.numeric(sigma0), as.numeric(sigma_floor))
+  tau_b0 <- max(abs(as.numeric(mean_y)), as.numeric(tau_b_scale), as.numeric(sigma_floor))
+  b_out0 <- rep(as.numeric(mean_y), times = as.integer(nOutcomes))
+
+  init_values <- list(
+    tau_b = as.numeric(tau_b0),
+    sigma = as.numeric(sigma0)
+  )
+  if (is.character(b_out_site_name) && length(b_out_site_name) == 1L && nzchar(b_out_site_name)) {
+    if (identical(b_out_site_name, "b_out")) {
+      init_values[[b_out_site_name]] <- b_out0
+    } else {
+      init_values[[b_out_site_name]] <- b_out0 / tau_b0
+    }
+  }
+
+  init_values
+}
+
+neural_get_init_to_value <- function() {
+  if (is.null(strenv$numpyro) || is.null(strenv$numpyro$infer)) {
+    return(NULL)
+  }
+  if (reticulate::py_has_attr(strenv$numpyro$infer, "initialization") &&
+      reticulate::py_has_attr(strenv$numpyro$infer$initialization, "init_to_value")) {
+    return(strenv$numpyro$infer$initialization$init_to_value)
+  }
+  if (reticulate::py_has_attr(strenv$numpyro$infer, "init_to_value")) {
+    return(strenv$numpyro$infer$init_to_value)
+  }
+  NULL
+}
+
 neural_linear_head <- function(phi, W_out, b_out = NULL, dtype = NULL) {
   logits <- strenv$jnp$einsum("nm,mo->no", phi, W_out)
   if (is.null(b_out)) {
@@ -1208,7 +1268,7 @@ generate_ModelOutcome_neural <- function(){
     subsample_method = "full",
     n_thin_by = 1L,
     n_chains = 2L,
-    svi_steps = 1000L,
+    svi_steps = "optimal",
     svi_lr = 0.01,
     svi_num_particles = 1L,
     svi_num_draws = 200L,
@@ -1394,6 +1454,9 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(mcmc_overrides) && length(mcmc_overrides) > 0) {
     mcmc_control <- modifyList(mcmc_control, mcmc_overrides)
   }
+  user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
+  user_supplied_svi_num_draws <- !is.null(mcmc_overrides) &&
+    !is.null(mcmc_overrides$svi_num_draws)
   skip_eval_flag <- tolower(Sys.getenv("STRATEGIZE_NEURAL_SKIP_EVAL")) %in%
     c("1", "true", "yes")
   if (isTRUE(skip_eval_flag)) {
@@ -2690,7 +2753,7 @@ generate_ModelOutcome_neural <- function(){
                                     pr_b <- strenv$jnp$take(party_right, idx, axis = 0L)
                                     resp_p_b <- strenv$jnp$take(resp_party, idx, axis = 0L)
                                     resp_c_b <- strenv$jnp$take(resp_cov, idx, axis = 0L)
-                                    Yb <- strenv$jnp$take(Y_obs, idx, axis = 0L)
+                                    Yb <- if (is.null(Y_obs)) NULL else strenv$jnp$take(Y_obs, idx, axis = 0L)
                                     do_forward_and_lik_(Xl_b, Xr_b, pl_b, pr_b, resp_p_b, resp_c_b, Yb)
                                   })
       } else {
@@ -2790,7 +2853,7 @@ generate_ModelOutcome_neural <- function(){
                                     pb <- strenv$jnp$take(party, idx, axis = 0L)
                                     resp_p_b <- strenv$jnp$take(resp_party, idx, axis = 0L)
                                     resp_c_b <- strenv$jnp$take(resp_cov, idx, axis = 0L)
-                                    Yb <- strenv$jnp$take(Y_obs, idx, axis = 0L)
+                                    Yb <- if (is.null(Y_obs)) NULL else strenv$jnp$take(Y_obs, idx, axis = 0L)
                                     do_forward_and_lik_(Xb, pb, resp_p_b, resp_c_b, Yb)
                                   })
       } else {
@@ -2943,111 +3006,28 @@ generate_ModelOutcome_neural <- function(){
 	          NULL
 	        }
 
-        make_folds <- function(n, n_folds, cluster = NULL, seed = 123L) {
-          n <- as.integer(n)
-          n_folds <- as.integer(n_folds)
-          if (n <= 1L || n_folds < 2L) {
-            return(NULL)
-          }
-
-          restore_rng <- function(old_seed) {
-            if (is.null(old_seed)) {
-              if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
-                rm(".Random.seed", envir = .GlobalEnv)
-              }
-            } else {
-              assign(".Random.seed", old_seed, envir = .GlobalEnv)
-            }
-          }
-
-          old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
-            get(".Random.seed", envir = .GlobalEnv)
-          } else {
-            NULL
-          }
-          set.seed(as.integer(seed))
-          on.exit(restore_rng(old_seed), add = TRUE)
-
-          if (!is.null(cluster) && length(cluster) == n) {
-            cluster <- as.character(cluster)
-            if (any(is.na(cluster))) {
-              na_idx <- which(is.na(cluster))
-              cluster[na_idx] <- paste0("__missing__", na_idx)
-            }
-            uniq <- unique(cluster)
-            k <- min(n_folds, length(uniq))
-            if (k >= 2L) {
-              uniq <- sample(uniq, length(uniq))
-              fold_map <- rep(seq_len(k), length.out = length(uniq))
-              names(fold_map) <- uniq
-              return(list(fold_id = as.integer(fold_map[cluster]), n_folds = k))
-            }
-          }
-
-          k <- min(n_folds, n)
-          if (k < 2L) {
-            return(NULL)
-          }
-          fold_id <- sample(rep(seq_len(k), length.out = n))
-          list(fold_id = as.integer(fold_id), n_folds = k)
-        }
-
-        n_folds <- eval_control$n_folds
-        if (is.null(n_folds) || !is.finite(n_folds)) {
-          n_folds <- 3L
+	        n_folds <- eval_control$n_folds
+	        if (is.null(n_folds) || !is.finite(n_folds)) {
+	          n_folds <- 3L
         }
         n_folds <- as.integer(n_folds)
         if (n_folds < 2L) {
           n_folds <- 2L
         }
 
-        folds_out <- make_folds(n_eval_total, n_folds, cluster = cluster_eval, seed = eval_control$seed)
+	        folds_out <- cs_make_stratified_folds(
+	          n = n_eval_total,
+	          n_folds = n_folds,
+	          y = y_all[eval_idx],
+	          cluster = cluster_eval,
+	          seed = eval_control$seed
+	        )
         if (!is.null(folds_out) && !is.null(folds_out$fold_id)) {
           fold_id <- folds_out$fold_id
           n_folds_use <- as.integer(folds_out$n_folds)
 
           init_model <- body(generate_ModelOutcome_neural)
 
-          compute_auc <- function(y_true, y_score) {
-            y_true <- as.numeric(y_true)
-            y_score <- as.numeric(y_score)
-            ok <- is.finite(y_true) & is.finite(y_score)
-            y_true <- y_true[ok]
-            y_score <- y_score[ok]
-            if (!length(y_true)) return(NA_real_)
-            pos <- y_true == 1
-            neg <- y_true == 0
-            n_pos <- sum(pos)
-            n_neg <- sum(neg)
-            if (n_pos == 0L || n_neg == 0L) return(NA_real_)
-            ranks <- rank(y_score, ties.method = "average")
-            (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
-          }
-          compute_log_loss <- function(y_true, y_score, eps = 1e-12) {
-            y_true <- as.numeric(y_true)
-            y_score <- as.numeric(y_score)
-            ok <- is.finite(y_true) & is.finite(y_score)
-            y_true <- y_true[ok]
-            y_score <- y_score[ok]
-            if (!length(y_true)) return(NA_real_)
-            p <- pmin(pmax(y_score, eps), 1 - eps)
-            -mean(y_true * log(p) + (1 - y_true) * log(1 - p))
-          }
-          compute_multiclass_log_loss <- function(y_true, prob_mat, eps = 1e-12) {
-            if (is.null(dim(prob_mat))) {
-              prob_mat <- matrix(prob_mat, nrow = length(y_true), byrow = TRUE)
-            }
-            n_eval <- nrow(prob_mat)
-            if (length(y_true) != n_eval) return(NA_real_)
-            ok <- !is.na(y_true)
-            y_true <- y_true[ok]
-            prob_mat <- prob_mat[ok, , drop = FALSE]
-            if (!length(y_true)) return(NA_real_)
-            idx <- cbind(seq_along(y_true), y_true + 1L)
-            p <- prob_mat[idx]
-            p <- pmin(pmax(p, eps), 1 - eps)
-            -mean(log(p))
-          }
           format_metric <- function(label, value, digits = 4) {
             if (is.null(value) || !is.finite(value)) return(NULL)
             fmt <- paste0("%s=%.", digits, "f")
@@ -3055,75 +3035,10 @@ generate_ModelOutcome_neural <- function(){
           }
 
           compute_metrics <- function(y_eval, pred_eval) {
-            if (likelihood == "bernoulli") {
-              y_eval <- as.numeric(y_eval)
-              keep <- is.finite(y_eval) & (y_eval %in% c(0, 1))
-              y_eval <- y_eval[keep]
-              p <- as.numeric(pred_eval)[keep]
-              auc <- compute_auc(y_eval, p)
-              log_loss <- compute_log_loss(y_eval, p)
-              accuracy <- if (length(y_eval)) mean((p >= 0.5) == y_eval) else NA_real_
-              brier <- if (length(y_eval)) mean((p - y_eval) ^ 2) else NA_real_
-              return(list(
-                likelihood = likelihood,
-                n_eval = length(y_eval),
-                auc = auc,
-                log_loss = log_loss,
-                accuracy = accuracy,
-                brier = brier
-              ))
-            }
-            if (likelihood == "categorical") {
-              y_eval <- as.integer(y_eval)
-              prob_mat <- as.matrix(pred_eval)
-              keep <- !is.na(y_eval)
-              y_eval <- y_eval[keep]
-              prob_mat <- prob_mat[keep, , drop = FALSE]
-              if (length(y_eval)) {
-                log_loss <- compute_multiclass_log_loss(y_eval, prob_mat)
-                pred_class <- max.col(prob_mat) - 1L
-                accuracy <- mean(pred_class == y_eval, na.rm = TRUE)
-              } else {
-                log_loss <- NA_real_
-                accuracy <- NA_real_
-              }
-              return(list(
-                likelihood = likelihood,
-                n_eval = length(y_eval),
-                log_loss = log_loss,
-                accuracy = accuracy
-              ))
-            }
-            y_eval <- as.numeric(y_eval)
-            pred_mu <- as.numeric(pred_eval$mu)
-            pred_sigma <- as.numeric(pred_eval$sigma)
-            keep <- is.finite(y_eval) & is.finite(pred_mu)
-            y_eval <- y_eval[keep]
-            pred_mu <- pred_mu[keep]
-            if (length(pred_sigma) == 1L && length(y_eval) > 1L) {
-              pred_sigma <- rep(pred_sigma, length(y_eval))
-            } else if (length(pred_sigma) == length(keep)) {
-              pred_sigma <- pred_sigma[keep]
-            } else if (length(pred_sigma) == length(y_eval)) {
-              pred_sigma <- pred_sigma
-            } else {
-              pred_sigma <- rep(NA_real_, length(y_eval))
-            }
-            rmse <- if (length(y_eval)) sqrt(mean((pred_mu - y_eval) ^ 2)) else NA_real_
-            mae <- if (length(y_eval)) mean(abs(pred_mu - y_eval)) else NA_real_
-            nll <- NA_real_
-            if (length(y_eval) &&
-                length(pred_sigma) == length(y_eval) &&
-                all(is.finite(pred_sigma)) &&
-                all(pred_sigma > 0)) {
-              nll <- mean(0.5 * log(2 * pi * pred_sigma ^ 2) + (y_eval - pred_mu) ^ 2 / (2 * pred_sigma ^ 2))
-            }
-            list(
-              likelihood = likelihood,
-              n_eval = length(y_eval),
-              rmse = rmse,
-              mae = mae,
-              nll = nll
+            cs_compute_outcome_metrics(
+              y_eval = y_eval,
+              pred_eval = pred_eval,
+              likelihood = likelihood
             )
           }
 
@@ -3346,6 +3261,7 @@ generate_ModelOutcome_neural <- function(){
           overall_metrics$eval_subset <- subset_note
           overall_metrics$n_folds <- n_folds_use
           overall_metrics$seed <- eval_control$seed
+          overall_metrics$eval_index <- eval_idx
           overall_metrics$by_fold <- by_fold
 
           if (pairwise_mode) {
@@ -3485,7 +3401,6 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     reparam_config[["W_out"]] <- locscale_reparam(centered = 0)
-    reparam_config[["b_out"]] <- locscale_reparam(centered = 0)
     if (isTRUE(use_cross_term)) {
       reparam_config[["M_cross_raw"]] <- locscale_reparam(centered = 0)
     }
@@ -3505,11 +3420,22 @@ generate_ModelOutcome_neural <- function(){
 
   t0_ <- Sys.time()
   output_only_mode <- identical(tolower(as.character(uncertainty_scope)), "output")
+  output_site_init_values <- neural_build_output_site_init_values(
+    Y = Y_use,
+    likelihood = likelihood,
+    nOutcomes = nOutcomes,
+    b_out_site_name = if (isTRUE(manual_noncentered_loc_scale)) "b_out_z" else "b_out",
+    tau_b_scale = tau_b_scale
+  )
+  init_to_value <- neural_get_init_to_value()
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
   run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
   SVIParams <- NULL
   SVIInitValues <- NULL
   svi_loss_curve <- NULL
+  resolved_svi_steps <- NULL
+  resolved_svi_num_draws <- NULL
+  svi_budget_info <- NULL
   if (isTRUE(use_svi)) {
     if (isTRUE(output_only_mode)) {
       message("Enlisting SVI with autoguide for output-only uncertainty...")
@@ -3527,11 +3453,23 @@ generate_ModelOutcome_neural <- function(){
     if (length(guide_name) != 1L || is.na(guide_name) || !nzchar(guide_name)) {
       guide_name <- "auto_diagonal"
     }
-    guide <- switch(guide_name,
-                    auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn),
-                    auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn),
-                    auto_diagonal = strenv$numpyro$infer$autoguide$AutoDiagonalNormal(model_fn),
-                    stop(sprintf("Unknown vi_guide '%s' for SVI.", guide_name), call. = FALSE))
+    guide_init_loc_fn <- NULL
+    if (!is.null(init_to_value) && length(output_site_init_values) > 0L) {
+      guide_init_loc_fn <- init_to_value(values = output_site_init_values)
+    }
+    guide <- if (is.null(guide_init_loc_fn)) {
+      switch(guide_name,
+             auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn),
+             auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn),
+             auto_diagonal = strenv$numpyro$infer$autoguide$AutoDiagonalNormal(model_fn),
+             stop(sprintf("Unknown vi_guide '%s' for SVI.", guide_name), call. = FALSE))
+    } else {
+      switch(guide_name,
+             auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn, init_loc_fn = guide_init_loc_fn),
+             auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn, init_loc_fn = guide_init_loc_fn),
+             auto_diagonal = strenv$numpyro$infer$autoguide$AutoDiagonalNormal(model_fn, init_loc_fn = guide_init_loc_fn),
+             stop(sprintf("Unknown vi_guide '%s' for SVI.", guide_name), call. = FALSE))
+    }
     n_particles <- ai(mcmc_control$svi_num_particles)
     if (length(n_particles) != 1L || is.na(n_particles) || n_particles < 1L) {
       n_particles <- 1L
@@ -3568,60 +3506,64 @@ generate_ModelOutcome_neural <- function(){
         call. = FALSE
       )
     }
-    svi_steps_input <- mcmc_control$svi_steps
-    svi_steps <- NULL
-    if (is.character(svi_steps_input)) {
-      steps_tag <- tolower(as.character(svi_steps_input))
-      if (length(steps_tag) == 1L && !is.na(steps_tag) && nzchar(steps_tag) &&
-          identical(steps_tag, "optimal")) {
-        n_obs_svi <- length(Y_use)
-        pairwise_scaling <- pairwise_mode
-        if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
-          n_obs_svi <- nrow(pair_mat)
-          pairwise_scaling <- TRUE
-        }
-        if ((is.null(pair_mat) || nrow(pair_mat) < 1L) &&
-            isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
-          pair_id_use <- pair_id_
-          pair_id_use <- pair_id_use[!is.na(pair_id_use)]
-          if (length(pair_id_use) > 0L) {
-            n_obs_svi <- length(unique(pair_id_use))
-            pairwise_scaling <- TRUE
-          }
-        }
-        svi_subsample_method <- if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
-          "batch_vi"
-        } else {
-          subsample_method
-        }
-        svi_steps <- neural_optimal_svi_steps(
-          n_obs = n_obs_svi,
-          n_factors = length(factor_levels_int),
-          factor_levels = factor_levels_int,
-          model_dims = ModelDims,
-          model_depth = ModelDepth,
-          n_party_levels = n_party_levels,
-          n_resp_party_levels = n_resp_party_levels,
-          n_resp_covariates = n_resp_covariates,
-          n_outcomes = nOutcomes,
-          pairwise_mode = pairwise_scaling,
-          use_matchup_token = use_matchup_token,
-          use_cross_encoder = use_cross_encoder,
-          use_cross_term = use_cross_term,
-          use_cross_attn = use_cross_attn,
-          use_qk_norm = qk_norm_enabled,
-          batch_size = mcmc_control$batch_size,
-          subsample_method = svi_subsample_method
-        )
-        mcmc_control$svi_steps <- svi_steps
-        message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
+    n_obs_svi <- length(Y_use)
+    pairwise_scaling <- pairwise_mode
+    if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+      n_obs_svi <- nrow(pair_mat)
+      pairwise_scaling <- TRUE
+    }
+    if ((is.null(pair_mat) || nrow(pair_mat) < 1L) &&
+        isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0L) {
+      pair_id_use <- pair_id_
+      pair_id_use <- pair_id_use[!is.na(pair_id_use)]
+      if (length(pair_id_use) > 0L) {
+        n_obs_svi <- length(unique(pair_id_use))
+        pairwise_scaling <- TRUE
       }
     }
-    if (is.null(svi_steps)) {
-      svi_steps <- as.integer(svi_steps_input)
-      if (length(svi_steps) != 1L || is.na(svi_steps) || svi_steps < 1L) {
-        svi_steps <- 1L
-      }
+    svi_subsample_method <- if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
+      "batch_vi"
+    } else {
+      subsample_method
+    }
+    svi_budget_info <- neural_resolve_svi_budget(
+      svi_steps_input = mcmc_control$svi_steps,
+      svi_num_draws_input = mcmc_control$svi_num_draws,
+      user_supplied_svi_steps = user_supplied_svi_steps,
+      user_supplied_svi_num_draws = user_supplied_svi_num_draws,
+      n_obs = n_obs_svi,
+      n_factors = length(factor_levels_int),
+      factor_levels = factor_levels_int,
+      model_dims = ModelDims,
+      model_depth = ModelDepth,
+      n_party_levels = n_party_levels,
+      n_resp_party_levels = n_resp_party_levels,
+      n_resp_covariates = n_resp_covariates,
+      n_outcomes = nOutcomes,
+      pairwise_mode = pairwise_scaling,
+      use_matchup_token = use_matchup_token,
+      use_cross_encoder = use_cross_encoder,
+      use_cross_term = use_cross_term,
+      use_cross_attn = use_cross_attn,
+      use_qk_norm = qk_norm_enabled,
+      batch_size = mcmc_control$batch_size,
+      subsample_method = svi_subsample_method,
+      output_only_mode = output_only_mode,
+      likelihood = likelihood
+    )
+    svi_steps <- as.integer(svi_budget_info$svi_steps)
+    resolved_svi_steps <- svi_steps
+    resolved_svi_num_draws <- as.integer(svi_budget_info$svi_num_draws)
+    mcmc_control$svi_steps <- svi_steps
+    mcmc_control$svi_num_draws <- resolved_svi_num_draws
+    if (isTRUE(svi_budget_info$used_optimal)) {
+      message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
+    }
+    if (isTRUE(svi_budget_info$applied_output_single_normal_batch_vi_floor)) {
+      message(sprintf(
+        "Applying output-only single-model normal batch_vi SVI floor => %d steps.",
+        svi_steps
+      ))
     }
     warmup_frac <- if (!is.null(mcmc_control$svi_lr_warmup_frac)) {
       as.numeric(mcmc_control$svi_lr_warmup_frac)
@@ -3819,7 +3761,7 @@ generate_ModelOutcome_neural <- function(){
     }
     params <- svi$get_params(svi_state)
     SVIParams <- params
-    n_draws <- ai(mcmc_control$svi_num_draws)
+    n_draws <- ai(resolved_svi_num_draws)
     if (length(n_draws) != 1L || is.na(n_draws) || !is.finite(n_draws) || n_draws < 1L) {
       n_draws <- 1L
     }
@@ -3853,19 +3795,13 @@ generate_ModelOutcome_neural <- function(){
 
     init_strategy <- NULL
     if (!is.null(SVIInitValues) && length(SVIInitValues) > 0L) {
-      init_to_value <- NULL
-      if (!is.null(strenv$numpyro$infer) &&
-          reticulate::py_has_attr(strenv$numpyro$infer, "initialization") &&
-          reticulate::py_has_attr(strenv$numpyro$infer$initialization, "init_to_value")) {
-        init_to_value <- strenv$numpyro$infer$initialization$init_to_value
-      } else if (!is.null(strenv$numpyro$infer) &&
-                 reticulate::py_has_attr(strenv$numpyro$infer, "init_to_value")) {
-        init_to_value <- strenv$numpyro$infer$init_to_value
-      }
       if (!is.null(init_to_value)) {
         init_strategy <- init_to_value(values = SVIInitValues)
         message("Initializing MCMC with SVI posterior means...")
       }
+    } else if (!is.null(init_to_value) && length(output_site_init_values) > 0L) {
+      init_strategy <- init_to_value(values = output_site_init_values)
+      message("Initializing MCMC with data-informed output warm starts...")
     }
 
     if (identical(subsample_method, "batch")) {
@@ -4542,6 +4478,99 @@ generate_ModelOutcome_neural <- function(){
     coerce_prediction_output(pred)
   }
 
+  if (!is.null(fit_metrics) &&
+      !is.null(fit_metrics$eval_index) &&
+      length(fit_metrics$eval_index) > 0L) {
+    eval_idx_in <- as.integer(fit_metrics$eval_index)
+    pred_in_sample <- tryCatch({
+      if (pairwise_mode) {
+        my_model(
+          X_left_new = X_left[eval_idx_in, , drop = FALSE],
+          X_right_new = X_right[eval_idx_in, , drop = FALSE],
+          party_left_new = party_left[eval_idx_in],
+          party_right_new = party_right[eval_idx_in],
+          resp_party_new = resp_party_use[eval_idx_in],
+          resp_cov_new = if (!is.null(X_use) && n_resp_covariates > 0L) {
+            X_use[eval_idx_in, , drop = FALSE]
+          } else {
+            NULL
+          }
+        )
+      } else {
+        my_model(
+          X_new = X_single[eval_idx_in, , drop = FALSE],
+          party_new = party_single[eval_idx_in],
+          resp_party_new = resp_party_use[eval_idx_in],
+          resp_cov_new = if (!is.null(X_use) && n_resp_covariates > 0L) {
+            X_use[eval_idx_in, , drop = FALSE]
+          } else {
+            NULL
+          }
+        )
+      }
+    }, error = function(e) NULL)
+
+    if (!is.null(pred_in_sample)) {
+      in_sample_metrics <- cs_compute_outcome_metrics(
+        y_eval = Y_use[eval_idx_in],
+        pred_eval = pred_in_sample,
+        likelihood = likelihood
+      )
+      in_sample_metrics$eval_note <- "in_sample_full_fit"
+      in_sample_metrics$eval_subset <- fit_metrics$eval_subset
+
+      if (pairwise_mode) {
+        stage_primary <- party_left == party_right
+        if (length(stage_primary) == length(Y_use)) {
+          stage_primary <- stage_primary[eval_idx_in]
+          by_stage <- list()
+          if (any(stage_primary, na.rm = TRUE)) {
+            idx0 <- which(stage_primary)
+            pred_stage <- if (likelihood == "bernoulli") {
+              pred_in_sample[idx0]
+            } else if (likelihood == "categorical") {
+              pred_in_sample[idx0, , drop = FALSE]
+            } else {
+              list(
+                mu = pred_in_sample$mu[idx0],
+                sigma = pred_in_sample$sigma[idx0]
+              )
+            }
+            by_stage$primary <- cs_compute_outcome_metrics(
+              y_eval = Y_use[eval_idx_in][idx0],
+              pred_eval = pred_stage,
+              likelihood = likelihood
+            )
+          }
+          if (any(!stage_primary, na.rm = TRUE)) {
+            idx1 <- which(!stage_primary)
+            pred_stage <- if (likelihood == "bernoulli") {
+              pred_in_sample[idx1]
+            } else if (likelihood == "categorical") {
+              pred_in_sample[idx1, , drop = FALSE]
+            } else {
+              list(
+                mu = pred_in_sample$mu[idx1],
+                sigma = pred_in_sample$sigma[idx1]
+              )
+            }
+            by_stage$general <- cs_compute_outcome_metrics(
+              y_eval = Y_use[eval_idx_in][idx1],
+              pred_eval = pred_stage,
+              likelihood = likelihood
+            )
+          }
+          if (length(by_stage) > 0L) {
+            in_sample_metrics$by_stage <- by_stage
+          }
+        }
+      }
+
+      fit_metrics$in_sample_metrics <- in_sample_metrics
+    }
+    fit_metrics$eval_index <- NULL
+  }
+
   # Neural parameter vector and diagonal posterior covariance
   param_schema <- neural_build_param_schema(
     params = ParamsMean,
@@ -4676,6 +4705,9 @@ generate_ModelOutcome_neural <- function(){
     likelihood = likelihood,
     fit_metrics = fit_metrics,
     svi_loss_curve = svi_loss_curve,
+    svi_steps = resolved_svi_steps,
+    svi_num_draws = resolved_svi_num_draws,
+    svi_budget_info = svi_budget_info,
     stage_diagnostics = stage_diagnostics,
     model_dims = ModelDims,
     model_depth = ModelDepth,

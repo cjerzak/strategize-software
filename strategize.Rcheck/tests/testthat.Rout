@@ -28,31 +28,27 @@ Initializing computational environment...
 Initializing outcome models...
 [1] 1 1
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.3743, LogLoss=0.7120, Acc=0.493, Brier=0.2593
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.5528, LogLoss=0.6762, Acc=0.597, Brier=0.2416
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.4427, LogLoss=0.7225, Acc=0.439, Brier=0.2643
-GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.4357, LogLoss=0.7035, Acc=0.510, Brier=0.2550
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.5401, LogLoss=0.6847, Acc=0.552, Brier=0.2458
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.6203, LogLoss=0.6849, Acc=0.552, Brier=0.2459
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.4711, LogLoss=0.7082, Acc=0.470, Brier=0.2573
+GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.5110, LogLoss=0.6925, Acc=0.525, Brier=0.2496
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-SGD Iteration: 1 of 10
-SGD Iteration: 2 of 10
-SGD Iteration: 3 of 10
-SGD Iteration: 4 of 10
-SGD Iteration: 5 of 10
-SGD Iteration: 8 of 10
-SGD Iteration: 10 of 10
+SGD Iteration: 1 of 5
+SGD Iteration: 2 of 5
+SGD Iteration: 3 of 5
+SGD Iteration: 4 of 5
+SGD Iteration: 5 of 5
 Saving output from gd [getQPiStar_gd]...
-SGD Iteration: 1 of 10
-SGD Iteration: 2 of 10
-SGD Iteration: 3 of 10
-SGD Iteration: 4 of 10
-SGD Iteration: 5 of 10
-SGD Iteration: 8 of 10
-SGD Iteration: 10 of 10
+SGD Iteration: 1 of 5
+SGD Iteration: 2 of 5
+SGD Iteration: 3 of 5
+SGD Iteration: 4 of 5
+SGD Iteration: 5 of 5
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
@@ -61,33 +57,27 @@ strategize() call has begun...
 Initializing outcome models...
 [1] 1 1
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.3743, LogLoss=0.7120, Acc=0.493, Brier=0.2593
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.5528, LogLoss=0.6762, Acc=0.597, Brier=0.2416
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.4427, LogLoss=0.7225, Acc=0.439, Brier=0.2643
-GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.4357, LogLoss=0.7035, Acc=0.510, Brier=0.2550
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.5401, LogLoss=0.6847, Acc=0.552, Brier=0.2458
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.6203, LogLoss=0.6849, Acc=0.552, Brier=0.2459
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.4711, LogLoss=0.7082, Acc=0.470, Brier=0.2573
+GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.5110, LogLoss=0.6925, Acc=0.525, Brier=0.2496
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-SGD Iteration: 1 of 20
-SGD Iteration: 2 of 20
-SGD Iteration: 3 of 20
-SGD Iteration: 4 of 20
-SGD Iteration: 5 of 20
-SGD Iteration: 10 of 20
-SGD Iteration: 15 of 20
-SGD Iteration: 20 of 20
+SGD Iteration: 1 of 5
+SGD Iteration: 2 of 5
+SGD Iteration: 3 of 5
+SGD Iteration: 4 of 5
+SGD Iteration: 5 of 5
 Saving output from gd [getQPiStar_gd]...
-SGD Iteration: 1 of 20
-SGD Iteration: 2 of 20
-SGD Iteration: 3 of 20
-SGD Iteration: 4 of 20
-SGD Iteration: 5 of 20
-SGD Iteration: 10 of 20
-SGD Iteration: 15 of 20
-SGD Iteration: 20 of 20
+SGD Iteration: 1 of 5
+SGD Iteration: 2 of 5
+SGD Iteration: 3 of 5
+SGD Iteration: 4 of 5
+SGD Iteration: 5 of 5
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
@@ -96,31 +86,167 @@ strategize() call has begun...
 Initializing outcome models...
 [1] 1 1
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.3743, LogLoss=0.7120, Acc=0.493, Brier=0.2593
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.5528, LogLoss=0.6762, Acc=0.597, Brier=0.2416
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.4427, LogLoss=0.7225, Acc=0.439, Brier=0.2643
-GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.4357, LogLoss=0.7035, Acc=0.510, Brier=0.2550
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.5401, LogLoss=0.6847, Acc=0.552, Brier=0.2458
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.6203, LogLoss=0.6849, Acc=0.552, Brier=0.2459
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.4711, LogLoss=0.7082, Acc=0.470, Brier=0.2573
+GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.5110, LogLoss=0.6925, Acc=0.525, Brier=0.2496
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
 Defining gd function...
 Starting optimization...
 Optimization type: Gradient ascent
-SGD Iteration: 1 of 10
-SGD Iteration: 2 of 10
-SGD Iteration: 3 of 10
-SGD Iteration: 4 of 10
-SGD Iteration: 5 of 10
-SGD Iteration: 8 of 10
-SGD Iteration: 10 of 10
+SGD Iteration: 1 of 5
+SGD Iteration: 2 of 5
+SGD Iteration: 3 of 5
+SGD Iteration: 4 of 5
+SGD Iteration: 5 of 5
 Saving output from gd [getQPiStar_gd]...
-SGD Iteration: 1 of 10
-SGD Iteration: 2 of 10
-SGD Iteration: 3 of 10
-SGD Iteration: 4 of 10
-SGD Iteration: 5 of 10
-SGD Iteration: 8 of 10
-SGD Iteration: 10 of 10
+SGD Iteration: 1 of 5
+SGD Iteration: 2 of 5
+SGD Iteration: 3 of 5
+SGD Iteration: 4 of 5
+SGD Iteration: 5 of 5
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 1 1
+ok_counter = 0
+GLM OOS fold 1/3 (single, nested_fold_refit): RMSE=0.1019, MAE=0.0818
+GLM OOS fold 2/3 (single, nested_fold_refit): RMSE=0.1063, MAE=0.0856
+GLM OOS fold 3/3 (single, nested_fold_refit): RMSE=0.1111, MAE=0.0896
+GLM OOS fit metrics (single, oos_3fold, n=2000): RMSE=0.1065, MAE=0.0857
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 1 1
+ok_counter = 0
+GLM OOS fold 1/3 (single, nested_fold_refit): RMSE=0.1019, MAE=0.0818
+GLM OOS fold 2/3 (single, nested_fold_refit): RMSE=0.1063, MAE=0.0856
+GLM OOS fold 3/3 (single, nested_fold_refit): RMSE=0.1111, MAE=0.0896
+GLM OOS fit metrics (single, oos_3fold, n=2000): RMSE=0.1065, MAE=0.0857
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 1 1
+ok_counter = 0
+GLM OOS fold 1/3 (single, nested_fold_refit): RMSE=0.1019, MAE=0.0818
+GLM OOS fold 2/3 (single, nested_fold_refit): RMSE=0.1063, MAE=0.0856
+GLM OOS fold 3/3 (single, nested_fold_refit): RMSE=0.1111, MAE=0.0896
+GLM OOS fit metrics (single, oos_3fold, n=2000): RMSE=0.1065, MAE=0.0857
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+strategize() call has finished...
+-------------
+-------------
+strategize() call has begun...
+Initializing outcome models...
+[1] 1 1
+ok_counter = 0
+GLM OOS fold 1/3 (single, nested_fold_refit): RMSE=0.1019, MAE=0.0818
+GLM OOS fold 2/3 (single, nested_fold_refit): RMSE=0.1063, MAE=0.0856
+GLM OOS fold 3/3 (single, nested_fold_refit): RMSE=0.1111, MAE=0.0896
+GLM OOS fit metrics (single, oos_3fold, n=2000): RMSE=0.1065, MAE=0.0857
+Done initializing outcome models & starting optimization sequence...
+Defining some preliminary objects...
+Defining Q functions..
+Defining gd function...
+Starting optimization...
+Optimization type: Gradient ascent
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
+Saving output from gd [getQPiStar_gd]...
+SGD Iteration: 1 of 1000
+SGD Iteration: 2 of 1000
+SGD Iteration: 3 of 1000
+SGD Iteration: 4 of 1000
+SGD Iteration: 250 of 1000
+SGD Iteration: 500 of 1000
+SGD Iteration: 750 of 1000
+SGD Iteration: 1000 of 1000
 Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
@@ -128,10 +254,10 @@ ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9912, LogLoss=0.1581, Acc=0.853, Brier=0.0616
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9962, LogLoss=0.0606, Acc=0.970, Brier=0.0215
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9926, LogLoss=0.1899, Acc=0.879, Brier=0.0748
-GLM OOS fit metrics (pairwise, oos_3fold, n=100): AUC=0.9844, LogLoss=0.1364, Acc=0.900, Brier=0.0527
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=1000): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 -------------
 strategize() call has begun...
 -------------
@@ -142,28 +268,27 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.3466, Acc=1.000, Brier=0.1250
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=1.000, Brier=0.2500
 GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.4055, Acc=1.000, Brier=0.1111
-GLM OOS fit metrics (pairwise, oos_3fold, n=5): AUC=0.1250, LogLoss=4.9329, Acc=0.800, Brier=0.2722
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=5): AUC=0.1250, LogLoss=4.9905, Acc=0.800, Brier=0.3000
 [1] 0 2
 ok_counter = 0
 GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=16.3774, Acc=0.333, Brier=0.6667
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=0.000, Brier=0.2500
-GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=0.5833, LogLoss=6.3148, Acc=0.500, Brier=0.3125
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.4621, Acc=0.333, Brier=0.1667
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
 [1] 1 2
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.0000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=0.000, Brier=0.2500
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=23.5661, Acc=0.000, Brier=1.0000
-GLM OOS fit metrics (pairwise, oos_3fold, n=4): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.3466, Acc=0.500, Brier=0.1250
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=23.5661, Acc=0.000, Brier=1.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=4): LogLoss=8.0864, Acc=0.333, Brier=0.4167
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -187,28 +312,27 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.3466, Acc=1.000, Brier=0.1250
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=1.000, Brier=0.2500
 GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.4055, Acc=1.000, Brier=0.1111
-GLM OOS fit metrics (pairwise, oos_3fold, n=5): AUC=0.1250, LogLoss=4.9329, Acc=0.800, Brier=0.2722
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=5): AUC=0.1250, LogLoss=4.9905, Acc=0.800, Brier=0.3000
 [1] 0 2
 ok_counter = 0
 GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=16.3774, Acc=0.333, Brier=0.6667
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=0.000, Brier=0.2500
-GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=0.5833, LogLoss=6.3148, Acc=0.500, Brier=0.3125
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.4621, Acc=0.333, Brier=0.1667
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
 [1] 1 2
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.0000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=0.000, Brier=0.2500
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=23.5661, Acc=0.000, Brier=1.0000
-GLM OOS fit metrics (pairwise, oos_3fold, n=4): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.3466, Acc=0.500, Brier=0.1250
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=23.5661, Acc=0.000, Brier=1.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=4): LogLoss=8.0864, Acc=0.333, Brier=0.4167
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -232,28 +356,27 @@ Initializing outcome models...
 [1] 0 1
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.3466, Acc=1.000, Brier=0.1250
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=1.000, Brier=0.2500
 GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.4055, Acc=1.000, Brier=0.1111
-GLM OOS fit metrics (pairwise, oos_3fold, n=5): AUC=0.1250, LogLoss=4.9329, Acc=0.800, Brier=0.2722
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=5): AUC=0.1250, LogLoss=4.9905, Acc=0.800, Brier=0.3000
 [1] 0 2
 ok_counter = 0
 GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 [1] 1 1
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=16.3774, Acc=0.333, Brier=0.6667
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=0.000, Brier=0.2500
-GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=0.5833, LogLoss=6.3148, Acc=0.500, Brier=0.3125
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.4621, Acc=0.333, Brier=0.1667
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=8): AUC=1.0000, LogLoss=0.1733, Acc=0.750, Brier=0.0625
 [1] 1 2
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.0000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.6931, Acc=0.000, Brier=0.2500
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): LogLoss=23.5661, Acc=0.000, Brier=1.0000
-GLM OOS fit metrics (pairwise, oos_3fold, n=4): AUC=0.0000, LogLoss=11.9563, Acc=0.250, Brier=0.5625
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.3466, Acc=0.500, Brier=0.1250
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=23.5661, Acc=0.000, Brier=1.0000
+GLM OOS fit metrics (pairwise, oos_3fold, n=4): LogLoss=8.0864, Acc=0.333, Brier=0.4167
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -279,35 +402,35 @@ ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.0000, LogLoss=18.4207, Acc=0.333, Brier=0.6667
 GLM OOS fold 2/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.0000, LogLoss=13.8155, Acc=0.500, Brier=0.5000
-GLM OOS fit metrics (pairwise, oos_3fold, n=7): AUC=0.6000, LogLoss=3.9473, Acc=0.857, Brier=0.1429
+GLM OOS fit metrics (pairwise, oos_3fold, n=7): AUC=0.2000, LogLoss=11.8419, Acc=0.571, Brier=0.4286
 [1] 0 2
 ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
 GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
 GLM OOS fit metrics (pairwise, oos_3fold, n=6): AUC=0.8125, LogLoss=3.9277, Acc=0.833, Brier=0.1667
 [1] 1 1
 ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.5000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): LogLoss=11.7830, Acc=0.500, Brier=0.5000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
 GLM OOS fit metrics (pairwise, oos_3fold, n=6): AUC=0.8750, LogLoss=3.9277, Acc=0.833, Brier=0.1667
 [1] 1 2
 ok_counter = 0
 Starting a glinternet fit...
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=11.7830, Acc=0.500, Brier=0.5000
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
-GLM OOS fit metrics (pairwise, oos_3fold, n=6): AUC=1.0000, LogLoss=3.9277, Acc=0.833, Brier=0.1667
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0002, Acc=1.000, Brier=0.0000
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0000, Acc=1.000, Brier=0.0000
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.3466, Acc=1.000, Brier=0.1250
+GLM OOS fit metrics (pairwise, oos_3fold, n=6): AUC=1.0000, LogLoss=0.1156, Acc=1.000, Brier=0.0417
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -333,33 +456,33 @@ ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9411, LogLoss=0.3208, Acc=0.896, Brier=0.0840
-GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9329, LogLoss=0.2960, Acc=0.879, Brier=0.0902
-GLM OOS fit metrics (pairwise, oos_2fold, n=133): AUC=0.9390, LogLoss=0.3085, Acc=0.887, Brier=0.0871
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9364, LogLoss=0.3210, Acc=0.881, Brier=0.0849
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9355, LogLoss=0.3134, Acc=0.894, Brier=0.0955
+GLM OOS fit metrics (pairwise, oos_2fold, n=133): AUC=0.9371, LogLoss=0.3173, Acc=0.887, Brier=0.0902
 [1] 0 2
 ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9347, LogLoss=0.3640, Acc=0.831, Brier=0.1122
-GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.8925, LogLoss=1.4978, Acc=0.810, Brier=0.1161
-GLM OOS fit metrics (pairwise, oos_2fold, n=117): AUC=0.9157, LogLoss=0.9260, Acc=0.821, Brier=0.1141
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.8958, LogLoss=1.2660, Acc=0.814, Brier=0.1183
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9213, LogLoss=0.3848, Acc=0.810, Brier=0.1193
+GLM OOS fit metrics (pairwise, oos_2fold, n=117): AUC=0.9037, LogLoss=0.8292, Acc=0.812, Brier=0.1188
 [1] 1 1
 ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9262, LogLoss=1.4039, Acc=0.898, Brier=0.0898
-GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9908, LogLoss=0.2100, Acc=0.948, Brier=0.0577
-GLM OOS fit metrics (pairwise, oos_2fold, n=117): AUC=0.9513, LogLoss=0.8121, Acc=0.923, Brier=0.0739
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.9374, LogLoss=1.3664, Acc=0.915, Brier=0.0780
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9834, LogLoss=0.1873, Acc=0.931, Brier=0.0550
+GLM OOS fit metrics (pairwise, oos_2fold, n=117): AUC=0.9516, LogLoss=0.7819, Acc=0.923, Brier=0.0666
 [1] 1 2
 ok_counter = 0
 Starting a glinternet fit...
 Done with glinternet fit...
 ok_counter = 1
-GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.8170, LogLoss=0.6116, Acc=0.716, Brier=0.1660
-GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.9085, LogLoss=0.4239, Acc=0.848, Brier=0.1256
-GLM OOS fit metrics (pairwise, oos_2fold, n=133): AUC=0.8584, LogLoss=0.5185, Acc=0.782, Brier=0.1459
+GLM OOS fold 1/2 (pairwise, nested_fold_refit): AUC=0.8638, LogLoss=0.4866, Acc=0.821, Brier=0.1432
+GLM OOS fold 2/2 (pairwise, nested_fold_refit): AUC=0.8755, LogLoss=0.4478, Acc=0.848, Brier=0.1367
+GLM OOS fit metrics (pairwise, oos_2fold, n=133): AUC=0.8650, LogLoss=0.4673, Acc=0.835, Brier=0.1400
 Done initializing outcome models & starting optimization sequence...
 Defining some preliminary objects...
 Defining Q functions..
@@ -380,55 +503,55 @@ Saving output from gd [getQPiStar_gd]...
 strategize() call has finished...
 -------------
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9938, LogLoss=0.0807, Acc=0.970, Brier=0.0275
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9973, LogLoss=0.0762, Acc=0.955, Brier=0.0290
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9982, LogLoss=0.0424, Acc=0.985, Brier=0.0140
-GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9948, LogLoss=0.0665, Acc=0.970, Brier=0.0235
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9978, LogLoss=0.0505, Acc=0.985, Brier=0.0167
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9947, LogLoss=0.0707, Acc=0.970, Brier=0.0239
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9972, LogLoss=0.0773, Acc=0.955, Brier=0.0295
+GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9945, LogLoss=0.0661, Acc=0.970, Brier=0.0233
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9935, LogLoss=0.0785, Acc=0.949, Brier=0.0282
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9929, LogLoss=0.0829, Acc=0.946, Brier=0.0298
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9945, LogLoss=0.0737, Acc=0.946, Brier=0.0267
-GLM OOS fit metrics (pairwise, oos_3fold, n=1000): AUC=0.9933, LogLoss=0.0784, Acc=0.947, Brier=0.0283
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9951, LogLoss=0.0693, Acc=0.949, Brier=0.0251
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9928, LogLoss=0.0831, Acc=0.943, Brier=0.0300
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9929, LogLoss=0.0830, Acc=0.949, Brier=0.0299
+GLM OOS fit metrics (pairwise, oos_3fold, n=1000): AUC=0.9931, LogLoss=0.0785, Acc=0.947, Brier=0.0283
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8193, LogLoss=0.5265, Acc=0.776, Brier=0.1750
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8580, LogLoss=0.4767, Acc=0.805, Brier=0.1551
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.7440, LogLoss=0.6246, Acc=0.647, Brier=0.2193
-GLM OOS fit metrics (single, oos_3fold, n=400): AUC=0.7889, LogLoss=0.5426, Acc=0.743, Brier=0.1831
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8578, LogLoss=0.4853, Acc=0.813, Brier=0.1589
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.7520, LogLoss=0.5897, Acc=0.684, Brier=0.2016
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8115, LogLoss=0.5227, Acc=0.729, Brier=0.1752
+GLM OOS fit metrics (single, oos_3fold, n=400): AUC=0.7948, LogLoss=0.5324, Acc=0.743, Brier=0.1785
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9875, LogLoss=0.1080, Acc=0.940, Brier=0.0381
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9893, LogLoss=0.1030, Acc=0.940, Brier=0.0370
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9981, LogLoss=0.0437, Acc=0.985, Brier=0.0146
-GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9912, LogLoss=0.0851, Acc=0.955, Brier=0.0300
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9906, LogLoss=0.0930, Acc=0.955, Brier=0.0322
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=1.0000, LogLoss=0.0418, Acc=1.000, Brier=0.0137
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9862, LogLoss=0.1632, Acc=0.909, Brier=0.0612
+GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9887, LogLoss=0.0990, Acc=0.955, Brier=0.0356
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.7801, LogLoss=0.5844, Acc=0.701, Brier=0.1966
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8197, LogLoss=0.5428, Acc=0.714, Brier=0.1816
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8326, LogLoss=0.5190, Acc=0.714, Brier=0.1721
-GLM OOS fit metrics (single, oos_3fold, n=400): AUC=0.7933, LogLoss=0.5488, Acc=0.710, Brier=0.1835
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.7773, LogLoss=0.6020, Acc=0.724, Brier=0.1976
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8044, LogLoss=0.5493, Acc=0.744, Brier=0.1812
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8575, LogLoss=0.4814, Acc=0.789, Brier=0.1553
+GLM OOS fit metrics (single, oos_3fold, n=400): AUC=0.8055, LogLoss=0.5444, Acc=0.752, Brier=0.1781
 ok_counter = 0
-GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9731, LogLoss=0.1389, Acc=0.896, Brier=0.0507
-GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9964, LogLoss=0.0708, Acc=0.940, Brier=0.0267
-GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9815, LogLoss=0.1365, Acc=0.879, Brier=0.0492
-GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9833, LogLoss=0.1153, Acc=0.905, Brier=0.0422
+GLM OOS fold 1/3 (pairwise, nested_fold_refit): AUC=0.9844, LogLoss=0.1227, Acc=0.925, Brier=0.0441
+GLM OOS fold 2/3 (pairwise, nested_fold_refit): AUC=0.9866, LogLoss=0.1132, Acc=0.925, Brier=0.0407
+GLM OOS fold 3/3 (pairwise, nested_fold_refit): AUC=0.9959, LogLoss=0.0638, Acc=0.955, Brier=0.0231
+GLM OOS fit metrics (pairwise, oos_3fold, n=200): AUC=0.9889, LogLoss=0.1001, Acc=0.935, Brier=0.0360
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8249, LogLoss=0.5027, Acc=0.790, Brier=0.1634
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8488, LogLoss=0.4960, Acc=0.750, Brier=0.1642
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8325, LogLoss=0.4941, Acc=0.740, Brier=0.1574
-GLM OOS fit metrics (single, oos_3fold, n=300): AUC=0.8217, LogLoss=0.4976, Acc=0.760, Brier=0.1616
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8296, LogLoss=0.5247, Acc=0.760, Brier=0.1697
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8404, LogLoss=0.4878, Acc=0.750, Brier=0.1603
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8232, LogLoss=0.5285, Acc=0.790, Brier=0.1670
+GLM OOS fit metrics (single, oos_3fold, n=300): AUC=0.8180, LogLoss=0.5137, Acc=0.767, Brier=0.1657
 ok_counter = 0
-GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.8105, LogLoss=0.5387, Acc=0.716, Brier=0.1771
-GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8574, LogLoss=0.4677, Acc=0.776, Brier=0.1505
-GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.7687, LogLoss=0.5953, Acc=0.636, Brier=0.2019
-GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.7953, LogLoss=0.5336, Acc=0.710, Brier=0.1764
-[ FAIL 0 | WARN 47 | SKIP 120 | PASS 131 ]
+GLM OOS fold 1/3 (single, nested_fold_refit): AUC=0.7496, LogLoss=0.5946, Acc=0.657, Brier=0.2043
+GLM OOS fold 2/3 (single, nested_fold_refit): AUC=0.8284, LogLoss=0.5000, Acc=0.746, Brier=0.1640
+GLM OOS fold 3/3 (single, nested_fold_refit): AUC=0.8480, LogLoss=0.4955, Acc=0.803, Brier=0.1617
+GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.7958, LogLoss=0.5302, Acc=0.735, Brier=0.1767
+[ FAIL 0 | WARN 51 | SKIP 127 | PASS 199 ]
 
-══ Skipped tests (120) ═════════════════════════════════════════════════════════
+══ Skipped tests (127) ═════════════════════════════════════════════════════════
 • JAX available; neural fit is slow and not exercised here (1):
   'test-prediction-api.R:147:7'
-• On CRAN (118): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
+• On CRAN (125): 'test-adversarial.R:278:3', 'test-adversarial.R:316:3',
   'test-adversarial.R:389:3', 'test-adversarial.R:427:3',
-  'test-build-backend.R:2:3', 'test-build-backend.R:36:3',
-  'test-build-backend.R:85:3', 'test-choice-token-gradient.R:6:3',
-  'test-context-head-interaction.R:6:3',
+  'test-average-case-recovery.R:97:3', 'test-build-backend.R:2:3',
+  'test-build-backend.R:36:3', 'test-build-backend.R:85:3',
+  'test-choice-token-gradient.R:6:3', 'test-context-head-interaction.R:6:3',
   'test-context-head-interaction.R:116:3',
   'test-context-head-interaction.R:222:3',
   'test-context-head-interaction.R:332:3',
@@ -439,6 +562,7 @@ GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.7953, LogLoss=0.5336, Acc=
   'test-cv-strategize.R:29:3', 'test-cv-strategize.R:48:3',
   'test-cv-strategize.R:70:3', 'test-edge-cases.R:8:3',
   'test-edge-cases.R:54:3', 'test-edge-cases.R:103:3',
+  'test-implicit-se.R:95:3', 'test-implicit-se.R:106:3',
   'test-input-validation.R:13:3', 'test-input-validation.R:24:3',
   'test-input-validation.R:35:3', 'test-input-validation.R:47:3',
   'test-input-validation.R:59:3', 'test-input-validation.R:75:3',
@@ -457,16 +581,17 @@ GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.7953, LogLoss=0.5336, Acc=
   'test-input-validation.R:487:3', 'test-input-validation.R:505:3',
   'test-input-validation.R:532:3', 'test-input-validation.R:544:3',
   'test-input-validation.R:556:3', 'test-input-validation.R:572:3',
-  'test-input-validation.R:586:3', 'test-neural.R:197:3',
-  'test-neural.R:223:3', 'test-neural.R:249:3', 'test-neural.R:259:3',
-  'test-neural.R:334:3', 'test-neural.R:370:3', 'test-neural.R:779:3',
-  'test-neural.R:815:3', 'test-neural.R:827:3', 'test-neural.R:834:3',
-  'test-onestep.R:13:3', 'test-onestep.R:40:3', 'test-onestep.R:75:3',
-  'test-onestep.R:99:3', 'test-onestep.R:122:3', 'test-onestep.R:152:3',
-  'test-onestep.R:181:3', 'test-onestep.R:204:3', 'test-outcome-cache.R:2:3',
-  'test-outcome-cache.R:126:3', 'test-penalty-types.R:8:3',
-  'test-penalty-types.R:25:3', 'test-penalty-types.R:42:3',
-  'test-presets.R:2:3', 'test-presets.R:27:3',
+  'test-input-validation.R:586:3', 'test-neural.R:379:3',
+  'test-neural.R:405:3', 'test-neural.R:431:3', 'test-neural.R:441:3',
+  'test-neural.R:516:3', 'test-neural.R:623:3', 'test-neural.R:1032:3',
+  'test-neural.R:1157:3', 'test-neural.R:1206:3', 'test-neural.R:1242:3',
+  'test-neural.R:1258:3', 'test-neural.R:1310:3', 'test-neural.R:1321:3',
+  'test-neural.R:1475:3', 'test-onestep.R:13:3', 'test-onestep.R:40:3',
+  'test-onestep.R:75:3', 'test-onestep.R:100:3', 'test-onestep.R:123:3',
+  'test-onestep.R:153:3', 'test-onestep.R:182:3', 'test-onestep.R:205:3',
+  'test-outcome-cache.R:2:3', 'test-outcome-cache.R:126:3',
+  'test-penalty-types.R:8:3', 'test-penalty-types.R:25:3',
+  'test-penalty-types.R:42:3', 'test-presets.R:2:3', 'test-presets.R:27:3',
   'test-primary-pushforward.R:10:3', 'test-primary-pushforward.R:109:3',
   'test-primary-pushforward.R:145:3', 'test-primary-pushforward.R:174:3',
   'test-primary-pushforward.R:207:3', 'test-s3-methods.R:28:3',
@@ -485,8 +610,8 @@ GLM OOS fit metrics (single, oos_3fold, n=200): AUC=0.7953, LogLoss=0.5336, Acc=
 • cv_strategize adversarial mode requires larger datasets (n > 5000) for CV
   splitting (1): 'test-adversarial.R:466:3'
 
-[ FAIL 0 | WARN 47 | SKIP 120 | PASS 131 ]
+[ FAIL 0 | WARN 51 | SKIP 127 | PASS 199 ]
 > 
 > proc.time()
    user  system elapsed 
- 60.764   7.895  54.655 
+ 81.505   9.386  73.491 

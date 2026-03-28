@@ -303,7 +303,7 @@ cv_strategize       <-          function(
                                             partial_pooling_strength = 50,
                                             use_regularization = TRUE,
                                             force_gaussian = F,
-                                            temperature = 0.5,
+                                            temperature = NULL,
                                             a_init_sd = 0.001,
                                             learning_rate_max = 0.001, 
                                             penalty_type = "KL",
