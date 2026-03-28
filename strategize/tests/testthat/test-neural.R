@@ -236,6 +236,63 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
   list(res = res, data = data, p_list = p_list)
 }
 
+test_that("neural output site init values target scalar normal regression only", {
+  init <- strategize:::neural_build_output_site_init_values(
+    Y = c(1, 3, 5, NA_real_),
+    likelihood = "normal",
+    nOutcomes = 1L
+  )
+  expect_equal(init$b_out, mean(c(1, 3, 5)))
+  expect_equal(init$tau_b, abs(mean(c(1, 3, 5))))
+  expect_equal(init$sigma, stats::mad(c(1, 3, 5)))
+
+  constant_init <- strategize:::neural_build_output_site_init_values(
+    Y = rep(2, 4),
+    likelihood = "normal",
+    nOutcomes = 1L
+  )
+  expect_equal(constant_init$b_out, 2)
+  expect_equal(constant_init$tau_b, 2)
+  expect_true(is.finite(constant_init$sigma))
+  expect_gt(constant_init$sigma, 0)
+
+  latent_init <- strategize:::neural_build_output_site_init_values(
+    Y = c(-2, -2, -2),
+    likelihood = "normal",
+    nOutcomes = 1L,
+    b_out_site_name = "b_out_z"
+  )
+  expect_equal(latent_init$tau_b, 2)
+  expect_equal(latent_init$b_out_z * latent_init$tau_b, -2)
+  expect_true(is.finite(latent_init$sigma))
+  expect_gt(latent_init$sigma, 0)
+
+  expect_equal(
+    strategize:::neural_build_output_site_init_values(
+      Y = c(0, 1),
+      likelihood = "bernoulli",
+      nOutcomes = 1L
+    ),
+    list()
+  )
+  expect_equal(
+    strategize:::neural_build_output_site_init_values(
+      Y = c(0, 1, 2),
+      likelihood = "categorical",
+      nOutcomes = 3L
+    ),
+    list()
+  )
+  expect_equal(
+    strategize:::neural_build_output_site_init_values(
+      Y = c(0, 1, 2),
+      likelihood = "normal",
+      nOutcomes = 2L
+    ),
+    list()
+  )
+})
+
 test_that("strategize runs neural outcome model (non-adversarial)", {
   fit <- get_neural_fit()
   res <- fit$res
@@ -888,6 +945,58 @@ test_that("non-pairwise AutoDelta runs on the average-case normal neural path", 
   expect_valid_strategize_output(res, n_factors = ncol(fit$data$W))
   expect_false(is.null(model_info))
   expect_false(isTRUE(model_info$pairwise_mode))
+  expect_identical(model_info$likelihood, "normal")
+  expect_true(all(is.finite(as.numeric(res$Q_point))))
+})
+
+test_that("full-data normal neural path runs with direct MCMC warm-start init", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "false",
+    STRATEGIZE_NEURAL_SKIP_EVAL = "true"
+  ))
+
+  data <- generate_average_case_neural_data(seed = 20260327)
+  params <- default_strategize_params(fast = TRUE)
+  params$diff <- FALSE
+  params$force_gaussian <- TRUE
+  params$compute_se <- FALSE
+  params$outcome_model_type <- "neural"
+  params$nMonte_Qglm <- 4L
+  params$nSGD <- 1L
+  params$optim_type <- "gd"
+  base_neural_control <- params$neural_mcmc_control
+  if (is.null(base_neural_control)) {
+    base_neural_control <- list()
+  }
+  params$neural_mcmc_control <- modifyList(
+    base_neural_control,
+    list(
+      subsample_method = "full",
+      uncertainty_scope = "all",
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      n_samples_warmup = 1L,
+      n_samples_mcmc = 1L,
+      n_chains = 1L,
+      chain_method = "sequential",
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+
+  p_list <- generate_test_p_list(data$W)
+  res <- suppressWarnings(do.call(strategize, c(
+    list(Y = data$Y, W = data$W, p_list = p_list),
+    params
+  )))
+
+  model_info <- get_neural_model_info(res)
+  expect_valid_strategize_output(res, n_factors = ncol(data$W))
+  expect_false(is.null(model_info))
   expect_identical(model_info$likelihood, "normal")
   expect_true(all(is.finite(as.numeric(res$Q_point))))
 })
