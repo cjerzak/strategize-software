@@ -2750,7 +2750,7 @@ generate_ModelOutcome_neural <- function(){
                                     pr_b <- strenv$jnp$take(party_right, idx, axis = 0L)
                                     resp_p_b <- strenv$jnp$take(resp_party, idx, axis = 0L)
                                     resp_c_b <- strenv$jnp$take(resp_cov, idx, axis = 0L)
-                                    Yb <- strenv$jnp$take(Y_obs, idx, axis = 0L)
+                                    Yb <- if (is.null(Y_obs)) NULL else strenv$jnp$take(Y_obs, idx, axis = 0L)
                                     do_forward_and_lik_(Xl_b, Xr_b, pl_b, pr_b, resp_p_b, resp_c_b, Yb)
                                   })
       } else {
@@ -2850,7 +2850,7 @@ generate_ModelOutcome_neural <- function(){
                                     pb <- strenv$jnp$take(party, idx, axis = 0L)
                                     resp_p_b <- strenv$jnp$take(resp_party, idx, axis = 0L)
                                     resp_c_b <- strenv$jnp$take(resp_cov, idx, axis = 0L)
-                                    Yb <- strenv$jnp$take(Y_obs, idx, axis = 0L)
+                                    Yb <- if (is.null(Y_obs)) NULL else strenv$jnp$take(Y_obs, idx, axis = 0L)
                                     do_forward_and_lik_(Xb, pb, resp_p_b, resp_c_b, Yb)
                                   })
       } else {
