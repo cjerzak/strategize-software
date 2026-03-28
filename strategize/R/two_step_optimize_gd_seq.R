@@ -84,6 +84,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
   grad_eval_ast <- dQ_da_ast
   grad_eval_dag <- dQ_da_dag
 
+  # Large-support hard draws do not admit the pathwise gradient used by the
+  # relaxed/objective code paths, so this branch switches the optimizer to a
+  # score-function estimator. The exact penalty gradient is still added
+  # directly, and the EMA baseline only reduces variance; it does not change
+  # the target objective.
   if (identical(objective_gradient_mode, "reinforce")) {
     index_spec_use <- resolve_multinomial_group_index_spec(
       d_locator_use = strenv$d_locator_use,
