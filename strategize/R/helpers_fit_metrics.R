@@ -14,6 +14,121 @@ cs_compute_auc <- function(y_true, y_score) {
   (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 }
 
+cs_make_stratified_folds <- function(n, n_folds, y = NULL, cluster = NULL, seed = 123L) {
+  n <- as.integer(n)
+  n_folds <- as.integer(n_folds)
+  if (n <= 1L || n_folds < 2L) {
+    return(NULL)
+  }
+
+  restore_rng <- function(old_seed) {
+    if (is.null(old_seed)) {
+      if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".Random.seed", envir = .GlobalEnv)
+      }
+    } else {
+      assign(".Random.seed", old_seed, envir = .GlobalEnv)
+    }
+  }
+
+  old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+    get(".Random.seed", envir = .GlobalEnv)
+  } else {
+    NULL
+  }
+  set.seed(as.integer(seed))
+  on.exit(restore_rng(old_seed), add = TRUE)
+
+  if (!is.null(cluster) && length(cluster) == n) {
+    cluster_use <- as.character(cluster)
+    if (any(is.na(cluster_use))) {
+      na_idx <- which(is.na(cluster_use))
+      cluster_use[na_idx] <- paste0("__missing__", na_idx)
+    }
+  } else {
+    cluster_use <- paste0("__obs__", seq_len(n))
+  }
+
+  group_index <- split(seq_len(n), cluster_use)
+  group_ids <- names(group_index)
+  group_sizes <- vapply(group_index, length, integer(1))
+  k <- min(n_folds, length(group_index))
+  if (k < 2L) {
+    return(NULL)
+  }
+
+  strata <- rep("all", length(group_index))
+  if (!is.null(y) && length(y) == n) {
+    y_vec <- y
+    keep <- !is.na(y_vec)
+    y_keep <- y_vec[keep]
+    if (length(y_keep) > 0L) {
+      y_num <- suppressWarnings(as.numeric(y_keep))
+      binary_like <- length(y_num) == length(y_keep) &&
+        all(is.finite(y_num)) &&
+        all(y_num %in% c(0, 1)) &&
+        length(unique(y_num)) >= 2L
+      if (isTRUE(binary_like)) {
+        pos_rate <- vapply(group_index, function(idx) {
+          yy <- y_vec[idx]
+          yy <- suppressWarnings(as.numeric(yy))
+          yy <- yy[is.finite(yy)]
+          if (!length(yy)) {
+            return(NA_real_)
+          }
+          mean(yy == 1)
+        }, numeric(1))
+        bucket <- cut(
+          pos_rate,
+          breaks = c(-Inf, 0, 0.25, 0.5, 0.75, 1),
+          labels = FALSE,
+          right = TRUE
+        )
+        bucket[is.na(bucket)] <- 0L
+        strata <- paste0("bin_", bucket)
+      } else {
+        y_chr <- as.character(y_keep)
+        if (length(unique(y_chr)) >= 2L) {
+          majority_class <- vapply(group_index, function(idx) {
+            yy <- as.character(y_vec[idx])
+            yy <- yy[!is.na(yy)]
+            if (!length(yy)) {
+              return("__missing__")
+            }
+            counts <- sort(table(yy), decreasing = TRUE)
+            names(counts)[1L]
+          }, character(1))
+          if (length(unique(majority_class)) >= 2L) {
+            strata <- paste0("cat_", majority_class)
+          }
+        }
+      }
+    }
+  }
+
+  fold_loads <- integer(k)
+  fold_by_group <- integer(length(group_index))
+  for (stratum in unique(strata)) {
+    stratum_idx <- which(strata == stratum)
+    stratum_idx <- sample(stratum_idx, length(stratum_idx))
+    start_fold <- if (length(fold_loads)) {
+      order(fold_loads, seq_len(k))[1L]
+    } else {
+      1L
+    }
+    fold_cycle <- ((seq_along(stratum_idx) - 1L + start_fold - 1L) %% k) + 1L
+    for (i in seq_along(stratum_idx)) {
+      group_pos <- stratum_idx[[i]]
+      fold_id <- fold_cycle[[i]]
+      fold_by_group[[group_pos]] <- fold_id
+      fold_loads[[fold_id]] <- fold_loads[[fold_id]] + group_sizes[[group_pos]]
+    }
+  }
+
+  fold_map <- setNames(fold_by_group, group_ids)
+  list(fold_id = as.integer(fold_map[cluster_use]), n_folds = as.integer(k))
+}
+
 cs_compute_binary_log_loss <- function(y_true, y_score, eps = 1e-12) {
   y_true <- as.numeric(y_true)
   y_score <- as.numeric(y_score)

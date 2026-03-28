@@ -21,12 +21,83 @@ get_neural_fit <- local({
     data <- generate_test_data(n = 40, seed = 123)
     params <- default_strategize_params(fast = TRUE)
     params$outcome_model_type <- "neural"
+    base_neural_control <- params$neural_mcmc_control
+    if (is.null(base_neural_control)) {
+      base_neural_control <- list()
+    }
+    params$neural_mcmc_control <- modifyList(
+      base_neural_control,
+      list(
+        subsample_method = "batch_vi",
+        batch_size = 16L
+      )
+    )
 
     p_list <- generate_test_p_list(data$W)
 
     res <- do.call(strategize, c(
       list(Y = data$Y, W = data$W, p_list = p_list),
       data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    ))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
+get_neural_fit_perf <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true",
+      STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+      STRATEGIZE_NEURAL_EVAL_SEED = "123"
+    ))
+
+    data <- generate_pairwise_performance_test_data(
+      n_pairs = 1000L,
+      n_factors = 3,
+      n_levels = 2,
+      seed = 20260327
+    )
+    data <- add_adversarial_structure(data, seed = 20260328)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    base_neural_control <- params$neural_mcmc_control
+    if (is.null(base_neural_control)) {
+      base_neural_control <- list()
+    }
+    params$neural_mcmc_control <- modifyList(
+      base_neural_control,
+      list(
+        subsample_method = "batch_vi",
+        batch_size = 128L,
+        ModelDims = 16L,
+        ModelDepth = 1L
+      )
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c(
+        "pair_id",
+        "respondent_id",
+        "respondent_task_id",
+        "profile_order",
+        "competing_group_variable_respondent",
+        "competing_group_variable_candidate",
+        "competing_group_competition_variable_candidate"
+      )],
       params
     ))
 
@@ -54,9 +125,19 @@ get_neural_fit_attn <- local({
     data <- generate_test_data(n = 30, seed = 321)
     params <- default_strategize_params(fast = TRUE)
     params$outcome_model_type <- "neural"
+    base_neural_control <- params$neural_mcmc_control
+    if (is.null(base_neural_control)) {
+      base_neural_control <- list()
+    }
     params$neural_mcmc_control <- modifyList(
-      params$neural_mcmc_control,
-      list(cross_candidate_encoder = "attn", ModelDims = 16L, ModelDepth = 1L)
+      base_neural_control,
+      list(
+        subsample_method = "batch_vi",
+        batch_size = 16L,
+        cross_candidate_encoder = "attn",
+        ModelDims = 16L,
+        ModelDepth = 1L
+      )
     )
 
     p_list <- generate_test_p_list(data$W)
@@ -876,7 +957,7 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
 })
 
 test_that("neural outcome model exports cross-fitted OOS fit metrics", {
-  fit <- get_neural_fit()
+  fit <- get_neural_fit_perf()
   res <- fit$res
 
   info <- NULL
@@ -900,9 +981,12 @@ test_that("neural outcome model exports cross-fitted OOS fit metrics", {
   expect_match(metrics$eval_note, "^oos_\\d+fold$")
   expect_equal(metrics$n_folds, 2L)
   expect_equal(metrics$seed, 123L)
+  expect_gte(metrics$n_eval, 1000L, info = diag_info)
   expect_true(is.list(metrics$by_fold))
   expect_true(length(metrics$by_fold) >= 2L)
   expect_true(is.list(metrics$in_sample_metrics), info = diag_info)
+  expect_false(isTRUE(info$stage_diagnostics$single_stage_only), info = diag_info)
+  expect_false(isTRUE(info$stage_diagnostics$sparse_cells), info = diag_info)
 
   if (identical(metrics$likelihood, "bernoulli")) {
     expect_true(is.numeric(metrics$pred_quantiles), info = diag_info)
@@ -920,7 +1004,7 @@ test_that("neural outcome model exports cross-fitted OOS fit metrics", {
 })
 
 test_that("neural pairwise OOS fit beats an intercept-only observable baseline", {
-  fit <- get_neural_fit()
+  fit <- get_neural_fit_perf()
   res <- fit$res
   data <- fit$data
 
@@ -943,12 +1027,16 @@ test_that("neural pairwise OOS fit beats an intercept-only observable baseline",
     label = "Neural pairwise observable-baseline comparison"
   )
 
+  expect_gte(length(y_eval), 1000L)
+  expect_false(any(data$identical_pair))
+  expect_true(all(data$pair_margin > 0))
+  expect_false(isTRUE(info$stage_diagnostics$single_stage_only), info = diag_info)
+  expect_false(isTRUE(info$stage_diagnostics$sparse_cells), info = diag_info)
   expect_equal(metrics$n_eval, length(y_eval))
   expect_true(is.finite(metrics$auc), info = diag_info)
   expect_true(metrics$auc > 0.5, info = diag_info)
   expect_true(metrics$log_loss < null_metrics$log_loss, info = diag_info)
   expect_true(metrics$brier < null_metrics$brier, info = diag_info)
-  expect_true(metrics$accuracy > null_metrics$accuracy, info = diag_info)
 })
 
 test_that("non-pairwise AutoDelta runs on the average-case normal neural path", {

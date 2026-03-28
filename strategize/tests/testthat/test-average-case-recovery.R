@@ -98,6 +98,7 @@ test_that("strategize recovers linear average-case pi* and Q with neural", {
   skip_if_no_jax()
 
   fixture <- get_linear_average_case_fixture_cached()
+  expect_gte(length(fixture$Y), 1000L)
 
   for (seed in 20260326L + 0:3) {
     withr::local_seed(seed)
