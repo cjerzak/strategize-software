@@ -1451,6 +1451,26 @@ test_that("Q evaluation resolver aligns non-adversarial neural objective/report 
     nMonte_Qglm = 9L,
     nMonte_adversarial = 5L
   )
+  adv_large_obj <- strategize:::resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = TRUE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L,
+    nMonte_adversarial = 5L,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(rep(seq_len(12L), each = 2L))
+  )
+  avg_large_obj <- strategize:::resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = FALSE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(rep(seq_len(12L), each = 2L)),
+    single_party = TRUE
+  )
   glm_exact <- strategize:::resolve_q_eval_spec(
     phase = "report",
     adversarial = FALSE,
@@ -1463,10 +1483,20 @@ test_that("Q evaluation resolver aligns non-adversarial neural objective/report 
   expect_identical(avg_report$profile_draw_mode, "hard")
   expect_true(isTRUE(avg_obj$use_exact_support))
   expect_true(isTRUE(avg_report$use_exact_support))
+  expect_identical(avg_obj$objective_gradient_mode, "exact")
+  expect_identical(avg_report$objective_gradient_mode, "exact")
   expect_identical(as.integer(avg_obj$n_draws), 4L)
   expect_identical(as.integer(avg_report$n_draws), 4L)
   expect_identical(adv_obj$profile_draw_mode, "relaxed")
+  expect_identical(adv_obj$objective_gradient_mode, "pathwise")
   expect_identical(adv_obj$n_draws, 5L)
+  expect_identical(avg_large_obj$profile_draw_mode, "hard")
+  expect_false(isTRUE(avg_large_obj$use_exact_support))
+  expect_true(isTRUE(avg_large_obj$is_large_support))
+  expect_identical(avg_large_obj$objective_gradient_mode, "reinforce")
+  expect_identical(adv_large_obj$profile_draw_mode, "hard")
+  expect_true(isTRUE(adv_large_obj$is_large_support))
+  expect_identical(adv_large_obj$objective_gradient_mode, "reinforce")
   expect_true(isTRUE(glm_exact$use_exact_q))
   expect_identical(glm_exact$profile_draw_mode, "exact")
 })
