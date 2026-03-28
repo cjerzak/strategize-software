@@ -367,6 +367,66 @@ neural_param_or_default <- function(params, name, default) {
   val
 }
 
+neural_build_output_site_init_values <- function(Y,
+                                                 likelihood,
+                                                 nOutcomes = 1L,
+                                                 b_out_site_name = "b_out",
+                                                 tau_b_scale = 0.5,
+                                                 sigma_floor = 1e-3) {
+  if (!identical(likelihood, "normal")) {
+    return(list())
+  }
+  if (length(nOutcomes) != 1L || is.na(nOutcomes) || as.integer(nOutcomes) != 1L) {
+    return(list())
+  }
+
+  y_numeric <- suppressWarnings(as.numeric(Y))
+  finite_y <- y_numeric[is.finite(y_numeric)]
+  mean_y <- if (length(finite_y)) {
+    mean(finite_y)
+  } else {
+    0.0
+  }
+  sigma0 <- suppressWarnings(stats::mad(finite_y, na.rm = TRUE))
+  if (!is.finite(sigma0) || sigma0 <= 0) {
+    sigma0 <- suppressWarnings(stats::sd(finite_y, na.rm = TRUE))
+  }
+  if (!is.finite(sigma0) || sigma0 <= 0) {
+    sigma0 <- 1.0
+  }
+  sigma0 <- max(as.numeric(sigma0), as.numeric(sigma_floor))
+  tau_b0 <- max(abs(as.numeric(mean_y)), as.numeric(tau_b_scale), as.numeric(sigma_floor))
+  b_out0 <- rep(as.numeric(mean_y), times = as.integer(nOutcomes))
+
+  init_values <- list(
+    tau_b = as.numeric(tau_b0),
+    sigma = as.numeric(sigma0)
+  )
+  if (is.character(b_out_site_name) && length(b_out_site_name) == 1L && nzchar(b_out_site_name)) {
+    if (identical(b_out_site_name, "b_out")) {
+      init_values[[b_out_site_name]] <- b_out0
+    } else {
+      init_values[[b_out_site_name]] <- b_out0 / tau_b0
+    }
+  }
+
+  init_values
+}
+
+neural_get_init_to_value <- function() {
+  if (is.null(strenv$numpyro) || is.null(strenv$numpyro$infer)) {
+    return(NULL)
+  }
+  if (reticulate::py_has_attr(strenv$numpyro$infer, "initialization") &&
+      reticulate::py_has_attr(strenv$numpyro$infer$initialization, "init_to_value")) {
+    return(strenv$numpyro$infer$initialization$init_to_value)
+  }
+  if (reticulate::py_has_attr(strenv$numpyro$infer, "init_to_value")) {
+    return(strenv$numpyro$infer$init_to_value)
+  }
+  NULL
+}
+
 neural_linear_head <- function(phi, W_out, b_out = NULL, dtype = NULL) {
   logits <- strenv$jnp$einsum("nm,mo->no", phi, W_out)
   if (is.null(b_out)) {
@@ -3485,7 +3545,6 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     reparam_config[["W_out"]] <- locscale_reparam(centered = 0)
-    reparam_config[["b_out"]] <- locscale_reparam(centered = 0)
     if (isTRUE(use_cross_term)) {
       reparam_config[["M_cross_raw"]] <- locscale_reparam(centered = 0)
     }
@@ -3505,6 +3564,14 @@ generate_ModelOutcome_neural <- function(){
 
   t0_ <- Sys.time()
   output_only_mode <- identical(tolower(as.character(uncertainty_scope)), "output")
+  output_site_init_values <- neural_build_output_site_init_values(
+    Y = Y_use,
+    likelihood = likelihood,
+    nOutcomes = nOutcomes,
+    b_out_site_name = if (isTRUE(manual_noncentered_loc_scale)) "b_out_z" else "b_out",
+    tau_b_scale = tau_b_scale
+  )
+  init_to_value <- neural_get_init_to_value()
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
   run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
   SVIParams <- NULL
@@ -3527,11 +3594,23 @@ generate_ModelOutcome_neural <- function(){
     if (length(guide_name) != 1L || is.na(guide_name) || !nzchar(guide_name)) {
       guide_name <- "auto_diagonal"
     }
-    guide <- switch(guide_name,
-                    auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn),
-                    auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn),
-                    auto_diagonal = strenv$numpyro$infer$autoguide$AutoDiagonalNormal(model_fn),
-                    stop(sprintf("Unknown vi_guide '%s' for SVI.", guide_name), call. = FALSE))
+    guide_init_loc_fn <- NULL
+    if (!is.null(init_to_value) && length(output_site_init_values) > 0L) {
+      guide_init_loc_fn <- init_to_value(values = output_site_init_values)
+    }
+    guide <- if (is.null(guide_init_loc_fn)) {
+      switch(guide_name,
+             auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn),
+             auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn),
+             auto_diagonal = strenv$numpyro$infer$autoguide$AutoDiagonalNormal(model_fn),
+             stop(sprintf("Unknown vi_guide '%s' for SVI.", guide_name), call. = FALSE))
+    } else {
+      switch(guide_name,
+             auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn, init_loc_fn = guide_init_loc_fn),
+             auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn, init_loc_fn = guide_init_loc_fn),
+             auto_diagonal = strenv$numpyro$infer$autoguide$AutoDiagonalNormal(model_fn, init_loc_fn = guide_init_loc_fn),
+             stop(sprintf("Unknown vi_guide '%s' for SVI.", guide_name), call. = FALSE))
+    }
     n_particles <- ai(mcmc_control$svi_num_particles)
     if (length(n_particles) != 1L || is.na(n_particles) || n_particles < 1L) {
       n_particles <- 1L
@@ -3853,19 +3932,13 @@ generate_ModelOutcome_neural <- function(){
 
     init_strategy <- NULL
     if (!is.null(SVIInitValues) && length(SVIInitValues) > 0L) {
-      init_to_value <- NULL
-      if (!is.null(strenv$numpyro$infer) &&
-          reticulate::py_has_attr(strenv$numpyro$infer, "initialization") &&
-          reticulate::py_has_attr(strenv$numpyro$infer$initialization, "init_to_value")) {
-        init_to_value <- strenv$numpyro$infer$initialization$init_to_value
-      } else if (!is.null(strenv$numpyro$infer) &&
-                 reticulate::py_has_attr(strenv$numpyro$infer, "init_to_value")) {
-        init_to_value <- strenv$numpyro$infer$init_to_value
-      }
       if (!is.null(init_to_value)) {
         init_strategy <- init_to_value(values = SVIInitValues)
         message("Initializing MCMC with SVI posterior means...")
       }
+    } else if (!is.null(init_to_value) && length(output_site_init_values) > 0L) {
+      init_strategy <- init_to_value(values = output_site_init_values)
+      message("Initializing MCMC with data-informed output warm starts...")
     }
 
     if (identical(subsample_method, "batch")) {
