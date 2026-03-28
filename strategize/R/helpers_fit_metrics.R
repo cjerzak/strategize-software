@@ -141,8 +141,17 @@ cs_compute_outcome_metrics <- function(y_eval, pred_eval, likelihood, threshold 
   }
 
   y_eval <- as.numeric(y_eval)
-  pred_mu <- as.numeric(pred_eval$mu)
-  pred_sigma <- as.numeric(pred_eval$sigma)
+  if (is.list(pred_eval) && !is.null(pred_eval$mu)) {
+    pred_mu <- as.numeric(pred_eval$mu)
+    pred_sigma <- if (!is.null(pred_eval$sigma)) {
+      as.numeric(pred_eval$sigma)
+    } else {
+      rep(NA_real_, length(pred_mu))
+    }
+  } else {
+    pred_mu <- as.numeric(pred_eval)
+    pred_sigma <- rep(NA_real_, length(pred_mu))
+  }
   keep <- is.finite(y_eval) & is.finite(pred_mu)
   y_eval <- y_eval[keep]
   pred_mu <- pred_mu[keep]
