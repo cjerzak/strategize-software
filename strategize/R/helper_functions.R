@@ -397,7 +397,8 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
                                 ParameterizationType = NULL,
                                 d_locator_use = NULL,
                                 single_party = FALSE,
-                                q_exact_support_max = 2048L) {
+                                q_exact_support_max = 2048L,
+                                force_reinforce = FALSE) {
   phase <- match.arg(phase)
   support_size <- estimate_policy_support_size(
     ParameterizationType = ParameterizationType,
@@ -417,14 +418,20 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
         single_party = single_party,
         max_support = q_exact_support_max
       )
+      use_forced_reinforce <- identical(phase, "objective") &&
+        isTRUE(force_reinforce) &&
+        !is.null(exact_support_n)
+      use_exact_support <- !use_forced_reinforce && !is.null(exact_support_n)
       return(list(
         use_exact_q = FALSE,
-        use_exact_support = !is.null(exact_support_n),
-        exact_support_single_party = isTRUE(single_party) && !is.null(exact_support_n),
+        use_exact_support = use_exact_support,
+        exact_support_single_party = isTRUE(single_party) && isTRUE(use_exact_support),
         profile_draw_mode = "hard",
         pool_draw_mode = "hard",
-        objective_gradient_mode = if (!is.null(exact_support_n)) {
+        objective_gradient_mode = if (isTRUE(use_exact_support)) {
           "exact"
+        } else if (isTRUE(use_forced_reinforce)) {
+          "reinforce"
         } else if (identical(phase, "objective") && isTRUE(is_large_support)) {
           "reinforce"
         } else {
@@ -432,10 +439,10 @@ resolve_q_eval_spec <- function(phase = c("objective", "report"),
         },
         support_size = support_size,
         is_large_support = is_large_support,
-        n_draws = if (is.null(exact_support_n)) {
-          sanitize_q_draw_count(nMonte_Qglm)
-        } else {
+        n_draws = if (isTRUE(use_exact_support)) {
           as.integer(exact_support_n)
+        } else {
+          sanitize_q_draw_count(nMonte_Qglm)
         }
       ))
     }
@@ -1192,7 +1199,8 @@ evaluate_average_case_q <- function(pi_star_ast,
                                     ParameterizationType,
                                     d_locator_use,
                                     q_fxn,
-                                    single_party = FALSE) {
+                                    single_party = FALSE,
+                                    force_reinforce = FALSE) {
   phase <- match.arg(phase)
   spec <- resolve_q_eval_spec(
     phase = phase,
@@ -1202,7 +1210,8 @@ evaluate_average_case_q <- function(pi_star_ast,
     nMonte_Qglm = nMonte_Qglm,
     ParameterizationType = ParameterizationType,
     d_locator_use = d_locator_use,
-    single_party = single_party
+    single_party = single_party,
+    force_reinforce = force_reinforce
   )
   q_profile_draws <- draw_average_case_q_profiles(
     pi_star_ast = pi_star_ast,
@@ -1264,6 +1273,7 @@ evaluate_average_case_q_reinforce <- function(pi_star_ast,
                                               d_locator_use,
                                               q_fxn,
                                               single_party = FALSE,
+                                              force_reinforce = FALSE,
                                               player = c("ast", "dag")) {
   player <- match.arg(player)
   spec <- resolve_q_eval_spec(
@@ -1274,7 +1284,8 @@ evaluate_average_case_q_reinforce <- function(pi_star_ast,
     nMonte_Qglm = nMonte_Qglm,
     ParameterizationType = ParameterizationType,
     d_locator_use = d_locator_use,
-    single_party = single_party
+    single_party = single_party,
+    force_reinforce = force_reinforce
   )
   if (!identical(spec$objective_gradient_mode, "reinforce")) {
     stop("Average-case REINFORCE evaluation requires objective_gradient_mode='reinforce'.",

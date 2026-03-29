@@ -31,6 +31,7 @@ cv_strategize(
   partial_pooling_strength = 50,
   use_regularization = TRUE,
   force_gaussian = F,
+  force_reinforce = FALSE,
   temperature = NULL,
   a_init_sd = 0.001,
   learning_rate_max = 0.001,
@@ -168,6 +169,11 @@ Defaults to \code{TRUE}.}
 \item{force_gaussian}{Logical indicating whether a Gaussian family
 (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary.
 Defaults to \code{FALSE}.}
+
+\item{force_reinforce}{Logical indicating whether to force REINFORCE-based optimization for
+the neural average-case objective when exact small-support enumeration is available. This
+affects the optimization objective only; final reported \code{Q} values still use the
+standard report-time evaluation path. Defaults to \code{FALSE}.}
 
 \item{temperature}{Optional numeric temperature controlling the smoothness of
 Gumbel-Softmax sampling when exploring probability vectors. Smaller values
