@@ -13,25 +13,26 @@ Encoding: UTF-8
 Imports:
     stats,
     compositions,
-    graphics,
-    utils,
-    glinternet,
-    matrixStats,
     FactorHet,
+    ggplot2,
+    glinternet,
+    graphics,
+    gridExtra,
+    gtools,
+    Matrix,
+    matrixStats,
+    reticulate,
+    rlang,
+    rrapply,
     sandwich,
-    reticulate
+    utils
 Suggests:
     testthat (>= 3.0.0),
     withr,
-    Matrix,
     Rcpp,
     devtools,
     knitr,
     rmarkdown,
-    ggplot2,
-    gridExtra,
-    rlang,
-    rrapply,
     tgp
 VignetteBuilder: knitr
 RoxygenNote: 7.3.3
