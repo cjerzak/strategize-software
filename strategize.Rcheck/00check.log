@@ -11,7 +11,7 @@
 * checking extension type ... Package
 * this is package ‘strategize’ version ‘0.0.1’
 * package encoding: UTF-8
-* checking CRAN incoming feasibility ... [2s/12s] NOTE
+* checking CRAN incoming feasibility ... [2s/11s] NOTE
 Maintainer: ‘Connor T. Jerzak <connor.jerzak@austin.utexas.edu>’
 
 New submission
@@ -22,7 +22,14 @@ The Date field is over a month old.
 * checking if this is a source package ... OK
 * checking if there is a namespace ... OK
 * checking for executable files ... OK
-* checking for hidden files and directories ... OK
+* checking for hidden files and directories ... NOTE
+Found the following hidden files and directories:
+  .tmp_covr_lines.csv
+These were most likely included in error. See section ‘Package
+structure’ in the ‘Writing R Extensions’ manual.
+
+CRAN-pack does not know about
+  .tmp_covr_lines.csv
 * checking for portable file names ... OK
 * checking for sufficient/correct file permissions ... OK
 * checking whether package ‘strategize’ can be installed ... OK
@@ -49,7 +56,7 @@ Non-standard files/directories found at top level:
 * checking S3 generic/method consistency ... OK
 * checking replacement functions ... OK
 * checking foreign function calls ... OK
-* checking R code for possible problems ... [14s/14s] NOTE
+* checking R code for possible problems ... [10s/10s] NOTE
 generate_ModelOutcome_neural: no visible global function definition for
   ‘tail’
 generate_ModelOutcome_neural: no visible binding for global variable
@@ -61,6 +68,8 @@ generate_ModelOutcome_neural: no visible binding for global variable
 getQPiStar_gd: no visible binding for global variable
   ‘learning_rate_max’
 getQPiStar_gd: no visible binding for global variable ‘rain_lambda_t’
+neural_format_svi_elbo_plot_title: no visible global function
+  definition for ‘tail’
 Undefined global functions or variables:
   conda_env conda_env_required learning_rate_max names_list
   rain_lambda_t tail
@@ -79,10 +88,10 @@ to your NAMESPACE file.
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [75s/39s] OK
+* checking examples with --run-donttest ... [51s/25s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... [94s/74s] OK
-  Running ‘testthat.R’ [94s/74s]
+* checking tests ... [68s/52s] OK
+  Running ‘testthat.R’ [68s/51s]
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK
@@ -91,4 +100,4 @@ to your NAMESPACE file.
 * checking for non-standard things in the check directory ... OK
 * checking for detritus in the temp directory ... OK
 * DONE
-Status: 3 NOTEs
+Status: 4 NOTEs

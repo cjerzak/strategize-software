@@ -91,6 +91,37 @@ expect_se_methods_close <- function(results,
   expect_lt(abs(results$full$Q_se - results$implicit$Q_se), q_tolerance)
 }
 
+test_that("REINFORCE diagnostics are tracer-safe under jacrev", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  if (!"jnp" %in% ls(envir = strategize:::strenv)) {
+    strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  }
+
+  x0 <- strategize:::strenv$jnp$array(c(1, 2), dtype = strategize:::strenv$dtj)
+  jacobian <- tryCatch(
+    strategize:::strenv$jax$jacrev(function(x) {
+      diag <- strategize:::build_reinforce_diag(
+        reward_mean = x[[1L]],
+        reward_var = x[[1L]] * x[[1L]],
+        baseline_prev = x[[1L]],
+        grad_total = x
+      )
+      strategize:::strenv$jnp$add(diag$reward_mean, diag$reward_var)
+    })(x0),
+    error = identity
+  )
+
+  expect_false(
+    inherits(jacobian, "error"),
+    info = if (inherits(jacobian, "error")) conditionMessage(jacobian) else NULL
+  )
+  if (!inherits(jacobian, "error")) {
+    expect_true(all(is.finite(as.numeric(strategize:::strenv$np$array(jacobian)))))
+  }
+})
+
 test_that("implicit SEs match full-trace SEs in adversarial mode", {
   results <- run_se_method_comparison(adversarial = TRUE)
   expect_se_methods_close(
@@ -111,4 +142,74 @@ test_that("implicit SEs match full-trace SEs in non-adversarial mode", {
     max_tolerance = 0.01,
     q_tolerance = 0.01
   )
+})
+
+test_that("implicit SEs complete for large-support neural average-case fits", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+    STRATEGIZE_NEURAL_EVAL_SEED = "123"
+  ))
+
+  fixture <- generate_linear_average_case_fixture(
+    n_obs = 120L,
+    k_factors = 12L,
+    monte_i = 1L
+  )
+  params <- default_strategize_params(fast = TRUE)
+  params$lambda <- fixture$lambda
+  params$nSGD <- 15L
+  params$nMonte_Qglm <- 5L
+  params$outcome_model_type <- "neural"
+  params$diff <- FALSE
+  params$adversarial <- FALSE
+  params$compute_se <- TRUE
+  params$se_method <- "implicit"
+  params$penalty_type <- "L2"
+  params$use_regularization <- FALSE
+  params$use_optax <- FALSE
+  params$force_gaussian <- FALSE
+  params$a_init_sd <- 0.0
+  params$primary_pushforward <- "linearized"
+  params$compute_hessian <- FALSE
+  params$optimism <- "none"
+  params$neural_mcmc_control <- modifyList(
+    params$neural_mcmc_control,
+    list(
+      subsample_method = "batch_vi",
+      batch_size = 16L,
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      vi_guide = "auto_diagonal",
+      uncertainty_scope = "output",
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+
+  withr::local_seed(20260326L)
+  res <- suppressWarnings(do.call(strategize, c(
+    list(Y = fixture$Y, W = fixture$W),
+    params
+  )))
+
+  info_msg <- sprintf(
+    paste0(
+      "objective_gradient_mode=%s; Q_se=%s; finite_pi_se=%d; ",
+      "reinforce_nonfinite_ast_steps=%d"
+    ),
+    res$convergence_history$objective_gradient_mode,
+    format(res$Q_se, digits = 6),
+    sum(is.finite(res$pi_star_se_vec)),
+    as.integer(res$convergence_history$reinforce_nonfinite_ast_steps)
+  )
+
+  expect_identical(res$convergence_history$objective_gradient_mode, "reinforce", info = info_msg)
+  expect_true(is.finite(res$Q_se), info = info_msg)
+  expect_true(any(is.finite(res$pi_star_se_vec)), info = info_msg)
+  expect_identical(as.integer(res$convergence_history$reinforce_nonfinite_ast_steps), 0L, info = info_msg)
 })

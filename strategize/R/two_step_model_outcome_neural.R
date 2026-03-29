@@ -39,6 +39,37 @@ neural_has_shape <- function(x) {
   }, error = function(e) FALSE)
 }
 
+neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
+                                              n_tail = 20L,
+                                              digits = 4L) {
+  title_base <- "SVI ELBO Loss"
+  if (is.null(svi_loss_curve) || length(svi_loss_curve) < 1L) {
+    return(title_base)
+  }
+
+  finite_losses <- as.numeric(svi_loss_curve)
+  finite_losses <- finite_losses[is.finite(finite_losses)]
+  if (length(finite_losses) < 1L) {
+    return(title_base)
+  }
+
+  n_tail <- as.integer(n_tail)
+  if (length(n_tail) != 1L || is.na(n_tail) || n_tail < 1L) {
+    n_tail <- 20L
+  }
+  digits <- as.integer(digits)
+  if (length(digits) != 1L || is.na(digits) || digits < 0L) {
+    digits <- 4L
+  }
+
+  tail_mean <- mean(tail(finite_losses, n_tail))
+  if (!is.finite(tail_mean)) {
+    return(title_base)
+  }
+
+  sprintf("%s [%.*f]", title_base, digits, tail_mean)
+}
+
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
   mode <- NULL
   if (!is.null(model_info) && !is.null(model_info$stage_mode)) {
@@ -1273,7 +1304,7 @@ generate_ModelOutcome_neural <- function(){
     svi_num_particles = 1L,
     svi_num_draws = 200L,
     vi_guide = "auto_diagonal",
-    optimizer = "adam",
+    optimizer = "muon",
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -3474,13 +3505,18 @@ generate_ModelOutcome_neural <- function(){
     if (length(n_particles) != 1L || is.na(n_particles) || n_particles < 1L) {
       n_particles <- 1L
     }
-    optimizer_tag <- if (!is.null(mcmc_control$optimizer)) {
+    optimizer_raw <- if (!is.null(mcmc_control$optimizer)) {
       tolower(as.character(mcmc_control$optimizer))
     } else {
-      "adam"
+      character(0)
     }
-    if (length(optimizer_tag) != 1L || is.na(optimizer_tag) || !nzchar(optimizer_tag)) {
-      optimizer_tag <- "adam"
+    user_supplied_optimizer <- length(optimizer_raw) == 1L &&
+      !is.na(optimizer_raw) &&
+      nzchar(optimizer_raw)
+    optimizer_tag <- if (isTRUE(user_supplied_optimizer)) {
+      optimizer_raw
+    } else {
+      "muon"
     }
     if (!optimizer_tag %in% c("adam", "adamw", "adabelief", "muon")) {
       stop(
@@ -3606,6 +3642,25 @@ generate_ModelOutcome_neural <- function(){
     } else {
       svi_lr
     }
+    muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
+      reticulate::py_has_attr(strenv$optax$contrib, "muon")
+    if (identical(optimizer_tag, "muon") &&
+        !isTRUE(user_supplied_optimizer) &&
+        !isTRUE(muon_available)) {
+      optimizer_tag <- if (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW") ||
+                           reticulate::py_has_attr(strenv$optax, "adamw")) {
+        "adamw"
+      } else {
+        "adam"
+      }
+      warning(
+        sprintf(
+          "Default optimizer 'muon' is unavailable; falling back to '%s'.",
+          optimizer_tag
+        ),
+        call. = FALSE
+      )
+    }
     svi_optim <- if (optimizer_tag == "adam") {
       strenv$numpyro$optim$Adam(lr_schedule)
     } else if (optimizer_tag == "adamw") {
@@ -3625,8 +3680,7 @@ generate_ModelOutcome_neural <- function(){
         )
       }
     } else if (optimizer_tag == "muon") {
-      if (reticulate::py_has_attr(strenv$optax, "contrib") &&
-          reticulate::py_has_attr(strenv$optax$contrib, "muon")) {
+      if (isTRUE(muon_available)) {
         muon_dimnums <- NULL
         if (reticulate::py_has_attr(strenv$optax$contrib, "MuonDimensionNumbers")) {
           muon_dimnums <- tryCatch({
@@ -3738,9 +3792,10 @@ generate_ModelOutcome_neural <- function(){
         identical(subsample_method, "batch_vi")) {
       svi_loss_curve <- as.numeric(svi_loss_curve)
       svi_loss_curve[!is.finite(svi_loss_curve)] <- NA_real_
+      svi_plot_title <- neural_format_svi_elbo_plot_title(svi_loss_curve)
       try(suppressWarnings(plot(svi_loss_curve,
                                 type = "l",
-                                main = "SVI ELBO loss",
+                                main = svi_plot_title,
                                 xlab = "Iteration",
                                 log = ifelse(any(svi_loss_curve<0),"","y"),
                                 ylab = "ELBO loss")), TRUE)

@@ -39,6 +39,37 @@ neural_has_shape <- function(x) {
   }, error = function(e) FALSE)
 }
 
+neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
+                                              n_tail = 20L,
+                                              digits = 4L) {
+  title_base <- "SVI ELBO Loss"
+  if (is.null(svi_loss_curve) || length(svi_loss_curve) < 1L) {
+    return(title_base)
+  }
+
+  finite_losses <- as.numeric(svi_loss_curve)
+  finite_losses <- finite_losses[is.finite(finite_losses)]
+  if (length(finite_losses) < 1L) {
+    return(title_base)
+  }
+
+  n_tail <- as.integer(n_tail)
+  if (length(n_tail) != 1L || is.na(n_tail) || n_tail < 1L) {
+    n_tail <- 20L
+  }
+  digits <- as.integer(digits)
+  if (length(digits) != 1L || is.na(digits) || digits < 0L) {
+    digits <- 4L
+  }
+
+  tail_mean <- mean(tail(finite_losses, n_tail))
+  if (!is.finite(tail_mean)) {
+    return(title_base)
+  }
+
+  sprintf("%s [%.*f]", title_base, digits, tail_mean)
+}
+
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
   mode <- NULL
   if (!is.null(model_info) && !is.null(model_info$stage_mode)) {
@@ -3738,9 +3769,10 @@ generate_ModelOutcome_neural <- function(){
         identical(subsample_method, "batch_vi")) {
       svi_loss_curve <- as.numeric(svi_loss_curve)
       svi_loss_curve[!is.finite(svi_loss_curve)] <- NA_real_
+      svi_plot_title <- neural_format_svi_elbo_plot_title(svi_loss_curve)
       try(suppressWarnings(plot(svi_loss_curve,
                                 type = "l",
-                                main = "SVI ELBO loss",
+                                main = svi_plot_title,
                                 xlab = "Iteration",
                                 log = ifelse(any(svi_loss_curve<0),"","y"),
                                 ylab = "ELBO loss")), TRUE)

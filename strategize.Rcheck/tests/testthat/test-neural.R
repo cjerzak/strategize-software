@@ -549,6 +549,23 @@ test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
   expect_identical(as.integer(model_info$svi_steps), as.integer(expected_steps))
 })
 
+test_that("SVI ELBO plot title reports the rounded last-20 finite mean", {
+  expect_identical(
+    strategize:::neural_format_svi_elbo_plot_title(seq_len(25)),
+    "SVI ELBO Loss [15.5000]"
+  )
+
+  expect_identical(
+    strategize:::neural_format_svi_elbo_plot_title(c(Inf, NA_real_, 2, 4, 6)),
+    "SVI ELBO Loss [4.0000]"
+  )
+
+  expect_identical(
+    strategize:::neural_format_svi_elbo_plot_title(c(NA_real_, Inf, -Inf)),
+    "SVI ELBO Loss"
+  )
+})
+
 test_that("output-only single-model normal batch_vi applies the production SVI floor by default", {
   budget <- strategize:::neural_resolve_svi_budget(
     svi_steps_input = "optimal",
