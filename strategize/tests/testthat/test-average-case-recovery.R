@@ -187,9 +187,9 @@ test_that("strategize uses REINFORCE fallback for large-support neural average-c
   skip_on_cran()
   skip_if_no_jax()
 
-  thresholds <- c(`12` = 0.20, `14` = 0.10)
+  thresholds <- c(`12` = 0.20, `20` = 0.10)
 
-  for (k_factors in c(12L, 14L)) {
+  for (k_factors in c(12L, 20L)) {
     fixture <- get_large_support_average_case_fixture_cached(k_factors)
     withr::local_seed(20260326L)
     res <- strategize(
