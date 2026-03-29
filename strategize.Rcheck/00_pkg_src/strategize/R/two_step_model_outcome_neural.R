@@ -458,6 +458,185 @@ neural_get_init_to_value <- function() {
   NULL
 }
 
+neural_can_use_adamw_optimizer <- function() {
+  (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW") ||
+     reticulate::py_has_attr(strenv$optax, "adamw"))
+}
+
+neural_default_svi_fallback_optimizer <- function() {
+  if (isTRUE(neural_can_use_adamw_optimizer())) "adamw" else "adam"
+}
+
+neural_resolve_svi_optimizer_tag <- function(optimizer_tag,
+                                             guide_name = NULL,
+                                             user_supplied_optimizer = FALSE) {
+  if (identical(optimizer_tag, "muon") &&
+      identical(guide_name, "auto_diagonal")) {
+    optimizer_tag <- neural_default_svi_fallback_optimizer()
+    warning(
+      sprintf(
+        "optimizer='muon' is incompatible with vi_guide='auto_diagonal'; falling back to '%s'.",
+        optimizer_tag
+      ),
+      call. = FALSE
+    )
+    return(optimizer_tag)
+  }
+  muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
+    reticulate::py_has_attr(strenv$optax$contrib, "muon")
+  if (identical(optimizer_tag, "muon") &&
+      !isTRUE(user_supplied_optimizer) &&
+      !isTRUE(muon_available)) {
+    optimizer_tag <- neural_default_svi_fallback_optimizer()
+    warning(
+      sprintf(
+        "Default optimizer 'muon' is unavailable; falling back to '%s'.",
+        optimizer_tag
+      ),
+      call. = FALSE
+    )
+  }
+  optimizer_tag
+}
+
+neural_muon_target_name_regex <- function() {
+  "^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross|W_out|M_cross_raw)$"
+}
+
+neural_muon_normalize_param_name <- function(name) {
+  if (length(name) != 1L || is.na(name) || !nzchar(name)) {
+    return(NULL)
+  }
+  normalized_name <- as.character(name)
+  if (grepl("_auto_scale$", normalized_name)) {
+    return(NULL)
+  }
+  normalized_name <- sub("_auto_loc$", "", normalized_name)
+  repeat {
+    stripped_name <- sub("(_decentered|_base|_z)$", "", normalized_name)
+    if (identical(stripped_name, normalized_name)) {
+      break
+    }
+    normalized_name <- stripped_name
+  }
+  normalized_name
+}
+
+neural_muon_targets_matrix_weight <- function(name, ndim = NULL) {
+  normalized_name <- neural_muon_normalize_param_name(name)
+  if (is.null(normalized_name)) {
+    return(FALSE)
+  }
+  if (!is.null(ndim)) {
+    ndim <- suppressWarnings(as.integer(ndim)[1L])
+    if (is.na(ndim) || ndim != 2L) {
+      return(FALSE)
+    }
+  }
+  grepl(neural_muon_target_name_regex(), normalized_name)
+}
+
+neural_get_muon_dimension_numbers_callable <- local({
+  cached_callable <- NULL
+  cached_regex <- NULL
+
+  function(force_refresh = FALSE) {
+    if (!reticulate::py_has_attr(strenv$optax, "contrib") ||
+        !reticulate::py_has_attr(strenv$optax$contrib, "MuonDimensionNumbers")) {
+      return(NULL)
+    }
+
+    regex <- neural_muon_target_name_regex()
+    if (!isTRUE(force_refresh) &&
+        !is.null(cached_callable) &&
+        identical(cached_regex, regex)) {
+      return(cached_callable)
+    }
+
+    regex_py <- gsub("'", "\\\\'", regex, fixed = TRUE)
+    reticulate::py_run_string(sprintf(
+      paste(
+        "import re",
+        "import jax",
+        "import optax",
+        "",
+        "_STRATEGIZE_MUON_KEY_RE = re.compile(r'%s')",
+        "",
+        "def _strategize_muon_normalize_name(name):",
+        "    if not name:",
+        "        return None",
+        "    if name.endswith('_auto_scale'):",
+        "        return None",
+        "    if name.endswith('_auto_loc'):",
+        "        name = name[:-len('_auto_loc')]",
+        "    while True:",
+        "        stripped = re.sub(r'(_decentered|_base|_z)$', '', name)",
+        "        if stripped == name:",
+        "            break",
+        "        name = stripped",
+        "    return name",
+        "",
+        "def _strategize_muon_dimnums(params):",
+        "    tree_util = jax.tree_util",
+        "",
+        "    if hasattr(tree_util, 'tree_flatten_with_path'):",
+        "        path_leaves, treedef = tree_util.tree_flatten_with_path(params)",
+        "        out_leaves = []",
+        "        for path, value in path_leaves:",
+        "            name = ''",
+        "            for entry in reversed(path):",
+        "                if hasattr(entry, 'key'):",
+        "                    name = str(entry.key)",
+        "                    break",
+        "",
+        "            normalized_name = _strategize_muon_normalize_name(name)",
+        "            use_muon = False",
+        "            try:",
+        "                ndim = getattr(value, 'ndim', None)",
+        "                if ndim == 2 and normalized_name and _STRATEGIZE_MUON_KEY_RE.match(normalized_name):",
+        "                    use_muon = True",
+        "            except Exception:",
+        "                use_muon = False",
+        "",
+        "            out_leaves.append(optax.contrib.MuonDimensionNumbers() if use_muon else None)",
+        "        return tree_util.tree_unflatten(treedef, out_leaves)",
+        "",
+        "    if hasattr(params, 'items'):",
+        "        out = {}",
+        "        for k, v in params.items():",
+        "            name = str(k)",
+        "            normalized_name = _strategize_muon_normalize_name(name)",
+        "            use_muon = (",
+        "                getattr(v, 'ndim', None) == 2",
+        "                and normalized_name is not None",
+        "                and _STRATEGIZE_MUON_KEY_RE.match(normalized_name)",
+        "            )",
+        "            out[k] = optax.contrib.MuonDimensionNumbers() if use_muon else None",
+        "        try:",
+        "            return params.__class__(out)",
+        "        except Exception:",
+        "            return out",
+        "",
+        "    return tree_util.tree_map(lambda _: None, params)",
+        sep = "\n"
+      ),
+      regex_py
+    ))
+
+    cached_regex <<- regex
+    cached_callable <<- reticulate::py_eval("_strategize_muon_dimnums")
+    cached_callable
+  }
+})
+
+neural_build_muon_dimension_numbers_tree <- function(params) {
+  muon_callable <- neural_get_muon_dimension_numbers_callable()
+  if (is.null(muon_callable)) {
+    return(NULL)
+  }
+  muon_callable(params)
+}
+
 neural_linear_head <- function(phi, W_out, b_out = NULL, dtype = NULL) {
   logits <- strenv$jnp$einsum("nm,mo->no", phi, W_out)
   if (is.null(b_out)) {
@@ -1304,7 +1483,7 @@ generate_ModelOutcome_neural <- function(){
     svi_num_particles = 1L,
     svi_num_draws = 200L,
     vi_guide = "auto_diagonal",
-    optimizer = "adam",
+    optimizer = "muon",
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -3505,13 +3684,18 @@ generate_ModelOutcome_neural <- function(){
     if (length(n_particles) != 1L || is.na(n_particles) || n_particles < 1L) {
       n_particles <- 1L
     }
-    optimizer_tag <- if (!is.null(mcmc_control$optimizer)) {
+    optimizer_raw <- if (!is.null(mcmc_control$optimizer)) {
       tolower(as.character(mcmc_control$optimizer))
     } else {
-      "adam"
+      character(0)
     }
-    if (length(optimizer_tag) != 1L || is.na(optimizer_tag) || !nzchar(optimizer_tag)) {
-      optimizer_tag <- "adam"
+    user_supplied_optimizer <- length(optimizer_raw) == 1L &&
+      !is.na(optimizer_raw) &&
+      nzchar(optimizer_raw)
+    optimizer_tag <- if (isTRUE(user_supplied_optimizer)) {
+      optimizer_raw
+    } else {
+      "muon"
     }
     if (!optimizer_tag %in% c("adam", "adamw", "adabelief", "muon")) {
       stop(
@@ -3637,6 +3821,13 @@ generate_ModelOutcome_neural <- function(){
     } else {
       svi_lr
     }
+    muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
+      reticulate::py_has_attr(strenv$optax$contrib, "muon")
+    optimizer_tag <- neural_resolve_svi_optimizer_tag(
+      optimizer_tag = optimizer_tag,
+      guide_name = guide_name,
+      user_supplied_optimizer = user_supplied_optimizer
+    )
     svi_optim <- if (optimizer_tag == "adam") {
       strenv$numpyro$optim$Adam(lr_schedule)
     } else if (optimizer_tag == "adamw") {
@@ -3656,17 +3847,11 @@ generate_ModelOutcome_neural <- function(){
         )
       }
     } else if (optimizer_tag == "muon") {
-      if (reticulate::py_has_attr(strenv$optax, "contrib") &&
-          reticulate::py_has_attr(strenv$optax$contrib, "muon")) {
-        muon_dimnums <- NULL
-        if (reticulate::py_has_attr(strenv$optax$contrib, "MuonDimensionNumbers")) {
-          muon_dimnums <- tryCatch({
-            reticulate::py_run_string(
-              "import re\nimport jax\nimport optax\n\n_STRATEGIZE_MUON_KEY_RE = re.compile(r'^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_out|M_cross_raw)$')\n\ndef _strategize_muon_dimnums(params):\n    tree_util = jax.tree_util\n\n    if hasattr(tree_util, 'tree_flatten_with_path'):\n        path_leaves, treedef = tree_util.tree_flatten_with_path(params)\n        out_leaves = []\n        for path, value in path_leaves:\n            name = ''\n            for entry in reversed(path):\n                if hasattr(entry, 'key'):\n                    name = str(entry.key)\n                    break\n\n            use_muon = False\n            try:\n                ndim = getattr(value, 'ndim', None)\n                if ndim == 2 and _STRATEGIZE_MUON_KEY_RE.match(name):\n                    use_muon = True\n            except Exception:\n                use_muon = False\n\n            out_leaves.append(optax.contrib.MuonDimensionNumbers() if use_muon else None)\n        return tree_util.tree_unflatten(treedef, out_leaves)\n\n    # Fallback: assume dict-like params and use last-level keys.\n    if hasattr(params, 'items'):\n        out = {}\n        for k, v in params.items():\n            name = str(k)\n            use_muon = getattr(v, 'ndim', None) == 2 and _STRATEGIZE_MUON_KEY_RE.match(name)\n            out[k] = optax.contrib.MuonDimensionNumbers() if use_muon else None\n        try:\n            return params.__class__(out)\n        except Exception:\n            return out\n\n    # Last resort: keep Muon off and fall back to AdamW.\n    return tree_util.tree_map(lambda _: None, params)\n"
-            )
-            reticulate::py_eval("_strategize_muon_dimnums")
-          }, error = function(e) NULL)
-        }
+      if (isTRUE(muon_available)) {
+        muon_dimnums <- tryCatch(
+          neural_get_muon_dimension_numbers_callable(),
+          error = function(e) NULL
+        )
 
         muon_kwargs <- list(
           learning_rate = lr_schedule,

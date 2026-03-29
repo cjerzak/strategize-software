@@ -11,7 +11,7 @@
 * checking extension type ... Package
 * this is package ‘strategize’ version ‘0.0.1’
 * package encoding: UTF-8
-* checking CRAN incoming feasibility ... [2s/11s] NOTE
+* checking CRAN incoming feasibility ... [2s/12s] NOTE
 Maintainer: ‘Connor T. Jerzak <connor.jerzak@austin.utexas.edu>’
 
 New submission
@@ -56,7 +56,7 @@ Non-standard files/directories found at top level:
 * checking S3 generic/method consistency ... OK
 * checking replacement functions ... OK
 * checking foreign function calls ... OK
-* checking R code for possible problems ... [10s/10s] NOTE
+* checking R code for possible problems ... [15s/15s] NOTE
 generate_ModelOutcome_neural: no visible global function definition for
   ‘tail’
 generate_ModelOutcome_neural: no visible binding for global variable
@@ -88,10 +88,10 @@ to your NAMESPACE file.
 * checking installed files from ‘inst/doc’ ... OK
 * checking files in ‘vignettes’ ... OK
 * checking examples ... OK
-* checking examples with --run-donttest ... [51s/25s] OK
+* checking examples with --run-donttest ... [72s/40s] OK
 * checking for unstated dependencies in ‘tests’ ... OK
-* checking tests ... [68s/52s] OK
-  Running ‘testthat.R’ [68s/51s]
+* checking tests ... [96s/78s] OK
+  Running ‘testthat.R’ [95s/78s]
 * checking for unstated dependencies in vignettes ... OK
 * checking package vignettes ... OK
 * checking re-building of vignette outputs ... OK

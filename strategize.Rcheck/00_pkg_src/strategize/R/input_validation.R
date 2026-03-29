@@ -46,8 +46,11 @@ NULL
 #'   \code{neural_mcmc_control$qk_norm = TRUE} (default) to apply RMSNorm to projected
 #'   queries and keys before attention logits are formed.
 #'   For variational inference (subsample_method = "batch_vi"), set
-#'   \code{neural_mcmc_control$optimizer} to \code{"adam"} (numpyro.optim),
-#'   \code{"adamw"} (AdamW), \code{"adabelief"} (optax), or \code{"muon"} (optax.contrib). Learning-rate decay is controlled by
+#'   \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
+#'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
+#'   Muon is only applied to matrix-valued model-weight locations when the guide preserves
+#'   matrix structure; with \code{vi_guide = "auto_diagonal"}, it falls back to AdamW/Adam.
+#'   Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 #'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
 #' @param diff Difference mode flag

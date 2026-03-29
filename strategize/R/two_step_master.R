@@ -216,7 +216,10 @@
 #'   queries and keys before forming attention logits.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
-#'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+#'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
+#'   Muon is only applied to matrix-valued model-weight locations when the guide preserves
+#'   matrix structure; with \code{vi_guide = "auto_diagonal"}, it falls back to AdamW/Adam.
+#'   Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
 #'   a scaling-law heuristic based on model/data size; for minibatched VI this
 #'   also scales with \code{batch_size}) and
