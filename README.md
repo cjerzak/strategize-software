@@ -6,10 +6,12 @@ Software for implementing optimal stochastic intervention analysis. Current impl
 
 # Installation
 
-The most recent version of `strategize` can be installed directly from the repository using the `devtools` package:
+The most recent version of `strategize` can be installed directly from the repository using the `remotes` package:
 ```r
-devtools::install_github("cjerzak/strategize-software/strategize")
+remotes::install_github("cjerzak/strategize-software/strategize")
 ```
+
+This installs the package together with the required R dependencies declared in the package metadata.
 
 The package can then be loaded into your R session:
 ```r
@@ -19,7 +21,7 @@ Package functions can also be accessed as `strategize::function_name`.
 
 ## Python Backend Setup
 
-The package uses JAX for automatic differentiation. Set up the Python backend with:
+The package uses JAX for automatic differentiation in the neural backend. After installing the R package, set up the Python backend with:
 ```r
 strategize::build_backend(conda_env = "strategize_env")
 ```
