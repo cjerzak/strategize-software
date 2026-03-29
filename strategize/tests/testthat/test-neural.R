@@ -437,6 +437,7 @@ test_that("neural attn metadata marks the cross-candidate encoder as enabled", {
   expect_identical(model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(model_info$cross_candidate_encoder))
   expect_true(isTRUE(model_info$has_qk_norm))
+  expect_false(is.null(model_info$params$RMS_merge_cross))
 })
 
 test_that("neural outcome bundles save and reload cleanly", {
@@ -449,6 +450,7 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_true(!is.null(model_info))
   expect_identical(model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_false(is.null(model_info$params$RMS_merge_cross))
 
   theta_mean <- tryCatch(
     as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
@@ -496,6 +498,7 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_identical(bundle$fit$neural_model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(bundle$fit$neural_model_info$cross_candidate_encoder))
   expect_true(isTRUE(bundle$fit$neural_model_info$has_qk_norm))
+  expect_true("RMS_merge_cross" %in% bundle$fit$neural_model_info$param_names)
 
   fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
   expect_true(inherits(fit_loaded, "strategic_predictor"))
@@ -503,6 +506,7 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_identical(fit_loaded$fit$neural_model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(fit_loaded$fit$neural_model_info$cross_candidate_encoder))
   expect_true(isTRUE(fit_loaded$fit$neural_model_info$has_qk_norm))
+  expect_true("RMS_merge_cross" %in% fit_loaded$fit$neural_model_info$param_names)
 
   idx_left <- which(data$profile_order == 1L)
   idx_right <- which(data$profile_order == 2L)
@@ -524,6 +528,7 @@ test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
   expect_identical(model_info$cross_candidate_encoder_mode, "attn")
   expect_true(isTRUE(model_info$cross_candidate_encoder))
   expect_true(isTRUE(model_info$has_qk_norm))
+  expect_false(is.null(model_info$params$RMS_merge_cross))
   expect_true(is.numeric(model_info$svi_loss_curve))
   expect_gt(length(model_info$svi_loss_curve), 0L)
 
