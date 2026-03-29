@@ -907,9 +907,12 @@ cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, retur
       ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, left_out$cand_tokens_out,
                                                      model_info = model_info,
                                                      params = params)
-      alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
-      phi_l <- phi_l + alpha_cross * ctx_left
-      phi_r <- phi_r + alpha_cross * ctx_right
+      phi_l <- neural_merge_cross_attn_representation(
+        phi_l, ctx_left, params, model_info$model_dims
+      )
+      phi_r <- neural_merge_cross_attn_representation(
+        phi_r, ctx_right, params, model_info$model_dims
+      )
     }
     u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
     u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)

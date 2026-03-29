@@ -293,6 +293,7 @@ neural_build_param_schema <- function(params,
   param_names <- c(param_names,
                    "alpha_cross",
                    "RMS_cross",
+                   "RMS_merge_cross",
                    "RMS_q_cross",
                    "RMS_k_cross",
                    "W_q_cross",
@@ -1097,6 +1098,20 @@ neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
   ctx_out
 }
 
+neural_merge_cross_attn_representation <- function(phi, ctx, params, model_dims) {
+  alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
+  RMS_merge_cross <- params[["RMS_merge_cross"]]
+  if (is.null(RMS_merge_cross)) {
+    stop(
+      "Pairwise neural models with cross_candidate_encoder='attn' now require ",
+      "'RMS_merge_cross'. Refit the neural model under the updated architecture.",
+      call. = FALSE
+    )
+  }
+  merged <- phi + alpha_cross * ctx
+  neural_rms_norm(merged, RMS_merge_cross, model_dims)
+}
+
 neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
                                          resp_party_idx = NULL,
                                          stage_idx = NULL,
@@ -1269,9 +1284,12 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
       ctx_right <- neural_cross_attend_cls_to_tokens(phi_right, phi_pair$cand_left_out,
                                                      model_info = model_info,
                                                      params = params)
-      alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
-      phi_left <- phi_left + alpha_cross * ctx_left
-      phi_right <- phi_right + alpha_cross * ctx_right
+      phi_left <- neural_merge_cross_attn_representation(
+        phi_left, ctx_left, params, model_info$model_dims
+      )
+      phi_right <- neural_merge_cross_attn_representation(
+        phi_right, ctx_right, params, model_info$model_dims
+      )
     }
     u_left <- neural_linear_head(phi_left, params$W_out, params$b_out)
     u_right <- neural_linear_head(phi_right, params$W_out, params$b_out)
@@ -2519,6 +2537,7 @@ generate_ModelOutcome_neural <- function(){
 
     alpha_cross <- NULL
     RMS_cross <- NULL
+    RMS_merge_cross <- NULL
     RMS_q_cross <- NULL
     RMS_k_cross <- NULL
     W_q_cross <- NULL
@@ -2560,6 +2579,21 @@ generate_ModelOutcome_neural <- function(){
         },
         init_fxn = function() {
           p2d_init_lognormal("RMS_cross", RMS_scale, reticulate::tuple(ModelDims))
+        },
+        constraint = p2d_constraint_positive
+      )
+
+      RMS_merge_cross <- p2d(
+        name = "RMS_merge_cross",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "RMS_merge_cross",
+            strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+            sample_shape = reticulate::tuple(ModelDims)
+          )
+        },
+        init_fxn = function() {
+          p2d_init_lognormal("RMS_merge_cross", RMS_scale, reticulate::tuple(ModelDims))
         },
         constraint = p2d_constraint_positive
       )
@@ -2740,6 +2774,7 @@ generate_ModelOutcome_neural <- function(){
     if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
       params_view$alpha_cross <- alpha_cross
       params_view$RMS_cross <- RMS_cross
+      params_view$RMS_merge_cross <- RMS_merge_cross
       params_view$RMS_q_cross <- RMS_q_cross
       params_view$RMS_k_cross <- RMS_k_cross
       params_view$W_q_cross <- W_q_cross
@@ -2917,9 +2952,12 @@ generate_ModelOutcome_neural <- function(){
           ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, phi_pair$cand_left_out,
                                                          model_info = transformer_model_info,
                                                          params = params_view)
-          alpha_cross <- neural_param_or_default(params_view, "alpha_cross", 1.0)
-          phi_l <- phi_l + alpha_cross * ctx_left
-          phi_r <- phi_r + alpha_cross * ctx_right
+          phi_l <- neural_merge_cross_attn_representation(
+            phi_l, ctx_left, params_view, transformer_model_info$model_dims
+          )
+          phi_r <- neural_merge_cross_attn_representation(
+            phi_r, ctx_right, params_view, transformer_model_info$model_dims
+          )
         }
         u_l <- neural_linear_head(phi_l, W_out, b_out)
         u_r <- neural_linear_head(phi_r, W_out, b_out)
@@ -4233,6 +4271,7 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("E_matchup")
   maybe_site("alpha_cross")
   maybe_site("RMS_cross")
+  maybe_site("RMS_merge_cross")
   maybe_site("RMS_q_cross")
   maybe_site("RMS_k_cross")
 
@@ -4487,9 +4526,12 @@ generate_ModelOutcome_neural <- function(){
         ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, phi_pair$cand_left_out,
                                                        model_info = transformer_model_info,
                                                        params = params)
-        alpha_cross <- neural_param_or_default(params, "alpha_cross", 1.0)
-        phi_l <- phi_l + alpha_cross * ctx_left
-        phi_r <- phi_r + alpha_cross * ctx_right
+        phi_l <- neural_merge_cross_attn_representation(
+          phi_l, ctx_left, params, transformer_model_info$model_dims
+        )
+        phi_r <- neural_merge_cross_attn_representation(
+          phi_r, ctx_right, params, transformer_model_info$model_dims
+        )
       }
       u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
       u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)

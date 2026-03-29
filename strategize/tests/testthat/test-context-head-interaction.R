@@ -481,6 +481,7 @@ test_that("attn mode logits are antisymmetric across likelihoods (soft path)", {
       b_out = b_out,
       alpha_cross = strenv$jnp$array(0.5, dtype = strenv$dtj),
       RMS_cross = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
+      RMS_merge_cross = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
       W_q_cross = strenv$jnp$eye(model_dims, dtype = strenv$dtj),
       W_k_cross = strenv$jnp$eye(model_dims, dtype = strenv$dtj),
       W_v_cross = strenv$jnp$eye(model_dims, dtype = strenv$dtj),
