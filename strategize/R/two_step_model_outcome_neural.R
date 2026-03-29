@@ -1482,7 +1482,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr = 0.01,
     svi_num_particles = 1L,
     svi_num_draws = 200L,
-    vi_guide = "auto_diagonal",
+    vi_guide = "auto_normal",
     optimizer = "muon",
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
@@ -3658,10 +3658,10 @@ generate_ModelOutcome_neural <- function(){
     guide_name <- if (!is.null(mcmc_control$vi_guide)) {
       tolower(as.character(mcmc_control$vi_guide))
     } else {
-      "auto_diagonal"
+      "auto_normal"
     }
     if (length(guide_name) != 1L || is.na(guide_name) || !nzchar(guide_name)) {
-      guide_name <- "auto_diagonal"
+      guide_name <- "auto_normal"
     }
     guide_init_loc_fn <- NULL
     if (!is.null(init_to_value) && length(output_site_init_values) > 0L) {
