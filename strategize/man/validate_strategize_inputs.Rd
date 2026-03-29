@@ -90,7 +90,10 @@ to enable a full cross-encoder that jointly encodes both candidates. Use
 queries and keys before attention logits are formed.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
-\code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax). Learning-rate decay is controlled by
+\code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
+Muon is only applied to matrix-valued model-weight locations when the guide preserves
+matrix structure; with \code{vi_guide = "auto_diagonal"}, it falls back to AdamW/Adam.
+Learning-rate decay is controlled by
 \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.}
 
