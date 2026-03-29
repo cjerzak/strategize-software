@@ -1,3 +1,21 @@
+build_reinforce_diag <- function(reward_mean,
+                                 reward_var,
+                                 baseline_prev,
+                                 grad_total) {
+  grad_num <- tryCatch(
+    as.numeric(strenv$np$array(grad_total)),
+    error = function(e) NULL
+  )
+  nonfinite <- !is.null(grad_num) && any(!is.finite(grad_num))
+
+  list(
+    baseline = strenv$jax$lax$stop_gradient(baseline_prev),
+    reward_mean = strenv$jax$lax$stop_gradient(reward_mean),
+    reward_var = strenv$jax$lax$stop_gradient(reward_var),
+    nonfinite = isTRUE(nonfinite)
+  )
+}
+
 getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           REGRESSION_PARAMETERS_dag,
                           REGRESSION_PARAMETERS_ast0,
@@ -178,17 +196,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                       reward_var,
                                       baseline_prev,
                                       grad_total) {
-      baseline_num <- suppressWarnings(as.numeric(strenv$np$array(baseline_prev)))
-      reward_mean_num <- suppressWarnings(as.numeric(strenv$np$array(reward_mean)))
-      reward_var_num <- suppressWarnings(as.numeric(strenv$np$array(reward_var)))
-      grad_num <- tryCatch(as.numeric(strenv$np$array(grad_total)), error = function(e) NA_real_)
-      nonfinite <- any(!is.finite(grad_num))
-
-      list(
-        baseline = strenv$jnp$array(baseline_num, strenv$dtj),
-        reward_mean = strenv$jnp$array(reward_mean_num, strenv$dtj),
-        reward_var = strenv$jnp$array(reward_var_num, strenv$dtj),
-        nonfinite = nonfinite
+      build_reinforce_diag(
+        reward_mean = reward_mean,
+        reward_var = reward_var,
+        baseline_prev = baseline_prev,
+        grad_total = grad_total
       )
     }
 
