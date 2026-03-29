@@ -189,6 +189,11 @@
 #'   approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
 #'   to choose a more appropriate link (e.g., \code{"binomial"}). Defaults to \code{FALSE}.
 #'
+#' @param force_reinforce Logical indicating whether to force REINFORCE-based optimization for
+#'   the neural average-case objective when exact small-support enumeration is available. This only
+#'   affects the optimization objective path; reported \code{Q} values continue to use the existing
+#'   exact report-time evaluation when available. Defaults to \code{FALSE}.
+#'
 #' @param a_init_sd Numeric scalar specifying the standard deviation for random initialization
 #'   of unconstrained parameters used in the gradient-based search over factor-level probabilities.
 #'   Defaults to \code{0.001}.
@@ -490,6 +495,7 @@ strategize       <-          function(
                                             partial_pooling_strength = 50,
                                             use_regularization = TRUE,
                                             force_gaussian = FALSE,
+                                            force_reinforce = FALSE,
                                             a_init_sd = 0.001,
                                             outcome_model_type = "glm",
                                             neural_mcmc_control = NULL,
@@ -530,6 +536,10 @@ strategize       <-          function(
   # [2.] when simplex constrained with holdout, LAST entry is held out 
   
   message("-------------\nstrategize() call has begun...")
+
+  if (!is.logical(force_reinforce) || length(force_reinforce) != 1L || is.na(force_reinforce)) {
+    stop("'force_reinforce' must be TRUE or FALSE.", call. = FALSE)
+  }
 
   autoscale_rain_gamma <- missing(rain_gamma)
   autoscale_rain_eta <- missing(rain_eta)
@@ -1547,7 +1557,8 @@ strategize       <-          function(
       rain_L                      = rain_L,                           # 21
       rain_eta                    = rain_eta,                         # 22
       rain_variant                = rain_variant,                     # 23
-      rain_output                 = rain_output                       # 24
+      rain_output                 = rain_output,                      # 24
+      force_reinforce             = force_reinforce                   # 25
     )
     dQ_da_ast <- q_with_pi_star_full[[2]]$dQ_da_ast
     dQ_da_dag <- q_with_pi_star_full[[2]]$dQ_da_dag
@@ -1605,7 +1616,8 @@ strategize       <-          function(
                         rain_L          = rain_L,
                         rain_eta        = rain_eta,
                         rain_variant    = rain_variant,
-                        rain_output     = rain_output
+                        rain_output     = rain_output,
+                        force_reinforce = force_reinforce
                         )
     pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
     pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
@@ -1833,7 +1845,8 @@ strategize       <-          function(
               ParameterizationType = strenv$ParameterizationType,
               d_locator_use = strenv$d_locator_use,
               q_fxn = QFXN,
-              single_party = !isTRUE(diff)
+              single_party = !isTRUE(diff),
+              force_reinforce = force_reinforce
             )
             q_star_f <- average_case_eval$q_vec
             SEED_IN_LOOP <- average_case_eval$seed_next
@@ -2344,6 +2357,7 @@ strategize       <-          function(
                   "optimism" = optimism,
                   "optimism_coef" = optimism_coef,
                   "force_gaussian" = force_gaussian,
+                  "force_reinforce" = force_reinforce,
                   "used_regularization" = UsedRegularization,
                   "estimation_type" = "TwoStep",
                   "gather_fxn" = gather_fxn, 

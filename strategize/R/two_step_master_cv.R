@@ -90,6 +90,10 @@
 #' @param force_gaussian Logical indicating whether a Gaussian family
 #'   (\code{lm}-style) is forced for the outcome model, even if \code{Y} is binary.
 #'   Defaults to \code{FALSE}.
+#' @param force_reinforce Logical indicating whether to force REINFORCE-based optimization for
+#'   the neural average-case objective when exact small-support enumeration is available. This
+#'   affects the optimization objective only; final reported \code{Q} values still use the
+#'   standard report-time evaluation path. Defaults to \code{FALSE}.
 #' @param temperature Optional numeric temperature controlling the smoothness of
 #'   Gumbel-Softmax sampling when exploring probability vectors. Smaller values
 #'   lead to distributions closer to the argmax. Defaults to \code{NULL}, which
@@ -306,6 +310,7 @@ cv_strategize       <-          function(
                                             partial_pooling_strength = 50,
                                             use_regularization = TRUE,
                                             force_gaussian = F,
+                                            force_reinforce = FALSE,
                                             temperature = NULL,
                                             a_init_sd = 0.001,
                                             learning_rate_max = 0.001, 
@@ -342,6 +347,9 @@ cv_strategize       <-          function(
   }
   if (use_optax && optimism != "none") {
     stop("Optimistic / extra-gradient updates are only available when use_optax = FALSE.")
+  }
+  if (!is.logical(force_reinforce) || length(force_reinforce) != 1L || is.na(force_reinforce)) {
+    stop("'force_reinforce' must be TRUE or FALSE.", call. = FALSE)
   }
 
   autoscale_rain_gamma <- missing(rain_gamma)
@@ -445,6 +453,7 @@ cv_strategize       <-          function(
             penalty_type = penalty_type,
             K = K,
             force_gaussian = force_gaussian,
+            force_reinforce = force_reinforce,
             use_regularization = use_regularization,
             optim_type = optim_type,
             optimism = optimism,
@@ -542,10 +551,11 @@ cv_strategize       <-          function(
     # hyperparameters
     outcome_model_type = outcome_model_type,
     neural_mcmc_control = neural_mcmc_control,
-    temperature = temperature, 
+    temperature = temperature,
     optim_type = optim_type,
     optimism = optimism,
     force_gaussian = force_gaussian,
+    force_reinforce = force_reinforce,
     use_regularization = use_regularization,
     a_init_sd = a_init_sd,
     compute_se = compute_se,

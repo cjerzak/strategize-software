@@ -177,6 +177,11 @@ high-dimensional designs. Defaults to \code{TRUE}.}
 approach, even if \code{Y} is binary or forced-choice. If \code{FALSE}, the function attempts
 to choose a more appropriate link (e.g., \code{"binomial"}). Defaults to \code{FALSE}.}
 
+\item{force_reinforce}{Logical indicating whether to force REINFORCE-based optimization for
+the neural average-case objective when exact small-support enumeration is available. This only
+affects the optimization objective path; reported \code{Q} values continue to use the existing
+exact report-time evaluation when available. Defaults to \code{FALSE}.}
+
 \item{a_init_sd}{Numeric scalar specifying the standard deviation for random initialization
 of unconstrained parameters used in the gradient-based search over factor-level probabilities.
 Defaults to \code{0.001}.}

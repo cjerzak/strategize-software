@@ -39,7 +39,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                           rain_L = NULL,
                           rain_eta = 0.001,
                           rain_variant = "alg10_staged",
-                          rain_output = "last"
+                          rain_output = "last",
+                          force_reinforce = FALSE
                           ){
   optimism <- match.arg(optimism)
   optimism_coef <- as.numeric(optimism_coef)
@@ -86,7 +87,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     nMonte_adversarial = nMonte_adversarial,
     ParameterizationType = strenv$ParameterizationType,
     d_locator_use = strenv$jnp$array(strenv$d_locator_use),
-    single_party = !isTRUE(diff)
+    single_party = !isTRUE(diff),
+    force_reinforce = force_reinforce
   )
   objective_gradient_mode <- objective_spec$objective_gradient_mode
   strenv$objective_gradient_mode <- objective_gradient_mode
@@ -233,6 +235,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           d_locator_use = strenv$d_locator_use,
           q_fxn = QFXN,
           single_party = !isTRUE(diff),
+          force_reinforce = force_reinforce,
           player = "ast"
         )
       } else {
@@ -1107,38 +1110,39 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                               strenv$main_comp_mat,   
                                               strenv$shadow_comp_mat)
 
-	    if(!adversarial){ 
-	      average_case_eval <- evaluate_average_case_q(
-	        pi_star_ast = pi_star_ast_,
-	        pi_star_dag = pi_star_dag_,
-	        INTERCEPT_ast_ = INTERCEPT_ast_,
-	        COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
-	        INTERCEPT_dag_ = INTERCEPT_dag_,
-	        COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
-	        seed_in = SEED,
-	        phase = "report",
-	        outcome_model_type = outcome_model_type,
-	        glm_family = glm_family,
-	        nMonte_Qglm = nMonte_Qglm,
-	        temperature = MNtemp,
-	        ParameterizationType = strenv$ParameterizationType,
-	        d_locator_use = strenv$d_locator_use,
-	        q_fxn = QFXN,
-	        single_party = !isTRUE(diff)
-	      )
-	      q_star_f <- average_case_eval$q_vec
-	      SEED <- average_case_eval$seed_next
-	    }
-	    if(adversarial){ 
-	      adversarial_eval <- evaluate_adversarial_q(
-	        pi_star_ast = pi_star_ast_,
-	        pi_star_dag = pi_star_dag_,
-	        a_i_ast, a_i_dag,
-	        INTERCEPT_ast_ = INTERCEPT_ast_,
-	        COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
-	        INTERCEPT_dag_ = INTERCEPT_dag_,
-	        COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
-	        INTERCEPT_ast0_ = INTERCEPT_ast0_,
+    if (!adversarial) {
+      average_case_eval <- evaluate_average_case_q(
+        pi_star_ast = pi_star_ast_,
+        pi_star_dag = pi_star_dag_,
+        INTERCEPT_ast_ = INTERCEPT_ast_,
+        COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+        INTERCEPT_dag_ = INTERCEPT_dag_,
+        COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+        seed_in = SEED,
+        phase = "report",
+        outcome_model_type = outcome_model_type,
+        glm_family = glm_family,
+        nMonte_Qglm = nMonte_Qglm,
+        temperature = MNtemp,
+        ParameterizationType = strenv$ParameterizationType,
+        d_locator_use = strenv$d_locator_use,
+        q_fxn = QFXN,
+        single_party = !isTRUE(diff),
+        force_reinforce = force_reinforce
+      )
+      q_star_f <- average_case_eval$q_vec
+      SEED <- average_case_eval$seed_next
+    }
+    if (adversarial) {
+      adversarial_eval <- evaluate_adversarial_q(
+        pi_star_ast = pi_star_ast_,
+        pi_star_dag = pi_star_dag_,
+        a_i_ast, a_i_dag,
+        INTERCEPT_ast_ = INTERCEPT_ast_,
+        COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+        INTERCEPT_dag_ = INTERCEPT_dag_,
+        COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+        INTERCEPT_ast0_ = INTERCEPT_ast0_,
 	        COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
 	        INTERCEPT_dag0_ = INTERCEPT_dag0_,
 	        COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,

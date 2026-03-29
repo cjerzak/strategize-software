@@ -272,6 +272,7 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
                                         compute_se = FALSE,
                                         nMonte_Qglm = 4L,
                                         svi_steps = 20L,
+                                        force_reinforce = FALSE,
                                         seed = 20260326) {
   skip_on_cran()
   skip_if_no_jax()
@@ -285,6 +286,7 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
   params <- default_strategize_params(fast = TRUE)
   params$diff <- FALSE
   params$force_gaussian <- TRUE
+  params$force_reinforce <- force_reinforce
   params$compute_se <- compute_se
   params$outcome_model_type <- "neural"
   params$nMonte_Qglm <- as.integer(nMonte_Qglm)
@@ -1450,6 +1452,28 @@ test_that("Q evaluation resolver aligns non-adversarial neural objective/report 
     d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L, 2L, 2L)),
     single_party = TRUE
   )
+  avg_force_obj <- strategize:::resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = FALSE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L, 2L, 2L)),
+    single_party = TRUE,
+    force_reinforce = TRUE
+  )
+  avg_force_report <- strategize:::resolve_q_eval_spec(
+    phase = "report",
+    adversarial = FALSE,
+    outcome_model_type = "neural",
+    glm_family = "gaussian",
+    nMonte_Qglm = 9L,
+    ParameterizationType = "Full",
+    d_locator_use = strategize:::strenv$jnp$array(c(1L, 1L, 2L, 2L)),
+    single_party = TRUE,
+    force_reinforce = TRUE
+  )
   avg_report <- strategize:::resolve_q_eval_spec(
     phase = "report",
     adversarial = FALSE,
@@ -1504,6 +1528,13 @@ test_that("Q evaluation resolver aligns non-adversarial neural objective/report 
   expect_identical(avg_report$objective_gradient_mode, "exact")
   expect_identical(as.integer(avg_obj$n_draws), 4L)
   expect_identical(as.integer(avg_report$n_draws), 4L)
+  expect_identical(avg_force_obj$profile_draw_mode, "hard")
+  expect_false(isTRUE(avg_force_obj$use_exact_support))
+  expect_identical(avg_force_obj$objective_gradient_mode, "reinforce")
+  expect_identical(avg_force_obj$n_draws, 9L)
+  expect_true(isTRUE(avg_force_report$use_exact_support))
+  expect_identical(avg_force_report$objective_gradient_mode, "exact")
+  expect_identical(as.integer(avg_force_report$n_draws), 4L)
   expect_identical(adv_obj$profile_draw_mode, "relaxed")
   expect_identical(adv_obj$objective_gradient_mode, "pathwise")
   expect_identical(adv_obj$n_draws, 5L)
@@ -1516,6 +1547,32 @@ test_that("Q evaluation resolver aligns non-adversarial neural objective/report 
   expect_identical(adv_large_obj$objective_gradient_mode, "reinforce")
   expect_true(isTRUE(glm_exact$use_exact_q))
   expect_identical(glm_exact$profile_draw_mode, "exact")
+})
+
+test_that("strategize can force REINFORCE for small-support neural average-case optimization", {
+  fit <- run_average_case_neural_fit(
+    nMonte_Qglm = 8L,
+    svi_steps = 20L,
+    force_reinforce = TRUE,
+    seed = 20260329
+  )
+
+  res <- fit$res
+  info_msg <- sprintf(
+    paste0(
+      "objective_gradient_mode=%s; force_reinforce=%s; ",
+      "reinforce_nonfinite_ast_steps=%d; Q_point=%s"
+    ),
+    res$convergence_history$objective_gradient_mode,
+    as.character(res$force_reinforce),
+    as.integer(res$convergence_history$reinforce_nonfinite_ast_steps),
+    format(as.numeric(res$Q_point), digits = 6)
+  )
+
+  expect_true(isTRUE(res$force_reinforce), info = info_msg)
+  expect_identical(res$convergence_history$objective_gradient_mode, "reinforce", info = info_msg)
+  expect_identical(as.integer(res$convergence_history$reinforce_nonfinite_ast_steps), 0L, info = info_msg)
+  expect_true(all(is.finite(as.numeric(res$Q_point))), info = info_msg)
 })
 
 test_that("hard profile draw mode emits one-hot average-case samples", {
