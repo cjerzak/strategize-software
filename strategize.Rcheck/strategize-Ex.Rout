@@ -1322,7 +1322,7 @@ $conf_level
 > cleanEx()
 > options(digits = 7L)
 > base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
-Time elapsed:  90.068 2.586 63.02 2.485 0.721 
+Time elapsed:  70.08 2.36 38.694 1.672 0.511 
 > grDevices::dev.off()
 null device 
           1 

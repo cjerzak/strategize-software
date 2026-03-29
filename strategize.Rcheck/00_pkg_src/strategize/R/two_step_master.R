@@ -1633,6 +1633,15 @@ strategize       <-          function(
         loss_dag_vec = strenv$loss_dag_vec,
         inv_learning_rate_ast_vec = strenv$inv_learning_rate_ast_vec,
         inv_learning_rate_dag_vec = strenv$inv_learning_rate_dag_vec,
+        objective_gradient_mode = strenv$objective_gradient_mode,
+        reinforce_baseline_ast_vec = strenv$reinforce_baseline_ast_vec,
+        reinforce_baseline_dag_vec = strenv$reinforce_baseline_dag_vec,
+        reinforce_reward_mean_ast_vec = strenv$reinforce_reward_mean_ast_vec,
+        reinforce_reward_mean_dag_vec = strenv$reinforce_reward_mean_dag_vec,
+        reinforce_reward_var_ast_vec = strenv$reinforce_reward_var_ast_vec,
+        reinforce_reward_var_dag_vec = strenv$reinforce_reward_var_dag_vec,
+        reinforce_nonfinite_ast_steps = strenv$reinforce_nonfinite_ast_steps,
+        reinforce_nonfinite_dag_steps = strenv$reinforce_nonfinite_dag_steps,
         rain_lambda_vec = strenv$rain_lambda_vec,
         rain_lambda_s_vec = strenv$rain_lambda_s_vec,
         rain_lambda_sum_vec = strenv$rain_lambda_sum_vec,
@@ -1936,6 +1945,15 @@ strategize       <-          function(
       strenv$loss_dag_vec <- convergence_cache$loss_dag_vec
       strenv$inv_learning_rate_ast_vec <- convergence_cache$inv_learning_rate_ast_vec
       strenv$inv_learning_rate_dag_vec <- convergence_cache$inv_learning_rate_dag_vec
+      strenv$objective_gradient_mode <- convergence_cache$objective_gradient_mode
+      strenv$reinforce_baseline_ast_vec <- convergence_cache$reinforce_baseline_ast_vec
+      strenv$reinforce_baseline_dag_vec <- convergence_cache$reinforce_baseline_dag_vec
+      strenv$reinforce_reward_mean_ast_vec <- convergence_cache$reinforce_reward_mean_ast_vec
+      strenv$reinforce_reward_mean_dag_vec <- convergence_cache$reinforce_reward_mean_dag_vec
+      strenv$reinforce_reward_var_ast_vec <- convergence_cache$reinforce_reward_var_ast_vec
+      strenv$reinforce_reward_var_dag_vec <- convergence_cache$reinforce_reward_var_dag_vec
+      strenv$reinforce_nonfinite_ast_steps <- convergence_cache$reinforce_nonfinite_ast_steps
+      strenv$reinforce_nonfinite_dag_steps <- convergence_cache$reinforce_nonfinite_dag_steps
       strenv$rain_lambda_vec <- convergence_cache$rain_lambda_vec
       strenv$rain_lambda_s_vec <- convergence_cache$rain_lambda_s_vec
       strenv$rain_lambda_sum_vec <- convergence_cache$rain_lambda_sum_vec
@@ -2388,6 +2406,55 @@ strategize       <-          function(
                       "loss_dag" = unlist(lapply(strenv$loss_dag_vec, safe_to_numeric)),
                       "inv_lr_ast" = unlist(lapply(strenv$inv_learning_rate_ast_vec, safe_to_numeric)),
                       "inv_lr_dag" = unlist(lapply(strenv$inv_learning_rate_dag_vec, safe_to_numeric)),
+                      # objective_gradient_mode records the estimator used for
+                      # the optimization objective. The REINFORCE fields are
+                      # optimizer diagnostics: EMA baselines, reward moments,
+                      # and counts of non-finite score-gradient steps.
+                      "objective_gradient_mode" = if (!is.null(strenv$objective_gradient_mode)) {
+                        strenv$objective_gradient_mode
+                      } else {
+                        "pathwise"
+                      },
+                      "reinforce_baseline_ast" = if (!is.null(strenv$reinforce_baseline_ast_vec)) {
+                        unlist(lapply(strenv$reinforce_baseline_ast_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "reinforce_baseline_dag" = if (!is.null(strenv$reinforce_baseline_dag_vec)) {
+                        unlist(lapply(strenv$reinforce_baseline_dag_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "reinforce_reward_mean_ast" = if (!is.null(strenv$reinforce_reward_mean_ast_vec)) {
+                        unlist(lapply(strenv$reinforce_reward_mean_ast_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "reinforce_reward_mean_dag" = if (!is.null(strenv$reinforce_reward_mean_dag_vec)) {
+                        unlist(lapply(strenv$reinforce_reward_mean_dag_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "reinforce_reward_var_ast" = if (!is.null(strenv$reinforce_reward_var_ast_vec)) {
+                        unlist(lapply(strenv$reinforce_reward_var_ast_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "reinforce_reward_var_dag" = if (!is.null(strenv$reinforce_reward_var_dag_vec)) {
+                        unlist(lapply(strenv$reinforce_reward_var_dag_vec, safe_to_numeric))
+                      } else {
+                        rep(NA_real_, nSGD)
+                      },
+                      "reinforce_nonfinite_ast_steps" = if (!is.null(strenv$reinforce_nonfinite_ast_steps)) {
+                        as.integer(strenv$reinforce_nonfinite_ast_steps)
+                      } else {
+                        0L
+                      },
+                      "reinforce_nonfinite_dag_steps" = if (!is.null(strenv$reinforce_nonfinite_dag_steps)) {
+                        as.integer(strenv$reinforce_nonfinite_dag_steps)
+                      } else {
+                        0L
+                      },
                       "nSGD" = nSGD,
                       "adversarial" = adversarial,
                       "primary_pushforward" = primary_pushforward,
@@ -2438,6 +2505,15 @@ strategize       <-          function(
                       "loss_dag" = rep(NA_real_, nSGD),
                       "inv_lr_ast" = rep(NA_real_, nSGD),
                       "inv_lr_dag" = rep(NA_real_, nSGD),
+                      "objective_gradient_mode" = "pathwise",
+                      "reinforce_baseline_ast" = rep(NA_real_, nSGD),
+                      "reinforce_baseline_dag" = rep(NA_real_, nSGD),
+                      "reinforce_reward_mean_ast" = rep(NA_real_, nSGD),
+                      "reinforce_reward_mean_dag" = rep(NA_real_, nSGD),
+                      "reinforce_reward_var_ast" = rep(NA_real_, nSGD),
+                      "reinforce_reward_var_dag" = rep(NA_real_, nSGD),
+                      "reinforce_nonfinite_ast_steps" = 0L,
+                      "reinforce_nonfinite_dag_steps" = 0L,
                       "nSGD" = nSGD,
                       "adversarial" = adversarial,
                       "primary_pushforward" = primary_pushforward,

@@ -59,6 +59,340 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     COEFFICIENTS_dag0_ <- REGRESSION_PARAMETERS_dag0[[2]]
   }
 
+  objective_spec <- resolve_q_eval_spec(
+    phase = "objective",
+    adversarial = adversarial,
+    outcome_model_type = outcome_model_type,
+    glm_family = glm_family,
+    nMonte_Qglm = nMonte_Qglm,
+    nMonte_adversarial = nMonte_adversarial,
+    ParameterizationType = strenv$ParameterizationType,
+    d_locator_use = strenv$jnp$array(strenv$d_locator_use),
+    single_party = !isTRUE(diff)
+  )
+  objective_gradient_mode <- objective_spec$objective_gradient_mode
+  strenv$objective_gradient_mode <- objective_gradient_mode
+  strenv$reinforce_baseline_ast_vec <- vector("list", length = nSGD)
+  strenv$reinforce_baseline_dag_vec <- vector("list", length = nSGD)
+  strenv$reinforce_reward_mean_ast_vec <- vector("list", length = nSGD)
+  strenv$reinforce_reward_mean_dag_vec <- vector("list", length = nSGD)
+  strenv$reinforce_reward_var_ast_vec <- vector("list", length = nSGD)
+  strenv$reinforce_reward_var_dag_vec <- vector("list", length = nSGD)
+  strenv$reinforce_nonfinite_ast_steps <- 0L
+  strenv$reinforce_nonfinite_dag_steps <- 0L
+
+  grad_eval_ast <- dQ_da_ast
+  grad_eval_dag <- dQ_da_dag
+
+  # Large-support hard draws do not admit the pathwise gradient used by the
+  # relaxed/objective code paths, so this branch switches the optimizer to a
+  # score-function estimator. The exact penalty gradient is still added
+  # directly, and the EMA baseline only reduces variance; it does not change
+  # the target objective.
+  if (identical(objective_gradient_mode, "reinforce")) {
+    index_spec_use <- resolve_multinomial_group_index_spec(
+      d_locator_use = strenv$d_locator_use,
+      ParameterizationType = strenv$ParameterizationType
+    )
+    main_comp_mat_use <- strenv$main_comp_mat
+    shadow_comp_mat_use <- strenv$shadow_comp_mat
+    if (is.null(main_comp_mat_use)) {
+      main_comp_mat_use <- strenv$OneTf_flat
+    }
+    if (is.null(shadow_comp_mat_use)) {
+      shadow_comp_mat_use <- strenv$OneTf_flat
+    }
+
+    compute_penalty_value <- function(pi_star_full_i,
+                                      P_VEC_FULL_,
+                                      LAMBDA_) {
+      if (penalty_type %in% c("L1", "L2")) {
+        PenFxn <- if (penalty_type == "L1") strenv$jnp$abs else strenv$jnp$square
+        return(LAMBDA_ * strenv$jnp$negative(strenv$jnp$sum(PenFxn(pi_star_full_i - P_VEC_FULL_))))
+      }
+      if (penalty_type == "LInfinity") {
+        pen_groups <- tapply(1:length(split_vec_full), split_vec_full, function(zer) {
+          list(strenv$jnp$max(
+            strenv$jnp$take(pi_star_full_i, indices = strenv$jnp$array(ai(zer - 1L)), axis = 0L)
+          ))
+        })
+        names(pen_groups) <- NULL
+        return(strenv$jnp$negative(LAMBDA_ * strenv$jnp$sum(strenv$jnp$stack(pen_groups))))
+      }
+
+      eps <- 1e-8
+      LAMBDA_ * strenv$jnp$negative(strenv$jnp$sum(
+        P_VEC_FULL_ * (
+          strenv$jnp$log(strenv$jnp$clip(P_VEC_FULL_, eps, 1.0)) -
+            strenv$jnp$log(strenv$jnp$clip(pi_star_full_i, eps, 1.0))
+        )
+      ))
+    }
+
+    penalty_value_and_grad_ast <- strenv$jax$value_and_grad(function(a_ast, P_VEC_FULL_, LAMBDA_) {
+      pi_star_full_i_ast <- getPrettyPi(
+        strenv$a2Simplex_diff_use(a_ast),
+        strenv$ParameterizationType,
+        strenv$d_locator_use,
+        main_comp_mat_use,
+        shadow_comp_mat_use
+      )
+      compute_penalty_value(pi_star_full_i_ast, P_VEC_FULL_, LAMBDA_)
+    }, argnums = 0L)
+
+    penalty_value_and_grad_dag <- strenv$jax$value_and_grad(function(a_dag, P_VEC_FULL_, LAMBDA_) {
+      pi_star_full_i_dag <- getPrettyPi(
+        strenv$a2Simplex_diff_use(a_dag),
+        strenv$ParameterizationType,
+        strenv$d_locator_use,
+        main_comp_mat_use,
+        shadow_comp_mat_use
+      )
+      compute_penalty_value(pi_star_full_i_dag, P_VEC_FULL_, LAMBDA_)
+    }, argnums = 0L)
+
+    score_value_and_grad_ast <- strenv$jax$value_and_grad(function(a_ast, policy_samples, advantages) {
+      pi_star_i_ast <- strenv$a2Simplex_diff_use(a_ast)
+      log_probs <- compute_policy_sample_log_probs(
+        pi_vec = pi_star_i_ast,
+        profiles = policy_samples,
+        ParameterizationType = strenv$ParameterizationType,
+        index_spec = index_spec_use
+      )
+      strenv$jnp$mean(strenv$jax$lax$stop_gradient(advantages) * log_probs)
+    }, argnums = 0L)
+
+    score_value_and_grad_dag <- strenv$jax$value_and_grad(function(a_dag, policy_samples, advantages) {
+      pi_star_i_dag <- strenv$a2Simplex_diff_use(a_dag)
+      log_probs <- compute_policy_sample_log_probs(
+        pi_vec = pi_star_i_dag,
+        profiles = policy_samples,
+        ParameterizationType = strenv$ParameterizationType,
+        index_spec = index_spec_use
+      )
+      strenv$jnp$mean(strenv$jax$lax$stop_gradient(advantages) * log_probs)
+    }, argnums = 0L)
+
+    update_reinforce_diag <- function(player,
+                                      reward_mean,
+                                      reward_var,
+                                      baseline_prev,
+                                      grad_total) {
+      baseline_num <- suppressWarnings(as.numeric(strenv$np$array(baseline_prev)))
+      reward_mean_num <- suppressWarnings(as.numeric(strenv$np$array(reward_mean)))
+      reward_var_num <- suppressWarnings(as.numeric(strenv$np$array(reward_var)))
+      grad_num <- tryCatch(as.numeric(strenv$np$array(grad_total)), error = function(e) NA_real_)
+      nonfinite <- any(!is.finite(grad_num))
+
+      list(
+        baseline = strenv$jnp$array(baseline_num, strenv$dtj),
+        reward_mean = strenv$jnp$array(reward_mean_num, strenv$dtj),
+        reward_var = strenv$jnp$array(reward_var_num, strenv$dtj),
+        nonfinite = nonfinite
+      )
+    }
+
+    grad_eval_ast <- function(a_i_ast, a_i_dag,
+                              INTERCEPT_ast_, COEFFICIENTS_ast_,
+                              INTERCEPT_dag_, COEFFICIENTS_dag_,
+                              INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                              INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                              P_VEC_FULL_ast, P_VEC_FULL_dag,
+                              SLATE_VEC_ast, SLATE_VEC_dag,
+                              LAMBDA,
+                              Q_SIGN_,
+                              SEED) {
+      pi_star_i_ast <- strenv$a2Simplex_diff_use(a_i_ast)
+      pi_star_i_dag <- strenv$a2Simplex_diff_use(a_i_dag)
+      reinforce_eval <- if (!adversarial) {
+        evaluate_average_case_q_reinforce(
+          pi_star_ast = pi_star_i_ast,
+          pi_star_dag = pi_star_i_dag,
+          INTERCEPT_ast_ = INTERCEPT_ast_,
+          COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+          INTERCEPT_dag_ = INTERCEPT_dag_,
+          COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+          seed_in = SEED,
+          outcome_model_type = outcome_model_type,
+          glm_family = glm_family,
+          nMonte_Qglm = nMonte_Qglm,
+          temperature = MNtemp,
+          ParameterizationType = strenv$ParameterizationType,
+          d_locator_use = strenv$d_locator_use,
+          q_fxn = QFXN,
+          single_party = !isTRUE(diff),
+          player = "ast"
+        )
+      } else {
+        evaluate_adversarial_q_reinforce(
+          pi_star_ast = pi_star_i_ast,
+          pi_star_dag = pi_star_i_dag,
+          a_i_ast = a_i_ast,
+          a_i_dag = a_i_dag,
+          INTERCEPT_ast_ = INTERCEPT_ast_,
+          COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+          INTERCEPT_dag_ = INTERCEPT_dag_,
+          COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+          INTERCEPT_ast0_ = INTERCEPT_ast0_,
+          COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
+          INTERCEPT_dag0_ = INTERCEPT_dag0_,
+          COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
+          P_VEC_FULL_ast_ = P_VEC_FULL_ast,
+          P_VEC_FULL_dag_ = P_VEC_FULL_dag,
+          SLATE_VEC_ast_ = SLATE_VEC_ast,
+          SLATE_VEC_dag_ = SLATE_VEC_dag,
+          LAMBDA_ = LAMBDA,
+          seed_in = SEED,
+          outcome_model_type = outcome_model_type,
+          glm_family = glm_family,
+          nMonte_Qglm = nMonte_Qglm,
+          nMonte_adversarial = nMonte_adversarial,
+          primary_pushforward = primary_pushforward,
+          primary_n_entrants = primary_n_entrants,
+          primary_n_field = primary_n_field,
+          temperature = MNtemp,
+          ParameterizationType = strenv$ParameterizationType,
+          d_locator_use = strenv$d_locator_use,
+          player = "ast"
+        )
+      }
+
+      baseline_prev <- if (is.null(strenv$reinforce_baseline_ast)) {
+        strenv$jnp$array(0., strenv$dtj)
+      } else {
+        strenv$reinforce_baseline_ast
+      }
+      advantages <- reinforce_eval$reward_draws - baseline_prev
+      score_grad <- score_value_and_grad_ast(
+        a_i_ast,
+        reinforce_eval$policy_samples,
+        advantages
+      )
+      penalty_grad <- penalty_value_and_grad_ast(a_i_ast, P_VEC_FULL_ast, LAMBDA)
+      grad_total <- strenv$jnp$add(score_grad[[2]], penalty_grad[[2]])
+      reward_mean <- reinforce_eval$reward_mean
+      reward_var <- strenv$jnp$mean(strenv$jnp$square(reinforce_eval$reward_draws - reward_mean))
+      strenv$reinforce_baseline_ast <- strenv$jnp$add(
+        strenv$jnp$multiply(strenv$jnp$array(0.9, strenv$dtj), baseline_prev),
+        strenv$jnp$multiply(strenv$jnp$array(0.1, strenv$dtj), reward_mean)
+      )
+      diag <- update_reinforce_diag(
+        player = "ast",
+        reward_mean = reward_mean,
+        reward_var = reward_var,
+        baseline_prev = baseline_prev,
+        grad_total = grad_total
+      )
+
+      list(
+        strenv$jnp$add(reward_mean, penalty_grad[[1]]),
+        grad_total,
+        diag
+      )
+    }
+
+    grad_eval_dag <- function(a_i_ast, a_i_dag,
+                              INTERCEPT_ast_, COEFFICIENTS_ast_,
+                              INTERCEPT_dag_, COEFFICIENTS_dag_,
+                              INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+                              INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+                              P_VEC_FULL_ast, P_VEC_FULL_dag,
+                              SLATE_VEC_ast, SLATE_VEC_dag,
+                              LAMBDA,
+                              Q_SIGN_,
+                              SEED) {
+      pi_star_i_ast <- strenv$a2Simplex_diff_use(a_i_ast)
+      pi_star_i_dag <- strenv$a2Simplex_diff_use(a_i_dag)
+      reinforce_eval <- evaluate_adversarial_q_reinforce(
+        pi_star_ast = pi_star_i_ast,
+        pi_star_dag = pi_star_i_dag,
+        a_i_ast = a_i_ast,
+        a_i_dag = a_i_dag,
+        INTERCEPT_ast_ = INTERCEPT_ast_,
+        COEFFICIENTS_ast_ = COEFFICIENTS_ast_,
+        INTERCEPT_dag_ = INTERCEPT_dag_,
+        COEFFICIENTS_dag_ = COEFFICIENTS_dag_,
+        INTERCEPT_ast0_ = INTERCEPT_ast0_,
+        COEFFICIENTS_ast0_ = COEFFICIENTS_ast0_,
+        INTERCEPT_dag0_ = INTERCEPT_dag0_,
+        COEFFICIENTS_dag0_ = COEFFICIENTS_dag0_,
+        P_VEC_FULL_ast_ = P_VEC_FULL_ast,
+        P_VEC_FULL_dag_ = P_VEC_FULL_dag,
+        SLATE_VEC_ast_ = SLATE_VEC_ast,
+        SLATE_VEC_dag_ = SLATE_VEC_dag,
+        LAMBDA_ = LAMBDA,
+        seed_in = SEED,
+        outcome_model_type = outcome_model_type,
+        glm_family = glm_family,
+        nMonte_Qglm = nMonte_Qglm,
+        nMonte_adversarial = nMonte_adversarial,
+        primary_pushforward = primary_pushforward,
+        primary_n_entrants = primary_n_entrants,
+        primary_n_field = primary_n_field,
+        temperature = MNtemp,
+        ParameterizationType = strenv$ParameterizationType,
+        d_locator_use = strenv$d_locator_use,
+        player = "dag"
+      )
+
+      baseline_prev <- if (is.null(strenv$reinforce_baseline_dag)) {
+        strenv$jnp$array(0., strenv$dtj)
+      } else {
+        strenv$reinforce_baseline_dag
+      }
+      advantages <- reinforce_eval$reward_draws - baseline_prev
+      score_grad <- score_value_and_grad_dag(
+        a_i_dag,
+        reinforce_eval$policy_samples,
+        advantages
+      )
+      penalty_grad <- penalty_value_and_grad_dag(a_i_dag, P_VEC_FULL_dag, LAMBDA)
+      grad_total <- strenv$jnp$add(score_grad[[2]], penalty_grad[[2]])
+      reward_mean <- reinforce_eval$reward_mean
+      reward_var <- strenv$jnp$mean(strenv$jnp$square(reinforce_eval$reward_draws - reward_mean))
+      strenv$reinforce_baseline_dag <- strenv$jnp$add(
+        strenv$jnp$multiply(strenv$jnp$array(0.9, strenv$dtj), baseline_prev),
+        strenv$jnp$multiply(strenv$jnp$array(0.1, strenv$dtj), reward_mean)
+      )
+      diag <- update_reinforce_diag(
+        player = "dag",
+        reward_mean = reward_mean,
+        reward_var = reward_var,
+        baseline_prev = baseline_prev,
+        grad_total = grad_total
+      )
+
+      list(
+        strenv$jnp$add(reward_mean, penalty_grad[[1]]),
+        grad_total,
+        diag
+      )
+    }
+  }
+
+  record_reinforce_diag <- function(iter_idx, player, grad_result) {
+    if (length(grad_result) < 3L || is.null(grad_result[[3L]])) {
+      return(invisible(NULL))
+    }
+    diag <- grad_result[[3L]]
+    if (identical(player, "ast")) {
+      strenv$reinforce_baseline_ast_vec[[iter_idx]] <- list(diag$baseline)
+      strenv$reinforce_reward_mean_ast_vec[[iter_idx]] <- list(diag$reward_mean)
+      strenv$reinforce_reward_var_ast_vec[[iter_idx]] <- list(diag$reward_var)
+      if (isTRUE(diag$nonfinite)) {
+        strenv$reinforce_nonfinite_ast_steps <- strenv$reinforce_nonfinite_ast_steps + 1L
+      }
+    } else {
+      strenv$reinforce_baseline_dag_vec[[iter_idx]] <- list(diag$baseline)
+      strenv$reinforce_reward_mean_dag_vec[[iter_idx]] <- list(diag$reward_mean)
+      strenv$reinforce_reward_var_dag_vec[[iter_idx]] <- list(diag$reward_var)
+      if (isTRUE(diag$nonfinite)) {
+        strenv$reinforce_nonfinite_dag_steps <- strenv$reinforce_nonfinite_dag_steps + 1L
+      }
+    }
+    invisible(NULL)
+  }
+
   # gradient descent iterations
   strenv$grad_mag_ast_vec <- strenv$grad_mag_dag_vec <- rep(NA, times = nSGD)
   strenv$loss_ast_vec <- strenv$loss_dag_vec <- rep(NA, times = nSGD)
@@ -231,7 +565,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         seed_base <- SEED
 
         if (adversarial) {
-          base_grad_dag <- dQ_da_dag(
+          base_grad_dag <- grad_eval_dag(
             a_i_ast, a_i_dag,
             INTERCEPT_ast_,  COEFFICIENTS_ast_,
             INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -243,6 +577,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
             Q_SIGN_ <- strenv$jnp$array(-1.),
             seed_base
           )
+          record_reinforce_diag(i, "dag", base_grad_dag)
           loss_dag_val <- base_grad_dag[[1]]
           grad_dag <- base_grad_dag[[2]]
           if (has_anchors) {
@@ -251,7 +586,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           }
         }
 
-        base_grad_ast <- dQ_da_ast(
+        base_grad_ast <- grad_eval_ast(
           a_i_ast, a_i_dag,
           INTERCEPT_ast_,  COEFFICIENTS_ast_,
           INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -263,6 +598,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           Q_SIGN_ <- strenv$jnp$array(1.),
           seed_base
         )
+        record_reinforce_diag(i, "ast", base_grad_ast)
         loss_ast_val <- base_grad_ast[[1]]
         grad_ast <- base_grad_ast[[2]]
         if (has_anchors) {
@@ -291,7 +627,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         seed_look <- SEED
 
         if (adversarial) {
-          grad_pred_dag <- dQ_da_dag(
+          grad_pred_dag <- grad_eval_dag(
             a_pred_ast, a_pred_dag,
             INTERCEPT_ast_,  COEFFICIENTS_ast_,
             INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -309,7 +645,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
           }
         }
 
-        grad_pred_ast <- dQ_da_ast(
+        grad_pred_ast <- grad_eval_ast(
           a_pred_ast, a_pred_dag,
           INTERCEPT_ast_,  COEFFICIENTS_ast_,
           INTERCEPT_dag_,  COEFFICIENTS_dag_,
@@ -386,7 +722,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       if( i %% 1 == 0 & adversarial & !use_joint_extragrad ){
       # note: dQ_da_dag built off FullGetQStar_
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
-      grad_i_dag <- dQ_da_dag(  a_i_ast, a_i_dag,                    #1,2
+      grad_i_dag <- grad_eval_dag(  a_i_ast, a_i_dag,                    #1,2
                                 INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
                                 INTERCEPT_dag_,  COEFFICIENTS_dag_,  #5,6
                                 INTERCEPT_ast0_, COEFFICIENTS_ast0_, #7,8
@@ -397,6 +733,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                 Q_SIGN_ <- strenv$jnp$array(-1.),    #16
                                 SEED                                 #17
                                 )
+      record_reinforce_diag(i, "dag", grad_i_dag)
       strenv$loss_dag_vec[i] <- list(grad_i_dag[[1]]); grad_i_dag <- grad_i_dag[[2]]
       if (use_rain) {
         grad_i_dag <- strenv$jnp$subtract(
@@ -459,7 +796,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
             smp_gamma_dag_vec[[i]] <- gamma_dag
           }
           SEED   <- strenv$jax$random$split(SEED)[[1L]]
-          grad_pred_dag <- dQ_da_dag(  a_i_ast, a_pred_dag,                 #1,2
+          grad_pred_dag <- grad_eval_dag(  a_i_ast, a_pred_dag,                 #1,2
                                        INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
                                        INTERCEPT_dag_,  COEFFICIENTS_dag_,  #5,6
                                        INTERCEPT_ast0_, COEFFICIENTS_ast0_, #7,8
@@ -500,7 +837,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     # do updates ("max" step)
     if( (i %% 1 == 0 | (!adversarial)) && !use_joint_extragrad ){
       SEED   <- strenv$jax$random$split(SEED)[[1L]] 
-      grad_i_ast <- dQ_da_ast( a_i_ast, a_i_dag,
+      grad_i_ast <- grad_eval_ast( a_i_ast, a_i_dag,
                                INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                INTERCEPT_dag_,  COEFFICIENTS_dag_,
                                INTERCEPT_ast0_, COEFFICIENTS_ast0_,
@@ -511,6 +848,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                Q_SIGN_ <- strenv$jnp$array(1.),
                                SEED
                                )
+      record_reinforce_diag(i, "ast", grad_i_ast)
       strenv$loss_ast_vec[i] <- list(grad_i_ast[[1]]); grad_i_ast <- grad_i_ast[[2]]
       if (use_rain) {
         grad_i_ast <- strenv$jnp$subtract(
@@ -546,7 +884,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
             smp_gamma_ast_vec[[i]] <- gamma_ast
           }
           SEED   <- strenv$jax$random$split(SEED)[[1L]] 
-          grad_pred_ast <- dQ_da_ast( a_pred_ast, a_i_dag,
+          grad_pred_ast <- grad_eval_ast( a_pred_ast, a_i_dag,
                                       INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                       INTERCEPT_dag_,  COEFFICIENTS_dag_,
                                       INTERCEPT_ast0_, COEFFICIENTS_ast0_,
@@ -591,7 +929,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       start_dag <- a_i_dag
 
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
-      base_grad_dag <- dQ_da_dag(  a_i_ast, a_i_dag,                    #1,2
+      base_grad_dag <- grad_eval_dag(  a_i_ast, a_i_dag,                    #1,2
                                    INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
                                    INTERCEPT_dag_,  COEFFICIENTS_dag_,  #5,6
                                    INTERCEPT_ast0_, COEFFICIENTS_ast0_, #7,8
@@ -602,6 +940,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                    Q_SIGN_ <- strenv$jnp$array(-1.),    #16
                                    SEED                                 #17
       )
+      record_reinforce_diag(i, "dag", base_grad_dag)
       strenv$loss_dag_vec[i] <- list(base_grad_dag[[1]]); base_grad_dag <- base_grad_dag[[2]]
       if (use_rain) {
         base_grad_dag <- strenv$jnp$subtract(
@@ -611,7 +950,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
 
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
-      base_grad_ast <- dQ_da_ast( a_i_ast, a_i_dag,
+      base_grad_ast <- grad_eval_ast( a_i_ast, a_i_dag,
                                   INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                   INTERCEPT_dag_,  COEFFICIENTS_dag_,
                                   INTERCEPT_ast0_, COEFFICIENTS_ast0_,
@@ -622,6 +961,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                   Q_SIGN_ <- strenv$jnp$array(1.),
                                   SEED
       )
+      record_reinforce_diag(i, "ast", base_grad_ast)
       strenv$loss_ast_vec[i] <- list(base_grad_ast[[1]]); base_grad_ast <- base_grad_ast[[2]]
       if (use_rain) {
         base_grad_ast <- strenv$jnp$subtract(
@@ -665,7 +1005,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
 
       SEED   <- strenv$jax$random$split(SEED)[[1L]]
-      grad_pred_dag <- dQ_da_dag(  a_pred_ast, a_pred_dag,               #1,2
+      grad_pred_dag <- grad_eval_dag(  a_pred_ast, a_pred_dag,               #1,2
                                    INTERCEPT_ast_,  COEFFICIENTS_ast_,  #3,4
                                    INTERCEPT_dag_,  COEFFICIENTS_dag_,  #5,6
                                    INTERCEPT_ast0_, COEFFICIENTS_ast0_, #7,8
@@ -684,7 +1024,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
 
       SEED   <- strenv$jax$random$split(SEED)[[1L]] 
-      grad_pred_ast <- dQ_da_ast( a_pred_ast, a_pred_dag,
+      grad_pred_ast <- grad_eval_ast( a_pred_ast, a_pred_dag,
                                   INTERCEPT_ast_,  COEFFICIENTS_ast_,
                                   INTERCEPT_dag_,  COEFFICIENTS_dag_,
                                   INTERCEPT_ast0_, COEFFICIENTS_ast0_,
@@ -823,11 +1163,11 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
                                                no  = list(list( q_star_f, 
                                                                 pi_star_ast_, 
                                                                 pi_star_dag_ )))[[1]])
-    if( functionReturn ){ 
+    if( functionReturn ){
                             ret_array <- list(ret_array,
-                                               list("dQ_da_ast" = dQ_da_ast, 
-                                                    "dQ_da_dag" = dQ_da_dag,
-                                                    "QFXN" = QFXN, 
+                                               list("dQ_da_ast" = grad_eval_ast,
+                                                    "dQ_da_dag" = grad_eval_dag,
+                                                    "QFXN" = QFXN,
                                                     "getMultinomialSamp" = strenv$getMultinomialSamp,
                                                     "a_i_ast" = a_i_ast, 
                                                     "a_i_dag" = a_i_dag
