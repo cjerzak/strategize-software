@@ -212,4 +212,72 @@ test_that("implicit SEs complete for large-support neural average-case fits", {
   expect_true(is.finite(res$Q_se), info = info_msg)
   expect_true(any(is.finite(res$pi_star_se_vec)), info = info_msg)
   expect_identical(as.integer(res$convergence_history$reinforce_nonfinite_ast_steps), 0L, info = info_msg)
+  expect_null(strategize:::strenv$reinforce_baseline_ast, info = info_msg)
+  expect_null(strategize:::strenv$reinforce_baseline_dag, info = info_msg)
+
+  small_data <- local({
+    withr::local_seed(20260329L)
+    levels <- LETTERS[1:2]
+    W <- matrix(sample(levels, 24L * 3L, replace = TRUE), nrow = 24L, ncol = 3L)
+    colnames(W) <- paste0("V", seq_len(3L))
+    effect_sizes <- seq(0.5, 0.2, length.out = 3L)
+    signal <- rowSums((W == "B") * rep(effect_sizes, each = 24L))
+    list(
+      Y = as.numeric(signal + rnorm(24L, sd = 0.1)),
+      W = W
+    )
+  })
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_SKIP_EVAL = "true"
+  ))
+  small_params <- default_strategize_params(fast = TRUE)
+  small_params$diff <- FALSE
+  small_params$force_gaussian <- TRUE
+  small_params$force_reinforce <- TRUE
+  small_params$compute_se <- FALSE
+  small_params$outcome_model_type <- "neural"
+  small_params$nMonte_Qglm <- 8L
+  small_params$neural_mcmc_control <- modifyList(
+    small_params$neural_mcmc_control,
+    list(
+      subsample_method = "batch_vi",
+      uncertainty_scope = "output",
+      vi_guide = "auto_diagonal",
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      batch_size = 16L,
+      svi_steps = 20L,
+      svi_num_draws = 5L,
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+
+  followup <- suppressWarnings(do.call(strategize, c(
+    list(
+      Y = small_data$Y,
+      W = small_data$W,
+      p_list = generate_test_p_list(small_data$W)
+    ),
+    small_params
+  )))
+
+  followup_info <- sprintf(
+    paste0(
+      "followup objective_gradient_mode=%s; ",
+      "reinforce_nonfinite_ast_steps=%d; Q_point=%s"
+    ),
+    followup$convergence_history$objective_gradient_mode,
+    as.integer(followup$convergence_history$reinforce_nonfinite_ast_steps),
+    format(as.numeric(followup$Q_point), digits = 6)
+  )
+
+  expect_identical(followup$convergence_history$objective_gradient_mode, "reinforce", info = followup_info)
+  expect_identical(as.integer(followup$convergence_history$reinforce_nonfinite_ast_steps), 0L, info = followup_info)
+  expect_true(all(is.finite(as.numeric(followup$Q_point))), info = followup_info)
+  expect_null(strategize:::strenv$reinforce_baseline_ast, info = followup_info)
+  expect_null(strategize:::strenv$reinforce_baseline_dag, info = followup_info)
 })
