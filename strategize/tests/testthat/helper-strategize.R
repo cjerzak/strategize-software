@@ -53,11 +53,6 @@ skip_if_no_tgp <- function() {
   }
 }
 
-#' Skip one-step estimator tests (require larger datasets and more tuning)
-skip_onestep_tests <- function() {
-  skip("One-step estimator tests require larger datasets (set STRATEGIZE_RUN_ONESTEP_TESTS=true to run)")
-}
-
 # =============================================================================
 # Test Data Generators
 # =============================================================================
@@ -245,7 +240,7 @@ add_adversarial_structure <- function(base_data, seed = 42) {
 #'
 #' Creates a list of probability distributions for each factor,
 #' where each distribution is uniform over the factor's levels.
-#' Returns a named vector format compatible with strategize() and strategize_onestep().
+#' Returns a named vector format compatible with strategize().
 #'
 #' @param W Factor matrix from generate_test_data
 #' @return List of named probability vectors for each factor

@@ -1,3 +1,4 @@
+# Deprecated archive: retained for reference only and not sourced by the active package.
 #' Estimate an Optimal (or Adversarial) Stochastic Intervention for Conjoint Analysis Using a One-Step M-estimation Approach
 #'
 #' @description

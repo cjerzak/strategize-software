@@ -308,7 +308,7 @@
 #'
 #' \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
 #'
-#' \item{\code{estimationType}}{String indicating the approach used (e.g., \code{"TwoStep"} or \code{"OneStep"}).}
+#' \item{\code{estimationType}}{String indicating the approach used by the active estimator, \code{"TwoStep"}.}
 #'
 #' \item{\code{...}}{Additional internal details (e.g., fitted models, optimization logs).}
 #' }
@@ -342,8 +342,6 @@
 #'
 #' @seealso
 #' \code{\link{cv_strategize}} for cross-validation across candidate values of \code{lambda}.
-#' See also \code{\link{strategize_onestep}} for a function that implements a \dQuote{one-step}
-#' approach to M-estimation of the same target quantity. 
 #'
 #' @examples
 #' \donttest{

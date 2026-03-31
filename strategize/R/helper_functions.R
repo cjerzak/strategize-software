@@ -1747,9 +1747,6 @@ computeQ_conjoint_internal <- function(FactorsMat_internal,
               "log_PrW"=log_pr_w_internal))
 }
 
-vec2list_noTransform <- function(vec_){ return( split(vec_,f = splitIndices)) }
-
-
 computeQse_conjoint <- function(FactorsMat, Yobs,
                                 pi_list,
                                 assignmentProbList,

@@ -52,7 +52,6 @@ This vignette illustrates core functionality:
 - **Section 1** constructs a toy dataset (since we do not assume you have your own data in this example).
 - **Section 2** demonstrates a two-step approach to (1) fit an outcome model (like a logistic regression) and (2) optimize a *stochastic intervention* to maximize that model's predicted outcome.
 - **Section 3** highlights features like adversarial (max-min) scenarios, cross-validation, and multi-cluster expansions.
-- **Section 4** briefly shows an alternative one-step M-estimation procedure.
 
 Throughout, we will use raw `R` code chunks to illustrate typical usage in `R`, including how to specify factor-level probability constraints, run the optimization, and interpret the results.
 
@@ -394,7 +393,7 @@ This vignette has illustrated the core usage of the `strategize` package for:
 3. Optimizing to find an *average-case* or *adversarial* (max-min) solution for a new factor-level distribution.
 4. Interpreting the estimated solution, e.g., the new distribution that up- or down-weights certain levels.
 
-We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `strategize`, `cv_strategize`, and `strategize_onestep` for additional arguments and more advanced use-cases.
+We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `strategize` and `cv_strategize` for additional arguments and more advanced use-cases.
 
 ## References
 

@@ -1,3 +1,4 @@
+# Deprecated archive: retained for reference only and not sourced by the active package.
 ml_build <- function(){
   message("Begin building block...")
   Zero1by1 <- strenv$jnp$array(as.matrix(0.),strenv$jnp$float32)

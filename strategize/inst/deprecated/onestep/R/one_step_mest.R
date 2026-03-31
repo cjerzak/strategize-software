@@ -1,3 +1,4 @@
+# Deprecated archive: retained for reference only and not sourced by the active package.
 get_se <- function(){
 
   # start here - get SEs from M-estimation for marginal mean computation

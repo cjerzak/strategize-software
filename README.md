@@ -75,7 +75,7 @@ with the expected outcome `Q_point_mEst` under that distribution.
 - **Adversarial Mode**: Set `adversarial = TRUE` to find Nash equilibrium strategies in two-player zero-sum games (e.g., competing candidates)
 - **Optimistic Updates**: Toggle `optimism = "ogda"`, `optimism = "smp"`, or `optimism = "none"`; default is `optimism = "extragrad"` (extra-gradient look-ahead) for more stable min-max training
 - **Cross-Validation**: Use `cv_strategize()` to automatically select the regularization parameter lambda
-- **One-Step Estimation**: Use `strategize_onestep()` for simultaneous outcome modeling and distribution optimization
+- **Deprecated One-Step Estimator**: The legacy one-step implementation is archived under `strategize/inst/deprecated/onestep/` for reference only
 - **Helper Functions**: Use `create_p_list()` to easily create probability lists from your data, and `strategize_preset()` for quick analysis with sensible defaults
 - **Validation & Diagnostics**: Use `validate_equilibrium()` to verify Nash equilibrium quality, `plot_convergence()` to visualize optimization, `plot_quadrant_breakdown()` for scenario analysis, and `summarize_adversarial()` for comprehensive summaries
 
