@@ -1520,6 +1520,7 @@ generate_ModelOutcome_neural <- function(){
     svi_num_draws = 200L,
     vi_guide = "auto_normal",
     optimizer = "muon",
+    early_stopping = TRUE,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -3663,6 +3664,493 @@ generate_ModelOutcome_neural <- function(){
 
   model_fn_base <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
   model_fn <- model_fn_base
+
+  build_params_from_sites_for_svi_validation <- function(param_sites,
+                                                         fallback_params = NULL) {
+    if (is.null(param_sites) && is.null(fallback_params)) {
+      return(NULL)
+    }
+
+    get_site_value <- function(name) {
+      value <- if (!is.null(param_sites)) {
+        tryCatch(param_sites[[name]], error = function(e) NULL)
+      } else {
+        NULL
+      }
+      if (is.null(value) && !is.null(fallback_params)) {
+        value <- tryCatch(fallback_params[[name]], error = function(e) NULL)
+      }
+      value
+    }
+
+    get_loc_scale_site_value <- function(name, scale_name) {
+      direct_value <- get_site_value(name)
+      if (!is.null(direct_value)) {
+        return(direct_value)
+      }
+
+      base_names <- c(paste0(name, "_decentered"),
+                      paste0(name, "_base"),
+                      paste0(name, "_z"))
+      base_value <- NULL
+      for (base_name in base_names) {
+        base_value <- get_site_value(base_name)
+        if (!is.null(base_value)) {
+          break
+        }
+      }
+      scale_value <- get_site_value(scale_name)
+      if (is.null(base_value) || is.null(scale_value)) {
+        return(NULL)
+      }
+
+      scale_shape <- tryCatch(
+        as.integer(reticulate::py_to_r(scale_value$shape)),
+        error = function(e) NULL
+      )
+      base_shape <- tryCatch(
+        as.integer(reticulate::py_to_r(base_value$shape)),
+        error = function(e) NULL
+      )
+      if (!is.null(scale_shape) && !is.null(base_shape)) {
+        extra_dims <- length(base_shape) - length(scale_shape)
+        if (extra_dims > 0L) {
+          reshape_dims <- c(scale_shape, rep(1L, extra_dims))
+          scale_value <- strenv$jnp$reshape(scale_value, as.list(reshape_dims))
+        }
+      }
+      scale_value * base_value
+    }
+
+    get_centered_factor_site_value <- function(name, d_idx) {
+      value <- get_site_value(name)
+      if (!is.null(value)) {
+        return(value)
+      }
+      raw_value <- get_site_value(paste0(name, "_raw"))
+      if (is.null(raw_value)) {
+        return(NULL)
+      }
+      center_factor_embeddings(raw_value, factor_levels_int[d_idx])
+    }
+
+    get_cross_site_value <- function() {
+      value <- get_site_value("M_cross")
+      if (!is.null(value)) {
+        return(value)
+      }
+      raw_value <- get_site_value("M_cross_raw")
+      if (is.null(raw_value)) {
+        raw_value <- get_loc_scale_site_value("M_cross_raw", "tau_cross")
+      }
+      if (is.null(raw_value)) {
+        return(NULL)
+      }
+      0.5 * (raw_value - strenv$jnp$transpose(raw_value))
+    }
+
+    params_out <- list()
+    maybe_site <- function(name, assign_as = name, value = NULL) {
+      if (is.null(value)) {
+        value <- get_site_value(name)
+      }
+      if (!is.null(value)) {
+        params_out[[assign_as]] <<- value
+      }
+      invisible(value)
+    }
+
+    params_out$E_party <- get_site_value("E_party")
+    params_out$E_resp_party <- get_site_value("E_resp_party")
+    params_out$E_choice <- get_site_value("E_choice")
+    if (is.null(params_out$E_party) ||
+        is.null(params_out$E_resp_party) ||
+        is.null(params_out$E_choice)) {
+      return(NULL)
+    }
+
+    maybe_site("E_sep")
+    maybe_site("E_rel")
+    maybe_site("E_stage")
+    maybe_site("E_matchup")
+    maybe_site("alpha_cross")
+    maybe_site("RMS_cross")
+    maybe_site("RMS_merge_cross")
+    maybe_site("RMS_q_cross")
+    maybe_site("RMS_k_cross")
+
+    feature_id_value <- get_site_value("E_feature_id")
+    if (is.null(feature_id_value)) {
+      feature_id_raw <- get_site_value("E_feature_id_raw")
+      if (!is.null(feature_id_raw)) {
+        feature_id_value <- neural_center_token_rows(feature_id_raw)
+      }
+    }
+    maybe_site("E_feature_id", value = feature_id_value)
+
+    segment_value <- get_site_value("E_segment")
+    if (is.null(segment_value)) {
+      segment_delta <- get_site_value("E_segment_delta")
+      if (!is.null(segment_delta)) {
+        segment_value <- neural_build_symmetric_segment_embeddings(segment_delta)
+      }
+    }
+    maybe_site("E_segment", value = segment_value)
+
+    params_out$W_out <- get_loc_scale_site_value("W_out", "tau_w_out")
+    params_out$b_out <- get_loc_scale_site_value("b_out", "tau_b")
+    if (is.null(params_out$W_out) || is.null(params_out$b_out)) {
+      return(NULL)
+    }
+
+    cross_value <- get_cross_site_value()
+    if (!is.null(cross_value)) {
+      params_out$M_cross <- cross_value
+    }
+    maybe_site("W_cross_out")
+
+    if (likelihood == "normal") {
+      maybe_site("sigma")
+    }
+    if (n_resp_covariates > 0L) {
+      maybe_site("W_resp_x")
+    }
+
+    for (d_ in seq_along(factor_levels_int)) {
+      params_out[[paste0("E_factor_", d_)]] <- get_centered_factor_site_value(
+        paste0("E_factor_", d_),
+        d_
+      )
+    }
+
+    for (l_ in 1L:ModelDepth) {
+      maybe_site(paste0("alpha_attn_l", l_))
+      maybe_site(paste0("alpha_ff_l", l_))
+      maybe_site(paste0("RMS_attn_l", l_))
+      maybe_site(paste0("RMS_q_l", l_))
+      maybe_site(paste0("RMS_k_l", l_))
+      maybe_site(paste0("RMS_ff_l", l_))
+
+      tau_name <- paste0("tau_w_", l_)
+      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+        params_out[[paste0(base, l_)]] <- get_loc_scale_site_value(paste0(base, l_), tau_name)
+      }
+    }
+
+    for (name in c("W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
+      params_out[[name]] <- get_loc_scale_site_value(name, "tau_cross_attn")
+    }
+    maybe_site("RMS_final")
+
+    params_out
+  }
+
+  svi_validation_predict <- function(param_sites, idx, fallback_params = NULL) {
+    params <- build_params_from_sites_for_svi_validation(
+      param_sites,
+      fallback_params = fallback_params
+    )
+    if (is.null(params) || length(idx) < 1L) {
+      return(NULL)
+    }
+
+    to_r_array_local <- function(x) {
+      if (is.null(x) || is.numeric(x)) {
+        return(x)
+      }
+      tryCatch(reticulate::py_to_r(strenv$np$array(x)),
+               error = function(e) {
+                 tryCatch(reticulate::py_to_r(x), error = function(e2) x)
+               })
+    }
+
+    coerce_prediction_output_local <- function(pred) {
+      if (likelihood == "bernoulli") {
+        return(as.numeric(to_r_array_local(pred)))
+      }
+      if (likelihood == "categorical") {
+        return(as.matrix(to_r_array_local(pred)))
+      }
+      if (likelihood == "normal") {
+        return(list(
+          mu = as.numeric(to_r_array_local(pred$mu)),
+          sigma = as.numeric(to_r_array_local(pred$sigma))
+        ))
+      }
+      pred
+    }
+
+    if (pairwise_mode) {
+      Xl <- strenv$jnp$array(to_index_matrix(X_left[idx, , drop = FALSE]))$astype(strenv$jnp$int32)
+      Xr <- strenv$jnp$array(to_index_matrix(X_right[idx, , drop = FALSE]))$astype(strenv$jnp$int32)
+      pl <- strenv$jnp$array(as.integer(party_left[idx]))$astype(strenv$jnp$int32)
+      pr <- strenv$jnp$array(as.integer(party_right[idx]))$astype(strenv$jnp$int32)
+      resp_p <- strenv$jnp$array(as.integer(resp_party_use[idx]))$astype(strenv$jnp$int32)
+      if (n_resp_covariates > 0L) {
+        resp_c <- strenv$jnp$array(as.matrix(X_use[idx, , drop = FALSE]))$astype(ddtype_)
+      } else {
+        resp_c <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
+      }
+
+      model_info_local <- list(
+        model_dims = ModelDims,
+        cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
+        n_party_levels = ai(n_party_levels)
+      )
+      transformer_model_info <- list(
+        model_depth = ModelDepth,
+        model_dims = ModelDims,
+        n_heads = TransformerHeads,
+        head_dim = head_dim
+      )
+
+      embed_candidate <- function(X_idx, party_idx, resp_p_idx) {
+        neural_build_candidate_tokens_hard(
+          X_idx,
+          party_idx,
+          model_info = model_info_local,
+          resp_party_idx = resp_p_idx,
+          params = params
+        )
+      }
+      add_segment_embedding <- function(tokens, segment_idx) {
+        neural_add_segment_embedding(
+          tokens,
+          segment_idx,
+          model_info = model_info_local,
+          params = params
+        )
+      }
+      run_transformer <- function(tokens) {
+        neural_run_transformer(tokens, model_info = transformer_model_info, params = params)
+      }
+      build_context_tokens <- function(stage_idx, resp_p_idx, resp_c_idx, matchup_idx = NULL) {
+        neural_build_context_tokens_batch(
+          model_info = model_info_local,
+          resp_party_idx = resp_p_idx,
+          stage_idx = stage_idx,
+          matchup_idx = matchup_idx,
+          resp_cov = resp_c_idx,
+          params = params
+        )
+      }
+      build_sep_token <- function(n_batch) {
+        neural_build_sep_token(model_info_local, n_batch = n_batch, params = params)
+      }
+      encode_pair_cross <- function(stage_idx, matchup_idx = NULL) {
+        n_batch <- ai(Xl$shape[[1]])
+        choice_tok <- neural_build_choice_token(model_info_local, params)
+        choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
+        ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, matchup_idx)
+        left_tokens <- add_segment_embedding(embed_candidate(Xl, pl, resp_p), 0L)
+        right_tokens <- add_segment_embedding(embed_candidate(Xr, pr, resp_p), 1L)
+        sep_tok <- build_sep_token(n_batch)
+        token_parts <- list(choice_tok)
+        if (!is.null(ctx_tokens)) {
+          token_parts <- c(token_parts, list(ctx_tokens))
+        }
+        token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+        tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
+        tokens <- run_transformer(tokens)
+        cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+        cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+        neural_linear_head(cls_out, params$W_out, params$b_out)
+      }
+      encode_candidate <- function(Xa, pa, resp_p_idx, resp_c_idx, stage_idx, matchup_idx = NULL,
+                                   return_tokens = FALSE) {
+        n_batch <- ai(Xa$shape[[1]])
+        choice_tok <- neural_build_choice_token(model_info_local, params)
+        choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
+        ctx_tokens <- build_context_tokens(stage_idx, resp_p_idx, resp_c_idx, matchup_idx)
+        cand_tokens <- embed_candidate(Xa, pa, resp_p_idx)
+        if (is.null(ctx_tokens)) {
+          tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
+        } else {
+          tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
+        }
+        tokens <- run_transformer(tokens)
+        choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+        phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+        if (!isTRUE(return_tokens)) {
+          return(phi)
+        }
+        t_total <- ai(tokens$shape[[2]])
+        t_cand <- ai(n_candidate_tokens)
+        cand_idx <- strenv$jnp$arange(ai(t_total - t_cand), ai(t_total))
+        cand_out <- strenv$jnp$take(tokens, cand_idx, axis = 1L)
+        list(phi = phi, cand_tokens_out = cand_out)
+      }
+      encode_candidate_pair <- function(stage_idx, matchup_idx = NULL) {
+        n_batch <- ai(Xl$shape[[1]])
+        X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
+        p_all <- strenv$jnp$concatenate(list(pl, pr), axis = 0L)
+        resp_p_all <- strenv$jnp$concatenate(list(resp_p, resp_p), axis = 0L)
+        resp_c_all <- strenv$jnp$concatenate(list(resp_c, resp_c), axis = 0L)
+        stage_all <- if (is.null(stage_idx)) NULL else {
+          strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
+        }
+        matchup_all <- if (is.null(matchup_idx)) NULL else {
+          strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
+        }
+        if (isTRUE(use_cross_attn)) {
+          enc_all <- encode_candidate(
+            X_all,
+            p_all,
+            resp_p_all,
+            resp_c_all,
+            stage_all,
+            matchup_all,
+            return_tokens = TRUE
+          )
+          phi_all <- enc_all$phi
+          cand_all <- enc_all$cand_tokens_out
+        } else {
+          phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all, stage_all, matchup_all)
+          cand_all <- NULL
+        }
+        idx_left <- strenv$jnp$arange(n_batch)
+        idx_right <- strenv$jnp$arange(n_batch, 2L * n_batch)
+        out <- list(
+          phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
+          phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
+        )
+        if (isTRUE(use_cross_attn)) {
+          out$cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
+          out$cand_right_out <- strenv$jnp$take(cand_all, idx_right, axis = 0L)
+        }
+        out
+      }
+
+      stage_idx <- neural_stage_index(pl, pr, model_info_local)
+      matchup_idx <- NULL
+      if (!is.null(params$E_matchup)) {
+        matchup_idx <- neural_matchup_index(pl, pr, model_info_local)
+      }
+      if (isTRUE(use_cross_encoder)) {
+        logits <- encode_pair_cross(stage_idx, matchup_idx)
+      } else {
+        phi_pair <- encode_candidate_pair(stage_idx, matchup_idx)
+        phi_l <- phi_pair$phi_left
+        phi_r <- phi_pair$phi_right
+        if (isTRUE(use_cross_attn)) {
+          ctx_left <- neural_cross_attend_cls_to_tokens(
+            phi_l,
+            phi_pair$cand_right_out,
+            model_info = transformer_model_info,
+            params = params
+          )
+          ctx_right <- neural_cross_attend_cls_to_tokens(
+            phi_r,
+            phi_pair$cand_left_out,
+            model_info = transformer_model_info,
+            params = params
+          )
+          phi_l <- neural_merge_cross_attn_representation(
+            phi_l,
+            ctx_left,
+            params,
+            transformer_model_info$model_dims
+          )
+          phi_r <- neural_merge_cross_attn_representation(
+            phi_r,
+            ctx_right,
+            params,
+            transformer_model_info$model_dims
+          )
+        }
+        u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
+        u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)
+        logits <- u_l - u_r
+        if (isTRUE(use_cross_term)) {
+          logits <- neural_apply_cross_term(
+            logits,
+            phi_l,
+            phi_r,
+            params$M_cross,
+            params$W_cross_out,
+            out_dim = ai(params$W_out$shape[[2]])
+          )
+        }
+      }
+
+      pred <- if (likelihood == "bernoulli") {
+        strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L))
+      } else if (likelihood == "categorical") {
+        strenv$jax$nn$softmax(logits, axis = -1L)
+      } else {
+        list(
+          mu = strenv$jnp$squeeze(logits, axis = 1L),
+          sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.)
+        )
+      }
+      return(coerce_prediction_output_local(pred))
+    }
+
+    Xb <- strenv$jnp$array(to_index_matrix(X_single[idx, , drop = FALSE]))$astype(strenv$jnp$int32)
+    pb <- strenv$jnp$array(as.integer(party_single[idx]))$astype(strenv$jnp$int32)
+    resp_p <- strenv$jnp$array(as.integer(resp_party_use[idx]))$astype(strenv$jnp$int32)
+    if (n_resp_covariates > 0L) {
+      resp_c <- strenv$jnp$array(as.matrix(X_use[idx, , drop = FALSE]))$astype(ddtype_)
+    } else {
+      resp_c <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
+    }
+
+    model_info_local <- list(
+      model_dims = ModelDims,
+      cand_party_to_resp_idx = cand_party_to_resp_idx_jnp
+    )
+    transformer_model_info <- list(
+      model_depth = ModelDepth,
+      model_dims = ModelDims,
+      n_heads = TransformerHeads,
+      head_dim = head_dim
+    )
+
+    embed_candidate <- function(X_idx, party_idx, resp_p_idx) {
+      neural_build_candidate_tokens_hard(
+        X_idx,
+        party_idx,
+        model_info = model_info_local,
+        resp_party_idx = resp_p_idx,
+        params = params
+      )
+    }
+    run_transformer <- function(tokens) {
+      neural_run_transformer(tokens, model_info = transformer_model_info, params = params)
+    }
+
+    ctx_tokens <- neural_build_context_tokens_batch(
+      model_info = model_info_local,
+      resp_party_idx = resp_p,
+      resp_cov = resp_c,
+      params = params
+    )
+    choice_tok <- neural_build_choice_token(model_info_local, params)
+    choice_tok <- choice_tok * strenv$jnp$ones(list(Xb$shape[[1]], 1L, 1L))
+    cand_tokens <- embed_candidate(Xb, pb, resp_p)
+    token_parts <- list(choice_tok)
+    if (!is.null(ctx_tokens)) {
+      token_parts <- c(token_parts, list(ctx_tokens))
+    }
+    token_parts <- c(token_parts, list(cand_tokens))
+    tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
+    tokens <- run_transformer(tokens)
+    choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
+    choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+    logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
+
+    pred <- if (likelihood == "bernoulli") {
+      strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L))
+    } else if (likelihood == "categorical") {
+      strenv$jax$nn$softmax(logits, axis = -1L)
+    } else {
+      list(
+        mu = strenv$jnp$squeeze(logits, axis = 1L),
+        sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.)
+      )
+    }
+    coerce_prediction_output_local(pred)
+  }
   locscale_reparam <- NULL
   if (!is.null(strenv$numpyro$infer) &&
       reticulate::py_has_attr(strenv$numpyro$infer, "reparam")) {
@@ -3722,6 +4210,24 @@ generate_ModelOutcome_neural <- function(){
   resolved_svi_steps <- NULL
   resolved_svi_num_draws <- NULL
   svi_budget_info <- NULL
+  svi_steps_completed <- NULL
+  early_stopping_enabled <- isTRUE(mcmc_control$early_stopping)
+  early_stopping_info <- list(
+    enabled = early_stopping_enabled,
+    active = FALSE,
+    stopped_early = FALSE,
+    reason = if (isTRUE(early_stopping_enabled)) "not_initialized" else "disabled",
+    metric = NULL,
+    eval_every = NA_integer_,
+    patience = NA_integer_,
+    min_delta = NA_real_,
+    best_step = NA_integer_,
+    stop_step = NA_integer_,
+    best_metric = NA_real_,
+    final_metric = NA_real_,
+    n_train = NA_integer_,
+    n_validation = NA_integer_
+  )
   if (isTRUE(use_svi)) {
     if (isTRUE(output_only_mode)) {
       message("Enlisting SVI with autoguide for output-only uncertainty...")
@@ -3978,7 +4484,6 @@ generate_ModelOutcome_neural <- function(){
         num_particles = n_particles
       )
     )
-    rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
     svi_model_args <- if (pairwise_mode) {
       list(
         X_left = X_left_jnp,
@@ -3998,44 +4503,419 @@ generate_ModelOutcome_neural <- function(){
         Y_obs = Y_jnp
       )
     }
-    if (pairwise_mode) {
-      svi_result <- svi$run(rng_key,
-                            ai(svi_steps),
-                            X_left = X_left_jnp,
-                            X_right = X_right_jnp,
-                            party_left = party_left_jnp,
-                            party_right = party_right_jnp,
-                            resp_party = resp_party_jnp,
-                            resp_cov = resp_cov_jnp,
-                            Y_obs = Y_jnp)
-    } else {
-      svi_result <- svi$run(rng_key,
-                            ai(svi_steps),
-                            X = X_single_jnp,
-                            party = party_single_jnp,
-                            resp_party = resp_party_jnp,
-                            resp_cov = resp_cov_jnp,
-                            Y_obs = Y_jnp)
+    rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
+    jnp_take_rows <- function(x, idx) {
+      idx_jnp <- strenv$jnp$array(as.integer(idx - 1L))$astype(strenv$jnp$int32)
+      strenv$jnp$take(x, idx_jnp, axis = 0L)
     }
-    svi_loss_curve <- tryCatch({
-      if (reticulate::py_has_attr(svi_result, "losses")) {
-        as.numeric(strenv$np$array(svi_result$losses))
-      } else if (!is.null(svi_result$losses)) {
-        as.numeric(strenv$np$array(svi_result$losses))
+    build_svi_subset_model_args <- function(idx) {
+      if (pairwise_mode) {
+        list(
+          X_left = jnp_take_rows(X_left_jnp, idx),
+          X_right = jnp_take_rows(X_right_jnp, idx),
+          party_left = jnp_take_rows(party_left_jnp, idx),
+          party_right = jnp_take_rows(party_right_jnp, idx),
+          resp_party = jnp_take_rows(resp_party_jnp, idx),
+          resp_cov = jnp_take_rows(resp_cov_jnp, idx),
+          Y_obs = jnp_take_rows(Y_jnp, idx)
+        )
+      } else {
+        list(
+          X = jnp_take_rows(X_single_jnp, idx),
+          party = jnp_take_rows(party_single_jnp, idx),
+          resp_party = jnp_take_rows(resp_party_jnp, idx),
+          resp_cov = jnp_take_rows(resp_cov_jnp, idx),
+          Y_obs = jnp_take_rows(Y_jnp, idx)
+        )
+      }
+    }
+    build_svi_validation_split <- function() {
+      n_total <- length(Y_use)
+      if (n_total < 2L) {
+        return(NULL)
+      }
+
+      if (likelihood == "categorical") {
+        y_all <- as.integer(reticulate::py_to_r(strenv$np$array(Y_jnp)))
+        ok_rows <- !is.na(y_all)
+      } else if (likelihood == "bernoulli") {
+        y_all <- as.numeric(Y_use)
+        ok_rows <- is.finite(y_all) & (y_all %in% c(0, 1))
+      } else {
+        y_all <- as.numeric(Y_use)
+        ok_rows <- is.finite(y_all)
+      }
+      eval_idx <- which(ok_rows)
+      if (length(eval_idx) < 2L) {
+        return(NULL)
+      }
+
+      cluster_obs <- NULL
+      if (exists("varcov_cluster_variable_", inherits = TRUE)) {
+        cluster_raw <- get("varcov_cluster_variable_", inherits = TRUE)
+        if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
+          if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+            need <- suppressWarnings(max(pair_mat[, 1], na.rm = TRUE))
+            if (is.finite(need) && length(cluster_raw) >= need) {
+              cluster_obs <- cluster_raw[pair_mat[, 1]]
+            }
+          } else if (!pairwise_mode && length(cluster_raw) == n_total) {
+            cluster_obs <- cluster_raw
+          }
+        }
+      }
+      if (is.null(cluster_obs) || length(cluster_obs) != n_total) {
+        cluster_raw <- NULL
+
+        subset_by_indi <- function(x) {
+          if (is.null(x) || length(x) == 0L) {
+            return(NULL)
+          }
+          x <- as.vector(x)
+          if (!exists("indi_", inherits = TRUE)) {
+            return(x)
+          }
+          idx <- get("indi_", inherits = TRUE)
+          if (is.null(idx) || length(idx) == 0L) {
+            return(x)
+          }
+          if (length(x) == length(Y_)) {
+            return(x)
+          }
+          max_idx <- suppressWarnings(max(as.integer(idx), na.rm = TRUE))
+          if (is.finite(max_idx) && length(x) >= max_idx) {
+            return(x[idx])
+          }
+          x
+        }
+
+        resp_id <- if (exists("respondent_id", inherits = TRUE)) {
+          subset_by_indi(get("respondent_id", inherits = TRUE))
+        } else {
+          NULL
+        }
+        task_id <- if (exists("respondent_task_id", inherits = TRUE)) {
+          subset_by_indi(get("respondent_task_id", inherits = TRUE))
+        } else {
+          NULL
+        }
+
+        if (!is.null(resp_id) && length(resp_id) > 0L) {
+          cluster_raw <- resp_id
+        } else if (!is.null(task_id) && length(task_id) > 0L) {
+          cluster_raw <- task_id
+        }
+
+        if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
+          if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+            cluster_obs <- cluster_raw[pair_mat[, 1]]
+          } else if (!pairwise_mode && length(cluster_raw) == n_total) {
+            cluster_obs <- cluster_raw
+          }
+        }
+      }
+
+      cluster_eval <- if (!is.null(cluster_obs) && length(cluster_obs) == n_total) {
+        cluster_obs[eval_idx]
       } else {
         NULL
       }
-    }, error = function(e) NULL)
+
+      split_seed <- eval_control$seed
+      if (is.null(split_seed) || is.na(split_seed) || !is.finite(split_seed)) {
+        split_seed <- 123L
+      }
+      n_folds_es <- min(5L, length(eval_idx))
+      if (n_folds_es < 2L) {
+        return(NULL)
+      }
+      folds_out <- cs_make_stratified_folds(
+        n = length(eval_idx),
+        n_folds = as.integer(n_folds_es),
+        y = y_all[eval_idx],
+        cluster = cluster_eval,
+        seed = as.integer(split_seed)
+      )
+      if (is.null(folds_out) || is.null(folds_out$fold_id)) {
+        return(NULL)
+      }
+      fold_id <- as.integer(folds_out$fold_id)
+      available_folds <- sort(unique(fold_id[!is.na(fold_id)]))
+      if (length(available_folds) < 2L && length(eval_idx) > 1L) {
+        validation_idx <- eval_idx[1L]
+        train_idx <- eval_idx[-1L]
+      } else {
+        validation_fold <- available_folds[[1L]]
+        validation_idx <- eval_idx[fold_id == validation_fold]
+        train_idx <- eval_idx[fold_id != validation_fold]
+      }
+      if (length(train_idx) < 1L || length(validation_idx) < 1L) {
+        return(NULL)
+      }
+      if (length(validation_idx) > 64L) {
+        set.seed(as.integer(split_seed) + 1L)
+        validation_idx <- sort(sample(validation_idx, size = 64L, replace = FALSE))
+      }
+
+      list(
+        train_idx = as.integer(train_idx),
+        validation_idx = as.integer(validation_idx),
+        y_all = y_all
+      )
+    }
+    extract_svi_param_sites <- function(svi_params_current) {
+      param_sites <- NULL
+      if (reticulate::py_has_attr(guide, "median")) {
+        param_sites <- tryCatch(guide$median(svi_params_current), error = function(e) NULL)
+        if (is.null(param_sites)) {
+          param_sites <- tryCatch(
+            do.call(guide$median, c(list(svi_params_current), svi_model_args)),
+            error = function(e) NULL
+          )
+        }
+      }
+      if (is.null(param_sites) && reticulate::py_has_attr(guide, "sample_posterior")) {
+        fixed_key <- strenv$jax$random$PRNGKey(ai(0L))
+        param_sites <- tryCatch(
+          do.call(guide$sample_posterior, c(list(fixed_key, svi_params_current), svi_model_args)),
+          error = function(e) {
+            tryCatch(
+              do.call(
+                guide$sample_posterior,
+                c(list(fixed_key, svi_params_current, sample_shape = reticulate::tuple()), svi_model_args)
+              ),
+              error = function(e2) NULL
+            )
+          }
+        )
+      }
+      param_sites
+    }
+    compute_svi_validation_metric <- function(svi_state_current, validation_split) {
+      svi_params_current <- tryCatch(svi$get_params(svi_state_current), error = function(e) NULL)
+      if (is.null(svi_params_current)) {
+        return(NA_real_)
+      }
+      param_sites <- extract_svi_param_sites(svi_params_current)
+      pred_eval <- svi_validation_predict(
+        param_sites,
+        validation_split$validation_idx,
+        fallback_params = svi_params_current
+      )
+      if (is.null(pred_eval)) {
+        return(NA_real_)
+      }
+      metrics <- cs_compute_outcome_metrics(
+        y_eval = validation_split$y_all[validation_split$validation_idx],
+        pred_eval = pred_eval,
+        likelihood = likelihood
+      )
+      metric_name <- if (likelihood == "normal") "nll" else "log_loss"
+      metric_value <- metrics[[metric_name]]
+      if (is.null(metric_value)) {
+        return(NA_real_)
+      }
+      as.numeric(metric_value)
+    }
+    parse_svi_update_result <- function(update_result) {
+      coerce_loss_value <- function(value) {
+        if (is.null(value)) {
+          return(NA_real_)
+        }
+        tryCatch(
+          as.numeric(strenv$np$array(value)),
+          error = function(e) {
+            tryCatch(as.numeric(value), error = function(e2) NA_real_)
+          }
+        )
+      }
+      state <- NULL
+      loss <- NA_real_
+      if (!is.null(update_result$state)) {
+        state <- update_result$state
+      }
+      if (!is.null(update_result$loss)) {
+        loss <- suppressWarnings(coerce_loss_value(update_result$loss))
+      }
+      if (is.null(state) && length(update_result) > 0L) {
+        state <- update_result[[1]]
+      }
+      if (!is.finite(loss) && length(update_result) > 1L) {
+        loss <- suppressWarnings(coerce_loss_value(update_result[[2]]))
+      }
+      list(state = state, loss = loss)
+    }
+
+    validation_split <- NULL
+    early_stopping_running <- FALSE
+    early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
+      "validation_split_unavailable"
+    } else {
+      "disabled"
+    }
+    svi_train_model_args <- svi_model_args
+
+    if (isTRUE(early_stopping_enabled)) {
+      validation_split <- tryCatch(build_svi_validation_split(), error = function(e) NULL)
+      if (!is.null(validation_split) &&
+          reticulate::py_has_attr(svi, "init") &&
+          reticulate::py_has_attr(svi, "update") &&
+          reticulate::py_has_attr(svi, "get_params")) {
+        early_stopping_info$active <- TRUE
+        early_stopping_info$metric <- if (likelihood == "normal") "nll" else "log_loss"
+        early_stopping_info$patience <- 3L
+        early_stopping_info$min_delta <- 1e-4
+        early_stopping_info$eval_every <- if (svi_steps > 200L) {
+          as.integer(max(100L, ceiling(svi_steps / 5)))
+        } else {
+          as.integer(max(10L, ceiling(svi_steps / 20)))
+        }
+        early_stopping_info$n_train <- length(validation_split$train_idx)
+        early_stopping_info$n_validation <- length(validation_split$validation_idx)
+        svi_train_model_args <- build_svi_subset_model_args(validation_split$train_idx)
+        early_stopping_running <- TRUE
+        early_stopping_reason <- "completed_budget"
+      } else {
+        early_stopping_reason <- if (is.null(validation_split)) {
+          "validation_split_unavailable"
+        } else {
+          "api_unavailable"
+        }
+        early_stopping_info$n_train <- length(Y_use)
+        early_stopping_info$n_validation <- 0L
+      }
+    } else {
+      early_stopping_info$n_train <- length(Y_use)
+      early_stopping_info$n_validation <- 0L
+    }
+
+    if (isTRUE(early_stopping_running)) {
+      svi_state <- do.call(svi$init, c(list(rng_key), svi_train_model_args))
+      best_svi_state <- NULL
+      best_metric <- Inf
+      last_metric <- NA_real_
+      no_improve_checks <- 0L
+
+      for (step in seq_len(svi_steps)) {
+        update_result <- do.call(svi$update, c(list(svi_state), svi_train_model_args))
+        update_parts <- parse_svi_update_result(update_result)
+        if (is.null(update_parts$state)) {
+          early_stopping_reason <- "update_failed"
+          early_stopping_running <- FALSE
+          break
+        }
+        svi_state <- update_parts$state
+        svi_loss_curve <- c(svi_loss_curve, update_parts$loss)
+        svi_steps_completed <- as.integer(step)
+
+        should_eval <- identical(step, svi_steps) ||
+          (step %% early_stopping_info$eval_every == 0L)
+        if (!isTRUE(should_eval) || !isTRUE(early_stopping_running)) {
+          next
+        }
+
+        metric_value <- tryCatch(
+          compute_svi_validation_metric(svi_state, validation_split),
+          error = function(e) NA_real_
+        )
+        if (!is.finite(metric_value)) {
+          early_stopping_reason <- "metric_failed"
+          early_stopping_running <- FALSE
+          next
+        }
+
+        last_metric <- metric_value
+        if (!is.finite(best_metric) ||
+            metric_value < (best_metric - early_stopping_info$min_delta)) {
+          best_metric <- metric_value
+          best_svi_state <- svi_state
+          early_stopping_info$best_step <- as.integer(step)
+          early_stopping_info$best_metric <- metric_value
+          no_improve_checks <- 0L
+        } else {
+          no_improve_checks <- no_improve_checks + 1L
+          if (no_improve_checks >= early_stopping_info$patience && step < svi_steps) {
+            early_stopping_info$stopped_early <- TRUE
+            early_stopping_reason <- "patience_exhausted"
+            message(sprintf(
+              "SVI early stopping at step %d/%d on validation %s=%.6f.",
+              step,
+              svi_steps,
+              early_stopping_info$metric,
+              metric_value
+            ))
+            break
+          }
+        }
+      }
+
+      if (is.finite(best_metric)) {
+        early_stopping_info$final_metric <- best_metric
+      } else if (is.finite(last_metric)) {
+        early_stopping_info$final_metric <- last_metric
+      }
+      if (!is.null(best_svi_state) && !identical(early_stopping_reason, "metric_failed")) {
+        svi_state <- best_svi_state
+      }
+      early_stopping_info$reason <- early_stopping_reason
+      early_stopping_info$stop_step <- as.integer(svi_steps_completed %||% svi_steps)
+    } else {
+      if (pairwise_mode) {
+        svi_result <- svi$run(rng_key,
+                              ai(svi_steps),
+                              X_left = X_left_jnp,
+                              X_right = X_right_jnp,
+                              party_left = party_left_jnp,
+                              party_right = party_right_jnp,
+                              resp_party = resp_party_jnp,
+                              resp_cov = resp_cov_jnp,
+                              Y_obs = Y_jnp)
+      } else {
+        svi_result <- svi$run(rng_key,
+                              ai(svi_steps),
+                              X = X_single_jnp,
+                              party = party_single_jnp,
+                              resp_party = resp_party_jnp,
+                              resp_cov = resp_cov_jnp,
+                              Y_obs = Y_jnp)
+      }
+      svi_loss_curve <- tryCatch({
+        if (reticulate::py_has_attr(svi_result, "losses")) {
+          as.numeric(strenv$np$array(svi_result$losses))
+        } else if (!is.null(svi_result$losses)) {
+          as.numeric(strenv$np$array(svi_result$losses))
+        } else {
+          NULL
+        }
+      }, error = function(e) NULL)
+      svi_state <- if (!is.null(svi_result$state)) {
+        svi_result$state
+      } else if (length(svi_result) > 0L) {
+        svi_result[[1]]
+      } else {
+        svi_result
+      }
+      svi_steps_completed <- if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L) {
+        as.integer(length(svi_loss_curve))
+      } else {
+        as.integer(svi_steps)
+      }
+      early_stopping_info$reason <- early_stopping_reason
+      early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+    }
+
+    svi_loss_curve <- as.numeric(svi_loss_curve)
+    if (length(svi_loss_curve) > 0L) {
+      svi_loss_curve[!is.finite(svi_loss_curve)] <- NA_real_
+    }
     if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L &&
         identical(subsample_method, "batch_vi")) {
-      svi_loss_curve <- as.numeric(svi_loss_curve)
-      svi_loss_curve[!is.finite(svi_loss_curve)] <- NA_real_
       svi_plot_title <- neural_format_svi_elbo_plot_title(svi_loss_curve)
       try(suppressWarnings(plot(svi_loss_curve,
                                 type = "l",
                                 main = svi_plot_title,
                                 xlab = "Iteration",
-                                log = ifelse(any(svi_loss_curve<0),"","y"),
+                                log = ifelse(any(svi_loss_curve < 0), "", "y"),
                                 ylab = "ELBO loss")), TRUE)
       finite_idx <- is.finite(svi_loss_curve)
       if (sum(finite_idx, na.rm = TRUE) >= 2L) {
@@ -4044,13 +4924,6 @@ generate_ModelOutcome_neural <- function(){
                    lwd = 2,
                    col = "red"), TRUE)
       }
-    }
-    svi_state <- if (!is.null(svi_result$state)) {
-      svi_result$state
-    } else if (length(svi_result) > 0L) {
-      svi_result[[1]]
-    } else {
-      svi_result
     }
     params <- svi$get_params(svi_state)
     SVIParams <- params
@@ -4980,6 +5853,17 @@ generate_ModelOutcome_neural <- function(){
 
   # fit_metrics is computed above via cross-fitting (unless eval is disabled).
 
+  if (!isTRUE(use_svi) && identical(early_stopping_info$reason, "not_initialized")) {
+    early_stopping_info$reason <- if (isTRUE(early_stopping_info$enabled)) {
+      "not_svi"
+    } else {
+      "disabled"
+    }
+  }
+  if (isTRUE(use_svi) && is.null(svi_steps_completed) && !is.null(resolved_svi_steps)) {
+    svi_steps_completed <- as.integer(resolved_svi_steps)
+  }
+
   if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L) {
     finite_losses <- svi_loss_curve[is.finite(svi_loss_curve)]
     svi_summary <- list(
@@ -5037,7 +5921,9 @@ generate_ModelOutcome_neural <- function(){
     fit_metrics = fit_metrics,
     svi_loss_curve = svi_loss_curve,
     svi_steps = resolved_svi_steps,
+    svi_steps_completed = svi_steps_completed,
     svi_num_draws = resolved_svi_num_draws,
+    early_stopping = early_stopping_info,
     svi_budget_info = svi_budget_info,
     stage_diagnostics = stage_diagnostics,
     model_dims = ModelDims,
