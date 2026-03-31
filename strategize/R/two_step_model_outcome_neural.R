@@ -1533,6 +1533,7 @@ generate_ModelOutcome_neural <- function(){
   model_depth <- 2L
   qk_norm_enabled <- TRUE
   cross_candidate_encoder_mode <- "none"
+  cross_candidate_encoder_supplied <- FALSE
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
 
@@ -1664,6 +1665,7 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     if (!is.null(neural_mcmc_control$cross_candidate_encoder)) {
+      cross_candidate_encoder_supplied <- TRUE
       cross_candidate_encoder_mode <- normalize_cross_candidate_encoder(
         neural_mcmc_control$cross_candidate_encoder
       )
@@ -1790,6 +1792,8 @@ generate_ModelOutcome_neural <- function(){
   pairwise_mode <- isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0
   if (!isTRUE(pairwise_mode)) {
     cross_candidate_encoder_mode <- "none"
+  } else if (!isTRUE(cross_candidate_encoder_supplied)) {
+    cross_candidate_encoder_mode <- "term"
   }
   use_cross_term <- identical(cross_candidate_encoder_mode, "term")
   use_cross_attn <- identical(cross_candidate_encoder_mode, "attn")
