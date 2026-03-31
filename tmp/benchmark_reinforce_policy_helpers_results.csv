@@ -1,0 +1,5 @@
+"benchmark","elapsed_seconds","speedup_vs_old"
+"old_log_probs",0.0329999999999995,1
+"new_log_probs",0.0300000000000002,1.09999999999997
+"old_support_weights",0.0579999999999998,1
+"new_support_weights",0.0380000000000003,1.52631578947367

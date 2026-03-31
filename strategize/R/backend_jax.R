@@ -7,6 +7,7 @@ initialize_jax <- function(conda_env = "strategize_env",
   strenv$jax <- reticulate::import("jax")
   strenv$jnp <- reticulate::import("jax.numpy")
   strenv$np  <- reticulate::import("numpy")
+  strenv$eq  <- reticulate::import("equinox")
   strenv$py_gc  <- reticulate::import("gc")
   strenv$numpyro  <- reticulate::import("numpyro")
   strenv$optax  <- reticulate::import("optax")
@@ -17,4 +18,3 @@ initialize_jax <- function(conda_env = "strategize_env",
   strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", FALSE) # use float32
 }
 strenv <- new.env( parent = emptyenv() )
-

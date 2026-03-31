@@ -3,17 +3,15 @@ build_reinforce_diag <- function(reward_mean,
                                  baseline_prev,
                                  grad_total,
                                  baseline_next = NULL) {
-  grad_num <- tryCatch(
-    as.numeric(strenv$np$array(grad_total)),
-    error = function(e) NULL
+  nonfinite <- strenv$jnp$logical_not(
+    strenv$jnp$all(strenv$jnp$isfinite(grad_total))
   )
-  nonfinite <- !is.null(grad_num) && any(!is.finite(grad_num))
 
   diag <- list(
     baseline = strenv$jax$lax$stop_gradient(baseline_prev),
     reward_mean = strenv$jax$lax$stop_gradient(reward_mean),
     reward_var = strenv$jax$lax$stop_gradient(reward_var),
-    nonfinite = isTRUE(nonfinite)
+    nonfinite = strenv$jax$lax$stop_gradient(nonfinite)
   )
   if (!is.null(baseline_next)) {
     diag$baseline_next <- strenv$jax$lax$stop_gradient(baseline_next)
@@ -429,18 +427,25 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       return(invisible(NULL))
     }
     diag <- grad_result[[3L]]
+    diag_nonfinite <- FALSE
+    if (!is.null(diag$nonfinite)) {
+      diag_nonfinite <- tryCatch(
+        isTRUE(as.logical(strenv$np$array(diag$nonfinite))),
+        error = function(e) isTRUE(diag$nonfinite)
+      )
+    }
     if (identical(player, "ast")) {
       strenv$reinforce_baseline_ast_vec[[iter_idx]] <- list(diag$baseline)
       strenv$reinforce_reward_mean_ast_vec[[iter_idx]] <- list(diag$reward_mean)
       strenv$reinforce_reward_var_ast_vec[[iter_idx]] <- list(diag$reward_var)
-      if (isTRUE(diag$nonfinite)) {
+      if (diag_nonfinite) {
         strenv$reinforce_nonfinite_ast_steps <- strenv$reinforce_nonfinite_ast_steps + 1L
       }
     } else {
       strenv$reinforce_baseline_dag_vec[[iter_idx]] <- list(diag$baseline)
       strenv$reinforce_reward_mean_dag_vec[[iter_idx]] <- list(diag$reward_mean)
       strenv$reinforce_reward_var_dag_vec[[iter_idx]] <- list(diag$reward_var)
-      if (isTRUE(diag$nonfinite)) {
+      if (diag_nonfinite) {
         strenv$reinforce_nonfinite_dag_steps <- strenv$reinforce_nonfinite_dag_steps + 1L
       }
     }
@@ -537,7 +542,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     eta_t <- strenv$jnp$array(rain_eta, strenv$dtj)
     inv_lr_val <- strenv$jnp$reciprocal(eta_t)
 
-    Lambda_sum <- strenv$jnp$array(0., strenv$dtj)
+    Lambda_sum_num <- 0
+    Lambda_sum <- strenv$jnp$array(Lambda_sum_num, strenv$dtj)
     B_ast <- strenv$jnp$multiply(a_i_ast, strenv$jnp$array(0., strenv$dtj))
     if (adversarial) {
       B_dag <- strenv$jnp$multiply(a_i_dag, strenv$jnp$array(0., strenv$dtj))
@@ -576,7 +582,6 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
         z_s_dag_start <- a_i_dag
       }
 
-      Lambda_sum_num <- as.numeric(strenv$np$array(Lambda_sum))
       has_anchors <- is.finite(Lambda_sum_num) && Lambda_sum_num > 0
       if (has_anchors) {
         zbar_ast <- strenv$jnp$divide(B_ast, Lambda_sum)
@@ -769,6 +774,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       }
 
       Lambda_sum <- strenv$jnp$add(Lambda_sum, lambda_use_tf)
+      Lambda_sum_num <- Lambda_sum_num + lambda_use_num
       B_ast <- strenv$jnp$add(B_ast, strenv$jnp$multiply(lambda_use_tf, z_s_ast_start))
       if (adversarial) {
         B_dag <- strenv$jnp$add(B_dag, strenv$jnp$multiply(lambda_use_tf, z_s_dag_start))

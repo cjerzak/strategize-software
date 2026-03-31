@@ -373,8 +373,9 @@ strategize_onestep <- function(
     treatment_combs <- exp(log_treatment_combs  <- sum(log(sapply(1:ncol(W),function(ze){ length(p_list[[ze]]) }) )))
 
     # initialize quantities
-    marginalProb_m <- seList <- seList_automatic <- m_se_Q <- seList_manual <- lowerList <- upperList <- NULL
-    PrXd_vec <- PrXdGivenClust_se <- PrXdGivenClust_mat <- NULL
+        marginalProb_m <- seList <- seList_automatic <- m_se_Q <- seList_manual <- lowerList <- upperList <- NULL
+        ClassProbProjCoefs <- ClassProbProjCoefs_se <- ClassProbsXobs <- VarCov_ProbClust <- NULL
+        PrXd_vec <- PrXdGivenClust_se <- PrXdGivenClust_mat <- NULL
     if(is.null(split1_indices)){
       split_ <- rep(1,times=length(Y))
       if(is.null(test_fraction)){ test_fraction <- 0.5 }
@@ -546,21 +547,28 @@ strategize_onestep <- function(
     }
 
     # save and store results
-    {
-      # save results - split 1
-      hypotheticalProbList_full <- hypotheticalProbList_split1 <- pi_list
+	    {
+	      # save results - split 1
+	      hypotheticalProbList_full <- hypotheticalProbList_split1 <- pi_list
 
-      # Get values from tf
-      Qhat_tf <- strenv$jnp$array( getQ_fxn( ModelList_object,  split2_indices  ), strenv$jnp$float32)
-      Qhat <- strenv$np$array( Qhat_tf )
-      Qhat_split1 <- Qhat_all <- Q_interval_split2 <- Q_interval_split1 <- Q_se_exact <- NULL
-      Qhat_split2<-list();Qhat_split2$Qest <- strenv$np$array(Qhat_tf)
-    }
+	      # Get values from tf
+	      Qhat_tf <- strenv$jnp$array( getQ_fxn( ModelList_object,  split2_indices  ), strenv$jnp$float32)
+	      Qhat <- strenv$np$array( Qhat_tf )
+	      seList <- lowerList <- upperList <- NULL
+	      m_se_Q <- NULL
+	      Qhat_split1 <- Qhat_all <- Q_interval_split2 <- Q_interval_split1 <- Q_se_exact <- NULL
+	      Qhat_split2<-list();Qhat_split2$Qest <- strenv$np$array(Qhat_tf)
+	    }
 
-    # get SEs
-    seText <- paste(deparse(get_se),collapse="\n")
-    seText <- gsub(seText,pattern="function \\(\\)",replacement="")
-    eval(parse( text = seText ),evaluation_environment)
+	    # get SEs
+	    if (isTRUE(forceSEs)) {
+	      if (!exists("piSEtype", inherits = TRUE) || length(piSEtype) < 1L || is.null(piSEtype)) {
+	        piSEtype <- "automatic"
+	      }
+	      seText <- paste(deparse(get_se),collapse="\n")
+	      seText <- gsub(seText,pattern="function \\(\\)",replacement="")
+	      eval(parse( text = seText ),evaluation_environment)
+	    }
 
     #plot(unlist(seList_manual),unlist(seList_automatic));abline(a=0,b=1)
     #plot(VarCov_n_automatic[,1],VarCov_n_manual[,1]);abline(a=0,b=1)

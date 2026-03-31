@@ -96,7 +96,10 @@ Muon is only applied to matrix-valued model-weight locations when the guide pres
 matrix structure; with \code{vi_guide = "auto_diagonal"}, it falls back to AdamW/Adam.
 Learning-rate decay is controlled by
 \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
-\code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.}
+\code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}. Validation-based
+early stopping is enabled by default for SVI-backed neural fits; set
+\code{neural_mcmc_control$early_stopping = FALSE} to force the full
+\code{svi_steps} budget.}
 
 \item{diff}{Difference mode flag}
 

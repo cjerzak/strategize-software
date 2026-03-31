@@ -92,16 +92,19 @@ ml_build <- function(){
           logPrW_new <- strenv$jax$scipy$special$logsumexp(strenv$jnp$concatenate(logPrWGivenAllClasses, 1L),keepdims = T, axis =  1L)
           probRatio <- strenv$jnp$exp( strenv$jnp$subtract(logPrW_new,  logProb_ ));',
           minThis_text, return_text,'return(   returnThis_    )})', sep = "")))
-      }
+    }
     if(forMEst == T){
-      getLoss_tf_unnormalized <- strenv$jax$jit(   base_tf_function  )
+      getLoss_tf_unnormalized_raw <- base_tf_function
+      getLoss_tf_unnormalized <- strenv$jax$jit(getLoss_tf_unnormalized_raw)
     }
     if(forMEst == F){
       if(subtype == "probRatio"){
-        getProbRatio_tf <- strenv$jax$jit(   base_tf_function  )
+        getProbRatio_tf_raw <- base_tf_function
+        getProbRatio_tf <- strenv$jax$jit(getProbRatio_tf_raw)
       }
       if(subtype == "objToMin"){
-        getLoss_tf <- strenv$jax$jit(   base_tf_function  )
+        getLoss_tf_raw <- base_tf_function
+        getLoss_tf <- strenv$jax$jit(getLoss_tf_raw)
       }
     }
   }
@@ -255,7 +258,7 @@ ml_build <- function(){
                          logProb_ = tfConst(as.matrix(log_PrW[my_batch])),
                          REGULARIZATION_LAMBDA = tfConst(returnWeightsFxn(lambda_seq[1])))
 
-  gradient_getLoss_tf <- strenv$jax$jit( strenv$jax$grad(getLoss_tf) )
+  gradient_getLoss_tf <- strenv$jax$jit(strenv$jax$grad(getLoss_tf_raw))
 
   # test gradient
   ModelList_object <- list(AVSList, ProjectionList)

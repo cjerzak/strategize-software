@@ -220,7 +220,10 @@ Learning-rate decay is controlled by
 a scaling-law heuristic based on model/data size; for minibatched VI this
 also scales with \code{batch_size}) and
 \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
-\code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.}
+\code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}. Validation-based
+early stopping is enabled by default for SVI-backed neural fits; set
+\code{neural_mcmc_control$early_stopping = FALSE} to force the full
+\code{svi_steps} budget.}
 
 \item{compute_se}{Logical; if \code{TRUE}, attempts to compute standard errors
 using M-estimation or the Delta method. Defaults to \code{TRUE}.}
