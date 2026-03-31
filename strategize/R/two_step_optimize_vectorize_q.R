@@ -477,48 +477,26 @@ InitializeQMonteFxns <- function(){
   }
   
   # Batch wrapper 
-  strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn(function(
-    TSAMP_ast_all, TSAMP_dag_all,
-    TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
-    a_i_ast, a_i_dag,
-    INTERCEPT_ast_, COEFFICIENTS_ast_,
-    INTERCEPT_dag_, COEFFICIENTS_dag_,
-    INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-    INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-    P_VEC_FULL_ast_, P_VEC_FULL_dag_,
-    LAMBDA_, Q_SIGN, SEED_IN_LOOP
-  ){
-    strenv$QMonteIter_MaxMin(
-      TSAMP_ast_all, TSAMP_dag_all,
-      TSAMP_ast_PrimaryComp_all, TSAMP_dag_PrimaryComp_all,
-      a_i_ast, a_i_dag,
-      INTERCEPT_ast_, COEFFICIENTS_ast_,
-      INTERCEPT_dag_, COEFFICIENTS_dag_,
-      INTERCEPT_ast0_, COEFFICIENTS_ast0_,
-      INTERCEPT_dag0_, COEFFICIENTS_dag0_,
-      P_VEC_FULL_ast_, P_VEC_FULL_dag_,
-      LAMBDA_, Q_SIGN, SEED_IN_LOOP
-    )
-  })
+  strenv$Vectorized_QMonteIter_MaxMin <- strenv$QMonteIter_MaxMin
   
   # ---- Non-adversarial MC evaluator ----
+  strenv$QMonteIter <- function(pi_star_ast_f, 
+                                pi_star_dag_f,
+                                INTERCEPT_ast_,
+                                COEFFICIENTS_ast_,
+                                INTERCEPT_dag_,
+                                COEFFICIENTS_dag_){
+    q_star_ <- QFXN(pi_star_ast_f, 
+                    pi_star_dag_f, 
+                    INTERCEPT_ast_,  
+                    COEFFICIENTS_ast_, 
+                    INTERCEPT_dag_,  
+                    COEFFICIENTS_dag_)
+    return(q_star_)
+  }
   strenv$Vectorized_QMonteIter <- compile_fxn(
-    strenv$jax$vmap( (strenv$QMonteIter <- compile_fxn(
-      function(pi_star_ast_f, 
-               pi_star_dag_f,
-               INTERCEPT_ast_,
-               COEFFICIENTS_ast_,
-               INTERCEPT_dag_,
-               COEFFICIENTS_dag_){
-        q_star_ <- QFXN(pi_star_ast_f, 
-                        pi_star_dag_f, 
-                        INTERCEPT_ast_,  
-                        COEFFICIENTS_ast_, 
-                        INTERCEPT_dag_,  
-                        COEFFICIENTS_dag_)
-        return(q_star_)
-      })),
-    in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
+    strenv$jax$vmap(strenv$QMonteIter,
+                    in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
 }
 
 InitializeQMonteFxns_MCSampling <- function(){
@@ -552,8 +530,7 @@ InitializeQMonteFxns_MCSampling <- function(){
   kappa_pair_dag <- kappa_helpers$kappa_pair_dag
   kappa_pair <- kappa_helpers$kappa_pair
   
-  strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn( strenv$jax$vmap(
-    (strenv$QMonteIter_MaxMin <- compile_fxn(function(
+  strenv$QMonteIter_MaxMin <- function(
     TSAMP_ast, TSAMP_dag,
     TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
     a_i_ast,
@@ -596,26 +573,29 @@ InitializeQMonteFxns_MCSampling <- function(){
                (one - kA) * (one - kB) * C_ff
       list("q_ast" = q_ast,
            "q_dag" = one - q_ast)
-      })), 
+      }
+  strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn(strenv$jax$vmap(
+    strenv$QMonteIter_MaxMin,
     in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,", # vectorize over TSAMPs and SEED
                                       paste(rep("NULL,",times = 15-1), collapse=""), "0L",  ")",sep = "") ))))
   
-  strenv$Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (strenv$QMonteIter <- compile_fxn( 
-    function(pi_star_ast_f, 
-             pi_star_dag_f,
-             INTERCEPT_ast_,
-             COEFFICIENTS_ast_,
-             INTERCEPT_dag_,
-             COEFFICIENTS_dag_){
-      # note: when diff == F, dag is ignored 
-      q_star_ <- QFXN(pi_star_ast_f, 
-                      pi_star_dag_f, 
-                      INTERCEPT_ast_,  
-                      COEFFICIENTS_ast_, 
-                      INTERCEPT_dag_,  
-                      COEFFICIENTS_dag_)
-      return( q_star_ )
-    })), in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
+  strenv$QMonteIter <- function(pi_star_ast_f, 
+                                pi_star_dag_f,
+                                INTERCEPT_ast_,
+                                COEFFICIENTS_ast_,
+                                INTERCEPT_dag_,
+                                COEFFICIENTS_dag_){
+    # note: when diff == F, dag is ignored 
+    q_star_ <- QFXN(pi_star_ast_f, 
+                    pi_star_dag_f, 
+                    INTERCEPT_ast_,  
+                    COEFFICIENTS_ast_, 
+                    INTERCEPT_dag_,  
+                    COEFFICIENTS_dag_)
+    return( q_star_ )
+  }
+  strenv$Vectorized_QMonteIter <- compile_fxn(
+    strenv$jax$vmap(strenv$QMonteIter, in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
 }
 
 InitializeQMonteFxns_MultiCandidate <- function(){
@@ -638,8 +618,7 @@ InitializeQMonteFxns_MultiCandidate <- function(){
   utility_ast <- kappa_helpers$utility_ast
   utility_dag <- kappa_helpers$utility_dag
 
-  strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn(strenv$jax$vmap(
-    (strenv$QMonteIter_MaxMin <- compile_fxn(function(
+  strenv$QMonteIter_MaxMin <- function(
     TSAMP_ast, TSAMP_dag,
     TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
     a_i_ast,
@@ -753,24 +732,27 @@ InitializeQMonteFxns_MultiCandidate <- function(){
 
       list("q_ast" = q_ast,
            "q_dag" = one - q_ast)
-      })),
+      }
+  strenv$Vectorized_QMonteIter_MaxMin <- compile_fxn(strenv$jax$vmap(
+    strenv$QMonteIter_MaxMin,
     in_axes = eval(parse(text = paste("list(0L,0L,0L,0L,",
                                       paste(rep("NULL,",times = 15-1), collapse=""), "0L",  ")",sep = "") ))))
 
   # Non-adversarial MC evaluator (same as other implementations)
-  strenv$Vectorized_QMonteIter <- compile_fxn( strenv$jax$vmap( (strenv$QMonteIter <- compile_fxn(
-    function(pi_star_ast_f,
-             pi_star_dag_f,
-             INTERCEPT_ast_,
-             COEFFICIENTS_ast_,
-             INTERCEPT_dag_,
-             COEFFICIENTS_dag_){
-      q_star_ <- QFXN(pi_star_ast_f,
-                      pi_star_dag_f,
-                      INTERCEPT_ast_,
-                      COEFFICIENTS_ast_,
-                      INTERCEPT_dag_,
-                      COEFFICIENTS_dag_)
-      return( q_star_ )
-    })), in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
+  strenv$QMonteIter <- function(pi_star_ast_f,
+                                pi_star_dag_f,
+                                INTERCEPT_ast_,
+                                COEFFICIENTS_ast_,
+                                INTERCEPT_dag_,
+                                COEFFICIENTS_dag_){
+    q_star_ <- QFXN(pi_star_ast_f,
+                    pi_star_dag_f,
+                    INTERCEPT_ast_,
+                    COEFFICIENTS_ast_,
+                    INTERCEPT_dag_,
+                    COEFFICIENTS_dag_)
+    return( q_star_ )
+  }
+  strenv$Vectorized_QMonteIter <- compile_fxn(
+    strenv$jax$vmap(strenv$QMonteIter, in_axes = list(0L,0L,NULL,NULL,NULL,NULL)))
 }

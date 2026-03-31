@@ -224,3 +224,32 @@ test_that("strategize_onestep handles factors with many levels", {
 
   expect_type(result, "list")
 })
+
+test_that("strategize_onestep runs a short JAX training loop with finite output", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  data <- generate_test_data(n = 120, n_factors = 2, seed = 20260331)
+  p_list <- generate_test_p_list(data$W)
+
+  result <- strategize_onestep(
+    W = as.data.frame(data$W),
+    Y = data$Y,
+    p_list = p_list,
+    nSGD = 6L,
+    nEpoch = 1L,
+    batch_size = 12L,
+    lambda_seq = c(0.1),
+    forceSEs = FALSE,
+    conda_env = "strategize_env",
+    conda_env_required = TRUE,
+    quiet = TRUE
+  )
+
+  q_names <- intersect(c("Q_point", "Q_point_mEst", "Q_point_all"), names(result))
+  expect_true(length(q_names) >= 1L)
+  q_values <- unlist(lapply(q_names, function(name) {
+    as.numeric(unlist(result[[name]], use.names = FALSE))
+  }), use.names = FALSE)
+  expect_true(any(is.finite(q_values)))
+})

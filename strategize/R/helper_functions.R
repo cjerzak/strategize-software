@@ -670,11 +670,91 @@ resolve_multinomial_group_index_spec <- function(d_locator_use, Parameterization
     )
   }
 
+  group_count <- length(index_list)
+  index_lengths <- as.integer(vapply(index_list, length, integer(1)))
+  max_explicit_count <- if (group_count > 0L) {
+    max(index_lengths)
+  } else {
+    0L
+  }
+
+  index_matrix <- index_mask <- NULL
+  if (max_explicit_count > 0L) {
+    index_matrix_r <- matrix(0L, nrow = group_count, ncol = max_explicit_count)
+    index_mask_r <- matrix(FALSE, nrow = group_count, ncol = max_explicit_count)
+    for (g_i in seq_len(group_count)) {
+      len_i <- index_lengths[[g_i]]
+      if (len_i < 1L) {
+        next
+      }
+      index_matrix_r[g_i, seq_len(len_i)] <- index_list[[g_i]]
+      index_mask_r[g_i, seq_len(len_i)] <- TRUE
+    }
+    index_matrix <- strenv$jnp$array(index_matrix_r, dtype = strenv$jnp$int32)
+    index_mask <- strenv$jnp$array(index_mask_r, dtype = strenv$jnp$bool_)
+  }
+
   list(
     support_counts = support_counts,
     explicit_counts = explicit_counts,
-    index_list = index_list
+    index_list = index_list,
+    index_lengths = index_lengths,
+    group_count = as.integer(group_count),
+    max_explicit_count = as.integer(max_explicit_count),
+    index_matrix = index_matrix,
+    index_mask = index_mask
   )
+}
+
+compute_grouped_policy_prob_matrix <- function(pi_vec,
+                                               flat_profiles,
+                                               ParameterizationType,
+                                               index_spec) {
+  n_flat <- ai(flat_profiles$shape[[1L]])
+  group_count <- as.integer(index_spec$group_count)
+  if (group_count < 1L) {
+    return(NULL)
+  }
+
+  max_explicit_count <- as.integer(index_spec$max_explicit_count)
+  if (max_explicit_count < 1L || is.null(index_spec$index_matrix) || is.null(index_spec$index_mask)) {
+    return(strenv$jnp$ones(list(n_flat, group_count), dtype = pi_vec$dtype))
+  }
+
+  flat_profiles <- strenv$jnp$reshape(flat_profiles, list(n_flat, -1L))
+  pi_flat <- strenv$jnp$reshape(pi_vec, list(-1L))
+  mask_float <- strenv$jnp$astype(index_spec$index_mask, pi_flat$dtype)
+  mask_float_3d <- strenv$jnp$expand_dims(mask_float, 0L)
+  group_profiles <- strenv$jnp$take(flat_profiles, index_spec$index_matrix, axis = 1L)
+  group_profiles <- strenv$jnp$reshape(
+    group_profiles,
+    list(n_flat, group_count, max_explicit_count)
+  ) * mask_float_3d
+  pi_selection <- strenv$jnp$reshape(
+    strenv$jnp$take(pi_flat, index_spec$index_matrix, axis = 0L),
+    list(group_count, max_explicit_count)
+  ) * mask_float
+  active_prob <- strenv$jnp$sum(
+    group_profiles * strenv$jnp$reshape(pi_selection, list(1L, group_count, max_explicit_count)),
+    axis = 2L
+  )
+
+  if (!identical(ParameterizationType, "Implicit")) {
+    return(active_prob)
+  }
+
+  group_sum <- strenv$jnp$sum(group_profiles, axis = 2L)
+  holdout_prob <- strenv$jnp$array(1., dtype = pi_flat$dtype) -
+    strenv$jnp$sum(pi_selection, axis = 1L)
+  holdout_matrix <- strenv$jnp$broadcast_to(
+    strenv$jnp$expand_dims(holdout_prob, 0L),
+    list(n_flat, group_count)
+  )
+  use_holdout <- strenv$jnp$equal(
+    group_sum,
+    strenv$jnp$array(0., dtype = group_sum$dtype)
+  )
+  strenv$jnp$where(use_holdout, holdout_matrix, active_prob)
 }
 
 average_case_q_exact_support_size <- function(ParameterizationType,
@@ -766,49 +846,17 @@ compute_policy_support_weights <- function(pi_vec,
                                            d_locator_use) {
   index_spec <- resolve_multinomial_group_index_spec(d_locator_use, ParameterizationType)
   n_profiles <- ai(profiles$shape[[1L]])
-  weights <- NULL
-
-  for (g_i in seq_along(index_spec$index_list)) {
-    idx_r <- index_spec$index_list[[g_i]]
-    if (length(idx_r) > 0L) {
-      idx_j <- strenv$jnp$array(as.integer(idx_r))
-      group_profiles <- strenv$jnp$take(profiles, idx_j, axis = 1L)
-      pi_selection <- strenv$jnp$take(pi_vec, idx_j, axis = 0L)
-      if (length(group_profiles$shape) == 1L) {
-        group_profiles <- strenv$jnp$expand_dims(group_profiles, 1L)
-      }
-      pi_selection <- strenv$jnp$atleast_1d(pi_selection)
-      active_prob <- strenv$jnp$sum(
-        group_profiles * strenv$jnp$reshape(pi_selection, list(1L, -1L)),
-        axis = 1L
-      )
-    } else {
-      group_profiles <- strenv$jnp$zeros(list(n_profiles, 0L), dtype = profiles$dtype)
-      pi_selection <- strenv$jnp$zeros(list(0L), dtype = pi_vec$dtype)
-      active_prob <- strenv$jnp$zeros(list(n_profiles), dtype = pi_vec$dtype)
-    }
-
-    if (identical(ParameterizationType, "Implicit")) {
-      holdout_prob <- strenv$jnp$array(1., dtype = pi_vec$dtype) - strenv$jnp$sum(pi_selection)
-      group_sum <- if (length(idx_r) > 0L) {
-        strenv$jnp$sum(group_profiles, axis = 1L)
-      } else {
-        strenv$jnp$zeros(list(n_profiles), dtype = pi_vec$dtype)
-      }
-      is_holdout <- strenv$jnp$equal(group_sum, strenv$jnp$array(0., dtype = group_sum$dtype))
-      group_prob <- strenv$jnp$where(is_holdout, holdout_prob, active_prob)
-    } else {
-      group_prob <- active_prob
-    }
-
-    weights <- if (is.null(weights)) {
-      group_prob
-    } else {
-      weights * group_prob
-    }
+  if (as.integer(index_spec$group_count) < 1L) {
+    return(strenv$jnp$ones(list(n_profiles), dtype = pi_vec$dtype))
   }
 
-  weights
+  group_probs <- compute_grouped_policy_prob_matrix(
+    pi_vec = pi_vec,
+    flat_profiles = profiles,
+    ParameterizationType = ParameterizationType,
+    index_spec = index_spec
+  )
+  strenv$jnp$prod(group_probs, axis = 1L)
 }
 
 weighted_q_draw_average <- function(q_draws, weights = NULL) {
@@ -867,40 +915,21 @@ compute_policy_sample_log_probs <- function(pi_vec,
   }
   n_params <- as.integer(prod(param_dims))
   flat_profiles <- strenv$jnp$reshape(profiles, list(-1L, n_params))
-  n_flat <- as.integer(reticulate::py_to_r(strenv$np$array(flat_profiles$shape[[1L]])))
-  log_probs <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
+  n_flat <- ai(flat_profiles$shape[[1L]])
   eps <- strenv$jnp$array(1e-8, dtype = pi_vec$dtype)
-
-  for (g_i in seq_along(index_spec$index_list)) {
-    idx_r <- index_spec$index_list[[g_i]]
-    if (length(idx_r) > 0L) {
-      idx_j <- strenv$jnp$array(as.integer(idx_r))
-      group_profiles <- strenv$jnp$take(flat_profiles, idx_j, axis = 1L)
-      pi_selection <- strenv$jnp$take(pi_vec, idx_j, axis = 0L)
-      if (length(group_profiles$shape) == 1L) {
-        group_profiles <- strenv$jnp$expand_dims(group_profiles, 1L)
-      }
-      pi_selection <- strenv$jnp$atleast_1d(pi_selection)
-      active_prob <- strenv$jnp$sum(
-        group_profiles * strenv$jnp$reshape(pi_selection, list(1L, -1L)),
-        axis = 1L
-      )
-      group_sum <- strenv$jnp$sum(group_profiles, axis = 1L)
-    } else {
-      pi_selection <- strenv$jnp$zeros(list(0L), dtype = pi_vec$dtype)
-      active_prob <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
-      group_sum <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
-    }
-
-    if (identical(ParameterizationType, "Implicit")) {
-      holdout_prob <- strenv$jnp$array(1., dtype = pi_vec$dtype) - strenv$jnp$sum(pi_selection)
-      use_holdout <- strenv$jnp$equal(group_sum, strenv$jnp$array(0., dtype = group_sum$dtype))
-      group_prob <- strenv$jnp$where(use_holdout, holdout_prob, active_prob)
-    } else {
-      group_prob <- active_prob
-    }
-
-    log_probs <- log_probs + strenv$jnp$log(strenv$jnp$clip(group_prob, eps, 1.0))
+  if (as.integer(index_spec$group_count) < 1L) {
+    log_probs <- strenv$jnp$zeros(list(n_flat), dtype = pi_vec$dtype)
+  } else {
+    group_probs <- compute_grouped_policy_prob_matrix(
+      pi_vec = pi_vec,
+      flat_profiles = flat_profiles,
+      ParameterizationType = ParameterizationType,
+      index_spec = index_spec
+    )
+    log_probs <- strenv$jnp$sum(
+      strenv$jnp$log(strenv$jnp$clip(group_probs, eps, 1.0)),
+      axis = 1L
+    )
   }
 
   if (n_inner == 1L) {
