@@ -156,6 +156,5 @@ plot_best_response_curves(
 }
 \seealso{
 \code{\link{strategize}} for obtaining the result object \code{res} in adversarial mode.
-See also \code{\link{cv_strategize}}, and if one-step M-estimation is desired,
-see \code{\link{strategize_onestep}}.
+See also \code{\link{cv_strategize}}.
 }

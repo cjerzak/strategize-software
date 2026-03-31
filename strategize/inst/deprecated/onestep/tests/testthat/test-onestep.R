@@ -1,3 +1,4 @@
+# Deprecated archive: retained for reference only and not part of the active test suite.
 # =============================================================================
 # Tests for strategize_onestep()
 # =============================================================================

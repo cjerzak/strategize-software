@@ -1,3 +1,4 @@
+# Deprecated archive: retained for reference only and not sourced by the active package.
 ml_train <- function(){
 
 print("Begin training block...")

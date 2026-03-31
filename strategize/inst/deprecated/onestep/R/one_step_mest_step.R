@@ -1,3 +1,4 @@
+# Deprecated archive: retained for reference only and not sourced by the active package.
 initialize_m <- function(){
     ### initializations for fast m estimation
     {
