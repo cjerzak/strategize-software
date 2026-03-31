@@ -153,6 +153,100 @@ get_neural_fit_attn <- local({
   }
 })
 
+get_neural_fit_none <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true",
+      STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+      STRATEGIZE_NEURAL_EVAL_SEED = "123"
+    ))
+
+    data <- generate_test_data(n = 24, seed = 20260329)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    base_neural_control <- params$neural_mcmc_control
+    if (is.null(base_neural_control)) {
+      base_neural_control <- list()
+    }
+    params$neural_mcmc_control <- modifyList(
+      base_neural_control,
+      list(
+        subsample_method = "batch_vi",
+        batch_size = 16L,
+        cross_candidate_encoder = FALSE,
+        ModelDims = 16L,
+        ModelDepth = 1L
+      )
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    ))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
+get_neural_fit_true <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true",
+      STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+      STRATEGIZE_NEURAL_EVAL_SEED = "123"
+    ))
+
+    data <- generate_test_data(n = 24, seed = 20260330)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    base_neural_control <- params$neural_mcmc_control
+    if (is.null(base_neural_control)) {
+      base_neural_control <- list()
+    }
+    params$neural_mcmc_control <- modifyList(
+      base_neural_control,
+      list(
+        subsample_method = "batch_vi",
+        batch_size = 16L,
+        cross_candidate_encoder = TRUE,
+        ModelDims = 16L,
+        ModelDepth = 1L
+      )
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    ))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
 get_neural_fit_attn_output_vi <- local({
   cache <- NULL
   function() {
@@ -451,6 +545,39 @@ test_that("neural attn predictor remains antisymmetric", {
   expect_equal(p_lr + p_rl, rep(1, length(p_lr)), tolerance = 1e-4)
 })
 
+test_that("default pairwise neural metadata uses term interactions", {
+  fit <- get_neural_fit()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_false(is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "term")
+  expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_true(isTRUE(model_info$has_cross_term))
+  expect_false(isTRUE(model_info$has_cross_attn))
+})
+
+test_that("explicit none override disables the pairwise interaction default", {
+  fit <- get_neural_fit_none()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_false(is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "none")
+  expect_false(isTRUE(model_info$cross_candidate_encoder))
+  expect_false(isTRUE(model_info$has_cross_term))
+  expect_false(isTRUE(model_info$has_cross_attn))
+})
+
+test_that("logical TRUE override normalizes to the term interaction mode", {
+  fit <- get_neural_fit_true()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_false(is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "term")
+  expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_true(isTRUE(model_info$has_cross_term))
+  expect_false(isTRUE(model_info$has_cross_attn))
+})
+
 test_that("neural attn metadata marks the cross-candidate encoder as enabled", {
   fit <- get_neural_fit_attn()
   model_info <- get_neural_model_info(fit$res)
@@ -538,6 +665,58 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_true(is.numeric(p))
   expect_true(all(is.finite(p)))
   expect_true(all(p >= 0 & p <= 1))
+})
+
+test_that("default term bundles preserve pairwise interaction metadata", {
+  fit <- get_neural_fit()
+  res <- fit$res
+
+  model_info <- get_neural_model_info(res)
+  expect_false(is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "term")
+  expect_true(isTRUE(model_info$has_cross_term))
+
+  theta_mean <- tryCatch(
+    as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
+    error = function(e) {
+      tryCatch(
+        as.numeric(res$est_coefficients_jnp),
+        error = function(e2) {
+          as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(res$est_coefficients_jnp)))
+        }
+      )
+    }
+  )
+  expect_true(is.numeric(theta_mean))
+
+  vcov_vec <- res$vcov_outcome_model
+  theta_var <- if (!is.null(vcov_vec) && length(vcov_vec) > 1L) {
+    as.numeric(vcov_vec[-1])
+  } else {
+    NULL
+  }
+
+  tmp <- tempfile(fileext = ".rds")
+  save_neural_outcome_bundle(
+    file = tmp,
+    theta_mean = theta_mean,
+    theta_var = theta_var,
+    neural_model_info = model_info,
+    p_list = fit$p_list,
+    mode = "pairwise",
+    overwrite = TRUE
+  )
+
+  bundle <- readRDS(tmp)
+  expect_identical(bundle$fit$neural_model_info$cross_candidate_encoder_mode, "term")
+  expect_true(isTRUE(bundle$fit$neural_model_info$has_cross_term))
+  expect_true("M_cross" %in% bundle$fit$neural_model_info$param_names)
+
+  fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
+  expect_true(inherits(fit_loaded, "strategic_predictor"))
+  expect_identical(fit_loaded$fit$neural_model_info$cross_candidate_encoder_mode, "term")
+  expect_true(isTRUE(fit_loaded$fit$neural_model_info$has_cross_term))
+  expect_true("M_cross" %in% fit_loaded$fit$neural_model_info$param_names)
 })
 
 test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {

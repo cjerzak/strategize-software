@@ -199,7 +199,8 @@ uncertainty using only the output-layer parameters (default is \code{"all"}). In
 neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
 models (default is 1 for a single differential model). Use
 \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override
-the Transformer hidden width and depth. Set
+the Transformer hidden width and depth. Pairwise neural fits default to
+\code{neural_mcmc_control$cross_candidate_encoder = "term"} when unspecified. Set
 \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
 the opponent-dependent cross-candidate term in pairwise mode, set
 \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
