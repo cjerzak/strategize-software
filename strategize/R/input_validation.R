@@ -53,7 +53,10 @@ NULL
 #'   matrix structure; with \code{vi_guide = "auto_diagonal"}, it falls back to AdamW/Adam.
 #'   Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
-#'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}.
+#'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}. Validation-based
+#'   early stopping is enabled by default for SVI-backed neural fits; set
+#'   \code{neural_mcmc_control$early_stopping = FALSE} to force the full
+#'   \code{svi_steps} budget.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -705,6 +708,16 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         !is.finite(end_factor) || end_factor < 0) {
       stop(
         "'neural_mcmc_control$svi_lr_end_factor' must be a single non-negative number.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$early_stopping)) {
+    early_stopping <- neural_mcmc_control$early_stopping
+    if (!is.logical(early_stopping) || length(early_stopping) != 1L || is.na(early_stopping)) {
+      stop(
+        "'neural_mcmc_control$early_stopping' must be TRUE or FALSE.",
         call. = FALSE
       )
     }

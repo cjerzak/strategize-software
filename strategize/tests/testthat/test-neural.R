@@ -274,6 +274,53 @@ get_neural_fit_attn_output_vi <- local({
         uncertainty_scope = "output",
         svi_steps = "optimal",
         batch_size = 16L,
+        early_stopping = FALSE,
+        eval_enabled = FALSE,
+        warn_stage_imbalance_pct = 0,
+        warn_min_cell_n = 0L
+      )
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- suppressWarnings(do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    )))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
+get_neural_fit_attn_output_vi_default_es <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true"
+    ))
+
+    data <- generate_test_data(n = 24, seed = 20260330)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    params$neural_mcmc_control <- modifyList(
+      params$neural_mcmc_control,
+      list(
+        cross_candidate_encoder = "attn",
+        ModelDims = 16L,
+        ModelDepth = 1L,
+        subsample_method = "batch_vi",
+        uncertainty_scope = "output",
+        svi_steps = 25L,
+        batch_size = 16L,
         eval_enabled = FALSE,
         warn_stage_imbalance_pct = 0,
         warn_min_cell_n = 0L
@@ -755,6 +802,25 @@ test_that("output-only optimal SVI uses the pairwise batch_vi heuristic path", {
 
   expect_length(model_info$svi_loss_curve, expected_steps)
   expect_identical(as.integer(model_info$svi_steps), as.integer(expected_steps))
+  expect_identical(as.integer(model_info$svi_steps_completed), as.integer(expected_steps))
+  expect_false(isTRUE(model_info$early_stopping$enabled))
+  expect_identical(model_info$early_stopping$reason, "disabled")
+})
+
+test_that("output-only neural SVI enables early stopping by default", {
+  fit <- get_neural_fit_attn_output_vi_default_es()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_false(is.null(model_info))
+  expect_true(isTRUE(model_info$early_stopping$enabled))
+  expect_true(isTRUE(model_info$early_stopping$active))
+  expect_identical(model_info$early_stopping$metric, "log_loss")
+  expect_gt(as.integer(model_info$early_stopping$n_train), 0L)
+  expect_gt(as.integer(model_info$early_stopping$n_validation), 0L)
+  expect_true(as.integer(model_info$svi_steps_completed) <= as.integer(model_info$svi_steps))
+  expect_length(model_info$svi_loss_curve, as.integer(model_info$svi_steps_completed))
+  expect_false(identical(model_info$early_stopping$reason, "disabled"))
+  expect_false(is.na(model_info$early_stopping$best_step))
 })
 
 test_that("SVI ELBO plot title reports the rounded last-20 finite mean", {
