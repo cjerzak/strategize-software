@@ -391,6 +391,24 @@ neural_rms_norm <- function(x, g, model_dims, eps = 1e-6) {
   x * inv_rms * g_use
 }
 
+neural_center_token_rows <- function(x) {
+  x <- strenv$jnp$array(x)
+  ndim <- length(x$shape)
+  if (ndim < 2L) {
+    return(x)
+  }
+  row_axis <- ai(ndim - 2L)
+  x - strenv$jnp$mean(x, axis = row_axis, keepdims = TRUE)
+}
+
+neural_build_symmetric_segment_embeddings <- function(delta) {
+  delta <- strenv$jnp$array(delta)
+  ndim <- length(delta$shape)
+  axis_use <- if (ndim <= 1L) 0L else ai(ndim - 1L)
+  half_delta <- 0.5 * delta
+  strenv$jnp$stack(list(-half_delta, half_delta), axis = axis_use)
+}
+
 neural_param_or_default <- function(params, name, default) {
   val <- params[[name]]
   if (is.null(val)) {
@@ -1757,6 +1775,10 @@ generate_ModelOutcome_neural <- function(){
   embed_sd_scale <- 4 * weight_sd_scale
   factor_embed_sd_scale <- embed_sd_scale
   context_embed_sd_scale <- embed_sd_scale
+  feature_id_embed_sd_scale <- 0.5 * context_embed_sd_scale
+  choice_embed_sd_scale <- 0.25 * context_embed_sd_scale
+  sep_embed_sd_scale <- 0.10 * context_embed_sd_scale
+  segment_embed_sd_scale <- 0.10 * context_embed_sd_scale
   tau_b_scale <- 0.5
   
   # shrink M_cross more (initialize interactionto smaller than main temr)
@@ -2145,6 +2167,10 @@ generate_ModelOutcome_neural <- function(){
         strenv$numpyro$distributions$HalfNormal(as.numeric(context_embed_sd_scale))
       )
     }
+    tau_feature_id <- tau_context * (feature_id_embed_sd_scale / context_embed_sd_scale)
+    tau_choice <- tau_context * (choice_embed_sd_scale / context_embed_sd_scale)
+    tau_sep <- tau_context * (sep_embed_sd_scale / context_embed_sd_scale)
+    tau_segment <- tau_context * (segment_embed_sd_scale / context_embed_sd_scale)
 
     E_factor_list <- vector("list", D_local)
     for (d_ in 1L:D_local) {
@@ -2171,18 +2197,22 @@ generate_ModelOutcome_neural <- function(){
     }
 
     E_feature_shape <- reticulate::tuple(ai(D_local), ModelDims)
-    E_feature_id <- p2d(
-      name = "E_feature_id",
+    E_feature_id_raw <- p2d(
+      name = "E_feature_id_raw",
       sample_fxn = function() {
         strenv$numpyro$sample(
-          "E_feature_id",
-          strenv$numpyro$distributions$Normal(0., tau_context),
+          "E_feature_id_raw",
+          strenv$numpyro$distributions$Normal(0., tau_feature_id),
           sample_shape = E_feature_shape
         )
       },
       init_fxn = function() {
-        p2d_init_normal("E_feature_id", tau_context, E_feature_shape)
+        p2d_init_normal("E_feature_id_raw", tau_feature_id, E_feature_shape)
       }
+    )
+    E_feature_id <- strenv$numpyro$deterministic(
+      "E_feature_id",
+      neural_center_token_rows(E_feature_id_raw)
     )
 
     E_party_shape <- reticulate::tuple(ai(n_party_levels), ModelDims)
@@ -2271,12 +2301,12 @@ generate_ModelOutcome_neural <- function(){
       sample_fxn = function() {
         strenv$numpyro$sample(
           "E_choice",
-          strenv$numpyro$distributions$Normal(0., tau_context),
+          strenv$numpyro$distributions$Normal(0., tau_choice),
           sample_shape = E_choice_shape
         )
       },
       init_fxn = function() {
-        p2d_init_normal("E_choice", tau_context, E_choice_shape)
+        p2d_init_normal("E_choice", 0., E_choice_shape)
       }
     )
 
@@ -2289,28 +2319,32 @@ generate_ModelOutcome_neural <- function(){
         sample_fxn = function() {
           strenv$numpyro$sample(
             "E_sep",
-            strenv$numpyro$distributions$Normal(0., tau_context),
+            strenv$numpyro$distributions$Normal(0., tau_sep),
             sample_shape = E_sep_shape
           )
         },
         init_fxn = function() {
-          p2d_init_normal("E_sep", tau_context, E_sep_shape)
+          p2d_init_normal("E_sep", 0., E_sep_shape)
         }
       )
 
-      E_segment_shape <- reticulate::tuple(ai(2L), ModelDims)
-      E_segment <- p2d(
-        name = "E_segment",
+      E_segment_delta_shape <- reticulate::tuple(ModelDims)
+      E_segment_delta <- p2d(
+        name = "E_segment_delta",
         sample_fxn = function() {
           strenv$numpyro$sample(
-            "E_segment",
-            strenv$numpyro$distributions$Normal(0., tau_context),
-            sample_shape = E_segment_shape
+            "E_segment_delta",
+            strenv$numpyro$distributions$Normal(0., tau_segment),
+            sample_shape = E_segment_delta_shape
           )
         },
         init_fxn = function() {
-          p2d_init_normal("E_segment", tau_context, E_segment_shape)
+          p2d_init_normal("E_segment_delta", tau_segment, E_segment_delta_shape)
         }
+      )
+      E_segment <- strenv$numpyro$deterministic(
+        "E_segment",
+        neural_build_symmetric_segment_embeddings(E_segment_delta)
       )
     }
 
@@ -4211,6 +4245,28 @@ generate_ModelOutcome_neural <- function(){
     if (startsWith(name, "E_factor_")) {
       return(get_centered_factor_draws(name))
     }
+    if (identical(name, "E_feature_id")) {
+      draws <- PosteriorDraws$E_feature_id
+      if (!is.null(draws)) {
+        return(draws)
+      }
+      raw_draws <- PosteriorDraws$E_feature_id_raw
+      if (is.null(raw_draws)) {
+        return(NULL)
+      }
+      return(neural_center_token_rows(raw_draws))
+    }
+    if (identical(name, "E_segment")) {
+      draws <- PosteriorDraws$E_segment
+      if (!is.null(draws)) {
+        return(draws)
+      }
+      delta_draws <- PosteriorDraws$E_segment_delta
+      if (is.null(delta_draws)) {
+        return(NULL)
+      }
+      return(neural_build_symmetric_segment_embeddings(delta_draws))
+    }
     if (identical(name, "M_cross")) {
       return(get_cross_draws())
     }
@@ -4240,9 +4296,21 @@ generate_ModelOutcome_neural <- function(){
     tryCatch(SVIParams[[name]], error = function(e) NULL)
   }
   get_site_mean_or_param <- function(name) {
-    draws <- PosteriorDraws[[name]]
+    draws <- get_param_draws(name)
     if (!is.null(draws)) {
       return(mean_param(draws))
+    }
+    if (isTRUE(p2d_output_only) && identical(name, "E_feature_id")) {
+      raw_val <- get_svi_param("E_feature_id_raw")
+      if (!is.null(raw_val)) {
+        return(neural_center_token_rows(raw_val))
+      }
+    }
+    if (isTRUE(p2d_output_only) && identical(name, "E_segment")) {
+      delta_val <- get_svi_param("E_segment_delta")
+      if (!is.null(delta_val)) {
+        return(neural_build_symmetric_segment_embeddings(delta_val))
+      }
     }
     get_svi_param(name)
   }

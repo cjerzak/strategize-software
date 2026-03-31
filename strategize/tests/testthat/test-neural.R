@@ -377,6 +377,28 @@ test_that("neural output site init values target scalar normal regression only",
   )
 })
 
+test_that("special-token helper transforms stay centered and symmetric", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  feature_raw <- strategize:::strenv$jnp$array(
+    matrix(c(2, 0,
+             0, 4,
+             -2, -4),
+           nrow = 3L, byrow = TRUE),
+    dtype = strategize:::strenv$jnp$float32
+  )
+  feature_centered <- strategize:::neural_center_token_rows(feature_raw)
+  feature_mat <- reticulate::py_to_r(strategize:::strenv$np$array(feature_centered))
+  expect_equal(colMeans(feature_mat), c(0, 0), tolerance = 1e-6)
+
+  delta <- strategize:::strenv$jnp$array(c(2, -4), dtype = strategize:::strenv$jnp$float32)
+  segment <- strategize:::neural_build_symmetric_segment_embeddings(delta)
+  segment_mat <- reticulate::py_to_r(strategize:::strenv$np$array(segment))
+  expect_equal(segment_mat[1, ] + segment_mat[2, ], c(0, 0), tolerance = 1e-6)
+  expect_equal(segment_mat[2, ] - segment_mat[1, ], c(2, -4), tolerance = 1e-6)
+})
+
 test_that("strategize runs neural outcome model (non-adversarial)", {
   fit <- get_neural_fit()
   res <- fit$res
@@ -815,6 +837,18 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
     )
     for (nm in base_names) {
       params[[nm]] <- get_trace_value(trace, nm)
+    }
+    if (is.null(params$E_feature_id)) {
+      raw <- get_trace_value(trace, "E_feature_id_raw")
+      if (!is.null(raw)) {
+        params$E_feature_id <- strategize:::neural_center_token_rows(raw)
+      }
+    }
+    if (is.null(params$E_segment)) {
+      delta <- get_trace_value(trace, "E_segment_delta")
+      if (!is.null(delta)) {
+        params$E_segment <- strategize:::neural_build_symmetric_segment_embeddings(delta)
+      }
     }
     for (l_ in seq_len(model_depth)) {
       params[[paste0("RMS_attn_l", l_)]] <- get_trace_value(trace, paste0("RMS_attn_l", l_))
