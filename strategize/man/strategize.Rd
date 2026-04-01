@@ -222,7 +222,11 @@ also scales with \code{batch_size}) and
 \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}. Validation-based
 early stopping is enabled by default for SVI-backed neural fits; set
 \code{neural_mcmc_control$early_stopping = FALSE} to force the full
-\code{svi_steps} budget.}
+\code{svi_steps} budget. Use
+\code{neural_mcmc_control$early_stopping_n_checks} (default \code{10}) to
+request an approximate number of validation checks during SVI early
+stopping; the cadence is derived as
+\code{ceiling(svi_steps / early_stopping_n_checks)}.}
 
 \item{penalty_type}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities

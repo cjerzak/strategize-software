@@ -56,7 +56,11 @@ NULL
 #'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}. Validation-based
 #'   early stopping is enabled by default for SVI-backed neural fits; set
 #'   \code{neural_mcmc_control$early_stopping = FALSE} to force the full
-#'   \code{svi_steps} budget.
+#'   \code{svi_steps} budget. Use
+#'   \code{neural_mcmc_control$early_stopping_n_checks} (default \code{10}) to
+#'   request an approximate number of validation checks during SVI early
+#'   stopping; the cadence is derived as
+#'   \code{ceiling(svi_steps / early_stopping_n_checks)}.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -712,12 +716,30 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       )
     }
   }
-  if (!is.null(neural_mcmc_control) &&
-      !is.null(neural_mcmc_control$early_stopping)) {
-    early_stopping <- neural_mcmc_control$early_stopping
+  early_stopping <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["early_stopping"]]
+  } else {
+    NULL
+  }
+  if (!is.null(early_stopping)) {
     if (!is.logical(early_stopping) || length(early_stopping) != 1L || is.na(early_stopping)) {
       stop(
         "'neural_mcmc_control$early_stopping' must be TRUE or FALSE.",
+        call. = FALSE
+      )
+    }
+  }
+  n_checks <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["early_stopping_n_checks"]]
+  } else {
+    NULL
+  }
+  if (!is.null(n_checks)) {
+    if (!is.numeric(n_checks) || length(n_checks) != 1L ||
+        !is.finite(n_checks) || n_checks < 1 ||
+        n_checks != round(n_checks)) {
+      stop(
+        "'neural_mcmc_control$early_stopping_n_checks' must be an integer >= 1.",
         call. = FALSE
       )
     }
