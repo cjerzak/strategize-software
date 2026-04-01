@@ -746,6 +746,10 @@ cs2step_neural_prepare_params <- function(object,
   if (is.null(model_info)) {
     stop("Neural predictor is missing model metadata.", call. = FALSE)
   }
+  neural_validate_full_attn_compatibility(
+    model_info = model_info,
+    context = "Neural predictor"
+  )
 
   if (!is.null(object$fit$params)) {
     params <- object$fit$params
@@ -755,6 +759,11 @@ cs2step_neural_prepare_params <- function(object,
         params <- lapply(params, function(x) strenv$jnp$array(x)$astype(strenv$dtj))
       }
     }
+    neural_validate_full_attn_compatibility(
+      model_info = model_info,
+      params = params,
+      context = "Neural predictor"
+    )
     return(list(params = params, model_info = model_info))
   }
 
@@ -774,6 +783,11 @@ cs2step_neural_prepare_params <- function(object,
           params <- lapply(params, function(x) strenv$jnp$array(x)$astype(strenv$dtj))
         }
       }
+      neural_validate_full_attn_compatibility(
+        model_info = model_info,
+        params = params,
+        context = "Neural predictor"
+      )
       return(list(params = params, model_info = model_info))
     }
     stop("Neural predictor is missing fitted parameters.", call. = FALSE)
@@ -858,9 +872,8 @@ cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, retur
     }
     token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
     tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    tokens <- neural_run_transformer(tokens, model_info, params)
-    cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-    cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+    transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+    cls_out <- neural_extract_choice_representation(transformer_out)
     logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
   } else {
     choice_tok <- neural_build_choice_token(model_info, params)
@@ -883,9 +896,9 @@ cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, retur
       } else {
         tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
       }
-      tokens <- neural_run_transformer(tokens, model_info, params)
-      choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+      tokens <- neural_transformer_state_tokens(transformer_out)
+      phi <- neural_extract_choice_representation(transformer_out)
       if (!isTRUE(return_tokens)) {
         return(list(phi = phi, cand_tokens_out = NULL))
       }
@@ -960,9 +973,8 @@ cs2step_neural_predict_single_prepared <- function(params, model_info, prep, ret
   }
   token_parts <- c(token_parts, list(cand_tokens))
   tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-  tokens <- neural_run_transformer(tokens, model_info, params)
-  choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-  choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  choice_out <- neural_extract_choice_representation(transformer_out)
   logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
 
   if (isTRUE(return_logits)) {
@@ -1432,6 +1444,10 @@ cs2step_unpack_predictor <- function(bundle,
   if (!cs2step_has_reticulate()) {
     stop("Loading neural predictors requires the 'reticulate' package.", call. = FALSE)
   }
+  neural_validate_full_attn_compatibility(
+    model_info = bundle$fit$neural_model_info,
+    context = "Neural predictor bundle"
+  )
 
   fit <- list(
     my_model = NULL,

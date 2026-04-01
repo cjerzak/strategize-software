@@ -45,7 +45,12 @@ NULL
 #'   to enable a full cross-encoder that jointly encodes both candidates. Use
 #'   \code{"none"} (or \code{FALSE}) to disable. Set
 #'   \code{neural_mcmc_control$qk_norm = TRUE} (default) to apply RMSNorm to projected
-#'   queries and keys before attention logits are formed.
+#'   queries and keys before attention logits are formed. Set
+#'   \code{neural_mcmc_control$residual_mode = "full_attn"} to replace the
+#'   default additive/ReZero residual path with full depth-wise attention over
+#'   all prior layer outputs plus a final depth-attentive readout; use
+#'   \code{"standard"} (default) to keep the
+#'   existing residual formulation.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 #'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
@@ -613,6 +618,38 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
     } else {
       stop(
         "'neural_mcmc_control$qk_norm' must be TRUE/FALSE.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$residual_mode)) {
+    residual_mode <- neural_mcmc_control$residual_mode
+    if (is.logical(residual_mode)) {
+      if (length(residual_mode) != 1L || is.na(residual_mode)) {
+        stop(
+          "'neural_mcmc_control$residual_mode' must be one of 'standard' or 'full_attn'.",
+          call. = FALSE
+        )
+      }
+    } else if (is.character(residual_mode)) {
+      mode <- tolower(as.character(residual_mode))
+      if (length(mode) != 1L || is.na(mode) || !nzchar(mode) ||
+          !mode %in% c(
+            "standard", "add", "additive", "rezero",
+            "full_attn", "full-attn", "full_attention",
+            "attnres", "full_attnres", "attention_residual",
+            "attention-residual", "full_attention_residual",
+            "full-attention-residual"
+          )) {
+        stop(
+          "'neural_mcmc_control$residual_mode' must be one of 'standard' or 'full_attn'.",
+          call. = FALSE
+        )
+      }
+    } else {
+      stop(
+        "'neural_mcmc_control$residual_mode' must be one of 'standard' or 'full_attn'.",
         call. = FALSE
       )
     }
