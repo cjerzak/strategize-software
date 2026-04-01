@@ -1522,6 +1522,7 @@ generate_ModelOutcome_neural <- function(){
     optimizer = "muon",
     early_stopping = TRUE,
     early_stopping_n_checks = 10L,
+    early_stopping_patience = 3L,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -4225,10 +4226,12 @@ generate_ModelOutcome_neural <- function(){
     min_delta = NA_real_,
     best_step = NA_integer_,
     stop_step = NA_integer_,
+    stop_check = NA_integer_,
     best_metric = NA_real_,
     final_metric = NA_real_,
     n_train = NA_integer_,
-    n_validation = NA_integer_
+    n_validation = NA_integer_,
+    validation_loss_history = numeric(0)
   )
   if (isTRUE(use_svi)) {
     if (isTRUE(output_only_mode)) {
@@ -4752,7 +4755,19 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_n_checks < 1L) {
       early_stopping_n_checks <- 10L
     }
+    early_stopping_patience <- if (!is.null(mcmc_control$early_stopping_patience)) {
+      as.integer(mcmc_control$early_stopping_patience)
+    } else {
+      3L
+    }
+    if (length(early_stopping_patience) != 1L ||
+        is.na(early_stopping_patience) ||
+        !is.finite(early_stopping_patience) ||
+        early_stopping_patience < 1L) {
+      early_stopping_patience <- 3L
+    }
     early_stopping_info$n_checks <- early_stopping_n_checks
+    early_stopping_info$patience <- early_stopping_patience
     early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
       "validation_split_unavailable"
     } else {
@@ -4768,7 +4783,6 @@ generate_ModelOutcome_neural <- function(){
           reticulate::py_has_attr(svi, "get_params")) {
         early_stopping_info$active <- TRUE
         early_stopping_info$metric <- if (likelihood == "normal") "nll" else "log_loss"
-        early_stopping_info$patience <- 3L
         early_stopping_info$min_delta <- 1e-4
         early_stopping_info$eval_every <- as.integer(max(
           1L,
@@ -4843,6 +4857,11 @@ generate_ModelOutcome_neural <- function(){
         }
 
         last_metric <- metric_value
+        early_stopping_info$validation_loss_history <- c(
+          early_stopping_info$validation_loss_history,
+          metric_value
+        )
+        early_stopping_info$stop_check <- as.integer(length(early_stopping_info$validation_loss_history))
         if (!is.finite(best_metric) ||
             metric_value < (best_metric - early_stopping_info$min_delta)) {
           best_metric <- metric_value
