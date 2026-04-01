@@ -1,0 +1,3 @@
+"benchmark","model","residual_mode","depth","seed","n_eval","auc","log_loss","accuracy","brier","null_log_loss","null_accuracy","null_brier"
+"pairwise_oos","baseline_standard","standard",4,20260327,1000,0.9903,0.1546,0.949,0.0382,0.692905161034832,0.511,0.249879
+"pairwise_oos","full_attn_residual","full_attn",4,20260327,1000,0.8735,0.5224,0.809,0.1735,0.692905161034832,0.511,0.249879

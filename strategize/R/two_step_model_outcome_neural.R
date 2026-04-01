@@ -277,6 +277,8 @@ neural_build_param_schema <- function(params,
   }
   for (l_ in 1L:model_depth) {
     param_names <- c(param_names,
+                     paste0("pseudo_query_attn_l", l_),
+                     paste0("pseudo_query_ff_l", l_),
                      paste0("alpha_attn_l", l_),
                      paste0("alpha_ff_l", l_),
                      paste0("RMS_attn_l", l_),
@@ -300,7 +302,7 @@ neural_build_param_schema <- function(params,
                    "W_k_cross",
                    "W_v_cross",
                    "W_o_cross")
-  param_names <- c(param_names, "RMS_final", "W_out", "b_out")
+  param_names <- c(param_names, "pseudo_query_final", "RMS_final", "W_out", "b_out")
   if (!is.null(params$sigma)) {
     param_names <- c(param_names, "sigma")
   }
@@ -380,6 +382,57 @@ neural_cross_encoder_mode <- function(model_info) {
   "none"
 }
 
+neural_normalize_residual_mode <- function(value) {
+  if (is.null(value)) {
+    return("standard")
+  }
+  if (isTRUE(value)) {
+    return("full_attn")
+  }
+  if (identical(value, FALSE)) {
+    return("standard")
+  }
+  if (is.character(value)) {
+    mode <- tolower(as.character(value))
+    if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      if (mode %in% c("standard", "add", "additive", "rezero")) {
+        return("standard")
+      }
+      if (mode %in% c(
+        "full_attn", "full-attn", "full_attention",
+        "attnres", "full_attnres", "attention_residual",
+        "attention-residual", "full_attention_residual",
+        "full-attention-residual"
+      )) {
+        return("full_attn")
+      }
+    }
+  }
+  NA_character_
+}
+
+neural_transformer_residual_mode <- function(model_info) {
+  mode <- neural_normalize_residual_mode(model_info$residual_mode)
+  if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+    return(mode)
+  }
+  "standard"
+}
+
+neural_make_transformer_model_info <- function(model_depth,
+                                               model_dims,
+                                               n_heads,
+                                               head_dim,
+                                               residual_mode = "standard") {
+  list(
+    model_depth = model_depth,
+    model_dims = model_dims,
+    n_heads = n_heads,
+    head_dim = head_dim,
+    residual_mode = neural_normalize_residual_mode(residual_mode)
+  )
+}
+
 neural_rms_norm <- function(x, g, model_dims, eps = 1e-6) {
   if (is.null(g)) {
     return(x)
@@ -389,6 +442,96 @@ neural_rms_norm <- function(x, g, model_dims, eps = 1e-6) {
   mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
   inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
   x * inv_rms * g_use
+}
+
+neural_rms_norm_no_scale <- function(x, eps = 1e-6) {
+  x <- strenv$jnp$array(x)
+  mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
+  inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
+  x * inv_rms
+}
+
+neural_full_attn_residual <- function(sources,
+                                      pseudo_query = NULL,
+                                      model_dims = NULL,
+                                      eps = 1e-6) {
+  if (is.list(sources)) {
+    sources <- strenv$jnp$stack(sources, axis = 0L)
+  } else {
+    sources <- strenv$jnp$array(sources)
+  }
+  if (is.null(model_dims)) {
+    model_dims <- tryCatch(ai(sources$shape[[4]]), error = function(e) NULL)
+  }
+  if (is.null(pseudo_query)) {
+    pseudo_query <- strenv$jnp$zeros(
+      list(ai(model_dims)),
+      dtype = tryCatch(sources$dtype, error = function(e) strenv$dtj)
+    )
+  } else {
+    pseudo_query <- strenv$jnp$array(
+      pseudo_query,
+      dtype = tryCatch(sources$dtype, error = function(e) strenv$dtj)
+    )
+  }
+  keys <- neural_rms_norm_no_scale(sources, eps = eps)
+  logits <- strenv$jnp$einsum("d,nbtd->nbt", pseudo_query, keys)
+  weights <- strenv$jax$nn$softmax(logits, axis = 0L)
+  strenv$jnp$einsum("nbt,nbtd->btd", weights, sources)
+}
+
+neural_validate_full_attn_compatibility <- function(model_info,
+                                                    params = NULL,
+                                                    context = "Neural model") {
+  if (is.null(model_info)) {
+    return(invisible(NULL))
+  }
+  if (!identical(neural_transformer_residual_mode(model_info), "full_attn")) {
+    return(invisible(NULL))
+  }
+
+  has_final_query <- FALSE
+  if (!is.null(params)) {
+    has_final_query <- !is.null(params[["pseudo_query_final"]])
+  }
+  if (!isTRUE(has_final_query) && !is.null(model_info$params)) {
+    has_final_query <- !is.null(model_info$params[["pseudo_query_final"]])
+  }
+  if (!isTRUE(has_final_query) && !is.null(model_info$param_names)) {
+    has_final_query <- "pseudo_query_final" %in% model_info$param_names
+  }
+
+  if (!isTRUE(has_final_query)) {
+    stop(
+      sprintf(
+        "%s uses legacy 'full_attn' parameters without 'pseudo_query_final'. Refit and re-export under the updated architecture.",
+        context
+      ),
+      call. = FALSE
+    )
+  }
+
+  invisible(NULL)
+}
+
+neural_transformer_state_tokens <- function(transformer_out) {
+  if (is.list(transformer_out) && !is.null(transformer_out$tokens)) {
+    return(transformer_out$tokens)
+  }
+  transformer_out
+}
+
+neural_transformer_readout_tokens <- function(transformer_out) {
+  if (is.list(transformer_out) && !is.null(transformer_out$readout_tokens)) {
+    return(transformer_out$readout_tokens)
+  }
+  transformer_out
+}
+
+neural_extract_choice_representation <- function(transformer_out) {
+  readout_tokens <- neural_transformer_readout_tokens(transformer_out)
+  choice_out <- strenv$jnp$take(readout_tokens, strenv$jnp$arange(1L), axis = 1L)
+  strenv$jnp$squeeze(choice_out, axis = 1L)
 }
 
 neural_center_token_rows <- function(x) {
@@ -1025,9 +1168,26 @@ neural_build_choice_token <- function(model_info, params = NULL){
   strenv$jnp$reshape(choice_vec, list(1L, 1L, ai(model_info$model_dims)))
 }
 
-neural_run_transformer <- function(tokens, model_info, params = NULL){
+neural_run_transformer <- function(tokens,
+                                   model_info,
+                                   params = NULL,
+                                   return_details = FALSE){
   if (is.null(params)) {
     params <- model_info$params
+  }
+  residual_mode <- neural_transformer_residual_mode(model_info)
+  use_full_attn_residual <- identical(residual_mode, "full_attn")
+  if (isTRUE(use_full_attn_residual)) {
+    neural_validate_full_attn_compatibility(
+      model_info = model_info,
+      params = params,
+      context = "Neural transformer"
+    )
+  }
+  layer_outputs <- if (isTRUE(use_full_attn_residual)) {
+    list(tokens)
+  } else {
+    NULL
   }
   for (l_ in 1L:ai(model_info$model_depth)) {
     Wq <- params[[paste0("W_q_l", l_)]]
@@ -1040,10 +1200,19 @@ neural_run_transformer <- function(tokens, model_info, params = NULL){
     RMS_ff <- params[[paste0("RMS_ff_l", l_)]]
     RMS_q <- params[[paste0("RMS_q_l", l_)]]
     RMS_k <- params[[paste0("RMS_k_l", l_)]]
-    alpha_attn <- neural_param_or_default(params, paste0("alpha_attn_l", l_), 1.0)
-    alpha_ff <- neural_param_or_default(params, paste0("alpha_ff_l", l_), 1.0)
+    if (isTRUE(use_full_attn_residual)) {
+      h_attn <- neural_full_attn_residual(
+        layer_outputs,
+        pseudo_query = params[[paste0("pseudo_query_attn_l", l_)]],
+        model_dims = model_info$model_dims
+      )
+      tokens_norm <- neural_rms_norm(h_attn, RMS_attn, model_info$model_dims)
+    } else {
+      alpha_attn <- neural_param_or_default(params, paste0("alpha_attn_l", l_), 1.0)
+      alpha_ff <- neural_param_or_default(params, paste0("alpha_ff_l", l_), 1.0)
+      tokens_norm <- neural_rms_norm(tokens, RMS_attn, model_info$model_dims)
+    }
 
-    tokens_norm <- neural_rms_norm(tokens, RMS_attn, model_info$model_dims)
     Q <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wq)
     K <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wk)
     V <- strenv$jnp$einsum("ntm,mk->ntk", tokens_norm, Wv)
@@ -1065,15 +1234,43 @@ neural_run_transformer <- function(tokens, model_info, params = NULL){
                                                   ai(model_info$model_dims)))
     attn_out <- strenv$jnp$einsum("ntm,mk->ntk", context, Wo)
 
-    h1 <- tokens + alpha_attn * attn_out
-    h1_norm <- neural_rms_norm(h1, RMS_ff, model_info$model_dims)
-    ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
+    if (isTRUE(use_full_attn_residual)) {
+      layer_outputs[[length(layer_outputs) + 1L]] <- attn_out
+      h_ff <- neural_full_attn_residual(
+        layer_outputs,
+        pseudo_query = params[[paste0("pseudo_query_ff_l", l_)]],
+        model_dims = model_info$model_dims
+      )
+      h_ff_norm <- neural_rms_norm(h_ff, RMS_ff, model_info$model_dims)
+      ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h_ff_norm, Wff1)
+    } else {
+      h1 <- tokens + alpha_attn * attn_out
+      h1_norm <- neural_rms_norm(h1, RMS_ff, model_info$model_dims)
+      ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
+    }
     ff_act <- strenv$jax$nn$swish(ff_pre)
     ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
-    tokens <- h1 + alpha_ff * ff_out
+    if (isTRUE(use_full_attn_residual)) {
+      layer_outputs[[length(layer_outputs) + 1L]] <- ff_out
+      tokens <- ff_out
+    } else {
+      tokens <- h1 + alpha_ff * ff_out
+    }
   }
-  tokens <- neural_rms_norm(tokens, params$RMS_final, model_info$model_dims)
-  tokens
+  tokens_final <- neural_rms_norm(tokens, params$RMS_final, model_info$model_dims)
+  readout_tokens <- tokens_final
+  if (isTRUE(use_full_attn_residual)) {
+    h_out <- neural_full_attn_residual(
+      layer_outputs,
+      pseudo_query = params[["pseudo_query_final"]],
+      model_dims = model_info$model_dims
+    )
+    readout_tokens <- neural_rms_norm(h_out, params$RMS_final, model_info$model_dims)
+  }
+  if (isTRUE(return_details)) {
+    return(list(tokens = tokens_final, readout_tokens = readout_tokens))
+  }
+  tokens_final
 }
 
 neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
@@ -1154,9 +1351,8 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
   } else {
     tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
   }
-  tokens <- neural_run_transformer(tokens, model_info, params)
-  choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-  strenv$jnp$squeeze(choice_out, axis = 1L)
+  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  neural_extract_choice_representation(transformer_out)
 }
 
 neural_encode_pair_soft_batched <- function(pi_left, pi_right,
@@ -1193,9 +1389,9 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     tokens_right <- strenv$jnp$concatenate(list(choice_tok, right_tokens), axis = 1L)
   }
   tokens <- strenv$jnp$concatenate(list(tokens_left, tokens_right), axis = 0L)
-  tokens <- neural_run_transformer(tokens, model_info, params)
-  choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-  phi_all <- strenv$jnp$squeeze(choice_out, axis = 1L)
+  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  tokens <- neural_transformer_state_tokens(transformer_out)
+  phi_all <- neural_extract_choice_representation(transformer_out)
   idx_left <- strenv$jnp$arange(1L)
   idx_right <- strenv$jnp$arange(1L, 2L)
   out <- list(
@@ -1279,9 +1475,8 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
     }
     token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
     tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    tokens <- neural_run_transformer(tokens, model_info, params)
-    cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-    cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+    transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+    cls_out <- neural_extract_choice_representation(transformer_out)
     logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
   } else {
     phi_pair <- neural_encode_pair_soft_batched(pi_left, pi_right,
@@ -1535,6 +1730,7 @@ generate_ModelOutcome_neural <- function(){
   model_dims <- 128L
   model_depth <- 2L
   qk_norm_enabled <- TRUE
+  residual_mode <- "standard"
   cross_candidate_encoder_mode <- "none"
   cross_candidate_encoder_supplied <- FALSE
   warn_stage_imbalance_pct <- 0.10
@@ -1602,6 +1798,10 @@ generate_ModelOutcome_neural <- function(){
       }
 
       neural_model_info <- bundle$fit$neural_model_info
+      neural_validate_full_attn_compatibility(
+        model_info = neural_model_info,
+        context = "Cached neural outcome bundle"
+      )
       fit_metrics <- bundle$fit$fit_metrics %||% neural_model_info$fit_metrics
       my_model <- NULL
 
@@ -1620,6 +1820,17 @@ generate_ModelOutcome_neural <- function(){
     stop(
       "'neural_mcmc_control$cross_candidate_encoder' must be TRUE/FALSE or one of ",
       "'none', 'term', 'attn', or 'full'.",
+      call. = FALSE
+    )
+  }
+  normalize_residual_mode <- function(value) {
+    mode <- neural_normalize_residual_mode(value)
+    if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      return(mode)
+    }
+    stop(
+      "'neural_mcmc_control$residual_mode' must be one of ",
+      "'standard' or 'full_attn'.",
       call. = FALSE
     )
   }
@@ -1667,6 +1878,9 @@ generate_ModelOutcome_neural <- function(){
         stop("'neural_mcmc_control$qk_norm' must be TRUE/FALSE.", call. = FALSE)
       }
     }
+    if (!is.null(neural_mcmc_control$residual_mode)) {
+      residual_mode <- normalize_residual_mode(neural_mcmc_control$residual_mode)
+    }
     if (!is.null(neural_mcmc_control$cross_candidate_encoder)) {
       cross_candidate_encoder_supplied <- TRUE
       cross_candidate_encoder_mode <- normalize_cross_candidate_encoder(
@@ -1685,6 +1899,7 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$ModelDims <- NULL
     mcmc_overrides$ModelDepth <- NULL
     mcmc_overrides$qk_norm <- NULL
+    mcmc_overrides$residual_mode <- NULL
     mcmc_overrides$cross_candidate_encoder <- NULL
   }
   uncertainty_scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
@@ -1801,6 +2016,7 @@ generate_ModelOutcome_neural <- function(){
   use_cross_term <- identical(cross_candidate_encoder_mode, "term")
   use_cross_attn <- identical(cross_candidate_encoder_mode, "attn")
   use_cross_encoder <- identical(cross_candidate_encoder_mode, "full")
+  use_full_attn_residual <- identical(residual_mode, "full_attn")
   use_matchup_token <- isTRUE(pairwise_mode) &&
     !identical(cross_candidate_encoder_mode, "none")
 
@@ -2374,6 +2590,7 @@ generate_ModelOutcome_neural <- function(){
     }
 
     layer_params <- list()
+    attnres_query_sd_scale <- as.numeric(weight_sd_scale * depth_prior_scale)
     for (l_ in 1L:ModelDepth) {
       tau_w_prior <- as.numeric(weight_sd_scale * depth_prior_scale)
       tau_w_l <- if (isTRUE(output_only_mode)) {
@@ -2385,35 +2602,72 @@ generate_ModelOutcome_neural <- function(){
         )
       }
 
-      alpha_attn_name <- paste0("alpha_attn_l", l_)
-      alpha_attn_l <- p2d(
-        name = alpha_attn_name,
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            alpha_attn_name,
-            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
-          )
-        },
-        init_fxn = function() {
-          p2d_init_halfnormal(alpha_attn_name, gate_sd_scale, reticulate::tuple())
-        },
-        constraint = p2d_constraint_positive
-      )
+      pseudo_query_attn_l <- NULL
+      pseudo_query_ff_l <- NULL
+      alpha_attn_l <- NULL
+      alpha_ff_l <- NULL
+      if (isTRUE(use_full_attn_residual)) {
+        pseudo_query_attn_name <- paste0("pseudo_query_attn_l", l_)
+        pseudo_query_shape <- reticulate::tuple(ModelDims)
+        pseudo_query_attn_l <- p2d(
+          name = pseudo_query_attn_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              pseudo_query_attn_name,
+              strenv$numpyro$distributions$Normal(0., attnres_query_sd_scale),
+              sample_shape = pseudo_query_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal(pseudo_query_attn_name, 0., pseudo_query_shape)
+          }
+        )
 
-      alpha_ff_name <- paste0("alpha_ff_l", l_)
-      alpha_ff_l <- p2d(
-        name = alpha_ff_name,
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            alpha_ff_name,
-            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
-          )
-        },
-        init_fxn = function() {
-          p2d_init_halfnormal(alpha_ff_name, gate_sd_scale, reticulate::tuple())
-        },
-        constraint = p2d_constraint_positive
-      )
+        pseudo_query_ff_name <- paste0("pseudo_query_ff_l", l_)
+        pseudo_query_ff_l <- p2d(
+          name = pseudo_query_ff_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              pseudo_query_ff_name,
+              strenv$numpyro$distributions$Normal(0., attnres_query_sd_scale),
+              sample_shape = pseudo_query_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal(pseudo_query_ff_name, 0., pseudo_query_shape)
+          }
+        )
+      } else {
+        alpha_attn_name <- paste0("alpha_attn_l", l_)
+        alpha_attn_l <- p2d(
+          name = alpha_attn_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              alpha_attn_name,
+              strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
+            )
+          },
+          init_fxn = function() {
+            p2d_init_halfnormal(alpha_attn_name, gate_sd_scale, reticulate::tuple())
+          },
+          constraint = p2d_constraint_positive
+        )
+
+        alpha_ff_name <- paste0("alpha_ff_l", l_)
+        alpha_ff_l <- p2d(
+          name = alpha_ff_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              alpha_ff_name,
+              strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
+            )
+          },
+          init_fxn = function() {
+            p2d_init_halfnormal(alpha_ff_name, gate_sd_scale, reticulate::tuple())
+          },
+          constraint = p2d_constraint_positive
+        )
+      }
 
       RMS_attn_name <- paste0("RMS_attn_l", l_)
       RMS_attn_shape <- reticulate::tuple(ModelDims)
@@ -2565,6 +2819,12 @@ generate_ModelOutcome_neural <- function(){
       layer_params[[paste0("W_ff1_l", l_)]] <- W_ff1_l
       layer_params[[paste0("W_ff2_l", l_)]] <- W_ff2_l
       layer_params[[paste0("RMS_attn_l", l_)]] <- RMS_attn_l
+      if (!is.null(pseudo_query_attn_l)) {
+        layer_params[[paste0("pseudo_query_attn_l", l_)]] <- pseudo_query_attn_l
+      }
+      if (!is.null(pseudo_query_ff_l)) {
+        layer_params[[paste0("pseudo_query_ff_l", l_)]] <- pseudo_query_ff_l
+      }
       if (!is.null(RMS_q_l)) {
         layer_params[[paste0("RMS_q_l", l_)]] <- RMS_q_l
       }
@@ -2572,8 +2832,12 @@ generate_ModelOutcome_neural <- function(){
         layer_params[[paste0("RMS_k_l", l_)]] <- RMS_k_l
       }
       layer_params[[paste0("RMS_ff_l", l_)]] <- RMS_ff_l
-      layer_params[[paste0("alpha_attn_l", l_)]] <- alpha_attn_l
-      layer_params[[paste0("alpha_ff_l", l_)]] <- alpha_ff_l
+      if (!is.null(alpha_attn_l)) {
+        layer_params[[paste0("alpha_attn_l", l_)]] <- alpha_attn_l
+      }
+      if (!is.null(alpha_ff_l)) {
+        layer_params[[paste0("alpha_ff_l", l_)]] <- alpha_ff_l
+      }
     }
 
     alpha_cross <- NULL
@@ -2716,6 +2980,24 @@ generate_ModelOutcome_neural <- function(){
       )
     }
 
+    pseudo_query_final <- NULL
+    if (isTRUE(use_full_attn_residual)) {
+      pseudo_query_final_shape <- reticulate::tuple(ModelDims)
+      pseudo_query_final <- p2d(
+        name = "pseudo_query_final",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "pseudo_query_final",
+            strenv$numpyro$distributions$Normal(0., attnres_query_sd_scale),
+            sample_shape = pseudo_query_final_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("pseudo_query_final", 0., pseudo_query_final_shape)
+        }
+      )
+    }
+
     RMS_final_shape <- reticulate::tuple(ModelDims)
     RMS_final <- p2d(
       name = "RMS_final",
@@ -2823,6 +3105,9 @@ generate_ModelOutcome_neural <- function(){
       params_view$W_v_cross <- W_v_cross
       params_view$W_o_cross <- W_o_cross
     }
+    if (!is.null(pseudo_query_final)) {
+      params_view$pseudo_query_final <- pseudo_query_final
+    }
     params_view$RMS_final <- RMS_final
     params_view$W_out <- W_out
     params_view$b_out <- b_out
@@ -2856,11 +3141,12 @@ generate_ModelOutcome_neural <- function(){
     M_cross <- shared_params$M_cross
     W_cross_out <- shared_params$W_cross_out
 
-    transformer_model_info <- list(
+    transformer_model_info <- neural_make_transformer_model_info(
       model_depth = ModelDepth,
       model_dims = ModelDims,
       n_heads = TransformerHeads,
-      head_dim = head_dim
+      head_dim = head_dim,
+      residual_mode = residual_mode
     )
     model_info_local <- list(
       model_dims = ModelDims,
@@ -2881,10 +3167,11 @@ generate_ModelOutcome_neural <- function(){
                                    params = params_view)
     }
 
-    run_transformer <- function(tokens) {
+    run_transformer <- function(tokens, return_details = FALSE) {
       neural_run_transformer(tokens,
                              model_info = transformer_model_info,
-                             params = params_view)
+                             params = params_view,
+                             return_details = return_details)
     }
 
     compute_matchup_idx <- function(pl, pr) {
@@ -2917,9 +3204,8 @@ generate_ModelOutcome_neural <- function(){
       tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, sep_tok,
                                             left_tokens, sep_tok, right_tokens),
                                        axis = 1L)
-      tokens <- run_transformer(tokens)
-      cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      cls_out <- neural_extract_choice_representation(transformer_out)
       neural_linear_head(cls_out, W_out, b_out)
     }
 
@@ -2931,9 +3217,9 @@ generate_ModelOutcome_neural <- function(){
       ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, matchup_idx)
       cand_tokens <- embed_candidate(Xa, pa, resp_p)
       tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
-      tokens <- run_transformer(tokens)
-      choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      tokens <- neural_transformer_state_tokens(transformer_out)
+      phi <- neural_extract_choice_representation(transformer_out)
       if (!isTRUE(return_tokens)) {
         return(phi)
       }
@@ -3067,11 +3353,12 @@ generate_ModelOutcome_neural <- function(){
     b_out <- shared_params$b_out
     sigma <- shared_params$sigma
 
-    transformer_model_info <- list(
+    transformer_model_info <- neural_make_transformer_model_info(
       model_depth = ModelDepth,
       model_dims = ModelDims,
       n_heads = TransformerHeads,
-      head_dim = head_dim
+      head_dim = head_dim,
+      residual_mode = residual_mode
     )
     model_info_local <- list(
       model_dims = ModelDims,
@@ -3086,10 +3373,11 @@ generate_ModelOutcome_neural <- function(){
                                          params = params_view)
     }
 
-    run_transformer <- function(tokens) {
+    run_transformer <- function(tokens, return_details = FALSE) {
       neural_run_transformer(tokens,
                              model_info = transformer_model_info,
-                             params = params_view)
+                             params = params_view,
+                             return_details = return_details)
     }
 
     do_forward_and_lik_ <- function(Xb, pb, resp_p, resp_c, Yb) {
@@ -3107,9 +3395,8 @@ generate_ModelOutcome_neural <- function(){
       }
       token_parts <- c(token_parts, list(cand_tokens))
       tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-      tokens <- run_transformer(tokens)
-      choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      choice_out <- neural_extract_choice_representation(transformer_out)
       logits <- neural_linear_head(choice_out, W_out, b_out)
 
       if (likelihood == "bernoulli") {
@@ -3826,6 +4113,8 @@ generate_ModelOutcome_neural <- function(){
     }
 
     for (l_ in 1L:ModelDepth) {
+      maybe_site(paste0("pseudo_query_attn_l", l_))
+      maybe_site(paste0("pseudo_query_ff_l", l_))
       maybe_site(paste0("alpha_attn_l", l_))
       maybe_site(paste0("alpha_ff_l", l_))
       maybe_site(paste0("RMS_attn_l", l_))
@@ -3842,6 +4131,7 @@ generate_ModelOutcome_neural <- function(){
     for (name in c("W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
       params_out[[name]] <- get_loc_scale_site_value(name, "tau_cross_attn")
     }
+    maybe_site("pseudo_query_final")
     maybe_site("RMS_final")
 
     params_out
@@ -3899,11 +4189,12 @@ generate_ModelOutcome_neural <- function(){
         cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
         n_party_levels = ai(n_party_levels)
       )
-      transformer_model_info <- list(
+      transformer_model_info <- neural_make_transformer_model_info(
         model_depth = ModelDepth,
         model_dims = ModelDims,
         n_heads = TransformerHeads,
-        head_dim = head_dim
+        head_dim = head_dim,
+        residual_mode = residual_mode
       )
 
       embed_candidate <- function(X_idx, party_idx, resp_p_idx) {
@@ -3923,8 +4214,11 @@ generate_ModelOutcome_neural <- function(){
           params = params
         )
       }
-      run_transformer <- function(tokens) {
-        neural_run_transformer(tokens, model_info = transformer_model_info, params = params)
+      run_transformer <- function(tokens, return_details = FALSE) {
+        neural_run_transformer(tokens,
+                               model_info = transformer_model_info,
+                               params = params,
+                               return_details = return_details)
       }
       build_context_tokens <- function(stage_idx, resp_p_idx, resp_c_idx, matchup_idx = NULL) {
         neural_build_context_tokens_batch(
@@ -3953,9 +4247,8 @@ generate_ModelOutcome_neural <- function(){
         }
         token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
         tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-        tokens <- run_transformer(tokens)
-        cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-        cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+        transformer_out <- run_transformer(tokens, return_details = TRUE)
+        cls_out <- neural_extract_choice_representation(transformer_out)
         neural_linear_head(cls_out, params$W_out, params$b_out)
       }
       encode_candidate <- function(Xa, pa, resp_p_idx, resp_c_idx, stage_idx, matchup_idx = NULL,
@@ -3970,9 +4263,9 @@ generate_ModelOutcome_neural <- function(){
         } else {
           tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
         }
-        tokens <- run_transformer(tokens)
-        choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-        phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+        transformer_out <- run_transformer(tokens, return_details = TRUE)
+        tokens <- neural_transformer_state_tokens(transformer_out)
+        phi <- neural_extract_choice_representation(transformer_out)
         if (!isTRUE(return_tokens)) {
           return(phi)
         }
@@ -4101,11 +4394,12 @@ generate_ModelOutcome_neural <- function(){
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp
     )
-    transformer_model_info <- list(
+    transformer_model_info <- neural_make_transformer_model_info(
       model_depth = ModelDepth,
       model_dims = ModelDims,
       n_heads = TransformerHeads,
-      head_dim = head_dim
+      head_dim = head_dim,
+      residual_mode = residual_mode
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p_idx) {
@@ -4117,8 +4411,11 @@ generate_ModelOutcome_neural <- function(){
         params = params
       )
     }
-    run_transformer <- function(tokens) {
-      neural_run_transformer(tokens, model_info = transformer_model_info, params = params)
+    run_transformer <- function(tokens, return_details = FALSE) {
+      neural_run_transformer(tokens,
+                             model_info = transformer_model_info,
+                             params = params,
+                             return_details = return_details)
     }
 
     ctx_tokens <- neural_build_context_tokens_batch(
@@ -4136,9 +4433,8 @@ generate_ModelOutcome_neural <- function(){
     }
     token_parts <- c(token_parts, list(cand_tokens))
     tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    tokens <- run_transformer(tokens)
-    choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-    choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+    transformer_out <- run_transformer(tokens, return_details = TRUE)
+    choice_out <- neural_extract_choice_representation(transformer_out)
     logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
 
     pred <- if (likelihood == "bernoulli") {
@@ -5295,6 +5591,8 @@ generate_ModelOutcome_neural <- function(){
   }
 
   for (l_ in 1L:ModelDepth) {
+    maybe_site(paste0("pseudo_query_attn_l", l_))
+    maybe_site(paste0("pseudo_query_ff_l", l_))
     alpha_attn_name <- paste0("alpha_attn_l", l_)
     alpha_ff_name <- paste0("alpha_ff_l", l_)
     maybe_site(alpha_attn_name)
@@ -5330,6 +5628,7 @@ generate_ModelOutcome_neural <- function(){
       }
     }
   }
+  maybe_site("pseudo_query_final")
   maybe_site("RMS_final")
 
   has_qk_norm <- FALSE
@@ -5383,14 +5682,18 @@ generate_ModelOutcome_neural <- function(){
                                    params = params)
     }
 
-    transformer_model_info <- list(model_depth = ModelDepth,
-                                   model_dims = ModelDims,
-                                   n_heads = TransformerHeads,
-                                   head_dim = head_dim)
-    run_transformer <- function(tokens) {
+    transformer_model_info <- neural_make_transformer_model_info(
+      model_depth = ModelDepth,
+      model_dims = ModelDims,
+      n_heads = TransformerHeads,
+      head_dim = head_dim,
+      residual_mode = residual_mode
+    )
+    run_transformer <- function(tokens, return_details = FALSE) {
       neural_run_transformer(tokens,
                              model_info = transformer_model_info,
-                             params = params)
+                             params = params,
+                             return_details = return_details)
     }
 
     build_context_tokens <- function(stage_idx, resp_p, resp_c, matchup_idx = NULL) {
@@ -5422,9 +5725,8 @@ generate_ModelOutcome_neural <- function(){
       }
       token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
       tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-      tokens <- run_transformer(tokens)
-      cls_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      cls_out <- strenv$jnp$squeeze(cls_out, axis = 1L)
+      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      cls_out <- neural_extract_choice_representation(transformer_out)
       neural_linear_head(cls_out, params$W_out, params$b_out)
     }
 
@@ -5440,9 +5742,9 @@ generate_ModelOutcome_neural <- function(){
       } else {
         tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
       }
-      tokens <- run_transformer(tokens)
-      choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-      phi <- strenv$jnp$squeeze(choice_out, axis = 1L)
+      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      tokens <- neural_transformer_state_tokens(transformer_out)
+      phi <- neural_extract_choice_representation(transformer_out)
       if (!isTRUE(return_tokens)) {
         return(phi)
       }
@@ -5562,13 +5864,17 @@ generate_ModelOutcome_neural <- function(){
                                          params = params)
     }
 
-    run_transformer <- function(tokens) {
+    run_transformer <- function(tokens, return_details = FALSE) {
       neural_run_transformer(tokens,
-                             model_info = list(model_depth = ModelDepth,
-                                               model_dims = ModelDims,
-                                               n_heads = TransformerHeads,
-                                               head_dim = head_dim),
-                             params = params)
+                             model_info = neural_make_transformer_model_info(
+                               model_depth = ModelDepth,
+                               model_dims = ModelDims,
+                               n_heads = TransformerHeads,
+                               head_dim = head_dim,
+                               residual_mode = residual_mode
+                             ),
+                             params = params,
+                             return_details = return_details)
     }
 
     ctx_tokens <- neural_build_context_tokens_batch(model_info = model_info_local,
@@ -5584,9 +5890,8 @@ generate_ModelOutcome_neural <- function(){
     }
     token_parts <- c(token_parts, list(cand_tokens))
     tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    tokens <- run_transformer(tokens)
-    choice_out <- strenv$jnp$take(tokens, strenv$jnp$arange(1L), axis = 1L)
-    choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+    transformer_out <- run_transformer(tokens, return_details = TRUE)
+    choice_out <- neural_extract_choice_representation(transformer_out)
     logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
 
     if (return_logits) {
@@ -5958,6 +6263,7 @@ generate_ModelOutcome_neural <- function(){
     stage_diagnostics = stage_diagnostics,
     model_dims = ModelDims,
     model_depth = ModelDepth,
+    residual_mode = residual_mode,
     n_heads = TransformerHeads,
     head_dim = head_dim
   )

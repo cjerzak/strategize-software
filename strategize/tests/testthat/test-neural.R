@@ -247,6 +247,54 @@ get_neural_fit_true <- local({
   }
 })
 
+get_neural_fit_full_attn_res <- local({
+  cache <- NULL
+  function() {
+    if (!is.null(cache)) {
+      return(cache)
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+
+    withr::local_envvar(c(
+      STRATEGIZE_NEURAL_FAST_MCMC = "true",
+      STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+      STRATEGIZE_NEURAL_EVAL_SEED = "123"
+    ))
+
+    data <- generate_test_data(n = 24, seed = 20260331)
+    params <- default_strategize_params(fast = TRUE)
+    params$outcome_model_type <- "neural"
+    base_neural_control <- params$neural_mcmc_control
+    if (is.null(base_neural_control)) {
+      base_neural_control <- list()
+    }
+    params$neural_mcmc_control <- modifyList(
+      base_neural_control,
+      list(
+        subsample_method = "batch_vi",
+        batch_size = 16L,
+        cross_candidate_encoder = FALSE,
+        residual_mode = "full_attn",
+        ModelDims = 16L,
+        ModelDepth = 2L
+      )
+    )
+
+    p_list <- generate_test_p_list(data$W)
+
+    res <- do.call(strategize, c(
+      list(Y = data$Y, W = data$W, p_list = p_list),
+      data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+      params
+    ))
+
+    cache <<- list(res = res, data = data, p_list = p_list)
+    cache
+  }
+})
+
 get_neural_fit_attn_output_vi <- local({
   cache <- NULL
   function() {
@@ -722,6 +770,66 @@ test_that("logical TRUE override normalizes to the term interaction mode", {
   expect_false(isTRUE(model_info$has_cross_attn))
 })
 
+test_that("full attention residual mode exposes depth-attention metadata", {
+  fit <- get_neural_fit_full_attn_res()
+  model_info <- get_neural_model_info(fit$res)
+
+  expect_valid_strategize_output(fit$res, n_factors = ncol(fit$data$W))
+  expect_false(is.null(model_info))
+  expect_identical(model_info$residual_mode, "full_attn")
+  expect_true("pseudo_query_attn_l1" %in% model_info$param_names)
+  expect_true("pseudo_query_ff_l1" %in% model_info$param_names)
+  expect_true("pseudo_query_final" %in% model_info$param_names)
+  expect_false("alpha_attn_l1" %in% model_info$param_names)
+  expect_false("alpha_ff_l1" %in% model_info$param_names)
+})
+
+test_that("full attention residual readout aggregates layer history", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  jnp <- strategize:::strenv$jnp
+  dtj <- strategize:::strenv$dtj
+  np <- strategize:::strenv$np
+
+  model_info <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 1L,
+    n_heads = 1L,
+    head_dim = 1L,
+    residual_mode = "full_attn"
+  )
+  params <- list(
+    pseudo_query_attn_l1 = jnp$zeros(reticulate::tuple(1L), dtype = dtj),
+    pseudo_query_ff_l1 = jnp$zeros(reticulate::tuple(1L), dtype = dtj),
+    pseudo_query_final = jnp$zeros(reticulate::tuple(1L), dtype = dtj),
+    RMS_attn_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_ff_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_q_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_k_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_final = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    W_q_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_k_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_v_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_o_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_ff1_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_ff2_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj)
+  )
+  tokens <- jnp$array(array(3, dim = c(1L, 1L, 1L)), dtype = dtj)
+
+  transformer_out <- strategize:::neural_run_transformer(
+    tokens = tokens,
+    model_info = model_info,
+    params = params,
+    return_details = TRUE
+  )
+  last_state <- as.numeric(reticulate::py_to_r(np$array(transformer_out$tokens)))
+  readout_state <- as.numeric(reticulate::py_to_r(np$array(transformer_out$readout_tokens)))
+
+  expect_equal(last_state, 0, tolerance = 1e-6)
+  expect_equal(readout_state, 1, tolerance = 1e-6)
+})
+
 test_that("neural attn metadata marks the cross-candidate encoder as enabled", {
   fit <- get_neural_fit_attn()
   model_info <- get_neural_model_info(fit$res)
@@ -809,6 +917,75 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_true(is.numeric(p))
   expect_true(all(is.finite(p)))
   expect_true(all(p >= 0 & p <= 1))
+})
+
+test_that("full attention bundles reload, but legacy full attention bundles fail clearly", {
+  fit <- get_neural_fit_full_attn_res()
+  res <- fit$res
+  data <- fit$data
+  p_list <- fit$p_list
+
+  model_info <- get_neural_model_info(res)
+  expect_true(!is.null(model_info))
+  expect_true("pseudo_query_final" %in% model_info$param_names)
+
+  theta_mean <- tryCatch(
+    as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
+    error = function(e) {
+      tryCatch(
+        as.numeric(res$est_coefficients_jnp),
+        error = function(e2) {
+          as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(res$est_coefficients_jnp)))
+        }
+      )
+    }
+  )
+  expect_true(is.numeric(theta_mean))
+
+  vcov_vec <- res$vcov_outcome_model
+  theta_var <- if (!is.null(vcov_vec) && length(vcov_vec) > 1L) {
+    as.numeric(vcov_vec[-1])
+  } else {
+    NULL
+  }
+
+  tmp <- tempfile(fileext = ".rds")
+  save_neural_outcome_bundle(
+    file = tmp,
+    theta_mean = theta_mean,
+    theta_var = theta_var,
+    neural_model_info = model_info,
+    p_list = p_list,
+    mode = "pairwise",
+    overwrite = TRUE
+  )
+
+  fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
+  expect_true(inherits(fit_loaded, "strategic_predictor"))
+  expect_true("pseudo_query_final" %in% fit_loaded$fit$neural_model_info$param_names)
+
+  idx_left <- which(data$profile_order == 1L)
+  idx_right <- which(data$profile_order == 2L)
+  p <- predict_pair(
+    fit_loaded,
+    W_left = data$W[idx_left, , drop = FALSE],
+    W_right = data$W[idx_right, , drop = FALSE]
+  )
+  expect_true(is.numeric(p))
+  expect_true(all(is.finite(p)))
+
+  bundle <- readRDS(tmp)
+  bundle$fit$neural_model_info$param_names <- setdiff(
+    bundle$fit$neural_model_info$param_names,
+    "pseudo_query_final"
+  )
+  bundle$neural_model_info <- bundle$fit$neural_model_info
+  saveRDS(bundle, tmp)
+
+  expect_error(
+    load_neural_outcome_bundle(tmp, preload_params = FALSE),
+    "pseudo_query_final"
+  )
 })
 
 test_that("default term bundles preserve pairwise interaction metadata", {
@@ -1243,7 +1420,7 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
     base_names <- c(
       "E_feature_id", "E_party", "E_rel", "E_resp_party", "E_stage", "E_matchup", "E_choice",
       "E_sep", "E_segment",
-      "W_resp_x", "RMS_final", "W_out", "b_out", "M_cross", "W_cross_out",
+      "W_resp_x", "pseudo_query_final", "RMS_final", "W_out", "b_out", "M_cross", "W_cross_out",
       "RMS_q_cross", "RMS_k_cross"
     )
     for (nm in base_names) {

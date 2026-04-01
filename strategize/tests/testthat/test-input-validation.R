@@ -417,6 +417,38 @@ test_that("validate_strategize_inputs rejects invalid qk_norm values", {
   )
 })
 
+test_that("validate_strategize_inputs accepts residual_mode options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  for (val in list(TRUE, FALSE, "standard", "additive", "rezero", "full_attn", "full-attn", "attnres")) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(residual_mode = val)
+      ),
+      info = sprintf("Expected residual_mode=%s to be accepted", as.character(val))
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid residual_mode values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(residual_mode = "bad_value")
+    ),
+    "residual_mode"
+  )
+})
+
 test_that("validate_strategize_inputs accepts optimizer options", {
   skip_on_cran()
 
