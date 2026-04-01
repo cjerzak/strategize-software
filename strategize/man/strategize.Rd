@@ -226,7 +226,10 @@ early stopping is enabled by default for SVI-backed neural fits; set
 \code{neural_mcmc_control$early_stopping_n_checks} (default \code{10}) to
 request an approximate number of validation checks during SVI early
 stopping; the cadence is derived as
-\code{ceiling(svi_steps / early_stopping_n_checks)}.}
+\code{ceiling(svi_steps / early_stopping_n_checks)}. Use
+\code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
+control how many consecutive non-improving validation checks are tolerated
+before stopping.}
 
 \item{penalty_type}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities

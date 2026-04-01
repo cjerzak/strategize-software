@@ -60,7 +60,10 @@ NULL
 #'   \code{neural_mcmc_control$early_stopping_n_checks} (default \code{10}) to
 #'   request an approximate number of validation checks during SVI early
 #'   stopping; the cadence is derived as
-#'   \code{ceiling(svi_steps / early_stopping_n_checks)}.
+#'   \code{ceiling(svi_steps / early_stopping_n_checks)}. Use
+#'   \code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
+#'   control how many consecutive non-improving validation checks are tolerated
+#'   before stopping.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -740,6 +743,21 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         n_checks != round(n_checks)) {
       stop(
         "'neural_mcmc_control$early_stopping_n_checks' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  patience <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["early_stopping_patience"]]
+  } else {
+    NULL
+  }
+  if (!is.null(patience)) {
+    if (!is.numeric(patience) || length(patience) != 1L ||
+        !is.finite(patience) || patience < 1 ||
+        patience != round(patience)) {
+      stop(
+        "'neural_mcmc_control$early_stopping_patience' must be an integer >= 1.",
         call. = FALSE
       )
     }

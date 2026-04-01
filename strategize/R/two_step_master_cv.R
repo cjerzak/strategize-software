@@ -141,7 +141,10 @@
 #'   \code{neural_mcmc_control$early_stopping_n_checks} (default \code{10}) to
 #'   request an approximate number of validation checks during SVI early
 #'   stopping; the cadence is derived as
-#'   \code{ceiling(svi_steps / early_stopping_n_checks)}.
+#'   \code{ceiling(svi_steps / early_stopping_n_checks)}. Use
+#'   \code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
+#'   control how many consecutive non-improving validation checks are tolerated
+#'   before stopping.
 #' @param compute_se Logical; if \code{TRUE}, attempts to compute standard errors
 #'   using M-estimation or the Delta method. Defaults to \code{TRUE}.
 #' @param conda_env A character specifying the name of a Conda environment for
