@@ -4717,33 +4717,24 @@ generate_ModelOutcome_neural <- function(){
       }
       as.numeric(metric_value)
     }
-    parse_svi_update_result <- function(update_result) {
-      coerce_loss_value <- function(value) {
-        if (is.null(value)) {
-          return(NA_real_)
+    parse_svi_run_result <- function(run_result) {
+      losses <- tryCatch({
+        if (reticulate::py_has_attr(run_result, "losses")) {
+          as.numeric(strenv$np$array(run_result$losses))
+        } else if (!is.null(run_result$losses)) {
+          as.numeric(strenv$np$array(run_result$losses))
+        } else {
+          NULL
         }
-        tryCatch(
-          as.numeric(strenv$np$array(value)),
-          error = function(e) {
-            tryCatch(as.numeric(value), error = function(e2) NA_real_)
-          }
-        )
+      }, error = function(e) NULL)
+      state <- if (!is.null(run_result$state)) {
+        run_result$state
+      } else if (length(run_result) > 0L) {
+        run_result[[1]]
+      } else {
+        run_result
       }
-      state <- NULL
-      loss <- NA_real_
-      if (!is.null(update_result$state)) {
-        state <- update_result$state
-      }
-      if (!is.null(update_result$loss)) {
-        loss <- suppressWarnings(coerce_loss_value(update_result$loss))
-      }
-      if (is.null(state) && length(update_result) > 0L) {
-        state <- update_result[[1]]
-      }
-      if (!is.finite(loss) && length(update_result) > 1L) {
-        loss <- suppressWarnings(coerce_loss_value(update_result[[2]]))
-      }
-      list(state = state, loss = loss)
+      list(state = state, losses = losses)
     }
 
     validation_split <- NULL
@@ -4759,7 +4750,7 @@ generate_ModelOutcome_neural <- function(){
       validation_split <- tryCatch(build_svi_validation_split(), error = function(e) NULL)
       if (!is.null(validation_split) &&
           reticulate::py_has_attr(svi, "init") &&
-          reticulate::py_has_attr(svi, "update") &&
+          reticulate::py_has_attr(svi, "run") &&
           reticulate::py_has_attr(svi, "get_params")) {
         early_stopping_info$active <- TRUE
         early_stopping_info$metric <- if (likelihood == "normal") "nll" else "log_loss"
@@ -4795,24 +4786,39 @@ generate_ModelOutcome_neural <- function(){
       best_metric <- Inf
       last_metric <- NA_real_
       no_improve_checks <- 0L
+      chunk_size <- max(1L, as.integer(early_stopping_info$eval_every %||% svi_steps))
+      svi_loss_chunks <- list()
+      steps_remaining <- as.integer(svi_steps)
+      steps_completed <- 0L
 
-      for (step in seq_len(svi_steps)) {
-        update_result <- do.call(svi$update, c(list(svi_state), svi_train_model_args))
-        update_parts <- parse_svi_update_result(update_result)
-        if (is.null(update_parts$state)) {
+      while (steps_remaining > 0L) {
+        chunk_steps <- min(chunk_size, steps_remaining)
+        run_result <- do.call(
+          svi$run,
+          c(
+            list(
+              rng_key,
+              ai(chunk_steps),
+              progress_bar = FALSE,
+              init_state = svi_state
+            ),
+            svi_train_model_args
+          )
+        )
+        run_parts <- parse_svi_run_result(run_result)
+        if (is.null(run_parts$state)) {
           early_stopping_reason <- "update_failed"
-          early_stopping_running <- FALSE
           break
         }
-        svi_state <- update_parts$state
-        svi_loss_curve <- c(svi_loss_curve, update_parts$loss)
-        svi_steps_completed <- as.integer(step)
-
-        should_eval <- identical(step, svi_steps) ||
-          (step %% early_stopping_info$eval_every == 0L)
-        if (!isTRUE(should_eval) || !isTRUE(early_stopping_running)) {
-          next
+        svi_state <- run_parts$state
+        chunk_losses <- as.numeric(run_parts$losses)
+        if (!length(chunk_losses)) {
+          chunk_losses <- rep(NA_real_, chunk_steps)
         }
+        svi_loss_chunks[[length(svi_loss_chunks) + 1L]] <- chunk_losses
+        steps_completed <- steps_completed + as.integer(chunk_steps)
+        steps_remaining <- steps_remaining - as.integer(chunk_steps)
+        svi_steps_completed <- as.integer(steps_completed)
 
         metric_value <- tryCatch(
           compute_svi_validation_metric(svi_state, validation_split),
@@ -4820,8 +4826,7 @@ generate_ModelOutcome_neural <- function(){
         )
         if (!is.finite(metric_value)) {
           early_stopping_reason <- "metric_failed"
-          early_stopping_running <- FALSE
-          next
+          break
         }
 
         last_metric <- metric_value
@@ -4829,17 +4834,18 @@ generate_ModelOutcome_neural <- function(){
             metric_value < (best_metric - early_stopping_info$min_delta)) {
           best_metric <- metric_value
           best_svi_state <- svi_state
-          early_stopping_info$best_step <- as.integer(step)
+          early_stopping_info$best_step <- as.integer(steps_completed)
           early_stopping_info$best_metric <- metric_value
           no_improve_checks <- 0L
         } else {
           no_improve_checks <- no_improve_checks + 1L
-          if (no_improve_checks >= early_stopping_info$patience && step < svi_steps) {
+          if (no_improve_checks >= early_stopping_info$patience &&
+              steps_completed < as.integer(svi_steps)) {
             early_stopping_info$stopped_early <- TRUE
             early_stopping_reason <- "patience_exhausted"
             message(sprintf(
               "SVI early stopping at step %d/%d on validation %s=%.6f.",
-              step,
+              steps_completed,
               svi_steps,
               early_stopping_info$metric,
               metric_value
@@ -4847,6 +4853,11 @@ generate_ModelOutcome_neural <- function(){
             break
           }
         }
+      }
+      svi_loss_curve <- if (length(svi_loss_chunks) > 0L) {
+        unlist(svi_loss_chunks, use.names = FALSE)
+      } else {
+        NULL
       }
 
       if (is.finite(best_metric)) {
@@ -4879,22 +4890,9 @@ generate_ModelOutcome_neural <- function(){
                               resp_cov = resp_cov_jnp,
                               Y_obs = Y_jnp)
       }
-      svi_loss_curve <- tryCatch({
-        if (reticulate::py_has_attr(svi_result, "losses")) {
-          as.numeric(strenv$np$array(svi_result$losses))
-        } else if (!is.null(svi_result$losses)) {
-          as.numeric(strenv$np$array(svi_result$losses))
-        } else {
-          NULL
-        }
-      }, error = function(e) NULL)
-      svi_state <- if (!is.null(svi_result$state)) {
-        svi_result$state
-      } else if (length(svi_result) > 0L) {
-        svi_result[[1]]
-      } else {
-        svi_result
-      }
+      run_parts <- parse_svi_run_result(svi_result)
+      svi_loss_curve <- run_parts$losses
+      svi_state <- run_parts$state
       svi_steps_completed <- if (!is.null(svi_loss_curve) && length(svi_loss_curve) > 0L) {
         as.integer(length(svi_loss_curve))
       } else {
