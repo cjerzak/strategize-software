@@ -983,10 +983,10 @@ test_that("output-only neural early stopping still honors patience exhaustion", 
   expect_gt(counted$count, 1L)
   expect_true(isTRUE(model_info$early_stopping$stopped_early))
   expect_identical(model_info$early_stopping$reason, "patience_exhausted")
-  expect_identical(as.integer(model_info$early_stopping$best_step), 10L)
-  expect_identical(as.integer(model_info$early_stopping$stop_step), 40L)
-  expect_identical(as.integer(model_info$svi_steps_completed), 40L)
-  expect_length(model_info$svi_loss_curve, 40L)
+  expect_identical(as.integer(model_info$early_stopping$best_step), 6L)
+  expect_identical(as.integer(model_info$early_stopping$stop_step), 24L)
+  expect_identical(as.integer(model_info$svi_steps_completed), 24L)
+  expect_length(model_info$svi_loss_curve, 24L)
 })
 
 test_that("SVI ELBO plot title reports the rounded last-20 finite mean", {

@@ -1521,6 +1521,7 @@ generate_ModelOutcome_neural <- function(){
     vi_guide = "auto_normal",
     optimizer = "muon",
     early_stopping = TRUE,
+    early_stopping_n_checks = 10L,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -4218,6 +4219,7 @@ generate_ModelOutcome_neural <- function(){
     stopped_early = FALSE,
     reason = if (isTRUE(early_stopping_enabled)) "not_initialized" else "disabled",
     metric = NULL,
+    n_checks = NA_integer_,
     eval_every = NA_integer_,
     patience = NA_integer_,
     min_delta = NA_real_,
@@ -4739,6 +4741,18 @@ generate_ModelOutcome_neural <- function(){
 
     validation_split <- NULL
     early_stopping_running <- FALSE
+    early_stopping_n_checks <- if (!is.null(mcmc_control$early_stopping_n_checks)) {
+      as.integer(mcmc_control$early_stopping_n_checks)
+    } else {
+      10L
+    }
+    if (length(early_stopping_n_checks) != 1L ||
+        is.na(early_stopping_n_checks) ||
+        !is.finite(early_stopping_n_checks) ||
+        early_stopping_n_checks < 1L) {
+      early_stopping_n_checks <- 10L
+    }
+    early_stopping_info$n_checks <- early_stopping_n_checks
     early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
       "validation_split_unavailable"
     } else {
@@ -4756,11 +4770,10 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$metric <- if (likelihood == "normal") "nll" else "log_loss"
         early_stopping_info$patience <- 3L
         early_stopping_info$min_delta <- 1e-4
-        early_stopping_info$eval_every <- if (svi_steps > 200L) {
-          as.integer(max(100L, ceiling(svi_steps / 5)))
-        } else {
-          as.integer(max(10L, ceiling(svi_steps / 20)))
-        }
+        early_stopping_info$eval_every <- as.integer(max(
+          1L,
+          ceiling(svi_steps / early_stopping_n_checks)
+        ))
         early_stopping_info$n_train <- length(validation_split$train_idx)
         early_stopping_info$n_validation <- length(validation_split$validation_idx)
         svi_train_model_args <- build_svi_subset_model_args(validation_split$train_idx)
