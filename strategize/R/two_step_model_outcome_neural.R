@@ -4874,6 +4874,97 @@ generate_ModelOutcome_neural <- function(){
   init_to_value <- neural_get_init_to_value()
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
   run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
+  emit_transformer_structure_banner <- function() {
+    message(sprintf(
+      "Bayesian Transformer complete. Pairwise=%s, Heads=%d, Depth=%d, Hidden=%d; likelihood=%s.",
+      pairwise_mode,
+      TransformerHeads,
+      ModelDepth,
+      MD_int,
+      likelihood
+    ))
+  }
+  format_metric_item <- function(label, value, digits = 4L) {
+    if (is.null(value) || length(value) != 1L || !is.finite(value)) {
+      return(NULL)
+    }
+    sprintf(paste0("%s=%.", as.integer(digits), "f"), label, value)
+  }
+  build_fit_metric_items <- function(metrics, likelihood) {
+    if (is.null(metrics)) {
+      return(character(0))
+    }
+    if (likelihood == "bernoulli") {
+      return(Filter(Negate(is.null), list(
+        format_metric_item("AUC", metrics$auc, 4L),
+        format_metric_item("LogLoss", metrics$log_loss, 4L),
+        format_metric_item("Acc", metrics$accuracy, 3L),
+        format_metric_item("Brier", metrics$brier, 4L)
+      )))
+    }
+    if (likelihood == "categorical") {
+      return(Filter(Negate(is.null), list(
+        format_metric_item("LogLoss", metrics$log_loss, 4L),
+        format_metric_item("Acc", metrics$accuracy, 3L)
+      )))
+    }
+    Filter(Negate(is.null), list(
+      format_metric_item("RMSE", metrics$rmse, 4L),
+      format_metric_item("MAE", metrics$mae, 4L),
+      format_metric_item("NLL", metrics$nll, 4L)
+    ))
+  }
+  emit_svi_fit_summary <- function() {
+    completed_steps <- suppressWarnings(as.integer(svi_steps_completed %||% resolved_svi_steps))
+    planned_steps <- suppressWarnings(as.integer(resolved_svi_steps))
+    if (is.na(completed_steps)) {
+      completed_steps <- planned_steps
+    }
+
+    summary_line <- NULL
+    if (isTRUE(early_stopping_info$active) &&
+        is.finite(early_stopping_info$best_metric) &&
+        !is.na(early_stopping_info$best_step)) {
+      summary_line <- sprintf(
+        "SVI fit summary: steps=%d/%d; best %s=%.6f at step %d.",
+        completed_steps,
+        planned_steps,
+        early_stopping_info$metric,
+        early_stopping_info$best_metric,
+        as.integer(early_stopping_info$best_step)
+      )
+    } else {
+      finite_losses <- svi_loss_curve[is.finite(svi_loss_curve)]
+      final_elbo <- if (length(finite_losses) > 0L) tail(finite_losses, 1L) else NA_real_
+      if (is.finite(final_elbo)) {
+        summary_line <- sprintf(
+          "SVI fit summary: steps=%d/%d; final ELBO=%.6f.",
+          completed_steps,
+          planned_steps,
+          final_elbo
+        )
+      }
+    }
+    if (!is.null(summary_line)) {
+      message(summary_line)
+    }
+
+    metric_items <- build_fit_metric_items(fit_metrics, likelihood)
+    if (length(metric_items) > 0L) {
+      metric_context <- c(ifelse(pairwise_mode, "pairwise", "single"))
+      if (!is.null(fit_metrics$eval_note) && nzchar(fit_metrics$eval_note)) {
+        metric_context <- c(metric_context, fit_metrics$eval_note)
+      }
+      if (!is.null(fit_metrics$eval_subset) && nzchar(fit_metrics$eval_subset)) {
+        metric_context <- c(metric_context, fit_metrics$eval_subset)
+      }
+      message(sprintf(
+        "Neural fit metrics (%s): %s",
+        paste(metric_context, collapse = ", "),
+        paste(metric_items, collapse = ", ")
+      ))
+    }
+  }
   SVIParams <- NULL
   SVIInitValues <- NULL
   svi_loss_curve <- NULL
@@ -4907,6 +4998,7 @@ generate_ModelOutcome_neural <- function(){
     } else {
       message("Enlisting SVI with autoguide for minibatched likelihood...")
     }
+    emit_transformer_structure_banner()
     if (!is.null(strenv$numpyro) && reticulate::py_has_attr(strenv$numpyro, "clear_param_store")) {
       tryCatch(strenv$numpyro$clear_param_store(), error = function(e) NULL)
     }
@@ -5652,10 +5744,14 @@ generate_ModelOutcome_neural <- function(){
     }
     message(sprintf("\n SVI Runtime: %.3f min",
                     as.numeric(difftime(Sys.time(), t0_, units = "secs"))/60))
+    emit_svi_fit_summary()
   }
 
   if (!isTRUE(use_svi) || isTRUE(run_mcmc_after_svi)) {
     strenv$numpyro$set_host_device_count(mcmc_control$n_chains)
+    if (!isTRUE(use_svi)) {
+      emit_transformer_structure_banner()
+    }
 
     init_strategy <- NULL
     if (!is.null(SVIInitValues) && length(SVIInitValues) > 0L) {
@@ -6508,6 +6604,4 @@ generate_ModelOutcome_neural <- function(){
     })
   }
 
-  message(sprintf("Bayesian Transformer complete. Pairwise=%s, Heads=%d, Depth=%d, Hidden=%d; likelihood=%s.",
-                  pairwise_mode, TransformerHeads, ModelDepth, MD_int, likelihood))
 }
