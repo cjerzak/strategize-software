@@ -41,7 +41,10 @@ NULL
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
 #'   the opponent-dependent cross-candidate term in pairwise mode, set
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
-#'   cross-attention step, or set \code{neural_mcmc_control$cross_candidate_encoder = "full"}
+#'   cross-attention step. When combined with
+#'   \code{neural_mcmc_control$residual_mode = "full_attn"}, that step consumes the
+#'   depth-attended candidate-token readout. Set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "full"}
 #'   to enable a full cross-encoder that jointly encodes both candidates. Use
 #'   \code{"none"} (or \code{FALSE}) to disable. Set
 #'   \code{neural_mcmc_control$qk_norm = TRUE} (default) to apply RMSNorm to projected
