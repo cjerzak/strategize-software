@@ -455,7 +455,8 @@ capture_messages <- function(expr) {
   value <- withCallingHandlers(
     expr,
     message = function(cnd) {
-      messages <<- c(messages, conditionMessage(cnd))
+      message_text <- sub("[\r\n]+$", "", conditionMessage(cnd), perl = TRUE)
+      messages <<- c(messages, message_text)
       invokeRestart("muffleMessage")
     }
   )
@@ -626,6 +627,16 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
 
   list(res = res, data = data, p_list = p_list)
 }
+
+test_that("capture_messages strips trailing newlines without trimming leading whitespace", {
+  captured <- capture_messages({
+    message("plain text")
+    message("\n indented text")
+  })
+
+  expect_identical(captured$messages[[1]], "plain text")
+  expect_identical(captured$messages[[2]], "\n indented text")
+})
 
 test_that("neural output site init values target scalar normal regression only", {
   init <- strategize:::neural_build_output_site_init_values(
