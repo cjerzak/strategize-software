@@ -136,8 +136,10 @@ test_that("strategize recovers linear average-case pi* and Q with neural", {
         ModelDims = 64L,
         ModelDepth = 2L,
         qk_norm = FALSE,
-        batch_size = 512L,
+        batch_size = 32L,
         optimizer = "adam",
+        svi_lr = 0.005,
+        early_stopping_n_checks = 20L,
         vi_guide = "auto_diagonal",
         uncertainty_scope = "output",
         eval_enabled = FALSE
@@ -213,8 +215,10 @@ test_that("strategize uses REINFORCE fallback for large-support neural average-c
         ModelDims = 64L,
         ModelDepth = 2L,
         qk_norm = FALSE,
-        batch_size = 512L,
+        batch_size = 32L,
         optimizer = "adam",
+        svi_lr = 0.005,
+        early_stopping_n_checks = 20L,
         vi_guide = "auto_diagonal",
         uncertainty_scope = "output",
         eval_enabled = FALSE
