@@ -29,7 +29,9 @@ get_neural_fit <- local({
       base_neural_control,
       list(
         subsample_method = "batch_vi",
-        batch_size = 16L
+        batch_size = 32L,
+        svi_lr = 0.005,
+        early_stopping_n_checks = 20L
       )
     )
 
@@ -79,9 +81,11 @@ get_neural_fit_perf <- local({
       base_neural_control,
       list(
         subsample_method = "batch_vi",
-        batch_size = 128L,
+        batch_size = 32L,
         ModelDims = 16L,
-        ModelDepth = 1L
+        ModelDepth = 1L,
+        svi_lr = 0.005,
+        early_stopping_n_checks = 20L
       )
     )
 
