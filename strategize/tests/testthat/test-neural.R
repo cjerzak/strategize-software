@@ -450,15 +450,30 @@ local_strategize_binding <- function(name, value, env = parent.frame()) {
   invisible(old_value)
 }
 
+capture_messages <- function(expr) {
+  messages <- character()
+  value <- withCallingHandlers(
+    expr,
+    message = function(cnd) {
+      messages <<- c(messages, conditionMessage(cnd))
+      invokeRestart("muffleMessage")
+    }
+  )
+  list(value = value, messages = messages)
+}
+
 run_output_only_attn_vi_fit <- function(seed,
                                         early_stopping = TRUE,
                                         svi_steps = 25L,
-                                        residual_mode = "standard") {
+                                        residual_mode = "standard",
+                                        eval_enabled = FALSE) {
   skip_on_cran()
   skip_if_no_jax()
 
   withr::local_envvar(c(
-    STRATEGIZE_NEURAL_FAST_MCMC = "true"
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+    STRATEGIZE_NEURAL_EVAL_SEED = "123"
   ))
 
   data <- generate_test_data(n = 24, seed = seed)
@@ -476,7 +491,7 @@ run_output_only_attn_vi_fit <- function(seed,
       svi_steps = svi_steps,
       batch_size = 16L,
       early_stopping = early_stopping,
-      eval_enabled = FALSE,
+      eval_enabled = eval_enabled,
       warn_stage_imbalance_pct = 0,
       warn_min_cell_n = 0L
     )
@@ -1296,6 +1311,70 @@ test_that("output-only neural early stopping still honors patience exhaustion", 
   expect_identical(as.integer(model_info$early_stopping$stop_step), 24L)
   expect_identical(as.integer(model_info$svi_steps_completed), 24L)
   expect_length(model_info$svi_loss_curve, 24L)
+})
+
+test_that("output-only neural logging surfaces structure and fit summary before optimization", {
+  captured <- capture_messages(
+    suppressWarnings(run_output_only_attn_vi_fit(
+      seed = 20260405,
+      early_stopping = FALSE,
+      svi_steps = 5L
+    ))
+  )
+  messages <- captured$messages
+
+  enlist_idx <- match(TRUE, grepl("^Enlisting SVI with autoguide for output-only uncertainty\\.\\.\\.$", messages))
+  structure_idx <- match(TRUE, grepl("^Bayesian Transformer complete\\. Pairwise=", messages))
+  summary_idx <- match(TRUE, grepl("^SVI fit summary: steps=[0-9]+/[0-9]+; final ELBO=", messages))
+  optimize_idx <- match(TRUE, grepl("^Done initializing outcome models & starting optimization sequence\\.\\.\\.$", messages))
+
+  expect_true(all(is.finite(c(enlist_idx, structure_idx, summary_idx, optimize_idx))))
+  expect_lt(enlist_idx, structure_idx)
+  expect_lt(structure_idx, summary_idx)
+  expect_lt(summary_idx, optimize_idx)
+})
+
+test_that("output-only neural post-fit logging reuses computed OOS metrics", {
+  captured <- capture_messages(
+    suppressWarnings(run_output_only_attn_vi_fit(
+      seed = 20260406,
+      early_stopping = FALSE,
+      svi_steps = 5L,
+      eval_enabled = TRUE
+    ))
+  )
+  messages <- captured$messages
+
+  metric_idx <- match(TRUE, grepl("^Neural fit metrics \\(.+oos_2fold.+\\): ", messages))
+  optimize_idx <- match(TRUE, grepl("^Done initializing outcome models & starting optimization sequence\\.\\.\\.$", messages))
+
+  expect_true(is.finite(metric_idx))
+  expect_true(grepl("LogLoss=", messages[[metric_idx]]))
+  expect_lt(metric_idx, optimize_idx)
+})
+
+test_that("average-case normal neural logging reports validation nll summaries", {
+  local_strategize_binding(
+    "cs_compute_outcome_metrics",
+    function(...) {
+      list(log_loss = 1, nll = 1, rmse = 0.25, mae = 0.125)
+    },
+    env = environment()
+  )
+
+  captured <- capture_messages(
+    suppressWarnings(run_average_case_neural_fit(
+      seed = 20260407,
+      svi_steps = 60L
+    ))
+  )
+  messages <- captured$messages
+
+  early_idx <- match(TRUE, grepl("^SVI early stopping at step [0-9]+/[0-9]+ on validation nll=1\\.000000\\.$", messages))
+  summary_idx <- match(TRUE, grepl("^SVI fit summary: steps=[0-9]+/[0-9]+; best nll=1\\.000000 at step [0-9]+\\.$", messages))
+
+  expect_true(all(is.finite(c(early_idx, summary_idx))))
+  expect_lt(early_idx, summary_idx)
 })
 
 test_that("output-only full-attn attn VI routes training through shared candidate extraction", {
