@@ -638,6 +638,32 @@ neural_transformer_readout_tokens <- function(transformer_out) {
   transformer_out
 }
 
+neural_extract_candidate_tokens <- function(transformer_out,
+                                            model_info,
+                                            n_candidate_tokens = NULL) {
+  tokens_use <- if (identical(neural_transformer_residual_mode(model_info), "full_attn")) {
+    neural_transformer_readout_tokens(transformer_out)
+  } else {
+    neural_transformer_state_tokens(transformer_out)
+  }
+
+  t_cand <- if (is.null(n_candidate_tokens)) {
+    tryCatch(ai(model_info$n_candidate_tokens), error = function(e) NULL)
+  } else {
+    ai(n_candidate_tokens)
+  }
+  if (length(t_cand) != 1L || is.na(t_cand) || t_cand < 1L) {
+    stop(
+      "n_candidate_tokens must be a positive integer for candidate-token extraction.",
+      call. = FALSE
+    )
+  }
+
+  t_total <- ai(tokens_use$shape[[2]])
+  cand_idx <- strenv$jnp$arange(ai(t_total - t_cand), ai(t_total))
+  strenv$jnp$take(tokens_use, cand_idx, axis = 1L)
+}
+
 neural_extract_choice_representation <- function(transformer_out) {
   readout_tokens <- neural_transformer_readout_tokens(transformer_out)
   choice_out <- strenv$jnp$take(readout_tokens, strenv$jnp$arange(1L), axis = 1L)
@@ -1478,11 +1504,7 @@ neural_encode_candidate_core_prepared <- function(params,
   if (!isTRUE(return_tokens)) {
     return(phi)
   }
-  tokens_state <- neural_transformer_state_tokens(transformer_out)
-  t_total <- ai(tokens_state$shape[[2]])
-  t_cand <- ai(model_info$n_candidate_tokens)
-  cand_idx <- strenv$jnp$arange(ai(t_total - t_cand), ai(t_total))
-  cand_out <- strenv$jnp$take(tokens_state, cand_idx, axis = 1L)
+  cand_out <- neural_extract_candidate_tokens(transformer_out, model_info)
   list(phi = phi, cand_tokens_out = cand_out)
 }
 
@@ -1976,7 +1998,6 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
   }
   tokens <- strenv$jnp$concatenate(list(tokens_left, tokens_right), axis = 0L)
   transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
-  tokens <- neural_transformer_state_tokens(transformer_out)
   phi_all <- neural_extract_choice_representation(transformer_out)
   idx_left <- strenv$jnp$arange(1L)
   idx_right <- strenv$jnp$arange(1L, 2L)
@@ -1985,13 +2006,9 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
   )
   if (isTRUE(return_tokens)) {
-    T_total <- ai(tokens$shape[[2]])
-    T_cand <- ai(model_info$n_candidate_tokens)
-    cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
-    tokens_left <- strenv$jnp$take(tokens, idx_left, axis = 0L)
-    tokens_right <- strenv$jnp$take(tokens, idx_right, axis = 0L)
-    out$cand_left_out <- strenv$jnp$take(tokens_left, cand_idx, axis = 1L)
-    out$cand_right_out <- strenv$jnp$take(tokens_right, cand_idx, axis = 1L)
+    cand_tokens <- neural_extract_candidate_tokens(transformer_out, model_info)
+    out$cand_left_out <- strenv$jnp$take(cand_tokens, idx_left, axis = 0L)
+    out$cand_right_out <- strenv$jnp$take(cand_tokens, idx_right, axis = 0L)
   }
   out
 }
@@ -3804,15 +3821,15 @@ generate_ModelOutcome_neural <- function(){
       cand_tokens <- embed_candidate(Xa, pa, resp_p)
       tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
       transformer_out <- run_transformer(tokens, return_details = TRUE)
-      tokens <- neural_transformer_state_tokens(transformer_out)
       phi <- neural_extract_choice_representation(transformer_out)
       if (!isTRUE(return_tokens)) {
         return(phi)
       }
-      T_total <- ai(tokens$shape[[2]])
-      T_cand <- ai(n_candidate_tokens)
-      cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
-      cand_out <- strenv$jnp$take(tokens, cand_idx, axis = 1L)
+      cand_out <- neural_extract_candidate_tokens(
+        transformer_out,
+        transformer_model_info,
+        n_candidate_tokens = n_candidate_tokens
+      )
       list(phi = phi, cand_tokens_out = cand_out)
     }
 

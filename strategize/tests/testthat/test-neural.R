@@ -452,7 +452,8 @@ local_strategize_binding <- function(name, value, env = parent.frame()) {
 
 run_output_only_attn_vi_fit <- function(seed,
                                         early_stopping = TRUE,
-                                        svi_steps = 25L) {
+                                        svi_steps = 25L,
+                                        residual_mode = "standard") {
   skip_on_cran()
   skip_if_no_jax()
 
@@ -465,11 +466,12 @@ run_output_only_attn_vi_fit <- function(seed,
   params$outcome_model_type <- "neural"
   params$neural_mcmc_control <- modifyList(
     params$neural_mcmc_control,
-    list(
-      cross_candidate_encoder = "attn",
-      ModelDims = 16L,
-      ModelDepth = 1L,
-      subsample_method = "batch_vi",
+      list(
+        cross_candidate_encoder = "attn",
+        residual_mode = residual_mode,
+        ModelDims = 16L,
+        ModelDepth = 1L,
+        subsample_method = "batch_vi",
       uncertainty_scope = "output",
       svi_steps = svi_steps,
       batch_size = 16L,
@@ -832,6 +834,58 @@ test_that("full attention residual readout aggregates layer history", {
 
   expect_equal(last_state, 0, tolerance = 1e-6)
   expect_equal(readout_state, 1, tolerance = 1e-6)
+})
+
+test_that("candidate extraction uses readout tokens under full attention residual mode", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  jnp <- strategize:::strenv$jnp
+  dtj <- strategize:::strenv$dtj
+  np <- strategize:::strenv$np
+
+  transformer_out <- list(
+    tokens = jnp$array(array(1:6, dim = c(1L, 6L, 1L)), dtype = dtj),
+    readout_tokens = jnp$array(array(11:16, dim = c(1L, 6L, 1L)), dtype = dtj)
+  )
+
+  model_info_standard <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 1L,
+    n_heads = 1L,
+    head_dim = 1L,
+    residual_mode = "standard"
+  )
+  model_info_standard$n_candidate_tokens <- 3L
+
+  model_info_full_attn <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 1L,
+    n_heads = 1L,
+    head_dim = 1L,
+    residual_mode = "full_attn"
+  )
+  model_info_full_attn$n_candidate_tokens <- 3L
+
+  standard_tokens <- strategize:::neural_extract_candidate_tokens(
+    transformer_out,
+    model_info_standard
+  )
+  full_attn_tokens <- strategize:::neural_extract_candidate_tokens(
+    transformer_out,
+    model_info_full_attn
+  )
+
+  expect_equal(
+    as.numeric(reticulate::py_to_r(np$array(standard_tokens))),
+    c(4, 5, 6),
+    tolerance = 1e-6
+  )
+  expect_equal(
+    as.numeric(reticulate::py_to_r(np$array(full_attn_tokens))),
+    c(14, 15, 16),
+    tolerance = 1e-6
+  )
 })
 
 test_that("neural attn metadata marks the cross-candidate encoder as enabled", {
@@ -1242,6 +1296,32 @@ test_that("output-only neural early stopping still honors patience exhaustion", 
   expect_identical(as.integer(model_info$early_stopping$stop_step), 24L)
   expect_identical(as.integer(model_info$svi_steps_completed), 24L)
   expect_length(model_info$svi_loss_curve, 24L)
+})
+
+test_that("output-only full-attn attn VI routes training through shared candidate extraction", {
+  helper_calls <- 0L
+  original_extract_candidate_tokens <- strategize:::neural_extract_candidate_tokens
+
+  local_strategize_binding(
+    "neural_extract_candidate_tokens",
+    function(...) {
+      helper_calls <<- helper_calls + 1L
+      original_extract_candidate_tokens(...)
+    },
+    env = environment()
+  )
+
+  fit <- run_output_only_attn_vi_fit(
+    seed = 20260404,
+    early_stopping = FALSE,
+    svi_steps = 5L,
+    residual_mode = "full_attn"
+  )
+  model_info <- get_neural_model_info(fit)
+
+  expect_identical(model_info$residual_mode, "full_attn")
+  expect_identical(model_info$cross_candidate_encoder_mode, "attn")
+  expect_gt(helper_calls, 0L)
 })
 
 test_that("SVI ELBO plot title reports the rounded last-20 finite mean", {

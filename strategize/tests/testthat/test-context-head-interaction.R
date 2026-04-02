@@ -618,3 +618,134 @@ test_that("attn candidate token slicing is stable with context tokens", {
     expect_equal(as.integer(out$cand_right_out$shape[[2]]), 3L)
   }
 })
+
+test_that("full attention residual attn pair encoding uses readout candidate tokens", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  jnp <- strenv$jnp
+  np <- strenv$np
+  dtj <- strenv$dtj
+
+  model_info <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 1L,
+    n_heads = 1L,
+    head_dim = 1L,
+    residual_mode = "full_attn"
+  )
+  model_info$n_factors <- 1L
+  model_info$factor_index_list <- list(jnp$array(as.integer(c(0L, 1L))))
+  model_info$implicit <- FALSE
+  model_info$likelihood <- "bernoulli"
+  model_info$resp_cov_mean <- NULL
+  model_info$n_resp_covariates <- 0L
+  model_info$resp_party_levels <- c("A", "B")
+  model_info$cand_party_to_resp_idx <- jnp$array(as.integer(c(0L)))
+  model_info$n_candidate_tokens <- 3L
+  model_info$cross_candidate_encoder_mode <- "attn"
+
+  params <- list(
+    E_choice = jnp$ones(reticulate::tuple(1L), dtype = dtj) * 10,
+    E_feature_id = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    E_factor_1 = jnp$array(matrix(c(1, 2), nrow = 2, ncol = 1), dtype = dtj),
+    E_party = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    E_rel = jnp$zeros(reticulate::tuple(3L, 1L), dtype = dtj),
+    E_stage = jnp$zeros(reticulate::tuple(2L, 2L, 1L), dtype = dtj),
+    E_resp_party = jnp$zeros(reticulate::tuple(2L, 1L), dtype = dtj),
+    pseudo_query_attn_l1 = jnp$zeros(reticulate::tuple(1L), dtype = dtj),
+    pseudo_query_ff_l1 = jnp$zeros(reticulate::tuple(1L), dtype = dtj),
+    pseudo_query_final = jnp$zeros(reticulate::tuple(1L), dtype = dtj),
+    RMS_attn_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_ff_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_q_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_k_l1 = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_final = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    W_q_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_k_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_v_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_o_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_ff1_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_ff2_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    alpha_cross = jnp$array(1, dtype = dtj),
+    RMS_cross = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    RMS_merge_cross = jnp$ones(reticulate::tuple(1L), dtype = dtj),
+    W_q_cross = jnp$ones(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_k_cross = jnp$ones(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_v_cross = jnp$ones(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_o_cross = jnp$ones(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_out = jnp$ones(reticulate::tuple(1L, 1L), dtype = dtj),
+    b_out = jnp$zeros(reticulate::tuple(1L), dtype = dtj)
+  )
+
+  pi_left <- jnp$array(c(1, 0), dtype = dtj)
+  pi_right <- jnp$array(c(0, 1), dtype = dtj)
+  out <- strategize:::neural_encode_pair_soft_batched(
+    pi_left = pi_left,
+    pi_right = pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    model_info = model_info,
+    resp_party_idx = 1L,
+    stage_idx = 1L,
+    matchup_idx = NULL,
+    resp_cov_vec = NULL,
+    params = params,
+    return_tokens = TRUE
+  )
+
+  choice_tok <- strategize:::neural_build_choice_token(model_info, params)
+  resp_tokens <- strategize:::neural_build_context_tokens(
+    model_info,
+    resp_party_idx = 1L,
+    stage_idx = 1L,
+    matchup_idx = NULL,
+    resp_cov_vec = NULL,
+    params = params
+  )
+  left_tokens <- strategize:::neural_build_candidate_tokens_soft(
+    pi_left,
+    party_idx = 0L,
+    role_id = 0L,
+    model_info = model_info,
+    params = params,
+    resp_party_idx = 1L
+  )
+  right_tokens <- strategize:::neural_build_candidate_tokens_soft(
+    pi_right,
+    party_idx = 0L,
+    role_id = 0L,
+    model_info = model_info,
+    params = params,
+    resp_party_idx = 1L
+  )
+  tokens_left <- jnp$concatenate(list(choice_tok, resp_tokens, left_tokens), axis = 1L)
+  tokens_right <- jnp$concatenate(list(choice_tok, resp_tokens, right_tokens), axis = 1L)
+  transformer_out <- strategize:::neural_run_transformer(
+    jnp$concatenate(list(tokens_left, tokens_right), axis = 0L),
+    model_info,
+    params,
+    return_details = TRUE
+  )
+
+  state_tokens <- strategize:::neural_transformer_state_tokens(transformer_out)
+  readout_tokens <- strategize:::neural_transformer_readout_tokens(transformer_out)
+  t_total <- as.integer(state_tokens$shape[[2]])
+  cand_idx <- jnp$arange(as.integer(t_total - model_info$n_candidate_tokens), as.integer(t_total))
+  state_candidates <- jnp$take(state_tokens, cand_idx, axis = 1L)
+  readout_candidates <- jnp$take(readout_tokens, cand_idx, axis = 1L)
+
+  out_left <- as.numeric(reticulate::py_to_r(np$array(out$cand_left_out)))
+  out_right <- as.numeric(reticulate::py_to_r(np$array(out$cand_right_out)))
+  state_left <- as.numeric(reticulate::py_to_r(np$array(jnp$take(state_candidates, jnp$arange(1L), axis = 0L))))
+  state_right <- as.numeric(reticulate::py_to_r(np$array(jnp$take(state_candidates, jnp$arange(1L, 2L), axis = 0L))))
+  readout_left <- as.numeric(reticulate::py_to_r(np$array(jnp$take(readout_candidates, jnp$arange(1L), axis = 0L))))
+  readout_right <- as.numeric(reticulate::py_to_r(np$array(jnp$take(readout_candidates, jnp$arange(1L, 2L), axis = 0L))))
+
+  expect_equal(out_left, readout_left, tolerance = 1e-6)
+  expect_equal(out_right, readout_right, tolerance = 1e-6)
+  expect_gt(max(abs(readout_left - state_left)), 1e-3)
+  expect_gt(max(abs(readout_right - state_right)), 1e-6)
+})
