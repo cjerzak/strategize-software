@@ -819,175 +819,27 @@ cs2step_neural_coerce_prediction_output <- function(pred, likelihood) {
 }
 
 cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, return_logits = FALSE) {
-  Xl <- prep$X_left
-  Xr <- prep$X_right
-  pl <- prep$party_left
-  pr <- prep$party_right
-  resp_p <- prep$resp_party
-  resp_c <- prep$resp_cov
-
-  mode <- neural_cross_encoder_mode(model_info)
-  use_cross_encoder <- identical(mode, "full")
-  use_cross_term <- identical(mode, "term")
-  use_cross_attn <- identical(mode, "attn")
-
-  stage_idx <- neural_stage_index(pl, pr, model_info)
-  matchup_idx <- NULL
-  if (!is.null(params$E_matchup)) {
-    matchup_idx <- neural_matchup_index(pl, pr, model_info)
+  if (!isTRUE(prep$pairwise)) {
+    stop("Pairwise prepared prediction requires pairwise prep data.", call. = FALSE)
   }
-
-  if (isTRUE(use_cross_encoder)) {
-    choice_tok <- neural_build_choice_token(model_info, params)
-    ctx_tokens <- neural_build_context_tokens_batch(model_info,
-                                                    resp_party_idx = resp_p,
-                                                    stage_idx = stage_idx,
-                                                    matchup_idx = matchup_idx,
-                                                    resp_cov = resp_c,
-                                                    params = params)
-    left_tokens <- neural_add_segment_embedding(
-      neural_build_candidate_tokens_hard(Xl, pl,
-                                         model_info = model_info,
-                                         resp_party_idx = resp_p,
-                                         params = params),
-      0L,
-      model_info = model_info,
-      params = params
-    )
-    right_tokens <- neural_add_segment_embedding(
-      neural_build_candidate_tokens_hard(Xr, pr,
-                                         model_info = model_info,
-                                         resp_party_idx = resp_p,
-                                         params = params),
-      1L,
-      model_info = model_info,
-      params = params
-    )
-    n_batch <- ai(Xl$shape[[1]])
-    choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
-    sep_tok <- neural_build_sep_token(model_info, n_batch = n_batch, params = params)
-    token_parts <- list(choice_tok)
-    if (!is.null(ctx_tokens)) {
-      token_parts <- c(token_parts, list(ctx_tokens))
-    }
-    token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
-    tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
-    cls_out <- neural_extract_choice_representation(transformer_out)
-    logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
-  } else {
-    choice_tok <- neural_build_choice_token(model_info, params)
-    ctx_tokens <- neural_build_context_tokens_batch(model_info,
-                                                    resp_party_idx = resp_p,
-                                                    stage_idx = stage_idx,
-                                                    matchup_idx = matchup_idx,
-                                                    resp_cov = resp_c,
-                                                    params = params)
-    n_batch <- ai(Xl$shape[[1]])
-    choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
-
-    encode_candidate <- function(X_idx, party_idx, return_tokens = FALSE) {
-      cand_tokens <- neural_build_candidate_tokens_hard(X_idx, party_idx,
-                                                        model_info = model_info,
-                                                        resp_party_idx = resp_p,
-                                                        params = params)
-      if (is.null(ctx_tokens)) {
-        tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
-      } else {
-        tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
-      }
-      transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
-      tokens <- neural_transformer_state_tokens(transformer_out)
-      phi <- neural_extract_choice_representation(transformer_out)
-      if (!isTRUE(return_tokens)) {
-        return(list(phi = phi, cand_tokens_out = NULL))
-      }
-      T_total <- ai(tokens$shape[[2]])
-      T_cand <- ai(model_info$n_candidate_tokens)
-      cand_idx <- strenv$jnp$arange(ai(T_total - T_cand), ai(T_total))
-      cand_out <- strenv$jnp$take(tokens, cand_idx, axis = 1L)
-      list(phi = phi, cand_tokens_out = cand_out)
-    }
-
-    left_out <- encode_candidate(Xl, pl, return_tokens = isTRUE(use_cross_attn))
-    right_out <- encode_candidate(Xr, pr, return_tokens = isTRUE(use_cross_attn))
-    phi_l <- left_out$phi
-    phi_r <- right_out$phi
-    if (isTRUE(use_cross_attn)) {
-      ctx_left <- neural_cross_attend_cls_to_tokens(phi_l, right_out$cand_tokens_out,
-                                                    model_info = model_info,
-                                                    params = params)
-      ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, left_out$cand_tokens_out,
-                                                     model_info = model_info,
-                                                     params = params)
-      phi_l <- neural_merge_cross_attn_representation(
-        phi_l, ctx_left, params, model_info$model_dims
-      )
-      phi_r <- neural_merge_cross_attn_representation(
-        phi_r, ctx_right, params, model_info$model_dims
-      )
-    }
-    u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
-    u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)
-    logits <- u_l - u_r
-    if (isTRUE(use_cross_term)) {
-      logits <- neural_apply_cross_term(logits, phi_l, phi_r,
-                                        params$M_cross, params$W_cross_out,
-                                        out_dim = ai(params$W_out$shape[[2]]))
-    }
-  }
-
-  if (isTRUE(return_logits)) {
-    return(logits)
-  }
-  if (model_info$likelihood == "bernoulli") {
-    return(strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L)))
-  }
-  if (model_info$likelihood == "categorical") {
-    return(strenv$jax$nn$softmax(logits, axis = -1L))
-  }
-  list(mu = strenv$jnp$squeeze(logits, axis = 1L),
-       sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.))
+  neural_predict_prepared_jitted(
+    params = params,
+    model_info = model_info,
+    prep = prep,
+    return_logits = return_logits
+  )
 }
 
 cs2step_neural_predict_single_prepared <- function(params, model_info, prep, return_logits = FALSE) {
-  Xb <- prep$X_single
-  party_idx <- prep$party_single
-  resp_p <- prep$resp_party
-  resp_c <- prep$resp_cov
-
-  choice_tok <- neural_build_choice_token(model_info, params)
-  n_batch <- ai(Xb$shape[[1]])
-  choice_tok <- choice_tok * strenv$jnp$ones(list(n_batch, 1L, 1L))
-  ctx_tokens <- neural_build_context_tokens_batch(model_info,
-                                                  resp_party_idx = resp_p,
-                                                  resp_cov = resp_c,
-                                                  params = params)
-  cand_tokens <- neural_build_candidate_tokens_hard(Xb, party_idx,
-                                                    model_info = model_info,
-                                                    resp_party_idx = resp_p,
-                                                    params = params)
-  token_parts <- list(choice_tok)
-  if (!is.null(ctx_tokens)) {
-    token_parts <- c(token_parts, list(ctx_tokens))
+  if (isTRUE(prep$pairwise)) {
+    stop("Single prepared prediction requires single-mode prep data.", call. = FALSE)
   }
-  token_parts <- c(token_parts, list(cand_tokens))
-  tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
-  choice_out <- neural_extract_choice_representation(transformer_out)
-  logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
-
-  if (isTRUE(return_logits)) {
-    return(logits)
-  }
-  if (model_info$likelihood == "bernoulli") {
-    return(strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L)))
-  }
-  if (model_info$likelihood == "categorical") {
-    return(strenv$jax$nn$softmax(logits, axis = -1L))
-  }
-  list(mu = strenv$jnp$squeeze(logits, axis = 1L),
-       sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.))
+  neural_predict_prepared_jitted(
+    params = params,
+    model_info = model_info,
+    prep = prep,
+    return_logits = return_logits
+  )
 }
 
 cs2step_neural_predict_prepared <- function(params, model_info, prep, return_logits = FALSE) {
@@ -1089,11 +941,6 @@ cs2step_neural_predict_internal <- function(object,
     return(pred)
   }
 
-  draw_internal <- is.function(object$fit$predict_pair) || is.function(object$fit$predict_single)
-  if (!isTRUE(draw_internal) && isTRUE(use_internal)) {
-    stop("Neural predictor does not expose draw-capable prediction functions.", call. = FALSE)
-  }
-
   theta_mean <- object$fit$theta_mean
   theta_var <- object$fit$theta_var
   if (length(theta_mean) != length(theta_var) || length(theta_mean) == 0L) {
@@ -1112,52 +959,38 @@ cs2step_neural_predict_internal <- function(object,
   if (is.null(model_info)) {
     model_info <- object$fit$neural_model_info
   }
-  draw_pred <- matrix(NA_real_, nrow = length(pred), ncol = n_draws)
-
-  party0 <- rep(0L, length(pred))
-  resp0 <- rep(0L, length(pred))
-  if (!isTRUE(draw_internal)) {
-    if (is.null(prep)) {
-      prep <- cs2step_neural_prepare_prediction_data(
-        W_idx = W_idx,
-        model_info = model_info,
-        pair_id = pair_id,
-        profile_order = profile_order,
-        mode = object$mode
-      )
-    }
+  pred_length <- if (is.list(pred) && !is.null(pred$mu)) length(pred$mu) else length(pred)
+  if (is.null(prep)) {
+    prep <- cs2step_neural_prepare_prediction_data(
+      W_idx = W_idx,
+      model_info = model_info,
+      pair_id = pair_id,
+      profile_order = profile_order,
+      mode = object$mode
+    )
   }
-  for (i in seq_len(n_draws)) {
-    theta_i <- strenv$jnp$array(theta_draws[i, ])$astype(strenv$dtj)
-    params_i <- neural_params_from_theta(theta_i, model_info)
-    if (isTRUE(draw_internal)) {
-      if (identical(object$mode, "pairwise")) {
-        logits_or_p <- object$fit$predict_pair(
-          params_i,
-          X_left, X_right,
-          party0, party0,
-          resp0, NULL,
-          return_logits = identical(type, "link")
-        )
-      } else {
-        logits_or_p <- object$fit$predict_single(
-          params_i,
-          W_idx,
-          party0,
-          resp0,
-          NULL,
-          return_logits = identical(type, "link")
-        )
-      }
-    } else {
-      logits_or_p <- cs2step_neural_predict_prepared(
-        params = params_i,
-        model_info = model_info,
-        prep = prep,
-        return_logits = identical(type, "link")
-      )
-    }
-    draw_pred[, i] <- as.numeric(cs2step_neural_to_r_array(logits_or_p))
+
+  theta_draws_jnp <- strenv$jnp$array(theta_draws)$astype(strenv$dtj)
+  batched_pred <- neural_predict_from_theta_prepared_jitted(
+    theta_batch = theta_draws_jnp,
+    model_info = model_info,
+    prep = prep,
+    return_logits = identical(type, "link")
+  )
+  batched_pred_r <- cs2step_neural_to_r_array(batched_pred)
+  if (is.list(batched_pred_r) && !is.null(batched_pred_r$mu)) {
+    batched_pred_r <- batched_pred_r$mu
+  }
+  draw_array <- as.array(batched_pred_r)
+  draw_dims <- dim(draw_array)
+  if (is.null(draw_dims) || length(draw_dims) <= 1L) {
+    draw_pred <- matrix(as.numeric(draw_array), nrow = pred_length, ncol = n_draws)
+  } else {
+    perm <- c(seq.int(2L, length(draw_dims)), 1L)
+    draw_pred <- matrix(
+      as.numeric(aperm(draw_array, perm)),
+      ncol = draw_dims[[1L]]
+    )
   }
 
   if (type == "response") {
