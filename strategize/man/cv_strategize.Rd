@@ -209,7 +209,12 @@ the opponent-dependent cross-candidate term in pairwise mode, set
 \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
 cross-attention step, or set \code{neural_mcmc_control$cross_candidate_encoder = "full"}
 to enable a full cross-encoder that jointly encodes both candidates. Use
-\code{"none"} (or \code{FALSE}) to disable.
+\code{"none"} (or \code{FALSE}) to disable. Set
+\code{neural_mcmc_control$residual_mode = "full_attn"} to replace the
+default additive/ReZero residual path with full depth-wise attention over
+all prior layer outputs plus a final depth-attentive readout; use
+\code{"standard"} (default) to keep the
+existing residual formulation.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).

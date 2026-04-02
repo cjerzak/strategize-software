@@ -988,6 +988,80 @@ test_that("full attention bundles reload, but legacy full attention bundles fail
   )
 })
 
+test_that("full attention bundle intervals reuse the vmapped draw path", {
+  fit <- get_neural_fit_full_attn_res()
+  res <- fit$res
+  data <- fit$data
+  p_list <- fit$p_list
+
+  model_info <- get_neural_model_info(res)
+  expect_true(!is.null(model_info))
+  expect_true("pseudo_query_final" %in% model_info$param_names)
+
+  theta_mean <- tryCatch(
+    as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
+    error = function(e) {
+      tryCatch(
+        as.numeric(res$est_coefficients_jnp),
+        error = function(e2) {
+          as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(res$est_coefficients_jnp)))
+        }
+      )
+    }
+  )
+  expect_true(is.numeric(theta_mean))
+
+  vcov_vec <- res$vcov_outcome_model
+  theta_var <- if (!is.null(vcov_vec) && length(vcov_vec) > 1L) {
+    as.numeric(vcov_vec[-1])
+  } else {
+    NULL
+  }
+  expect_false(is.null(theta_var))
+
+  tmp <- tempfile(fileext = ".rds")
+  save_neural_outcome_bundle(
+    file = tmp,
+    theta_mean = theta_mean,
+    theta_var = theta_var,
+    neural_model_info = model_info,
+    p_list = p_list,
+    mode = "pairwise",
+    overwrite = TRUE
+  )
+
+  fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
+  expect_true(inherits(fit_loaded, "strategic_predictor"))
+
+  idx_left <- which(data$profile_order == 1L)
+  idx_right <- which(data$profile_order == 2L)
+  W_left <- data$W[idx_left, , drop = FALSE]
+  W_right <- data$W[idx_right, , drop = FALSE]
+
+  ci_first <- predict_pair(
+    fit_loaded,
+    W_left = W_left,
+    W_right = W_right,
+    interval = "ci",
+    n_draws = 8L,
+    seed = 123
+  )
+  ci_second <- predict_pair(
+    fit_loaded,
+    W_left = W_left,
+    W_right = W_right,
+    interval = "ci",
+    n_draws = 8L,
+    seed = 123
+  )
+
+  expect_s3_class(ci_first, "data.frame")
+  expect_true(all(c("fit", "lo", "hi") %in% names(ci_first)))
+  expect_equal(ci_first, ci_second, tolerance = 1e-6)
+  expect_true(all(is.finite(as.matrix(ci_first[, c("fit", "lo", "hi")]))))
+  expect_true(all(ci_first$lo <= ci_first$hi))
+})
+
 test_that("default term bundles preserve pairwise interaction metadata", {
   fit <- get_neural_fit()
   res <- fit$res
