@@ -4871,6 +4871,16 @@ generate_ModelOutcome_neural <- function(){
     b_out_site_name = if (isTRUE(manual_noncentered_loc_scale)) "b_out_z" else "b_out",
     tau_b_scale = tau_b_scale
   )
+  user_site_init_values <- mcmc_control$init_site_values
+  if (!is.null(user_site_init_values) && !is.list(user_site_init_values)) {
+    stop(
+      "'neural_mcmc_control$init_site_values' must be a named list when provided.",
+      call. = FALSE
+    )
+  }
+  if (!is.null(user_site_init_values) && length(user_site_init_values) > 0L) {
+    output_site_init_values <- modifyList(output_site_init_values, user_site_init_values)
+  }
   init_to_value <- neural_get_init_to_value()
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
   run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
