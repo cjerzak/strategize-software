@@ -1,0 +1,383 @@
+---
+title: "Foundation Models for Multi-Study Conjoint Learning"
+author: "strategize package authors"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Foundation Models for Multi-Study Conjoint Learning}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+CONDA_AVAILABLE <- FALSE
+
+if (identical(Sys.getenv("STRATEGIZE_RUN_VIGNETTE"), "true")) {
+  CONDA_AVAILABLE <- tryCatch({
+    if (requireNamespace("reticulate", quietly = TRUE)) {
+      conda_list <- reticulate::conda_list()
+      "strategize" %in% conda_list$name || "strategize_env" %in% conda_list$name
+    } else {
+      FALSE
+    }
+  }, error = function(e) FALSE)
+}
+
+if (!CONDA_AVAILABLE && interactive()) {
+  message(
+    "Note: Foundation-model vignette code is not executed by default. ",
+    "To run code: Sys.setenv(STRATEGIZE_RUN_VIGNETTE='true') before rendering."
+  )
+}
+```
+
+# Overview
+
+The foundation-model workflow in `strategize` is meant for settings where you
+have many conjoint experiments and want to learn one reusable neural
+representation across them, then adapt that representation to a target study.
+
+The workflow has two stages:
+
+1. **Pooled foundation training** across multiple experiments with
+   `fit_conjoint_foundation_model()`.
+2. **Bayesian study adaptation** into the existing neural outcome model with
+   `adapt_conjoint_foundation_model()`.
+
+This differs from the standard `strategize()` workflow, which focuses on
+single-study optimization. Here the goal is to learn transferable
+representations across many studies first, then specialize.
+
+# Backend Setup
+
+Foundation-model training uses the same JAX backend as the package's neural
+outcome model. Run this once before fitting:
+
+```{r backend, eval=FALSE}
+library(strategize)
+
+build_backend(conda_env = "strategize_env")
+```
+
+After that, you can point training and adaptation calls at the same conda
+environment with `conda_env = "strategize_env"`.
+
+# The `experiments` Contract
+
+`fit_conjoint_foundation_model()` expects a list of per-study specifications.
+Each study must provide:
+
+- `experiment_id`: unique study identifier
+- `Y`: outcome vector
+- `W`: factor matrix or data frame
+
+The core shape rule is:
+
+```{r shape-rule, eval=FALSE}
+length(Y) == nrow(W)
+```
+
+Optional fields include:
+
+- `mode`: `"auto"`, `"pairwise"`, or `"single"`
+- `pair_id`, `profile_order`: required for pairwise studies
+- `X`: optional numeric covariates aligned row-wise to `W`
+- `respondent_id`, `respondent_task_id`
+- `likelihood`: `"auto"`, `"bernoulli"`, `"categorical"`, or `"normal"`
+- `n_outcomes`: categorical class count when needed
+- `names_list`, `p_list`
+- `canonical_factor_id`, `canonical_level_id`
+
+## Pairwise Requirements
+
+For forced-choice conjoint studies:
+
+- `pair_id` must be supplied
+- each `pair_id` must appear exactly twice
+- `profile_order` is optional but recommended and usually takes values `1` and `2`
+
+## Outcome Families
+
+The foundation workflow can ingest:
+
+- Bernoulli outcomes
+- categorical outcomes
+- Gaussian outcomes
+
+`strategize` does **not** force all of them into one universal output head.
+Instead, the returned foundation object stores separate internal groups for
+compatible families defined by:
+
+```{r grouping, eval=FALSE}
+(mode, likelihood, n_outcomes)
+```
+
+That means a mix of pairwise Bernoulli and single-study Gaussian experiments
+will produce one `conjoint_foundation_model`, but with separate internal pooled
+fits.
+
+# Minimal Pooled Training Example
+
+The simplest useful example is two pairwise binary studies that share some
+factors and differ on others.
+
+```{r pooled-example-data, eval=FALSE}
+library(strategize)
+
+study_a <- list(
+  experiment_id = "study_a",
+  Y = c(1, 0, 0, 1),
+  W = data.frame(
+    price = c("Low", "Low", "High", "High"),
+    message = c("Jobs", "Taxes", "Jobs", "Taxes")
+  ),
+  pair_id = c(1, 1, 2, 2),
+  profile_order = c(1, 2, 1, 2),
+  canonical_factor_id = c(
+    price = "price",
+    message = "message"
+  )
+)
+
+study_b <- list(
+  experiment_id = "study_b",
+  Y = c(0, 1, 1, 0),
+  W = data.frame(
+    price = c("Low", "High", "Low", "High"),
+    message = c("Jobs", "Jobs", "Taxes", "Taxes"),
+    messenger = c("Local", "Local", "National", "National")
+  ),
+  pair_id = c(1, 1, 2, 2),
+  profile_order = c(1, 2, 1, 2),
+  canonical_factor_id = c(
+    price = "price",
+    message = "message",
+    messenger = "messenger"
+  )
+)
+```
+
+Fit the pooled foundation model:
+
+```{r pooled-fit, eval=CONDA_AVAILABLE}
+foundation_fit <- fit_conjoint_foundation_model(
+  experiments = list(study_a, study_b),
+  foundation_control = list(
+    neural_mcmc_control = list(
+      ModelDims = 32L,
+      ModelDepth = 1L,
+      subsample_method = "batch_vi",
+      uncertainty_scope = "output",
+      svi_steps = 100L
+    )
+  ),
+  conda_env = "strategize_env"
+)
+```
+
+Inspect the internal pooled groups:
+
+```{r pooled-groups, eval=CONDA_AVAILABLE}
+names(foundation_fit$groups)
+```
+
+In this example you should see one pairwise Bernoulli group because both
+studies are compatible.
+
+# How Schema Sharing Works
+
+Schema sharing is conservative by default.
+
+## Canonical ids force sharing
+
+If two studies both use:
+
+```{r canonical-sharing, eval=FALSE}
+canonical_factor_id = c(price = "price")
+```
+
+then the pooled model treats those factor slots as one shared factor identity.
+
+The same logic applies to `canonical_level_id`, which can force specific levels
+to share identities across studies.
+
+## Raw label equality does not force sharing
+
+If two studies both contain a level labeled `"Moderate"` but you do not provide
+canonical ids, `strategize` keeps them local to their respective studies. This
+avoids accidental merging of semantically different labels.
+
+## Missing factors are allowed
+
+When one study has a factor that another study does not, the pooled schema still
+contains that slot. Rows from studies that do not contain the factor route that
+slot to the holdout row during pooled training.
+
+# Optional Text Semantics
+
+Text embeddings are available as optional side information, not as the primary
+identity mechanism.
+
+If you want to add a small semantic side channel, provide a
+`foundation_control$text_embedding_fn` that maps character inputs to fixed-width
+numeric embeddings.
+
+For example:
+
+```{r text-embeddings, eval=FALSE}
+text_embedding_fn <- function(x) {
+  x <- as.character(x)
+  cbind(
+    nchar = nchar(x),
+    has_space = 1 * grepl(" ", x),
+    has_upper = 1 * grepl("[A-Z]", x)
+  )
+}
+
+foundation_fit <- fit_conjoint_foundation_model(
+  experiments = list(study_a, study_b),
+  foundation_control = list(
+    text_embedding_fn = text_embedding_fn
+  )
+)
+```
+
+These embeddings are appended as pooled semantic side features. They do not
+override canonical ids and they do not force schema merges on their own.
+
+# Mixed-Family Behavior
+
+If you mix incompatible experiment families, one foundation object is still
+returned, but it stores multiple internal groups.
+
+For example:
+
+```{r mixed-families, eval=FALSE}
+single_normal <- list(
+  experiment_id = "single_normal",
+  Y = c(0.2, 0.5, 0.7, 0.4),
+  W = data.frame(
+    policy = c("A", "B", "C", "A"),
+    messenger = c("Local", "National", "Local", "National")
+  ),
+  mode = "single",
+  likelihood = "normal"
+)
+
+foundation_fit <- fit_conjoint_foundation_model(
+  experiments = list(study_a, study_b, single_normal)
+)
+
+names(foundation_fit$groups)
+```
+
+You should expect separate entries such as a pairwise Bernoulli group and a
+single-study Gaussian group.
+
+# Adaptation to a Target Study
+
+Once a foundation model is available, adapt it to a target study with
+`adapt_conjoint_foundation_model()`.
+
+```{r adaptation, eval=CONDA_AVAILABLE}
+target_study <- data.frame(
+  price = c("Low", "High", "Low", "High"),
+  message = c("Jobs", "Jobs", "Taxes", "Taxes")
+)
+
+adapted_fit <- adapt_conjoint_foundation_model(
+  foundation_model = foundation_fit,
+  Y = c(1, 0, 0, 1),
+  W = target_study,
+  mode = "pairwise",
+  pair_id = c(1, 1, 2, 2),
+  profile_order = c(1, 2, 1, 2),
+  experiment_id = "target_study",
+  canonical_factor_id = c(price = "price", message = "message"),
+  conda_env = "strategize_env"
+)
+```
+
+The return value is a regular `strategic_predictor`, so prediction works through
+the standard interface:
+
+```{r adaptation-predict, eval=CONDA_AVAILABLE}
+predict(
+  adapted_fit,
+  newdata = list(
+    W = target_study,
+    pair_id = c(1, 1, 2, 2),
+    profile_order = c(1, 2, 1, 2)
+  )
+)
+```
+
+## What adaptation does
+
+Adaptation does **not** replace the current neural model family. Instead it:
+
+1. matches the target study to a compatible foundation group
+2. warm-starts the local neural parameters from the pooled fit when possible
+3. runs the package's current Bayesian neural fit on the target study
+
+Matched factors and levels inherit warm-started embeddings. Unmatched local
+schema elements fall back to local initialization unless you request strict
+schema matching.
+
+# Save and Load
+
+Foundation objects can be cached to disk:
+
+```{r save-load, eval=CONDA_AVAILABLE}
+save_conjoint_foundation_bundle(
+  file = "foundation_bundle.rds",
+  foundation_model = foundation_fit,
+  overwrite = TRUE
+)
+
+foundation_fit_reloaded <- load_conjoint_foundation_bundle(
+  file = "foundation_bundle.rds",
+  preload_params = FALSE
+)
+```
+
+`preload_params = FALSE` is usually the right default when you only need
+metadata or plan to adapt later.
+
+# Common Failure Modes
+
+The most common setup errors are:
+
+- `pair_id` missing in pairwise mode
+- `pair_id` values that do not appear exactly twice
+- `length(Y) != nrow(W)`
+- non-numeric columns in `X`
+- forcing `likelihood = "categorical"` with an `n_outcomes` that does not match
+  the observed classes in the study
+- attempting adaptation when no compatible foundation group exists
+- assuming raw label equality implies cross-study sharing when no canonical ids
+  were supplied
+
+# Runtime Notes
+
+Foundation-model training is substantially heavier than the package's GLM path.
+For exploratory work, start with a shallow configuration:
+
+```{r runtime-notes, eval=FALSE}
+foundation_control = list(
+  neural_mcmc_control = list(
+    ModelDims = 32L,
+    ModelDepth = 1L,
+    subsample_method = "batch_vi",
+    uncertainty_scope = "output",
+    svi_steps = 100L
+  )
+)
+```
+
+Then scale up only after the data contract and schema sharing rules are stable.

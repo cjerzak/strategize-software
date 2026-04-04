@@ -206,6 +206,10 @@ cs2step_eval_outcome_model_neural <- function(Y,
                                              pair_id = NULL,
                                              profile_order = NULL,
                                              X = NULL,
+                                             respondent_id = NULL,
+                                             respondent_task_id = NULL,
+                                             likelihood_override = NULL,
+                                             n_outcomes_override = NULL,
                                              conda_env = "strategize_env",
                                              conda_env_required = TRUE,
                                              neural_mcmc_control = NULL,
@@ -247,6 +251,7 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$Y <- Y
   eval_env$Y_ <- Y
   eval_env$factor_levels <- factor_levels
+  eval_env$indi_ <- seq_len(nrow(W_idx))
 
   eval_env$pair_id <- pair_id
   eval_env$pair_id_ <- pair_id
@@ -259,9 +264,20 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$competing_group_variable_respondent_ <- NULL
   eval_env$neural_mcmc_control <- neural_mcmc_control
   eval_env$nFolds_glm <- if (is.null(nFolds_glm)) NULL else as.integer(nFolds_glm)
+  eval_env$X <- if (is.null(X)) NULL else as.matrix(X)
   eval_env$X_ <- if (is.null(X)) NULL else as.matrix(X)
-  eval_env$respondent_id <- NULL
-  eval_env$respondent_task_id <- NULL
+  eval_env$respondent_id <- respondent_id
+  eval_env$respondent_task_id <- respondent_task_id
+  eval_env$neural_likelihood_override <- if (!is.null(likelihood_override)) {
+    tolower(as.character(likelihood_override))
+  } else {
+    NULL
+  }
+  eval_env$neural_nOutcomes_override <- if (!is.null(n_outcomes_override)) {
+    as.integer(n_outcomes_override)
+  } else {
+    NULL
+  }
 
   initialize_model <- paste(deparse(generate_ModelOutcome_neural), collapse = "\n")
   initialize_model <- gsub(initialize_model, pattern = "function \\(\\)", replacement = "")

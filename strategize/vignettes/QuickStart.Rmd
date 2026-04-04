@@ -165,6 +165,8 @@ result <- strategize(Y = Y, W = W, lambda = 0.1, nSGD = 500,
 
 - **Cross-validation**: Use `cv_strategize()` to select optimal lambda
 - **Adversarial mode**: Set `adversarial = TRUE` for two-player games
+- **Foundation models**: For pooled neural training across many conjoint studies,
+  see `vignette("FoundationModels")`
 - **Full tutorial**: See `vignette("MainVignette")`
 - **Troubleshooting**: See `vignette("Troubleshooting")`
 

@@ -1,3 +1,0 @@
-"variant","elapsed_seconds","step_seconds","speedup_vs_host"
-"host_materialized_batches",0.0569999999999995,0.000759999999999993,1
-"device_indexed_batches",0.0350000000000001,0.000466666666666669,1.62857142857141

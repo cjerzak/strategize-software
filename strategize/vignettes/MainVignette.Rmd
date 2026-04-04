@@ -67,6 +67,11 @@ This tutorial assumes you have installed the strategize package, either from sou
 # strategize::build_backend(conda_env = "strategize")
 ``` 
 
+This tutorial focuses on the main single-study optimization workflow. If you
+want to pretrain a pooled neural representation across many conjoint studies and
+then adapt it to a target study, see `vignette("FoundationModels")` for the
+dedicated foundation-model workflow.
+
 ## Constructing Example Data
 
 Most methods in `strategize` require: 
@@ -394,6 +399,7 @@ This vignette has illustrated the core usage of the `strategize` package for:
 4. Interpreting the estimated solution, e.g., the new distribution that up- or down-weights certain levels.
 
 We hope this helps you investigate questions of *optimal* or *adversarial* design in conjoint experiments, bridging policy learning and typical factorial designs. Please see the documentation of `strategize` and `cv_strategize` for additional arguments and more advanced use-cases.
+For the multi-study pooled neural workflow, see `vignette("FoundationModels")`.
 
 ## References
 
