@@ -108,8 +108,9 @@ The target-study data contract mirrors the per-experiment contract used by
   \item pairwise studies require \code{pair_id};
   \item \code{X}, when supplied, must be numeric and row-aligned to
   \code{W}; raw numeric values remain unchanged during adaptation, while any
-  shared pooled \code{X}-name semantic side features are rebuilt when text
-  semantics are enabled;
+  shared pooled covariate tokens are aligned by pooled \code{X} name,
+  receive explicit presence masks, and optionally receive rebuilt
+  \code{X}-name text embeddings when text semantics are enabled;
   \item categorical adaptation follows the same \code{n_outcomes} rule as
   pooled training.
 }
@@ -128,16 +129,17 @@ The \code{foundation_adaptation_control} list supports:
   \item{\code{strict_schema_match}}{Require every local factor to match a
   pooled foundation slot. Default \code{FALSE}.}
   \item{\code{allow_extra_covariates}}{Allow local covariates that were not
-  present during pooled training. Extra columns are appended after the shared
-  pooled covariate schema. Default \code{TRUE}.}
-  \item{\code{use_text_semantics}}{Reuse semantic side features during
-  adaptation when the foundation object includes them, including any shared
-  \code{X}-name semantic block. Default \code{TRUE}.}
+  present during pooled training. Extra local covariate tokens are appended
+  after the shared pooled covariate vocabulary. Default \code{TRUE}.}
+  \item{\code{use_text_semantics}}{Reuse token-native text semantics during
+  adaptation when the foundation object includes them, including factor-name,
+  level-label, and pooled \code{X}-name token components. Default
+  \code{TRUE}.}
   \item{\code{text_embedding_fn}}{Optional embedding function used to rebuild
-  semantic side information for the target study. When omitted, adaptation
-  reuses the stored pooled semantic registry when available. Any supplied
-  function must return the same embedding width as the pooled foundation
-  semantic registry.}
+  token-native text information for the target study. When omitted,
+  adaptation reuses the stored pooled text registry when available. Any
+  supplied function must return the same embedding width as the pooled
+  foundation text registry.}
 }
 }
 \examples{

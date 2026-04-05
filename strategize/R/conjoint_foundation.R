@@ -606,6 +606,124 @@ cs_foundation_get_embedding_rows <- function(emb_matrix, keys) {
   out
 }
 
+cs_foundation_align_covariate_block <- function(schema_names,
+                                                X_mat,
+                                                n_rows) {
+  schema_names <- as.character(schema_names %||% character(0))
+  values <- matrix(0, nrow = n_rows, ncol = length(schema_names))
+  colnames(values) <- schema_names
+  present <- matrix(0, nrow = n_rows, ncol = length(schema_names))
+  colnames(present) <- schema_names
+
+  if (length(schema_names) < 1L || is.null(X_mat) || ncol(X_mat) < 1L) {
+    return(list(values = values, present = present))
+  }
+
+  idx <- match(colnames(X_mat), schema_names)
+  ok <- which(!is.na(idx))
+  if (length(ok) > 0L) {
+    values[, idx[ok]] <- X_mat[, ok, drop = FALSE]
+    present[, idx[ok]] <- 1
+  }
+  list(values = values, present = present)
+}
+
+cs_foundation_build_registry_slot_maps <- function(registry) {
+  slot_names <- registry$slot_table$slot_name
+  factor_map <- setNames(lapply(seq_along(slot_names), function(i) {
+    list(
+      slot_key = registry$slot_table$slot_key[[i]],
+      slot_name = slot_names[[i]],
+      slot_index = as.integer(i)
+    )
+  }), slot_names)
+  level_map <- setNames(lapply(slot_names, function(slot_name) {
+    lvl_keys <- registry$slot_level_keys[[slot_name]] %||% character(0)
+    stats::setNames(lvl_keys, lvl_keys)
+  }), slot_names)
+  list(
+    factor_map = factor_map,
+    level_map = level_map
+  )
+}
+
+cs_foundation_build_token_info <- function(names_list,
+                                           factor_map,
+                                           level_map,
+                                           text_registry,
+                                           covariate_names = character(0),
+                                           experiment_levels = character(0),
+                                           experiment_index = NULL) {
+  factor_names <- names(names_list)
+  dim_use <- if (is.null(text_registry)) {
+    0L
+  } else {
+    as.integer(text_registry$dim %||% 0L)
+  }
+
+  factor_name_text <- NULL
+  level_name_text <- NULL
+  covariate_name_text <- NULL
+  if (dim_use > 0L) {
+    factor_keys <- vapply(factor_map[factor_names], function(x) {
+      x$slot_key
+    }, character(1))
+    factor_name_text <- cs_foundation_get_embedding_rows(
+      emb_matrix = text_registry$factor_embedding,
+      keys = factor_keys
+    )
+    rownames(factor_name_text) <- factor_names
+
+    level_name_text <- setNames(lapply(factor_names, function(factor_name) {
+      levels_here <- names_list[[factor_name]][[1]]
+      out <- matrix(0, nrow = length(levels_here) + 1L, ncol = dim_use)
+      rownames(out) <- c(levels_here, "__holdout__")
+      level_keys <- unname(level_map[[factor_name]][levels_here])
+      if (length(level_keys) > 0L) {
+        out[seq_along(levels_here), ] <- cs_foundation_get_embedding_rows(
+          emb_matrix = text_registry$level_embedding,
+          keys = level_keys
+        )
+      }
+      out
+    }), factor_names)
+
+    covariate_names <- as.character(covariate_names %||% character(0))
+    if (length(covariate_names) > 0L) {
+      covariate_name_text <- cs_foundation_get_embedding_rows(
+        emb_matrix = text_registry$x_feature_embedding,
+        keys = covariate_names
+      )
+      rownames(covariate_name_text) <- covariate_names
+    }
+  }
+
+  experiment_levels <- as.character(experiment_levels %||% character(0))
+  experiment_index <- if (is.null(experiment_index)) {
+    NULL
+  } else {
+    as.integer(experiment_index)
+  }
+  default_experiment_index <- NA_integer_
+  if (!is.null(experiment_index)) {
+    idx_ok <- unique(experiment_index[!is.na(experiment_index)])
+    if (length(idx_ok) == 1L) {
+      default_experiment_index <- as.integer(idx_ok[[1]])
+    }
+  }
+
+  list(
+    text_dim = as.integer(dim_use),
+    factor_name_text = factor_name_text,
+    level_name_text = level_name_text,
+    covariate_name_text = covariate_name_text,
+    covariate_names = as.character(covariate_names %||% character(0)),
+    experiment_levels = experiment_levels,
+    experiment_index = experiment_index,
+    default_experiment_index = default_experiment_index
+  )
+}
+
 cs_foundation_row_semantics <- function(W_df, exp_map, text_registry, X_mat = NULL) {
   if (is.null(text_registry)) {
     return(NULL)
@@ -709,11 +827,8 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   } else {
     NULL
   }
-  experiment_indicator_names <- if (isTRUE(control$add_experiment_indicators) && length(experiments) > 1L) {
-    paste0("experiment__", vapply(experiments, `[[`, character(1), "experiment_id"))
-  } else {
-    character(0)
-  }
+  experiment_levels <- vapply(experiments, `[[`, character(1), "experiment_id")
+  registry_slot_maps <- cs_foundation_build_registry_slot_maps(registry)
 
   W_all <- vector("list", length(experiments))
   Y_all <- vector("list", length(experiments))
@@ -722,6 +837,8 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   respondent_all <- vector("list", length(experiments))
   task_all <- vector("list", length(experiments))
   X_all <- vector("list", length(experiments))
+  X_present_all <- vector("list", length(experiments))
+  experiment_index_all <- vector("list", length(experiments))
 
   for (i in seq_along(experiments)) {
     exp <- experiments[[i]]
@@ -737,75 +854,53 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       pooled_W[[factor_meta$slot_name]] <- unname(level_map[as.character(exp$W[[factor_name]])])
     }
 
-    base_x <- if (length(x_schema$base_x_names) > 0L) {
-      mat <- matrix(0, nrow = nrow(exp$W), ncol = length(x_schema$base_x_names))
-      colnames(mat) <- x_schema$base_x_names
-      if (!is.null(exp$X) && ncol(exp$X) > 0L) {
-        idx <- match(colnames(exp$X), x_schema$base_x_names)
-        ok <- which(!is.na(idx))
-        if (length(ok) > 0L) {
-          mat[, idx[ok]] <- exp$X[, ok, drop = FALSE]
-        }
-      }
-      mat
-    } else {
-      matrix(0, nrow = nrow(exp$W), ncol = 0L)
-    }
-
-    indicator_x <- if (length(experiment_indicator_names) > 0L) {
-      mat <- matrix(0, nrow = nrow(exp$W), ncol = length(experiment_indicator_names))
-      colnames(mat) <- experiment_indicator_names
-      col_idx <- match(paste0("experiment__", exp$experiment_id), experiment_indicator_names)
-      if (!is.na(col_idx)) {
-        mat[, col_idx] <- 1
-      }
-      mat
-    } else {
-      matrix(0, nrow = nrow(exp$W), ncol = 0L)
-    }
-
-    semantic_x <- cs_foundation_row_semantics(
-      W_df = exp$W,
-      exp_map = exp_map,
-      text_registry = text_registry,
-      X_mat = base_x
+    covariate_block <- cs_foundation_align_covariate_block(
+      schema_names = x_schema$base_x_names,
+      X_mat = exp$X,
+      n_rows = nrow(exp$W)
     )
-    if (is.null(semantic_x)) {
-      semantic_x <- matrix(0, nrow = nrow(exp$W), ncol = 0L)
-    }
 
-    X_all[[i]] <- cbind(base_x, indicator_x, semantic_x)
+    X_all[[i]] <- covariate_block$values
+    X_present_all[[i]] <- covariate_block$present
     W_all[[i]] <- pooled_W
     Y_all[[i]] <- exp$Y
     pair_all[[i]] <- if (!is.null(exp$pair_id)) paste(exp$experiment_id, exp$pair_id, sep = "::") else NULL
     profile_all[[i]] <- exp$profile_order %||% NULL
     respondent_all[[i]] <- if (!is.null(exp$respondent_id)) paste(exp$experiment_id, exp$respondent_id, sep = "::") else NULL
     task_all[[i]] <- if (!is.null(exp$respondent_task_id)) paste(exp$experiment_id, exp$respondent_task_id, sep = "::") else NULL
+    experiment_index_all[[i]] <- rep.int(as.integer(i - 1L), nrow(exp$W))
   }
 
-  X_feature_names <- if (length(X_all) > 0L && ncol(X_all[[1]]) > 0L) {
-    colnames(X_all[[1]])
-  } else {
-    character(0)
-  }
+  token_info <- cs_foundation_build_token_info(
+    names_list = registry$pooled_names_list,
+    factor_map = registry_slot_maps$factor_map,
+    level_map = registry_slot_maps$level_map,
+    text_registry = text_registry,
+    covariate_names = x_schema$base_x_names,
+    experiment_levels = experiment_levels,
+    experiment_index = unlist(experiment_index_all, use.names = FALSE)
+  )
 
   list(
     Y = unlist(Y_all, use.names = FALSE),
     W = do.call(rbind, W_all),
-    X = if (length(X_feature_names) > 0L) do.call(rbind, X_all) else NULL,
+    X = if (length(x_schema$base_x_names) > 0L) do.call(rbind, X_all) else NULL,
+    X_present = if (length(x_schema$base_x_names) > 0L) do.call(rbind, X_present_all) else NULL,
     pair_id = if (all(vapply(pair_all, is.null, logical(1)))) NULL else unlist(pair_all, use.names = FALSE),
     profile_order = if (all(vapply(profile_all, is.null, logical(1)))) NULL else unlist(profile_all, use.names = FALSE),
     respondent_id = if (all(vapply(respondent_all, is.null, logical(1)))) NULL else unlist(respondent_all, use.names = FALSE),
     respondent_task_id = if (all(vapply(task_all, is.null, logical(1)))) NULL else unlist(task_all, use.names = FALSE),
     names_list = registry$pooled_names_list,
     factor_levels = vapply(registry$pooled_names_list, function(x) length(x[[1]]), integer(1)),
-    x_feature_names = X_feature_names,
+    x_feature_names = x_schema$base_x_names,
     x_schema = list(
       base_x_names = x_schema$base_x_names,
-      experiment_indicator_names = experiment_indicator_names,
-      semantic_feature_names = cs_foundation_semantic_feature_names(text_registry)
+      experiment_indicator_names = character(0),
+      semantic_feature_names = character(0),
+      experiment_token_levels = experiment_levels
     ),
-    text_registry = text_registry
+    text_registry = text_registry,
+    token_info = token_info
   )
 }
 
@@ -892,40 +987,25 @@ cs_foundation_build_adaptation_x <- function(group,
   x_schema <- group$x_schema %||% list(
     base_x_names = character(0),
     experiment_indicator_names = character(0),
-    semantic_feature_names = character(0)
+    semantic_feature_names = character(0),
+    experiment_token_levels = character(0)
   )
   base_names <- x_schema$base_x_names %||% character(0)
-  base_x <- if (length(base_names) > 0L) {
-    mat <- matrix(0, nrow = nrow(experiment$W), ncol = length(base_names))
-    colnames(mat) <- base_names
-    if (!is.null(experiment$X) && ncol(experiment$X) > 0L) {
-      idx <- match(colnames(experiment$X), base_names)
-      ok <- which(!is.na(idx))
-      if (length(ok) > 0L) {
-        mat[, idx[ok]] <- experiment$X[, ok, drop = FALSE]
-      }
-    }
-    mat
-  } else {
-    matrix(0, nrow = nrow(experiment$W), ncol = 0L)
-  }
-
-  indicator_names <- x_schema$experiment_indicator_names %||% character(0)
-  indicator_x <- if (length(indicator_names) > 0L) {
-    mat <- matrix(0, nrow = nrow(experiment$W), ncol = length(indicator_names))
-    colnames(mat) <- indicator_names
-    col_idx <- match(paste0("experiment__", experiment$experiment_id), indicator_names)
-    if (!is.na(col_idx)) {
-      mat[, col_idx] <- 1
-    }
-    mat
-  } else {
-    matrix(0, nrow = nrow(experiment$W), ncol = 0L)
-  }
+  base_block <- cs_foundation_align_covariate_block(
+    schema_names = base_names,
+    X_mat = experiment$X,
+    n_rows = nrow(experiment$W)
+  )
 
   text_registry <- NULL
   use_text <- isTRUE(adaptation_control$use_text_semantics) &&
     !is.null(group$text_registry)
+  extra_names <- if (isTRUE(adaptation_control$allow_extra_covariates) && !is.null(experiment$X)) {
+    setdiff(colnames(experiment$X), base_names)
+  } else {
+    character(0)
+  }
+  local_covariate_names <- c(base_names, extra_names)
   if (use_text) {
     if (!is.null(adaptation_control$text_embedding_fn)) {
       text_registry <- cs_foundation_build_text_registry(
@@ -941,11 +1021,11 @@ cs_foundation_build_adaptation_x <- function(group,
           slot_level_labels = lapply(exp_map$level_map, names)
         ),
         text_embedding_fn = adaptation_control$text_embedding_fn,
-        x_feature_names = base_names
+        x_feature_names = local_covariate_names
       )
       if (!identical(as.integer(text_registry$dim %||% 0L), as.integer(group$text_registry$dim %||% 0L))) {
         stop(
-          "Adaptation text embeddings must match the pooled semantic embedding width.",
+          "Adaptation text embeddings must match the pooled foundation text embedding width.",
           call. = FALSE
         )
       }
@@ -953,30 +1033,37 @@ cs_foundation_build_adaptation_x <- function(group,
       text_registry <- group$text_registry
     }
   }
-  semantic_x <- cs_foundation_row_semantics(
-    W_df = experiment$W,
-    exp_map = exp_map,
-    text_registry = text_registry,
-    X_mat = base_x
-  )
-  if (is.null(semantic_x)) {
-    semantic_names <- x_schema$semantic_feature_names %||% character(0)
-    semantic_x <- matrix(0, nrow = nrow(experiment$W), ncol = length(semantic_names))
-    colnames(semantic_x) <- semantic_names
+
+  extra_x <- matrix(0, nrow = nrow(experiment$W), ncol = length(extra_names))
+  colnames(extra_x) <- extra_names
+  extra_present <- matrix(0, nrow = nrow(experiment$W), ncol = length(extra_names))
+  colnames(extra_present) <- extra_names
+  if (length(extra_names) > 0L) {
+    extra_x[, extra_names] <- experiment$X[, extra_names, drop = FALSE]
+    extra_present[, extra_names] <- 1
   }
 
-  X_core <- cbind(base_x, indicator_x, semantic_x)
-  extra_x <- matrix(0, nrow = nrow(experiment$W), ncol = 0L)
-  if (isTRUE(adaptation_control$allow_extra_covariates) && !is.null(experiment$X)) {
-    extras <- setdiff(colnames(experiment$X), colnames(X_core))
-    if (length(extras) > 0L) {
-      extra_x <- experiment$X[, extras, drop = FALSE]
-    }
+  out <- cbind(base_block$values, extra_x)
+  out_present <- cbind(base_block$present, extra_present)
+
+  experiment_levels <- x_schema$experiment_token_levels %||% character(0)
+  experiment_index <- rep.int(NA_integer_, nrow(experiment$W))
+  match_idx <- match(experiment$experiment_id, experiment_levels)
+  if (!is.na(match_idx)) {
+    experiment_index[] <- as.integer(match_idx - 1L)
   }
-  out <- cbind(X_core, extra_x)
-  if (!ncol(out)) {
-    return(NULL)
-  }
+  token_info <- cs_foundation_build_token_info(
+    names_list = experiment$names_list,
+    factor_map = exp_map$factor_map,
+    level_map = exp_map$level_map,
+    text_registry = text_registry,
+    covariate_names = colnames(out),
+    experiment_levels = experiment_levels,
+    experiment_index = experiment_index
+  )
+
+  attr(out, "resp_cov_present") <- out_present
+  attr(out, "token_info") <- token_info
   out
 }
 
@@ -999,7 +1086,8 @@ cs_foundation_build_init_site_values <- function(group,
 
   direct_names <- setdiff(names(params), c(
     grep("^E_factor_[0-9]+$", names(params), value = TRUE),
-    "E_feature_id", "E_segment", "W_resp_x", "M_cross"
+    "E_feature_id", "E_segment", "E_covariate_id",
+    "E_covariate_present", "V_covariate_value", "M_cross"
   ))
   for (name in direct_names) {
     init_values <- cs_foundation_add_init_value(
@@ -1086,8 +1174,12 @@ cs_foundation_build_init_site_values <- function(group,
     )
   }
 
-  if (!is.null(params$W_resp_x) && length(local_x_feature_names) > 0L) {
-    src_mat <- cs2step_neural_to_r_array(params$W_resp_x)
+  covariate_param_names <- c("E_covariate_id", "E_covariate_present", "V_covariate_value")
+  for (param_name in covariate_param_names) {
+    if (is.null(params[[param_name]]) || length(local_x_feature_names) < 1L) {
+      next
+    }
+    src_mat <- cs2step_neural_to_r_array(params[[param_name]])
     tgt <- matrix(0, nrow = length(local_x_feature_names), ncol = ncol(src_mat))
     rownames(tgt) <- local_x_feature_names
     src_names <- group$x_feature_names %||% character(0)
@@ -1096,7 +1188,7 @@ cs_foundation_build_init_site_values <- function(group,
     if (length(ok) > 0L) {
       tgt[idx[ok], ] <- src_mat[ok, , drop = FALSE]
     }
-    init_values[["W_resp_x"]] <- tgt
+    init_values[[param_name]] <- tgt
   }
 
   init_values
@@ -1213,9 +1305,11 @@ cs_foundation_unpack_group <- function(group,
 #'   \code{1}/\code{2}.}
 #'   \item{\code{X}}{Optional numeric covariates aligned row-wise to
 #'   \code{W}. Non-numeric columns are rejected. Raw numeric values are used
-#'   directly as-is; when \code{text_embedding_fn} is supplied, pooled
-#'   embeddings of the \code{X} column names add an extra semantic side
-#'   channel without replacing the raw columns.}
+#'   directly as-is. In the neural foundation backend, pooled training builds
+#'   one covariate token per pooled \code{X} column, keeps an explicit
+#'   presence mask so absent covariates are not conflated with numeric zeros,
+#'   and optionally adds projected \code{X}-name text embeddings to those
+#'   tokens when \code{text_embedding_fn} is supplied.}
 #'   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
 #'   respondent/task identifiers used when available for clustering and
 #'   evaluation logic.}
@@ -1249,16 +1343,19 @@ cs_foundation_unpack_group <- function(group,
 #' The \code{foundation_control} list supports:
 #' \describe{
 #'   \item{\code{add_experiment_indicators}}{Whether to append experiment
-#'   one-hot indicators to the pooled covariate matrix. Default \code{TRUE}.}
-#'   \item{\code{add_text_semantics}}{Whether to add pooled semantic side
-#'   features when \code{text_embedding_fn} is supplied. This covers factor
-#'   names, factor levels, and pooled \code{X} column names. Default
-#'   \code{TRUE}.}
+#'   indicators. This field is retained for compatibility, but the foundation
+#'   neural path now always represents experiment identity as an explicit
+#'   experiment token rather than one-hot covariates.}
+#'   \item{\code{add_text_semantics}}{Whether to add token-native text
+#'   semantics when \code{text_embedding_fn} is supplied. This covers projected
+#'   factor-name embeddings, level-label embeddings, and pooled \code{X}-name
+#'   embeddings inside the emitted tokens. Default \code{TRUE}.}
 #'   \item{\code{text_embedding_fn}}{Optional function that maps character input
 #'   to numeric embeddings. It may accept a character vector and return a matrix
 #'   with matching rows, or accept one string at a time and return a fixed-width
-#'   numeric vector. These embeddings are side information for factor names,
-#'   factor levels, and pooled \code{X} column names, not the primary identity
+#'   numeric vector. These embeddings are projected into factor-name,
+#'   level-label, and pooled \code{X}-name token components while learned
+#'   factor and covariate identity embeddings remain the primary identity
 #'   mechanism.}
 #'   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
 #'   neural outcome backend. Defaults to a pooled SVI configuration using
@@ -1373,8 +1470,10 @@ fit_conjoint_foundation_model <- function(experiments,
       pair_id = pooled$pair_id,
       profile_order = pooled$profile_order,
       X = pooled$X,
+      X_present = pooled$X_present,
       respondent_id = pooled$respondent_id,
       respondent_task_id = pooled$respondent_task_id,
+      neural_token_info = pooled$token_info,
       likelihood_override = group_meta$likelihood,
       n_outcomes_override = if (identical(group_meta$likelihood, "categorical")) group_meta$n_outcomes else NULL,
       conda_env = conda_env,
@@ -1499,8 +1598,9 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   \item pairwise studies require \code{pair_id};
 #'   \item \code{X}, when supplied, must be numeric and row-aligned to
 #'   \code{W}; raw numeric values remain unchanged during adaptation, while any
-#'   shared pooled \code{X}-name semantic side features are rebuilt when text
-#'   semantics are enabled;
+#'   shared pooled covariate tokens are aligned by pooled \code{X} name,
+#'   receive explicit presence masks, and optionally receive rebuilt
+#'   \code{X}-name text embeddings when text semantics are enabled;
 #'   \item categorical adaptation follows the same \code{n_outcomes} rule as
 #'   pooled training.
 #' }
@@ -1519,16 +1619,17 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   \item{\code{strict_schema_match}}{Require every local factor to match a
 #'   pooled foundation slot. Default \code{FALSE}.}
 #'   \item{\code{allow_extra_covariates}}{Allow local covariates that were not
-#'   present during pooled training. Extra columns are appended after the shared
-#'   pooled covariate schema. Default \code{TRUE}.}
-#'   \item{\code{use_text_semantics}}{Reuse semantic side features during
-#'   adaptation when the foundation object includes them, including any shared
-#'   \code{X}-name semantic block. Default \code{TRUE}.}
+#'   present during pooled training. Extra local covariate tokens are appended
+#'   after the shared pooled covariate vocabulary. Default \code{TRUE}.}
+#'   \item{\code{use_text_semantics}}{Reuse token-native text semantics during
+#'   adaptation when the foundation object includes them, including factor-name,
+#'   level-label, and pooled \code{X}-name token components. Default
+#'   \code{TRUE}.}
 #'   \item{\code{text_embedding_fn}}{Optional embedding function used to rebuild
-#'   semantic side information for the target study. When omitted, adaptation
-#'   reuses the stored pooled semantic registry when available. Any supplied
-#'   function must return the same embedding width as the pooled foundation
-#'   semantic registry.}
+#'   token-native text information for the target study. When omitted,
+#'   adaptation reuses the stored pooled text registry when available. Any
+#'   supplied function must return the same embedding width as the pooled
+#'   foundation text registry.}
 #' }
 #'
 #' @examples
@@ -1661,6 +1762,8 @@ adapt_conjoint_foundation_model <- function(foundation_model,
     exp_map = local_map,
     adaptation_control = adaptation_control
   )
+  X_present_aug <- attr(X_aug, "resp_cov_present", exact = TRUE)
+  token_info <- attr(X_aug, "token_info", exact = TRUE)
   local_names_list <- experiment$names_list
   enc <- cs_encode_W_indices(
     W = experiment$W,
@@ -1689,8 +1792,10 @@ adapt_conjoint_foundation_model <- function(foundation_model,
     pair_id = experiment$pair_id,
     profile_order = experiment$profile_order,
     X = X_aug,
+    X_present = X_present_aug,
     respondent_id = experiment$respondent_id,
     respondent_task_id = experiment$respondent_task_id,
+    neural_token_info = token_info,
     likelihood_override = experiment$likelihood,
     n_outcomes_override = if (identical(experiment$likelihood, "categorical")) experiment$n_outcomes else NULL,
     conda_env = conda_env,
@@ -1734,9 +1839,9 @@ adapt_conjoint_foundation_model <- function(foundation_model,
 #' @details
 #' Foundation bundles store the packed neural metadata and posterior summaries
 #' for each internal foundation group, together with the pooled schema registry,
-#' semantic embedding metadata for any factor/level/\code{X}-name side
-#' features, and adaptation metadata. They do not store active JIT functions or
-#' a live Python session.
+#' token metadata for pooled covariate order, experiment-token levels,
+#' factor/level/covariate text registries, and adaptation metadata. They do not
+#' store active JIT functions or a live Python session.
 #'
 #' @examples
 #' \dontrun{

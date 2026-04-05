@@ -58,8 +58,10 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
     }
     out <- list(
       W = newdata$W,
+      X = newdata$X %||% NULL,
       pair_id = newdata$pair_id %||% NULL,
-      profile_order = newdata$profile_order %||% NULL
+      profile_order = newdata$profile_order %||% NULL,
+      experiment_id = newdata$experiment_id %||% NULL
     )
     return(out)
   }
@@ -67,6 +69,7 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   newdata <- as.data.frame(newdata)
   pair_id <- NULL
   profile_order <- NULL
+  experiment_id <- NULL
   if (identical(mode, "pairwise")) {
     if ("pair_id" %in% colnames(newdata)) {
       pair_id <- newdata[["pair_id"]]
@@ -75,8 +78,17 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
       profile_order <- newdata[["profile_order"]]
     }
   }
+  if ("experiment_id" %in% colnames(newdata)) {
+    experiment_id <- newdata[["experiment_id"]]
+  }
   W <- newdata[, factor_names, drop = FALSE]
-  list(W = W, pair_id = pair_id, profile_order = profile_order)
+  extra_cols <- setdiff(colnames(newdata), c(factor_names, "pair_id", "profile_order", "experiment_id"))
+  X <- if (length(extra_cols) > 0L) {
+    newdata[, extra_cols, drop = FALSE]
+  } else {
+    NULL
+  }
+  list(W = W, X = X, pair_id = pair_id, profile_order = profile_order, experiment_id = experiment_id)
 }
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -206,8 +218,10 @@ cs2step_eval_outcome_model_neural <- function(Y,
                                              pair_id = NULL,
                                              profile_order = NULL,
                                              X = NULL,
+                                             X_present = NULL,
                                              respondent_id = NULL,
                                              respondent_task_id = NULL,
+                                             neural_token_info = NULL,
                                              likelihood_override = NULL,
                                              n_outcomes_override = NULL,
                                              conda_env = "strategize_env",
@@ -266,8 +280,11 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$nFolds_glm <- if (is.null(nFolds_glm)) NULL else as.integer(nFolds_glm)
   eval_env$X <- if (is.null(X)) NULL else as.matrix(X)
   eval_env$X_ <- if (is.null(X)) NULL else as.matrix(X)
+  eval_env$X_present <- if (is.null(X_present)) NULL else as.matrix(X_present)
+  eval_env$X_present_ <- if (is.null(X_present)) NULL else as.matrix(X_present)
   eval_env$respondent_id <- respondent_id
   eval_env$respondent_task_id <- respondent_task_id
+  eval_env$neural_token_info <- neural_token_info
   eval_env$neural_likelihood_override <- if (!is.null(likelihood_override)) {
     tolower(as.character(likelihood_override))
   } else {
@@ -670,26 +687,153 @@ cs2step_neural_to_index_matrix <- function(x_mat, factor_levels) {
 }
 
 cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
-  if (!is.null(resp_cov_new)) {
-    resp_cov_new <- as.matrix(resp_cov_new)
-    if (nrow(resp_cov_new) == 1L && n_rows > 1L) {
-      resp_cov_new <- matrix(rep(resp_cov_new, each = n_rows), nrow = n_rows)
-    }
-    return(resp_cov_new)
-  }
+  covariate_names <- as.character(model_info$covariate_names %||% character(0))
+  n_covariates <- length(covariate_names)
+
   resp_cov_mean <- cs2step_neural_to_r_array(model_info$resp_cov_mean)
-  if (!is.null(resp_cov_mean)) {
-    resp_cov_mean <- as.numeric(resp_cov_mean)
+  resp_cov_mean <- if (is.null(resp_cov_mean)) numeric(0) else as.numeric(resp_cov_mean)
+  if (n_covariates > 0L && length(resp_cov_mean) != n_covariates) {
     if (length(resp_cov_mean) == 0L) {
-      return(matrix(0, nrow = n_rows, ncol = 0L))
+      resp_cov_mean <- rep(0, n_covariates)
+    } else {
+      resp_cov_mean <- rep_len(resp_cov_mean, n_covariates)
     }
-    return(matrix(rep(resp_cov_mean, each = n_rows), nrow = n_rows))
   }
-  matrix(0, nrow = n_rows, ncol = 0L)
+
+  resp_cov_default_present <- cs2step_neural_to_r_array(model_info$resp_cov_default_present)
+  resp_cov_default_present <- if (is.null(resp_cov_default_present)) {
+    if (n_covariates > 0L) rep(1, n_covariates) else numeric(0)
+  } else {
+    as.numeric(resp_cov_default_present)
+  }
+  if (n_covariates > 0L && length(resp_cov_default_present) != n_covariates) {
+    if (length(resp_cov_default_present) == 0L) {
+      resp_cov_default_present <- rep(1, n_covariates)
+    } else {
+      resp_cov_default_present <- rep_len(resp_cov_default_present, n_covariates)
+    }
+  }
+
+  if (n_covariates < 1L) {
+    return(list(
+      values = matrix(0, nrow = n_rows, ncol = 0L),
+      present = matrix(0, nrow = n_rows, ncol = 0L)
+    ))
+  }
+
+  values <- matrix(rep(resp_cov_mean, each = n_rows), nrow = n_rows, ncol = n_covariates)
+  present <- matrix(rep(resp_cov_default_present, each = n_rows), nrow = n_rows, ncol = n_covariates)
+  colnames(values) <- covariate_names
+  colnames(present) <- covariate_names
+
+  if (is.null(resp_cov_new)) {
+    return(list(values = values, present = present))
+  }
+
+  if (is.atomic(resp_cov_new) && !is.matrix(resp_cov_new) && !is.data.frame(resp_cov_new)) {
+    if (n_covariates != 1L) {
+      stop(
+        "Unnamed prediction-time X can only be used when the fitted model has exactly one covariate.",
+        call. = FALSE
+      )
+    }
+    resp_cov_new <- data.frame(
+      stats::setNames(list(as.numeric(resp_cov_new)), covariate_names),
+      check.names = FALSE
+    )
+  } else {
+    resp_cov_new <- as.data.frame(resp_cov_new, check.names = FALSE)
+  }
+
+  if (nrow(resp_cov_new) == 1L && n_rows > 1L) {
+    resp_cov_new <- resp_cov_new[rep.int(1L, n_rows), , drop = FALSE]
+    rownames(resp_cov_new) <- NULL
+  }
+  if (nrow(resp_cov_new) != n_rows) {
+    stop(
+      "Prediction-time X must have either one row or the same number of rows as the prediction data.",
+      call. = FALSE
+    )
+  }
+
+  if (ncol(resp_cov_new) < 1L) {
+    return(list(values = values, present = present))
+  }
+
+  if (is.null(colnames(resp_cov_new))) {
+    if (ncol(resp_cov_new) != n_covariates) {
+      stop(
+        "Unnamed prediction-time X must match the fitted covariate width exactly.",
+        call. = FALSE
+      )
+    }
+    colnames(resp_cov_new) <- covariate_names
+  }
+
+  idx <- match(colnames(resp_cov_new), covariate_names)
+  ok <- which(!is.na(idx))
+  if (length(ok) < 1L) {
+    return(list(values = values, present = present))
+  }
+
+  for (k in ok) {
+    col_vals <- suppressWarnings(as.numeric(resp_cov_new[[k]]))
+    observed <- !is.na(col_vals)
+    tgt <- idx[[k]]
+    values[observed, tgt] <- col_vals[observed]
+    values[!observed, tgt] <- 0
+    present[observed, tgt] <- 1
+    present[!observed, tgt] <- 0
+  }
+
+  list(values = values, present = present)
+}
+
+cs2step_neural_prepare_experiment_index <- function(experiment_id, model_info, n_rows) {
+  experiment_levels <- as.character(model_info$experiment_levels %||% character(0))
+  default_experiment_index <- model_info$default_experiment_index %||% NULL
+  if (!is.null(default_experiment_index)) {
+    default_experiment_index <- as.integer(default_experiment_index)
+  }
+
+  if (is.null(experiment_id)) {
+    if (is.null(default_experiment_index) || is.na(default_experiment_index)) {
+      return(NULL)
+    }
+    return(rep.int(default_experiment_index, n_rows))
+  }
+
+  experiment_id <- as.character(experiment_id)
+  if (length(experiment_id) == 1L && n_rows > 1L) {
+    experiment_id <- rep.int(experiment_id, n_rows)
+  }
+  if (length(experiment_id) != n_rows) {
+    stop(
+      "Prediction-time experiment_id must have length one or the same number of rows as the prediction data.",
+      call. = FALSE
+    )
+  }
+  if (length(experiment_levels) < 1L) {
+    return(NULL)
+  }
+
+  matched <- match(experiment_id, experiment_levels)
+  if (all(is.na(matched))) {
+    return(NULL)
+  }
+  if (any(is.na(matched))) {
+    stop(
+      "Prediction-time experiment_id must either all match pooled experiment levels or be omitted.",
+      call. = FALSE
+    )
+  }
+  as.integer(matched - 1L)
 }
 
 cs2step_neural_prepare_prediction_data <- function(W_idx,
                                                    model_info,
+                                                   resp_cov_new = NULL,
+                                                   experiment_id = NULL,
                                                    pair_id = NULL,
                                                    profile_order = NULL,
                                                    mode = c("pairwise", "single")) {
@@ -708,6 +852,18 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     X_left_raw <- W_idx[pair_mat[, 1], , drop = FALSE]
     X_right_raw <- W_idx[pair_mat[, 2], , drop = FALSE]
     n_rows <- nrow(X_left_raw)
+    if (!is.null(resp_cov_new)) {
+      if (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new)) {
+        if (nrow(resp_cov_new) == nrow(W_idx)) {
+          resp_cov_new <- resp_cov_new[pair_mat[, 1], , drop = FALSE]
+        }
+      } else if (length(resp_cov_new) == nrow(W_idx)) {
+        resp_cov_new <- resp_cov_new[pair_mat[, 1]]
+      }
+    }
+    if (!is.null(experiment_id) && length(experiment_id) == nrow(W_idx)) {
+      experiment_id <- experiment_id[pair_mat[, 1]]
+    }
     X_left <- strenv$jnp$array(
       cs2step_neural_to_index_matrix(X_left_raw, model_info$factor_levels)
     )$astype(strenv$jnp$int32)
@@ -717,8 +873,15 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     party_left <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
     party_right <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
     resp_party <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
-    resp_cov <- cs2step_neural_prepare_resp_cov(NULL, model_info, n_rows)
-    resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov))$astype(strenv$dtj)
+    resp_cov <- cs2step_neural_prepare_resp_cov(resp_cov_new, model_info, n_rows)
+    resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov$values))$astype(strenv$dtj)
+    resp_cov_present_jnp <- strenv$jnp$array(as.matrix(resp_cov$present))$astype(strenv$dtj)
+    experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, n_rows)
+    experiment_idx_jnp <- if (is.null(experiment_idx)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.integer(experiment_idx))$astype(strenv$jnp$int32)
+    }
 
     return(list(
       pairwise = TRUE,
@@ -727,7 +890,9 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
       party_left = party_left,
       party_right = party_right,
       resp_party = resp_party,
-      resp_cov = resp_cov_jnp
+      resp_cov = resp_cov_jnp,
+      resp_cov_present = resp_cov_present_jnp,
+      experiment_idx = experiment_idx_jnp
     ))
   }
 
@@ -737,15 +902,24 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
   )$astype(strenv$jnp$int32)
   party_single <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
   resp_party <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
-  resp_cov <- cs2step_neural_prepare_resp_cov(NULL, model_info, n_rows)
-  resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov))$astype(strenv$dtj)
+  resp_cov <- cs2step_neural_prepare_resp_cov(resp_cov_new, model_info, n_rows)
+  resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov$values))$astype(strenv$dtj)
+  resp_cov_present_jnp <- strenv$jnp$array(as.matrix(resp_cov$present))$astype(strenv$dtj)
+  experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, n_rows)
+  experiment_idx_jnp <- if (is.null(experiment_idx)) {
+    NULL
+  } else {
+    strenv$jnp$array(as.integer(experiment_idx))$astype(strenv$jnp$int32)
+  }
 
   list(
     pairwise = FALSE,
     X_single = X_single,
     party_single = party_single,
     resp_party = resp_party,
-    resp_cov = resp_cov_jnp
+    resp_cov = resp_cov_jnp,
+    resp_cov_present = resp_cov_present_jnp,
+    experiment_idx = experiment_idx_jnp
   )
 }
 
@@ -867,6 +1041,8 @@ cs2step_neural_predict_prepared <- function(params, model_info, prep, return_log
 
 cs2step_neural_predict_internal <- function(object,
                                            W_new,
+                                           X_new = NULL,
+                                           experiment_id = NULL,
                                            pair_id = NULL,
                                            profile_order = NULL,
                                            type = c("response", "link"),
@@ -900,14 +1076,36 @@ cs2step_neural_predict_internal <- function(object,
     pair_mat <- pair_info$pair_mat
     X_left <- W_idx[pair_mat[, 1], , drop = FALSE]
     X_right <- W_idx[pair_mat[, 2], , drop = FALSE]
+    if (!is.null(X_new)) {
+      if (is.data.frame(X_new) || is.matrix(X_new)) {
+        if (nrow(X_new) == nrow(W_idx)) {
+          X_new <- X_new[pair_mat[, 1], , drop = FALSE]
+        }
+      } else if (length(X_new) == nrow(W_idx)) {
+        X_new <- X_new[pair_mat[, 1]]
+      }
+    }
+    if (!is.null(experiment_id) && length(experiment_id) == nrow(W_idx)) {
+      experiment_id <- experiment_id[pair_mat[, 1]]
+    }
+    resp_cov_prepped <- cs2step_neural_prepare_resp_cov(X_new, model_info, nrow(X_left))
+    experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, nrow(X_left))
     if (isTRUE(use_internal)) {
-      p <- object$fit$my_model(X_left_new = X_left, X_right_new = X_right)
+      p <- object$fit$my_model(
+        X_left_new = X_left,
+        X_right_new = X_right,
+        resp_cov_new = resp_cov_prepped$values,
+        resp_cov_present_new = resp_cov_prepped$present,
+        experiment_idx_new = experiment_idx
+      )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
       model_info <- prep_params$model_info
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
         model_info = model_info,
+        resp_cov_new = X_new,
+        experiment_id = experiment_id,
         pair_id = pair_id,
         profile_order = profile_order,
         mode = "pairwise"
@@ -920,14 +1118,23 @@ cs2step_neural_predict_internal <- function(object,
       )
     }
   } else {
+    resp_cov_prepped <- cs2step_neural_prepare_resp_cov(X_new, model_info, nrow(W_idx))
+    experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, nrow(W_idx))
     if (isTRUE(use_internal)) {
-      p <- object$fit$my_model(X_new = W_idx)
+      p <- object$fit$my_model(
+        X_new = W_idx,
+        resp_cov_new = resp_cov_prepped$values,
+        resp_cov_present_new = resp_cov_prepped$present,
+        experiment_idx_new = experiment_idx
+      )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
       model_info <- prep_params$model_info
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
         model_info = model_info,
+        resp_cov_new = X_new,
+        experiment_id = experiment_id,
         mode = "single"
       )
       p <- cs2step_neural_predict_prepared(
@@ -980,6 +1187,8 @@ cs2step_neural_predict_internal <- function(object,
     prep <- cs2step_neural_prepare_prediction_data(
       W_idx = W_idx,
       model_info = model_info,
+      resp_cov_new = X_new,
+      experiment_id = experiment_id,
       pair_id = pair_id,
       profile_order = profile_order,
       mode = object$mode
@@ -1065,8 +1274,10 @@ predict.strategic_predictor <- function(object,
 
   unpacked <- cs2step_unpack_newdata(newdata, object$encoder$factor_names, object$mode)
   W_new <- unpacked$W
+  X_new <- unpacked$X
   pair_id <- unpacked$pair_id
   profile_order <- unpacked$profile_order
+  experiment_id <- unpacked$experiment_id
 
   if (identical(object$model_type, "glm")) {
     return(cs2step_glm_predict_internal(
@@ -1084,6 +1295,8 @@ predict.strategic_predictor <- function(object,
   cs2step_neural_predict_internal(
     object = object,
     W_new = W_new,
+    X_new = X_new,
+    experiment_id = experiment_id,
     pair_id = pair_id,
     profile_order = profile_order,
     type = type,
@@ -1185,6 +1398,29 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$resp_cov_mean)) {
     out$resp_cov_mean <- as.numeric(cs2step_neural_to_r_array(out$resp_cov_mean))
   }
+  if (!is.null(out$resp_cov_default_present)) {
+    out$resp_cov_default_present <- as.numeric(cs2step_neural_to_r_array(out$resp_cov_default_present))
+  }
+  if (!is.null(out$factor_name_text)) {
+    out$factor_name_text <- as.matrix(cs2step_neural_to_r_array(out$factor_name_text))
+  }
+  if (!is.null(out$level_name_text)) {
+    out$level_name_text <- lapply(out$level_name_text, function(x) {
+      as.matrix(cs2step_neural_to_r_array(x))
+    })
+  }
+  if (!is.null(out$covariate_name_text)) {
+    out$covariate_name_text <- as.matrix(cs2step_neural_to_r_array(out$covariate_name_text))
+  }
+  if (!is.null(out$covariate_names)) {
+    out$covariate_names <- as.character(out$covariate_names)
+  }
+  if (!is.null(out$experiment_levels)) {
+    out$experiment_levels <- as.character(out$experiment_levels)
+  }
+  if (!is.null(out$token_family_levels)) {
+    out$token_family_levels <- as.character(out$token_family_levels)
+  }
   if (!is.null(out$factor_levels)) {
     out$factor_levels <- as.integer(out$factor_levels)
   }
@@ -1200,7 +1436,8 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
 
   int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
                   "n_matchup_levels", "n_resp_covariates", "model_dims", "model_depth",
-                  "n_heads", "head_dim", "choice_token_index")
+                  "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
+                  "default_experiment_index", "text_semantic_dim")
   for (field in int_fields) {
     if (!is.null(out[[field]])) {
       out[[field]] <- as.integer(out[[field]])

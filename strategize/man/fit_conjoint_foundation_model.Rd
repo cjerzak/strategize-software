@@ -64,9 +64,11 @@ Optional fields:
   \code{1}/\code{2}.}
   \item{\code{X}}{Optional numeric covariates aligned row-wise to
   \code{W}. Non-numeric columns are rejected. Raw numeric values are used
-  directly as-is; when \code{text_embedding_fn} is supplied, pooled
-  embeddings of the \code{X} column names add an extra semantic side
-  channel without replacing the raw columns.}
+  directly as-is. In the neural foundation backend, pooled training builds
+  one covariate token per pooled \code{X} column, keeps an explicit
+  presence mask so absent covariates are not conflated with numeric zeros,
+  and optionally adds projected \code{X}-name text embeddings to those
+  tokens when \code{text_embedding_fn} is supplied.}
   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
   respondent/task identifiers used when available for clustering and
   evaluation logic.}
@@ -100,16 +102,19 @@ Schema sharing rules are conservative:
 The \code{foundation_control} list supports:
 \describe{
   \item{\code{add_experiment_indicators}}{Whether to append experiment
-  one-hot indicators to the pooled covariate matrix. Default \code{TRUE}.}
-  \item{\code{add_text_semantics}}{Whether to add pooled semantic side
-  features when \code{text_embedding_fn} is supplied. This covers factor
-  names, factor levels, and pooled \code{X} column names. Default
-  \code{TRUE}.}
+  indicators. This field is retained for compatibility, but the foundation
+  neural path now always represents experiment identity as an explicit
+  experiment token rather than one-hot covariates.}
+  \item{\code{add_text_semantics}}{Whether to add token-native text
+  semantics when \code{text_embedding_fn} is supplied. This covers projected
+  factor-name embeddings, level-label embeddings, and pooled \code{X}-name
+  embeddings inside the emitted tokens. Default \code{TRUE}.}
   \item{\code{text_embedding_fn}}{Optional function that maps character input
   to numeric embeddings. It may accept a character vector and return a matrix
   with matching rows, or accept one string at a time and return a fixed-width
-  numeric vector. These embeddings are side information for factor names,
-  factor levels, and pooled \code{X} column names, not the primary identity
+  numeric vector. These embeddings are projected into factor-name,
+  level-label, and pooled \code{X}-name token components while learned
+  factor and covariate identity embeddings remain the primary identity
   mechanism.}
   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
   neural outcome backend. Defaults to a pooled SVI configuration using

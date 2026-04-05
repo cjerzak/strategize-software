@@ -109,7 +109,14 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   expect_length(fit$groups, 1L)
   group <- fit$groups[["pairwise::bernoulli::1"]]
   expect_false(is.null(group))
-  expect_true(length(group$x_feature_names) > 0L)
+  expect_identical(
+    group$x_feature_names,
+    c("income", "household size", "GOPScore")
+  )
+  expect_identical(group$x_schema$base_x_names, group$x_feature_names)
+  expect_identical(group$x_schema$semantic_feature_names, character(0))
+  expect_identical(group$x_schema$experiment_indicator_names, character(0))
+  expect_identical(group$x_schema$experiment_token_levels, c("study_a", "study_b"))
   expect_identical(
     group$text_registry$x_feature_names,
     group$x_schema$base_x_names
@@ -118,13 +125,22 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     nrow(group$text_registry$x_feature_embedding),
     length(group$x_schema$base_x_names)
   )
-  expect_true(any(grepl("^semantic_factor_", group$x_feature_names)))
-  expect_true(any(grepl("^semantic_level_", group$x_feature_names)))
-  expect_true(any(grepl("^semantic_x_", group$x_feature_names)))
-  expect_equal(
-    sum(grepl("^semantic_x_", group$x_feature_names)),
-    group$text_registry$dim
+  expect_identical(group$fit$neural_model_info$covariate_names, group$x_schema$base_x_names)
+  expect_identical(
+    rownames(group$fit$neural_model_info$covariate_name_text),
+    group$x_schema$base_x_names
   )
+  expect_true(isTRUE(group$fit$neural_model_info$has_covariate_tokens))
+  expect_true(isTRUE(group$fit$neural_model_info$has_token_family_embedding))
+  expect_true(isTRUE(group$fit$neural_model_info$has_experiment_token))
+  expect_true(isTRUE(group$fit$neural_model_info$has_factor_name_text))
+  expect_true(isTRUE(group$fit$neural_model_info$has_level_name_text))
+  expect_true(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
+  expect_true(all(
+    c("factor_candidate", "covariate", "experiment", "stage",
+      "resp_party", "matchup", "choice", "separator") %in%
+      group$fit$neural_model_info$token_family_levels
+  ))
 
   experiments_norm <- list(
     cs_foundation_normalize_experiment(study_a, index = 1L),
@@ -132,12 +148,19 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   )
   registry <- cs_foundation_build_group_registry(experiments_norm)
   pooled <- cs_foundation_build_group_training_data(experiments_norm, registry, control)
-  semantic_x_cols <- grep("^semantic_x_", colnames(pooled$X), value = TRUE)
-
-  expect_true(length(semantic_x_cols) > 0L)
-  expect_true(any(abs(as.matrix(pooled$X[, semantic_x_cols, drop = FALSE])) > 0))
-  expect_true(any(grepl("^semantic_factor_", colnames(pooled$X))))
-  expect_true(any(grepl("^semantic_level_", colnames(pooled$X))))
+  expect_identical(colnames(pooled$X), group$x_schema$base_x_names)
+  expect_identical(colnames(pooled$X_present), group$x_schema$base_x_names)
+  expect_false(any(grepl("^semantic_", colnames(pooled$X))))
+  expect_identical(pooled$token_info$covariate_names, group$x_schema$base_x_names)
+  expect_identical(
+    rownames(pooled$token_info$covariate_name_text),
+    group$x_schema$base_x_names
+  )
+  expect_true(all(pooled$X_present[seq_len(nrow(study_a$W)), "GOPScore"] == 0))
+  expect_true(all(
+    pooled$X_present[-seq_len(nrow(study_a$W)), "household size"] == 0
+  ))
+  expect_true(any(pooled$X_present[, "income"] == 1))
 })
 
 test_that("fit_conjoint_foundation_model splits incompatible likelihood families", {
@@ -177,7 +200,7 @@ test_that("fit_conjoint_foundation_model splits incompatible likelihood families
   expect_equal(sort(names(fit$groups)), sort(c("pairwise::bernoulli::1", "single::normal::1")))
 })
 
-test_that("adapt_conjoint_foundation_model rebuilds shared X semantics and predictions stay finite", {
+test_that("adapt_conjoint_foundation_model builds shared and local covariate tokens and predictions stay finite", {
   skip_on_cran()
   skip_if_no_jax()
   withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
@@ -219,13 +242,26 @@ test_that("adapt_conjoint_foundation_model rebuilds shared X semantics and predi
     exp_map = exp_map,
     adaptation_control = adaptation_control
   )
+  X_present_aug <- attr(X_aug, "resp_cov_present", exact = TRUE)
+  token_info <- attr(X_aug, "token_info", exact = TRUE)
 
   expect_true("local_bonus" %in% colnames(X_aug))
+  expect_identical(
+    colnames(X_aug),
+    c(group$x_schema$base_x_names, "local_bonus")
+  )
+  expect_identical(colnames(X_present_aug), colnames(X_aug))
+  expect_true(all(X_present_aug[, "local_bonus"] == 1))
+  expect_true(all(X_present_aug[, "GOPScore"] == 0))
   expect_equal(
-    sum(grepl("^semantic_x_", colnames(X_aug))),
-    group$text_registry$dim
+    token_info$covariate_names,
+    colnames(X_aug)
   )
   expect_false("local_bonus" %in% group$x_schema$base_x_names)
+  expect_identical(
+    rownames(token_info$covariate_name_text),
+    colnames(X_aug)
+  )
 
   predictor <- adapt_conjoint_foundation_model(
     foundation_model = foundation_fit,
@@ -244,6 +280,12 @@ test_that("adapt_conjoint_foundation_model rebuilds shared X semantics and predi
   )
 
   expect_s3_class(predictor, "strategic_predictor")
+  expect_identical(
+    predictor$fit$neural_model_info$covariate_names,
+    colnames(X_aug)
+  )
+  expect_true(isTRUE(predictor$fit$neural_model_info$has_covariate_tokens))
+
   preds <- predict(
     predictor,
     newdata = list(
@@ -252,8 +294,20 @@ test_that("adapt_conjoint_foundation_model rebuilds shared X semantics and predi
       profile_order = adapt_data$profile_order
     )
   )
+  preds_with_x <- predict(
+    predictor,
+    newdata = list(
+      W = adapt_data$W,
+      X = adapt_data$X,
+      pair_id = adapt_data$pair_id,
+      profile_order = adapt_data$profile_order,
+      experiment_id = adapt_data$experiment_id
+    )
+  )
   expect_true(all(is.finite(preds)))
   expect_true(all(preds >= 0 & preds <= 1))
+  expect_true(all(is.finite(preds_with_x)))
+  expect_true(all(preds_with_x >= 0 & preds_with_x <= 1))
 })
 
 test_that("foundation semantics stay backward compatible when text_embedding_fn is NULL", {
@@ -282,16 +336,24 @@ test_that("foundation semantics stay backward compatible when text_embedding_fn 
   group <- fit$groups[["pairwise::bernoulli::1"]]
   expect_null(group$text_registry)
   expect_identical(group$x_schema$semantic_feature_names, character(0))
+  expect_identical(group$x_schema$experiment_indicator_names, character(0))
   expect_false(any(grepl("^semantic_x_", group$x_feature_names)))
   expect_false(any(grepl("^semantic_factor_", group$x_feature_names)))
   expect_false(any(grepl("^semantic_level_", group$x_feature_names)))
   expect_identical(
     group$x_feature_names,
-    c(group$x_schema$base_x_names, group$x_schema$experiment_indicator_names)
+    group$x_schema$base_x_names
   )
+  expect_null(group$fit$neural_model_info$factor_name_text)
+  expect_null(group$fit$neural_model_info$level_name_text)
+  expect_null(group$fit$neural_model_info$covariate_name_text)
+  expect_true(isTRUE(group$fit$neural_model_info$has_covariate_tokens))
+  expect_false(isTRUE(group$fit$neural_model_info$has_factor_name_text))
+  expect_false(isTRUE(group$fit$neural_model_info$has_level_name_text))
+  expect_false(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
 })
 
-test_that("foundation bundles preserve X semantic metadata across save/load", {
+test_that("foundation bundles preserve covariate token metadata across save/load", {
   skip_on_cran()
   skip_if_no_jax()
   withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
@@ -323,8 +385,21 @@ test_that("foundation bundles preserve X semantic metadata across save/load", {
   loaded_group <- loaded$groups[["pairwise::bernoulli::1"]]
   expect_identical(loaded_group$x_schema$base_x_names, orig_group$x_schema$base_x_names)
   expect_identical(loaded_group$x_schema$semantic_feature_names, orig_group$x_schema$semantic_feature_names)
+  expect_identical(loaded_group$x_schema$experiment_token_levels, orig_group$x_schema$experiment_token_levels)
   expect_identical(loaded_group$text_registry$x_feature_names, orig_group$text_registry$x_feature_names)
   expect_equal(loaded_group$text_registry$x_feature_embedding, orig_group$text_registry$x_feature_embedding)
+  expect_identical(
+    loaded_group$fit$neural_model_info$covariate_names,
+    orig_group$fit$neural_model_info$covariate_names
+  )
+  expect_identical(
+    loaded_group$fit$neural_model_info$token_family_levels,
+    orig_group$fit$neural_model_info$token_family_levels
+  )
+  expect_equal(
+    loaded_group$fit$neural_model_info$covariate_name_text,
+    orig_group$fit$neural_model_info$covariate_name_text
+  )
 
   adapt_data <- foundation_test_experiment(
     seed = 7043,
@@ -352,6 +427,20 @@ test_that("foundation bundles preserve X semantic metadata across save/load", {
       profile_order = adapt_data$profile_order
     )
   )
+  tmp_pred <- tempfile(fileext = ".rds")
+  save_strategic_predictor(predictor, tmp_pred, overwrite = TRUE)
+  predictor_loaded <- load_strategic_predictor(tmp_pred)
+  preds_loaded <- predict(
+    predictor_loaded,
+    newdata = list(
+      W = adapt_data$W,
+      X = adapt_data$X,
+      pair_id = adapt_data$pair_id,
+      profile_order = adapt_data$profile_order,
+      experiment_id = adapt_data$experiment_id
+    )
+  )
 
   expect_true(all(is.finite(preds)))
+  expect_true(all(is.finite(preds_loaded)))
 })

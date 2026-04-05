@@ -717,6 +717,68 @@ test_that("special-token helper transforms stay centered and symmetric", {
   expect_equal(segment_mat[2, ] - segment_mat[1, ], c(2, -4), tolerance = 1e-6)
 })
 
+test_that("covariate context tokens distinguish absent from present zero via presence masks", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels()
+  covariate_family_idx <- match("covariate", token_levels) - 1L
+  family_mat <- matrix(0, nrow = length(token_levels), ncol = 4L)
+  family_mat[covariate_family_idx + 1L, ] <- c(1000, 2000, 3000, 4000)
+  model_info <- list(
+    model_dims = 4L,
+    token_family_levels = token_levels,
+    covariate_name_text = NULL
+  )
+  params <- list(
+    E_covariate_id = strategize:::strenv$jnp$array(
+      matrix(c(1, 2, 3, 4), nrow = 1L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_present = strategize:::strenv$jnp$array(
+      matrix(c(10, 20, 30, 40), nrow = 1L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    V_covariate_value = strategize:::strenv$jnp$array(
+      matrix(c(100, 200, 300, 400), nrow = 1L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_token_family = strategize:::strenv$jnp$array(
+      family_mat,
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_experiment = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_covariate_name_text = NULL
+  )
+
+  tok_absent <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(0, nrow = 1L, ncol = 1L),
+    resp_cov_present = matrix(0, nrow = 1L, ncol = 1L),
+    params = params,
+    batch = FALSE
+  )
+  tok_zero <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(0, nrow = 1L, ncol = 1L),
+    resp_cov_present = matrix(1, nrow = 1L, ncol = 1L),
+    params = params,
+    batch = FALSE
+  )
+
+  tok_absent_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_absent))
+  tok_zero_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_zero))
+  diff <- drop(tok_zero_r - tok_absent_r)
+
+  expect_false(isTRUE(all.equal(tok_absent_r, tok_zero_r)))
+  expect_equal(diff, c(10, 20, 30, 40), tolerance = 1e-6)
+})
+
 test_that("strategize runs neural outcome model (non-adversarial)", {
   fit <- get_neural_fit()
   res <- fit$res
