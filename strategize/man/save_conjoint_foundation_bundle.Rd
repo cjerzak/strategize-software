@@ -28,9 +28,10 @@ Save a conjoint foundation bundle
 }
 \details{
 Foundation bundles store the packed neural metadata and posterior summaries
-for each internal foundation group, together with the pooled schema registry
-and adaptation metadata. They do not store active JIT functions or a live
-Python session.
+for each internal foundation group, together with the pooled schema registry,
+semantic embedding metadata for any factor/level/\code{X}-name side
+features, and adaptation metadata. They do not store active JIT functions or
+a live Python session.
 }
 \examples{
 \dontrun{

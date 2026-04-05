@@ -247,8 +247,19 @@ foundation_fit <- fit_conjoint_foundation_model(
 )
 ```
 
-These embeddings are appended as pooled semantic side features. They do not
-override canonical ids and they do not force schema merges on their own.
+When supplied, the same embedding hook is used for:
+
+- factor names
+- factor-level labels
+- the pooled union of numeric `X` column names
+
+Raw numeric `X` values still enter the model directly as ordinary covariates.
+The extra `semantic_x_*` block is only a side channel, built from the row's
+numeric `X` values and the embeddings of the shared `X` column names.
+
+These embeddings do not override canonical ids and they do not force schema
+merges on their own. This pass also does not canonicalize or scale `X` across
+studies; cross-study `X` sharing still happens only by raw pooled column name.
 
 # Mixed-Family Behavior
 
@@ -327,7 +338,9 @@ Adaptation does **not** replace the current neural model family. Instead it:
 
 Matched factors and levels inherit warm-started embeddings. Unmatched local
 schema elements fall back to local initialization unless you request strict
-schema matching.
+schema matching. If the foundation group includes text semantics, adaptation
+rebuilds the same shared `semantic_x_*` block for matched pooled `X` columns
+while leaving the raw numeric `X` columns unchanged.
 
 # Save and Load
 

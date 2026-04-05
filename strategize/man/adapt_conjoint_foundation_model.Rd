@@ -107,7 +107,9 @@ The target-study data contract mirrors the per-experiment contract used by
   \item \code{length(Y) == nrow(W)};
   \item pairwise studies require \code{pair_id};
   \item \code{X}, when supplied, must be numeric and row-aligned to
-  \code{W};
+  \code{W}; raw numeric values remain unchanged during adaptation, while any
+  shared pooled \code{X}-name semantic side features are rebuilt when text
+  semantics are enabled;
   \item categorical adaptation follows the same \code{n_outcomes} rule as
   pooled training.
 }
@@ -129,11 +131,13 @@ The \code{foundation_adaptation_control} list supports:
   present during pooled training. Extra columns are appended after the shared
   pooled covariate schema. Default \code{TRUE}.}
   \item{\code{use_text_semantics}}{Reuse semantic side features during
-  adaptation when the foundation object includes them. Default
-  \code{TRUE}.}
+  adaptation when the foundation object includes them, including any shared
+  \code{X}-name semantic block. Default \code{TRUE}.}
   \item{\code{text_embedding_fn}}{Optional embedding function used to rebuild
   semantic side information for the target study. When omitted, adaptation
-  reuses the stored pooled semantic registry when available.}
+  reuses the stored pooled semantic registry when available. Any supplied
+  function must return the same embedding width as the pooled foundation
+  semantic registry.}
 }
 }
 \examples{

@@ -29,8 +29,9 @@
 #'
 #' Cross-study sharing is driven by explicit canonical ids. Raw label equality
 #' alone does not force two studies to share factor or level identities.
-#' Optional text embeddings act as side information for pooled features and
-#' adaptation, not as the main identity mechanism.
+#' Optional text embeddings act as side information for pooled factor names,
+#' factor levels, and numeric covariate names during training and adaptation,
+#' not as the main identity mechanism.
 #'
 #' See \code{\link{fit_conjoint_foundation_model}()} for the full experiment
 #' specification and \code{\link{adapt_conjoint_foundation_model}()} for the
@@ -522,7 +523,10 @@ cs_foundation_build_group_registry <- function(experiments) {
   )
 }
 
-cs_foundation_build_text_registry <- function(experiments, registry, text_embedding_fn) {
+cs_foundation_build_text_registry <- function(experiments,
+                                             registry,
+                                             text_embedding_fn,
+                                             x_feature_names = character(0)) {
   if (is.null(text_embedding_fn)) {
     return(NULL)
   }
@@ -536,11 +540,54 @@ cs_foundation_build_text_registry <- function(experiments, registry, text_embedd
   level_emb <- cs_foundation_text_embed(text_embedding_fn, level_labels)
   rownames(level_emb) <- level_keys
 
+  x_feature_names <- as.character(x_feature_names %||% character(0))
+  x_feature_emb <- if (length(x_feature_names) > 0L) {
+    emb <- cs_foundation_text_embed(text_embedding_fn, x_feature_names)
+    rownames(emb) <- x_feature_names
+    emb
+  } else {
+    NULL
+  }
+
+  dims <- unique(c(
+    if (ncol(slot_emb) > 0L) ncol(slot_emb) else integer(0),
+    if (ncol(level_emb) > 0L) ncol(level_emb) else integer(0),
+    if (!is.null(x_feature_emb) && ncol(x_feature_emb) > 0L) ncol(x_feature_emb) else integer(0)
+  ))
+  if (length(dims) > 1L) {
+    stop("text_embedding_fn returned inconsistent embedding lengths.", call. = FALSE)
+  }
+  dim_use <- if (length(dims) > 0L) as.integer(dims[[1]]) else 0L
+  if (is.null(x_feature_emb)) {
+    x_feature_emb <- matrix(numeric(0), nrow = 0L, ncol = dim_use)
+    rownames(x_feature_emb) <- character(0)
+  }
+
   list(
     factor_embedding = slot_emb,
     level_embedding = level_emb,
-    dim = ncol(slot_emb)
+    x_feature_embedding = x_feature_emb,
+    x_feature_names = x_feature_names,
+    dim = dim_use
   )
+}
+
+cs_foundation_semantic_feature_names <- function(text_registry) {
+  if (is.null(text_registry)) {
+    return(character(0))
+  }
+  dim_use <- as.integer(text_registry$dim %||% 0L)
+  if (dim_use < 1L) {
+    return(character(0))
+  }
+  out <- c(
+    paste0("semantic_factor_", seq_len(dim_use)),
+    paste0("semantic_level_", seq_len(dim_use))
+  )
+  if (length(text_registry$x_feature_names %||% character(0)) > 0L) {
+    out <- c(out, paste0("semantic_x_", seq_len(dim_use)))
+  }
+  out
 }
 
 cs_foundation_get_embedding_rows <- function(emb_matrix, keys) {
@@ -559,48 +606,81 @@ cs_foundation_get_embedding_rows <- function(emb_matrix, keys) {
   out
 }
 
-cs_foundation_row_semantics <- function(W_df, exp_map, text_registry) {
+cs_foundation_row_semantics <- function(W_df, exp_map, text_registry, X_mat = NULL) {
   if (is.null(text_registry)) {
     return(NULL)
   }
   dim_use <- as.integer(text_registry$dim)
-  n <- nrow(W_df)
-  factor_sum <- matrix(0, nrow = n, ncol = dim_use)
-  level_sum <- matrix(0, nrow = n, ncol = dim_use)
-  counts <- integer(n)
-
-  for (factor_name in names(exp_map$factor_map)) {
-    factor_meta <- exp_map$factor_map[[factor_name]]
-    level_map <- exp_map$level_map[[factor_name]]
-    factor_vec <- cs_foundation_get_embedding_rows(
-      emb_matrix = text_registry$factor_embedding,
-      keys = factor_meta$slot_key
-    )
-    vals <- as.character(W_df[[factor_name]])
-    lvl_keys <- unname(level_map[vals])
-    good <- !is.na(lvl_keys)
-    if (!any(good)) {
-      next
-    }
-    factor_sum[good, ] <- factor_sum[good, , drop = FALSE] +
-      matrix(rep(factor_vec[1, ], each = sum(good)), nrow = sum(good))
-    level_sum[good, ] <- level_sum[good, , drop = FALSE] +
-      cs_foundation_get_embedding_rows(
-        emb_matrix = text_registry$level_embedding,
-        keys = lvl_keys[good]
-      )
-    counts[good] <- counts[good] + 1L
+  if (dim_use < 1L) {
+    return(NULL)
   }
 
-  counts[counts < 1L] <- 1L
-  factor_mean <- factor_sum / counts
-  level_mean <- level_sum / counts
-  out <- cbind(factor_mean, level_mean)
-  colnames(out) <- c(
-    paste0("semantic_factor_", seq_len(dim_use)),
-    paste0("semantic_level_", seq_len(dim_use))
-  )
-  out
+  out_blocks <- list()
+  if (!is.null(text_registry$factor_embedding) && !is.null(text_registry$level_embedding)) {
+    n <- nrow(W_df)
+    factor_sum <- matrix(0, nrow = n, ncol = dim_use)
+    level_sum <- matrix(0, nrow = n, ncol = dim_use)
+    counts <- integer(n)
+
+    for (factor_name in names(exp_map$factor_map)) {
+      factor_meta <- exp_map$factor_map[[factor_name]]
+      level_map <- exp_map$level_map[[factor_name]]
+      factor_vec <- cs_foundation_get_embedding_rows(
+        emb_matrix = text_registry$factor_embedding,
+        keys = factor_meta$slot_key
+      )
+      vals <- as.character(W_df[[factor_name]])
+      lvl_keys <- unname(level_map[vals])
+      good <- !is.na(lvl_keys)
+      if (!any(good)) {
+        next
+      }
+      factor_sum[good, ] <- factor_sum[good, , drop = FALSE] +
+        matrix(rep(factor_vec[1, ], each = sum(good)), nrow = sum(good))
+      level_sum[good, ] <- level_sum[good, , drop = FALSE] +
+        cs_foundation_get_embedding_rows(
+          emb_matrix = text_registry$level_embedding,
+          keys = lvl_keys[good]
+        )
+      counts[good] <- counts[good] + 1L
+    }
+
+    counts[counts < 1L] <- 1L
+    factor_mean <- factor_sum / counts
+    level_mean <- level_sum / counts
+    factor_level_out <- cbind(factor_mean, level_mean)
+    colnames(factor_level_out) <- c(
+      paste0("semantic_factor_", seq_len(dim_use)),
+      paste0("semantic_level_", seq_len(dim_use))
+    )
+    out_blocks[["factor_level"]] <- factor_level_out
+  }
+
+  x_feature_emb <- text_registry$x_feature_embedding %||% NULL
+  if (!is.null(X_mat) && !is.null(x_feature_emb) && ncol(X_mat) > 0L && nrow(x_feature_emb) > 0L) {
+    X_use <- as.matrix(X_mat)
+    storage.mode(X_use) <- "double"
+    x_emb <- cs_foundation_get_embedding_rows(
+      emb_matrix = x_feature_emb,
+      keys = colnames(X_use)
+    )
+    semantic_x <- X_use %*% x_emb
+    denom <- rowSums(abs(X_use))
+    ok <- denom > 0
+    if (any(ok)) {
+      semantic_x[ok, ] <- semantic_x[ok, , drop = FALSE] / denom[ok]
+    }
+    if (any(!ok)) {
+      semantic_x[!ok, ] <- 0
+    }
+    colnames(semantic_x) <- paste0("semantic_x_", seq_len(dim_use))
+    out_blocks[["x"]] <- semantic_x
+  }
+
+  if (!length(out_blocks)) {
+    return(NULL)
+  }
+  do.call(cbind, out_blocks)
 }
 
 cs_foundation_stack_base_x <- function(experiments) {
@@ -618,17 +698,17 @@ cs_foundation_stack_base_x <- function(experiments) {
 
 cs_foundation_build_group_training_data <- function(experiments, registry, control) {
   slot_names <- registry$slot_table$slot_name
+  x_schema <- cs_foundation_stack_base_x(experiments)
   text_registry <- if (isTRUE(control$add_text_semantics)) {
     cs_foundation_build_text_registry(
       experiments = experiments,
       registry = registry,
-      text_embedding_fn = control$text_embedding_fn %||% NULL
+      text_embedding_fn = control$text_embedding_fn %||% NULL,
+      x_feature_names = x_schema$base_x_names
     )
   } else {
     NULL
   }
-
-  x_schema <- cs_foundation_stack_base_x(experiments)
   experiment_indicator_names <- if (isTRUE(control$add_experiment_indicators) && length(experiments) > 1L) {
     paste0("experiment__", vapply(experiments, `[[`, character(1), "experiment_id"))
   } else {
@@ -687,7 +767,8 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     semantic_x <- cs_foundation_row_semantics(
       W_df = exp$W,
       exp_map = exp_map,
-      text_registry = text_registry
+      text_registry = text_registry,
+      X_mat = base_x
     )
     if (is.null(semantic_x)) {
       semantic_x <- matrix(0, nrow = nrow(exp$W), ncol = 0L)
@@ -722,14 +803,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     x_schema = list(
       base_x_names = x_schema$base_x_names,
       experiment_indicator_names = experiment_indicator_names,
-      semantic_feature_names = if (!is.null(text_registry)) {
-        c(
-          paste0("semantic_factor_", seq_len(text_registry$dim)),
-          paste0("semantic_level_", seq_len(text_registry$dim))
-        )
-      } else {
-        character(0)
-      }
+      semantic_feature_names = cs_foundation_semantic_feature_names(text_registry)
     ),
     text_registry = text_registry
   )
@@ -866,8 +940,15 @@ cs_foundation_build_adaptation_x <- function(group,
           slot_level_keys = lapply(exp_map$level_map, unname),
           slot_level_labels = lapply(exp_map$level_map, names)
         ),
-        text_embedding_fn = adaptation_control$text_embedding_fn
+        text_embedding_fn = adaptation_control$text_embedding_fn,
+        x_feature_names = base_names
       )
+      if (!identical(as.integer(text_registry$dim %||% 0L), as.integer(group$text_registry$dim %||% 0L))) {
+        stop(
+          "Adaptation text embeddings must match the pooled semantic embedding width.",
+          call. = FALSE
+        )
+      }
     } else {
       text_registry <- group$text_registry
     }
@@ -875,7 +956,8 @@ cs_foundation_build_adaptation_x <- function(group,
   semantic_x <- cs_foundation_row_semantics(
     W_df = experiment$W,
     exp_map = exp_map,
-    text_registry = text_registry
+    text_registry = text_registry,
+    X_mat = base_x
   )
   if (is.null(semantic_x)) {
     semantic_names <- x_schema$semantic_feature_names %||% character(0)
@@ -1130,7 +1212,10 @@ cs_foundation_unpack_group <- function(group,
 #'   \item{\code{profile_order}}{Optional within-pair ordering, typically
 #'   \code{1}/\code{2}.}
 #'   \item{\code{X}}{Optional numeric covariates aligned row-wise to
-#'   \code{W}. Non-numeric columns are rejected.}
+#'   \code{W}. Non-numeric columns are rejected. Raw numeric values are used
+#'   directly as-is; when \code{text_embedding_fn} is supplied, pooled
+#'   embeddings of the \code{X} column names add an extra semantic side
+#'   channel without replacing the raw columns.}
 #'   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
 #'   respondent/task identifiers used when available for clustering and
 #'   evaluation logic.}
@@ -1166,12 +1251,15 @@ cs_foundation_unpack_group <- function(group,
 #'   \item{\code{add_experiment_indicators}}{Whether to append experiment
 #'   one-hot indicators to the pooled covariate matrix. Default \code{TRUE}.}
 #'   \item{\code{add_text_semantics}}{Whether to add pooled semantic side
-#'   features when \code{text_embedding_fn} is supplied. Default \code{TRUE}.}
+#'   features when \code{text_embedding_fn} is supplied. This covers factor
+#'   names, factor levels, and pooled \code{X} column names. Default
+#'   \code{TRUE}.}
 #'   \item{\code{text_embedding_fn}}{Optional function that maps character input
 #'   to numeric embeddings. It may accept a character vector and return a matrix
 #'   with matching rows, or accept one string at a time and return a fixed-width
-#'   numeric vector. These embeddings are side information, not the primary
-#'   identity mechanism.}
+#'   numeric vector. These embeddings are side information for factor names,
+#'   factor levels, and pooled \code{X} column names, not the primary identity
+#'   mechanism.}
 #'   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
 #'   neural outcome backend. Defaults to a pooled SVI configuration using
 #'   output-only uncertainty.}
@@ -1410,7 +1498,9 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   \item \code{length(Y) == nrow(W)};
 #'   \item pairwise studies require \code{pair_id};
 #'   \item \code{X}, when supplied, must be numeric and row-aligned to
-#'   \code{W};
+#'   \code{W}; raw numeric values remain unchanged during adaptation, while any
+#'   shared pooled \code{X}-name semantic side features are rebuilt when text
+#'   semantics are enabled;
 #'   \item categorical adaptation follows the same \code{n_outcomes} rule as
 #'   pooled training.
 #' }
@@ -1432,11 +1522,13 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   present during pooled training. Extra columns are appended after the shared
 #'   pooled covariate schema. Default \code{TRUE}.}
 #'   \item{\code{use_text_semantics}}{Reuse semantic side features during
-#'   adaptation when the foundation object includes them. Default
-#'   \code{TRUE}.}
+#'   adaptation when the foundation object includes them, including any shared
+#'   \code{X}-name semantic block. Default \code{TRUE}.}
 #'   \item{\code{text_embedding_fn}}{Optional embedding function used to rebuild
 #'   semantic side information for the target study. When omitted, adaptation
-#'   reuses the stored pooled semantic registry when available.}
+#'   reuses the stored pooled semantic registry when available. Any supplied
+#'   function must return the same embedding width as the pooled foundation
+#'   semantic registry.}
 #' }
 #'
 #' @examples
@@ -1641,9 +1733,10 @@ adapt_conjoint_foundation_model <- function(foundation_model,
 #'
 #' @details
 #' Foundation bundles store the packed neural metadata and posterior summaries
-#' for each internal foundation group, together with the pooled schema registry
-#' and adaptation metadata. They do not store active JIT functions or a live
-#' Python session.
+#' for each internal foundation group, together with the pooled schema registry,
+#' semantic embedding metadata for any factor/level/\code{X}-name side
+#' features, and adaptation metadata. They do not store active JIT functions or
+#' a live Python session.
 #'
 #' @examples
 #' \dontrun{

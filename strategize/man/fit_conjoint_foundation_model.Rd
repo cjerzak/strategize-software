@@ -63,7 +63,10 @@ Optional fields:
   \item{\code{profile_order}}{Optional within-pair ordering, typically
   \code{1}/\code{2}.}
   \item{\code{X}}{Optional numeric covariates aligned row-wise to
-  \code{W}. Non-numeric columns are rejected.}
+  \code{W}. Non-numeric columns are rejected. Raw numeric values are used
+  directly as-is; when \code{text_embedding_fn} is supplied, pooled
+  embeddings of the \code{X} column names add an extra semantic side
+  channel without replacing the raw columns.}
   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
   respondent/task identifiers used when available for clustering and
   evaluation logic.}
@@ -99,12 +102,15 @@ The \code{foundation_control} list supports:
   \item{\code{add_experiment_indicators}}{Whether to append experiment
   one-hot indicators to the pooled covariate matrix. Default \code{TRUE}.}
   \item{\code{add_text_semantics}}{Whether to add pooled semantic side
-  features when \code{text_embedding_fn} is supplied. Default \code{TRUE}.}
+  features when \code{text_embedding_fn} is supplied. This covers factor
+  names, factor levels, and pooled \code{X} column names. Default
+  \code{TRUE}.}
   \item{\code{text_embedding_fn}}{Optional function that maps character input
   to numeric embeddings. It may accept a character vector and return a matrix
   with matching rows, or accept one string at a time and return a fixed-width
-  numeric vector. These embeddings are side information, not the primary
-  identity mechanism.}
+  numeric vector. These embeddings are side information for factor names,
+  factor levels, and pooled \code{X} column names, not the primary identity
+  mechanism.}
   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
   neural outcome backend. Defaults to a pooled SVI configuration using
   output-only uncertainty.}

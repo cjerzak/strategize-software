@@ -32,8 +32,9 @@ are stored as separate internal groups in the returned
 
 Cross-study sharing is driven by explicit canonical ids. Raw label equality
 alone does not force two studies to share factor or level identities.
-Optional text embeddings act as side information for pooled features and
-adaptation, not as the main identity mechanism.
+Optional text embeddings act as side information for pooled factor names,
+factor levels, and numeric covariate names during training and adaptation,
+not as the main identity mechanism.
 
 See \code{\link{fit_conjoint_foundation_model}()} for the full experiment
 specification and \code{\link{adapt_conjoint_foundation_model}()} for the
