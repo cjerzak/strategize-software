@@ -220,10 +220,10 @@ slot to the holdout row during pooled training.
 
 # Optional Text Semantics
 
-Text embeddings are available as optional side information, not as the primary
-identity mechanism.
+Text embeddings are available as optional token-native side information, not as
+the primary identity mechanism.
 
-If you want to add a small semantic side channel, provide a
+If you want to enrich the emitted factor and covariate tokens, provide a
 `foundation_control$text_embedding_fn` that maps character inputs to fixed-width
 numeric embeddings.
 
@@ -253,9 +253,27 @@ When supplied, the same embedding hook is used for:
 - factor-level labels
 - the pooled union of numeric `X` column names
 
-Raw numeric `X` values still enter the model directly as ordinary covariates.
-The extra `semantic_x_*` block is only a side channel, built from the row's
-numeric `X` values and the embeddings of the shared `X` column names.
+Under the current foundation-model backend, those embeddings are projected into
+the corresponding tokens:
+
+- factor-name embeddings are added to factor candidate tokens
+- level-label embeddings are added to the selected level token path
+- covariate-name embeddings are added to one covariate token per pooled `X`
+  column
+
+Raw numeric `X` values still enter directly and are not scaled or
+canonicalized. Pooled training builds a deterministic pooled covariate order
+from the union of `X` column names within each compatible foundation group.
+Each row then carries:
+
+- the raw numeric value for each pooled covariate slot
+- an explicit presence mask so missing covariates are not confused with
+  present covariates whose value happens to be zero
+
+So the old dense `semantic_x_*` side block is gone in the foundation/adaptation
+path. Instead, covariate meaning now lives directly inside the emitted
+covariate tokens through identity, optional name text, raw value direction, and
+presence state.
 
 These embeddings do not override canonical ids and they do not force schema
 merges on their own. This pass also does not canonicalize or scale `X` across
@@ -338,9 +356,23 @@ Adaptation does **not** replace the current neural model family. Instead it:
 
 Matched factors and levels inherit warm-started embeddings. Unmatched local
 schema elements fall back to local initialization unless you request strict
-schema matching. If the foundation group includes text semantics, adaptation
-rebuilds the same shared `semantic_x_*` block for matched pooled `X` columns
-while leaving the raw numeric `X` columns unchanged.
+schema matching.
+
+For covariates, adaptation aligns the target study's `X` columns to the pooled
+shared covariate vocabulary by raw column name. Shared pooled covariate tokens
+warm-start by matched name. If `allow_extra_covariates = TRUE`, local extra
+covariates are appended after the shared pooled slots and initialized locally.
+As in pooled training, adaptation keeps explicit presence masks so absent
+covariates remain distinct from present-zero covariates.
+
+If the foundation group includes text semantics, adaptation rebuilds the same
+token-native text components for factor names, level labels, and covariate
+names. Experiment identity also stays tokenized: during adaptation the pooled
+experiment token is emitted only when the local `experiment_id` matches a
+pooled training experiment; otherwise no experiment token is emitted.
+
+At prediction time, if `X` is unavailable, the adapted predictor falls back to
+the stored default covariate-token metadata rather than erroring.
 
 # Save and Load
 
@@ -360,7 +392,9 @@ foundation_fit_reloaded <- load_conjoint_foundation_bundle(
 ```
 
 `preload_params = FALSE` is usually the right default when you only need
-metadata or plan to adapt later.
+metadata or plan to adapt later. Bundles retain the pooled covariate ordering,
+experiment-token levels, and factor/level/covariate text metadata needed to
+reconstruct the tokenized foundation/adaptation path after reload.
 
 # Common Failure Modes
 
