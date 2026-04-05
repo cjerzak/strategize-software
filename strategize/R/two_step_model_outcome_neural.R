@@ -5372,10 +5372,24 @@ generate_ModelOutcome_neural <- function(){
       resp_p <- strenv$jnp$array(as.integer(resp_party_use[idx]))$astype(strenv$jnp$int32)
       if (n_resp_covariates > 0L) {
         resp_c <- strenv$jnp$array(as.matrix(X_use[idx, , drop = FALSE]))$astype(ddtype_)
+        resp_c_present <- if (!is.null(X_present_use)) {
+          strenv$jnp$array(as.matrix(X_present_use[idx, , drop = FALSE]))$astype(ddtype_)
+        } else {
+          strenv$jnp$ones(list(ai(length(idx)), ai(n_resp_covariates)), dtype = ddtype_)
+        }
       } else {
         resp_c <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
+        resp_c_present <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
       }
-      pred <- validation_predict_jit(params, Xl, Xr, pl, pr, resp_p, resp_c)
+      experiment_idx <- if (!is.null(experiment_index_use)) {
+        strenv$jnp$array(as.integer(experiment_index_use[idx]))$astype(strenv$jnp$int32)
+      } else {
+        NULL
+      }
+      # Keep validation prediction aligned with neural_get_predict_jit's current signature.
+      pred <- validation_predict_jit(
+        params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, experiment_idx
+      )
       return(coerce_prediction_output_local(pred))
     }
 
@@ -5384,10 +5398,23 @@ generate_ModelOutcome_neural <- function(){
     resp_p <- strenv$jnp$array(as.integer(resp_party_use[idx]))$astype(strenv$jnp$int32)
     if (n_resp_covariates > 0L) {
       resp_c <- strenv$jnp$array(as.matrix(X_use[idx, , drop = FALSE]))$astype(ddtype_)
+      resp_c_present <- if (!is.null(X_present_use)) {
+        strenv$jnp$array(as.matrix(X_present_use[idx, , drop = FALSE]))$astype(ddtype_)
+      } else {
+        strenv$jnp$ones(list(ai(length(idx)), ai(n_resp_covariates)), dtype = ddtype_)
+      }
     } else {
       resp_c <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
+      resp_c_present <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
     }
-    pred <- validation_predict_jit(params, Xb, pb, resp_p, resp_c)
+    experiment_idx <- if (!is.null(experiment_index_use)) {
+      strenv$jnp$array(as.integer(experiment_index_use[idx]))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+    pred <- validation_predict_jit(
+      params, Xb, pb, resp_p, resp_c, resp_c_present, experiment_idx
+    )
     coerce_prediction_output_local(pred)
   }
   locscale_reparam <- NULL
