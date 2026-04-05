@@ -35,7 +35,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   }
 
   create_env <- function(conda_bin) {
-    reticulate::conda_create(envname = conda_env, conda = conda_bin, python_version = "3.13")
+    reticulate::conda_create(envname = conda_env, conda = conda_bin, python_version = "3.12")
     invisible(TRUE)
   }
 
@@ -115,7 +115,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   install_jax_gpu()
   
   # --- (B) Now install the rest (pip’s default upgrade strategy is "only-if-needed") ---
-  other_pkgs <- c("numpy", "equinox", "numpyro", "optax")
+  other_pkgs <- c("numpy", "equinox", "numpyro", "optax", "mlx-embeddings")
   pip_install(other_pkgs)
   
   msg("Environment '%s' is ready.", conda_env)
