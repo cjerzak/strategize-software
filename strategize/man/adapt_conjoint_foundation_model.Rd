@@ -13,6 +13,7 @@ adapt_conjoint_foundation_model(
   pair_id = NULL,
   profile_order = NULL,
   experiment_id = "adaptation_target",
+  experiment_description = NULL,
   names_list = NULL,
   p_list = NULL,
   respondent_id = NULL,
