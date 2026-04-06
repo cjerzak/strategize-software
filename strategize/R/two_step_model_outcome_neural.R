@@ -4185,11 +4185,43 @@ generate_ModelOutcome_neural <- function(){
     )
   }
 
+  normalize_resp_cov_present_for_model <- function(resp_cov,
+                                                   resp_cov_present = NULL,
+                                                   n_rows = 1L) {
+    n_rows <- ai(n_rows)
+    if (!is.null(resp_cov_present)) {
+      return(strenv$jnp$atleast_2d(resp_cov_present)$astype(ddtype_))
+    }
+    if (!is.null(resp_cov_default_present)) {
+      default_present <- matrix(as.numeric(resp_cov_default_present), nrow = 1L)
+      if (n_rows > 1L) {
+        default_present <- matrix(
+          rep(default_present[1L, ], each = n_rows),
+          nrow = n_rows
+        )
+      }
+      return(strenv$jnp$array(default_present)$astype(ddtype_))
+    }
+    if (!is.null(resp_cov)) {
+      resp_cov_mat <- strenv$jnp$atleast_2d(resp_cov)
+      return(strenv$jnp$ones(resp_cov_mat$shape, dtype = ddtype_))
+    }
+    if (n_resp_covariates > 0L) {
+      return(strenv$jnp$ones(list(n_rows, ai(n_resp_covariates)), dtype = ddtype_))
+    }
+    strenv$jnp$zeros(list(n_rows, ai(0L)), dtype = ddtype_)
+  }
+
   BayesianPairTransformerModel <- function(X_left, X_right, party_left, party_right,
-                                           resp_party, resp_cov, resp_cov_present,
-                                           experiment_index, Y_obs) {
+                                           resp_party, resp_cov, resp_cov_present = NULL,
+                                           experiment_index = NULL, Y_obs) {
     N_local <- ai(X_left$shape[[1]])
     D_local <- ai(X_left$shape[[2]])
+    resp_cov_present <- normalize_resp_cov_present_for_model(
+      resp_cov = resp_cov,
+      resp_cov_present = resp_cov_present,
+      n_rows = N_local
+    )
 
     shared_params <- sample_shared_transformer_params(D_local = D_local, pairwise = TRUE)
     params_view <- shared_params$params_view
@@ -4443,9 +4475,15 @@ generate_ModelOutcome_neural <- function(){
   }
 
   BayesianSingleTransformerModel <- function(X, party, resp_party, resp_cov,
-                                             resp_cov_present, experiment_index, Y_obs) {
+                                             resp_cov_present = NULL,
+                                             experiment_index = NULL, Y_obs) {
     N_local <- ai(X$shape[[1]])
     D_local <- ai(X$shape[[2]])
+    resp_cov_present <- normalize_resp_cov_present_for_model(
+      resp_cov = resp_cov,
+      resp_cov_present = resp_cov_present,
+      n_rows = N_local
+    )
 
     shared_params <- sample_shared_transformer_params(D_local = D_local, pairwise = FALSE)
     params_view <- shared_params$params_view

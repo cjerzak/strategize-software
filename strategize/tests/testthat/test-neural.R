@@ -63,6 +63,7 @@ get_neural_fit_perf <- local({
       STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
       STRATEGIZE_NEURAL_EVAL_SEED = "123"
     ))
+    withr::local_seed(123)
 
     data <- generate_pairwise_performance_test_data(
       n_pairs = 1000L,
