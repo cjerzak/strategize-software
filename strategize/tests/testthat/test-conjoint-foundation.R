@@ -180,6 +180,72 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     pooled$X_present[-seq_len(nrow(study_a$W)), "household size"] == 0
   ))
   expect_true(any(pooled$X_present[, "income"] == 1))
+
+  runtime_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = group$fit$neural_model_info$model_dims,
+    cand_party_to_resp_idx = group$fit$neural_model_info$cand_party_to_resp_idx,
+    n_party_levels = group$fit$neural_model_info$n_party_levels,
+    factor_name_text = group$fit$neural_model_info$factor_name_text,
+    level_name_text = group$fit$neural_model_info$level_name_text,
+    covariate_name_text = group$fit$neural_model_info$covariate_name_text,
+    resp_cov_mean = group$fit$neural_model_info$resp_cov_mean,
+    resp_cov_scale = group$fit$neural_model_info$resp_cov_scale,
+    resp_cov_default_present = group$fit$neural_model_info$resp_cov_default_present,
+    default_experiment_index = group$fit$neural_model_info$default_experiment_index,
+    token_family_levels = group$fit$neural_model_info$token_family_levels,
+    experiment_token_mode = group$fit$neural_model_info$experiment_token_mode,
+    covariate_value_encoding = group$fit$neural_model_info$covariate_value_encoding,
+    experiment_description_text = group$fit$neural_model_info$experiment_description_text,
+    experiment_description_present = group$fit$neural_model_info$experiment_description_present,
+    default_experiment_text = group$fit$neural_model_info$default_experiment_text,
+    default_experiment_text_present = group$fit$neural_model_info$default_experiment_text_present
+  )
+  params <- group$fit$neural_model_info$params
+  n_cov <- length(group$x_schema$base_x_names)
+
+  tok_study_a <- strategize:::add_context_tokens(
+    model_info = runtime_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(0, nrow = 1L, ncol = n_cov),
+    resp_cov_present = matrix(0, nrow = 1L, ncol = n_cov),
+    experiment_idx = 0L,
+    params = params,
+    batch = FALSE
+  )
+  tok_study_b <- strategize:::add_context_tokens(
+    model_info = runtime_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(0, nrow = 1L, ncol = n_cov),
+    resp_cov_present = matrix(0, nrow = 1L, ncol = n_cov),
+    experiment_idx = 1L,
+    params = params,
+    batch = FALSE
+  )
+  tok_study_a_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_study_a))
+  tok_study_b_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_study_b))
+  expect_gt(max(abs(tok_study_a_r[1, 1, ] - tok_study_b_r[1, 1, ])), 1e-8)
+
+  tok_cov0 <- strategize:::add_context_tokens(
+    model_info = runtime_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(0, nrow = 1L, ncol = n_cov),
+    resp_cov_present = matrix(1, nrow = 1L, ncol = n_cov),
+    experiment_idx = 0L,
+    params = params,
+    batch = FALSE
+  )
+  tok_cov1 <- strategize:::add_context_tokens(
+    model_info = runtime_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(1, nrow = 1L, ncol = n_cov),
+    resp_cov_present = matrix(1, nrow = 1L, ncol = n_cov),
+    experiment_idx = 0L,
+    params = params,
+    batch = FALSE
+  )
+  tok_cov0_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_cov0))
+  tok_cov1_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_cov1))
+  expect_gt(max(abs(tok_cov1_r - tok_cov0_r)), 1e-8)
 })
 
 test_that("fit_conjoint_foundation_model splits incompatible likelihood families", {

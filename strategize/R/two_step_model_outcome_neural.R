@@ -486,6 +486,48 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   info
 }
 
+neural_make_runtime_token_model_info <- function(model_dims,
+                                                 cand_party_to_resp_idx = NULL,
+                                                 n_party_levels = NULL,
+                                                 factor_name_text = NULL,
+                                                 level_name_text = NULL,
+                                                 covariate_name_text = NULL,
+                                                 resp_cov_mean = NULL,
+                                                 resp_cov_scale = NULL,
+                                                 resp_cov_default_present = NULL,
+                                                 default_experiment_index = NULL,
+                                                 token_family_levels = NULL,
+                                                 experiment_token_mode = NULL,
+                                                 covariate_value_encoding = NULL,
+                                                 experiment_description_text = NULL,
+                                                 experiment_description_present = NULL,
+                                                 default_experiment_text = NULL,
+                                                 default_experiment_text_present = FALSE) {
+  list(
+    model_dims = model_dims,
+    cand_party_to_resp_idx = cand_party_to_resp_idx,
+    n_party_levels = n_party_levels,
+    factor_name_text = factor_name_text,
+    level_name_text = level_name_text,
+    covariate_name_text = covariate_name_text,
+    resp_cov_mean = resp_cov_mean,
+    resp_cov_scale = resp_cov_scale,
+    resp_cov_default_present = resp_cov_default_present,
+    default_experiment_index = if (is.null(default_experiment_index) || is.na(default_experiment_index)) {
+      NULL
+    } else {
+      as.integer(default_experiment_index)
+    },
+    token_family_levels = token_family_levels,
+    experiment_token_mode = experiment_token_mode,
+    covariate_value_encoding = covariate_value_encoding,
+    experiment_description_text = experiment_description_text,
+    experiment_description_present = experiment_description_present,
+    default_experiment_text = default_experiment_text,
+    default_experiment_text_present = isTRUE(default_experiment_text_present)
+  )
+}
+
 neural_prediction_jit_cache <- new.env(parent = emptyenv())
 
 neural_model_jit_cache_key <- function(model_info) {
@@ -4447,7 +4489,7 @@ generate_ModelOutcome_neural <- function(){
       head_dim = head_dim,
       residual_mode = residual_mode
     )
-    model_info_local <- list(
+    model_info_local <- neural_make_runtime_token_model_info(
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
       n_party_levels = ai(n_party_levels),
@@ -4455,9 +4497,16 @@ generate_ModelOutcome_neural <- function(){
       level_name_text = level_name_text,
       covariate_name_text = covariate_name_text,
       resp_cov_mean = resp_cov_mean,
+      resp_cov_scale = resp_cov_scale,
       resp_cov_default_present = resp_cov_default_present,
-      default_experiment_index = if (is.na(default_experiment_index)) NULL else as.integer(default_experiment_index),
-      token_family_levels = token_family_levels
+      default_experiment_index = default_experiment_index,
+      token_family_levels = token_family_levels,
+      experiment_token_mode = experiment_token_mode,
+      covariate_value_encoding = covariate_value_encoding,
+      experiment_description_text = experiment_description_text,
+      experiment_description_present = experiment_description_present,
+      default_experiment_text = default_experiment_text,
+      default_experiment_text_present = default_experiment_text_present
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p) {
@@ -4707,7 +4756,7 @@ generate_ModelOutcome_neural <- function(){
       head_dim = head_dim,
       residual_mode = residual_mode
     )
-    model_info_local <- list(
+    model_info_local <- neural_make_runtime_token_model_info(
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
       n_party_levels = ai(n_party_levels),
@@ -4715,9 +4764,16 @@ generate_ModelOutcome_neural <- function(){
       level_name_text = level_name_text,
       covariate_name_text = covariate_name_text,
       resp_cov_mean = resp_cov_mean,
+      resp_cov_scale = resp_cov_scale,
       resp_cov_default_present = resp_cov_default_present,
-      default_experiment_index = if (is.na(default_experiment_index)) NULL else as.integer(default_experiment_index),
-      token_family_levels = token_family_levels
+      default_experiment_index = default_experiment_index,
+      token_family_levels = token_family_levels,
+      experiment_token_mode = experiment_token_mode,
+      covariate_value_encoding = covariate_value_encoding,
+      experiment_description_text = experiment_description_text,
+      experiment_description_present = experiment_description_present,
+      default_experiment_text = default_experiment_text,
+      default_experiment_text_present = default_experiment_text_present
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p) {
