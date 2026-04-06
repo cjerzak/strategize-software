@@ -268,12 +268,13 @@ neural_build_param_schema <- function(params,
     param_names <- c(param_names, "E_rel")
   }
   if (!is.null(params$E_covariate_id)) {
-    param_names <- c(
-      param_names,
-      "E_covariate_id",
-      "E_covariate_present",
-      "V_covariate_value"
-    )
+    param_names <- c(param_names, "E_covariate_id", "E_covariate_present")
+    if (!is.null(params$V_covariate_value)) {
+      param_names <- c(param_names, "V_covariate_value")
+    }
+    if (!is.null(params$W_covariate_value_shared)) {
+      param_names <- c(param_names, "W_covariate_value_shared")
+    }
   }
   if (!is.null(params$W_factor_name_text)) {
     param_names <- c(
@@ -282,6 +283,9 @@ neural_build_param_schema <- function(params,
       "W_level_name_text",
       "W_covariate_name_text"
     )
+  }
+  if (!is.null(params$W_experiment_text)) {
+    param_names <- c(param_names, "W_experiment_text")
   }
   if (!is.null(params$M_cross)) {
     param_names <- c(param_names, "M_cross")
@@ -511,6 +515,8 @@ neural_model_jit_cache_key <- function(model_info) {
     neural_transformer_residual_mode(model_info),
     neural_cross_encoder_mode(model_info),
     tryCatch(as.character(model_info$likelihood), error = function(e) "na"),
+    tryCatch(as.character(model_info$experiment_token_mode), error = function(e) "na"),
+    tryCatch(as.character(model_info$covariate_value_encoding), error = function(e) "na"),
     tryCatch(as.character(model_info$n_candidate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
     map_token
@@ -1049,6 +1055,89 @@ neural_project_text_matrix <- function(text_matrix, projection) {
   strenv$jnp$einsum("td,dm->tm", text_jnp, projection)
 }
 
+neural_experiment_token_mode <- function(model_info) {
+  mode <- tolower(as.character(model_info$experiment_token_mode %||% "legacy_id"))
+  if (!mode %in% c("description", "hybrid", "legacy_id")) {
+    return("legacy_id")
+  }
+  mode
+}
+
+neural_covariate_value_encoding <- function(model_info) {
+  mode <- tolower(as.character(model_info$covariate_value_encoding %||% "legacy_linear"))
+  if (!mode %in% c("shared_projection", "legacy_linear")) {
+    return("legacy_linear")
+  }
+  mode
+}
+
+neural_prepare_default_text_matrix <- function(text_matrix, n_batch = 1L) {
+  text_jnp <- neural_text_matrix_jnp(text_matrix)
+  if (is.null(text_jnp)) {
+    return(NULL)
+  }
+  n_batch <- as.integer(n_batch %||% 1L)
+  if (ai(text_jnp$shape[[1]]) == 1L && n_batch > 1L) {
+    text_jnp <- text_jnp * strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+  }
+  text_jnp
+}
+
+neural_project_experiment_text <- function(model_info,
+                                           params,
+                                           experiment_idx = NULL,
+                                           n_batch = 1L) {
+  if (is.null(params$W_experiment_text)) {
+    return(NULL)
+  }
+  if (!is.null(experiment_idx) && !is.null(model_info$experiment_description_text)) {
+    exp_text_proj <- neural_project_text_matrix(
+      model_info$experiment_description_text,
+      params$W_experiment_text
+    )
+    if (!is.null(exp_text_proj)) {
+      return(strenv$jnp$take(exp_text_proj, experiment_idx, axis = 0L))
+    }
+  }
+  if (!is.null(model_info$default_experiment_text) &&
+      isTRUE(model_info$default_experiment_text_present %||% FALSE)) {
+    default_text <- neural_prepare_default_text_matrix(
+      model_info$default_experiment_text,
+      n_batch = n_batch
+    )
+    if (!is.null(default_text)) {
+      return(strenv$jnp$einsum("td,dm->tm", default_text, params$W_experiment_text))
+    }
+  }
+  NULL
+}
+
+neural_covariate_basis <- function(resp_cov_mat,
+                                   resp_cov_present_mat,
+                                   model_info) {
+  if (is.null(resp_cov_mat) || is.null(resp_cov_present_mat)) {
+    return(NULL)
+  }
+  cov_mean <- model_info$resp_cov_mean %||% NULL
+  cov_scale <- model_info$resp_cov_scale %||% NULL
+  n_covariates <- ai(resp_cov_mat$shape[[2]])
+  mean_mat <- if (!is.null(cov_mean)) {
+    strenv$jnp$atleast_2d(cov_mean)
+  } else {
+    strenv$jnp$zeros(list(1L, n_covariates), dtype = strenv$dtj)
+  }
+  scale_mat <- if (!is.null(cov_scale)) {
+    strenv$jnp$atleast_2d(cov_scale)
+  } else {
+    strenv$jnp$ones(list(1L, n_covariates), dtype = strenv$dtj)
+  }
+  safe_scale <- strenv$jnp$maximum(scale_mat, strenv$jnp$array(1e-6, dtype = strenv$dtj))
+  z <- (resp_cov_mat - mean_mat) / safe_scale
+  z <- z * resp_cov_present_mat
+  z_sq <- z * z
+  strenv$jnp$stack(list(z, z_sq, resp_cov_present_mat), axis = 2L)
+}
+
 neural_add_token_family_embedding <- function(tokens,
                                               family_name,
                                               model_info,
@@ -1278,11 +1367,38 @@ add_context_tokens <- function(model_info,
     resp_cov_present_mat <- strenv$jnp$ones(resp_cov_mat$shape, dtype = strenv$dtj)
   }
 
-  if (!is.null(params$E_experiment) && !is.null(experiment_idx_use)) {
+  experiment_tok <- NULL
+  experiment_token_mode <- neural_experiment_token_mode(model_info)
+  if (experiment_token_mode %in% c("legacy_id", "hybrid") &&
+      !is.null(params$E_experiment) &&
+      !is.null(experiment_idx_use)) {
     exp_vec <- strenv$jnp$take(params$E_experiment, experiment_idx_use, axis = 0L)
-    exp_tok <- strenv$jnp$reshape(exp_vec, list(-1L, 1L, dims))
-    exp_tok <- neural_add_token_family_embedding(exp_tok, "experiment", model_info, params)
-    token_list[[length(token_list) + 1L]] <- exp_tok
+    experiment_tok <- strenv$jnp$reshape(exp_vec, list(-1L, 1L, dims))
+  }
+  if (experiment_token_mode %in% c("description", "hybrid")) {
+    exp_text_proj <- neural_project_experiment_text(
+      model_info = model_info,
+      params = params,
+      experiment_idx = experiment_idx_use,
+      n_batch = N_batch
+    )
+    if (!is.null(exp_text_proj)) {
+      exp_text_tok <- strenv$jnp$reshape(exp_text_proj, list(-1L, 1L, dims))
+      if (is.null(experiment_tok)) {
+        experiment_tok <- exp_text_tok
+      } else {
+        experiment_tok <- experiment_tok + exp_text_tok
+      }
+    }
+  }
+  if (!is.null(experiment_tok)) {
+    experiment_tok <- neural_add_token_family_embedding(
+      experiment_tok,
+      "experiment",
+      model_info,
+      params
+    )
+    token_list[[length(token_list) + 1L]] <- experiment_tok
   }
   if (!is.null(params$E_stage) && !is.null(stage_idx_use)) {
     stage_vec <- params$E_stage[resp_party_idx_use, stage_idx_use]
@@ -1335,7 +1451,21 @@ add_context_tokens <- function(model_info,
           list(1L, n_covariates, dims)
         )
       }
-      if (!is.null(params$V_covariate_value)) {
+      if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
+          !is.null(params$W_covariate_value_shared)) {
+        cov_basis <- neural_covariate_basis(
+          resp_cov_mat = resp_cov_mat,
+          resp_cov_present_mat = resp_cov_present_mat,
+          model_info = model_info
+        )
+        if (!is.null(cov_basis)) {
+          cov_tok <- cov_tok + strenv$jnp$einsum(
+            "ncb,bm->ncm",
+            cov_basis,
+            params$W_covariate_value_shared
+          )
+        }
+      } else if (!is.null(params$V_covariate_value)) {
         value_expanded <- strenv$jnp$expand_dims(resp_cov_mat, axis = 2L)
         cov_tok <- cov_tok + present_expanded * value_expanded * strenv$jnp$reshape(
           params$V_covariate_value,
@@ -2999,6 +3129,18 @@ generate_ModelOutcome_neural <- function(){
   factor_name_text <- neural_token_info_use$factor_name_text %||% NULL
   level_name_text <- neural_token_info_use$level_name_text %||% NULL
   covariate_name_text <- neural_token_info_use$covariate_name_text %||% NULL
+  experiment_description_text <- neural_token_info_use$experiment_description_text %||% NULL
+  experiment_description_present <- neural_token_info_use$experiment_description_present %||% NULL
+  default_experiment_text <- neural_token_info_use$default_experiment_text %||% NULL
+  default_experiment_text_present <- isTRUE(
+    neural_token_info_use$default_experiment_text_present %||% FALSE
+  )
+  experiment_token_mode <- tolower(as.character(
+    neural_token_info_use$experiment_token_mode %||% "legacy_id"
+  ))
+  covariate_value_encoding <- tolower(as.character(
+    neural_token_info_use$covariate_value_encoding %||% "legacy_linear"
+  ))
   covariate_names_override <- as.character(
     neural_token_info_use$covariate_names %||% colnames(X_) %||% character(0)
   )
@@ -3173,6 +3315,27 @@ generate_ModelOutcome_neural <- function(){
       means
     } else {
       as.numeric(colMeans(X_use))
+    }
+  } else {
+    NULL
+  }
+  resp_cov_scale <- if (!is.null(X_use) && n_resp_covariates > 0L) {
+    if (!is.null(X_present_use) && ncol(X_present_use) == ncol(X_use)) {
+      sds <- numeric(ncol(X_use))
+      for (j in seq_len(ncol(X_use))) {
+        present_idx <- which(X_present_use[, j] > 0)
+        sds[[j]] <- if (length(present_idx) > 1L) {
+          stats::sd(X_use[present_idx, j])
+        } else {
+          0
+        }
+      }
+      sds[!is.finite(sds) | sds < 1e-6] <- 1
+      sds
+    } else {
+      sds <- as.numeric(apply(X_use, 2L, stats::sd))
+      sds[!is.finite(sds) | sds < 1e-6] <- 1
+      sds
     }
   } else {
     NULL
@@ -3433,7 +3596,8 @@ generate_ModelOutcome_neural <- function(){
     )
 
     E_experiment <- NULL
-    if (n_experiment_levels > 0L) {
+    if (n_experiment_levels > 0L &&
+        experiment_token_mode %in% c("legacy_id", "hybrid")) {
       E_experiment_shape <- reticulate::tuple(ai(n_experiment_levels), ModelDims)
       E_experiment <- p2d(
         name = "E_experiment",
@@ -3541,6 +3705,7 @@ generate_ModelOutcome_neural <- function(){
     W_factor_name_text <- NULL
     W_level_name_text <- NULL
     W_covariate_name_text <- NULL
+    W_experiment_text <- NULL
     if (text_semantic_dim > 0L) {
       text_proj_shape <- reticulate::tuple(ai(text_semantic_dim), ModelDims)
       text_proj_sd <- tau_context / sqrt(as.numeric(text_semantic_dim))
@@ -3583,11 +3748,28 @@ generate_ModelOutcome_neural <- function(){
           p2d_init_normal("W_covariate_name_text", text_proj_sd, text_proj_shape)
         }
       )
+      if (experiment_token_mode %in% c("description", "hybrid") &&
+          !is.null(experiment_description_text)) {
+        W_experiment_text <- p2d(
+          name = "W_experiment_text",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "W_experiment_text",
+              strenv$numpyro$distributions$Normal(0., text_proj_sd),
+              sample_shape = text_proj_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("W_experiment_text", text_proj_sd, text_proj_shape)
+          }
+        )
+      }
     }
 
     E_covariate_id <- NULL
     E_covariate_present <- NULL
     V_covariate_value <- NULL
+    W_covariate_value_shared <- NULL
     if (n_resp_covariates > 0L) {
       covariate_shape <- reticulate::tuple(ai(n_resp_covariates), ModelDims)
       E_covariate_id <- p2d(
@@ -3616,19 +3798,37 @@ generate_ModelOutcome_neural <- function(){
           p2d_init_normal("E_covariate_present", tau_context, covariate_shape)
         }
       )
-      V_covariate_value <- p2d(
-        name = "V_covariate_value",
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            "V_covariate_value",
-            strenv$numpyro$distributions$Normal(0., resp_cov_sd),
-            sample_shape = covariate_shape
-          )
-        },
-        init_fxn = function() {
-          p2d_init_normal("V_covariate_value", resp_cov_sd, covariate_shape)
-        }
-      )
+      if (identical(covariate_value_encoding, "shared_projection")) {
+        value_proj_shape <- reticulate::tuple(ai(3L), ModelDims)
+        value_proj_sd <- tau_context / sqrt(3)
+        W_covariate_value_shared <- p2d(
+          name = "W_covariate_value_shared",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "W_covariate_value_shared",
+              strenv$numpyro$distributions$Normal(0., value_proj_sd),
+              sample_shape = value_proj_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("W_covariate_value_shared", value_proj_sd, value_proj_shape)
+          }
+        )
+      } else {
+        V_covariate_value <- p2d(
+          name = "V_covariate_value",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "V_covariate_value",
+              strenv$numpyro$distributions$Normal(0., resp_cov_sd),
+              sample_shape = covariate_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("V_covariate_value", resp_cov_sd, covariate_shape)
+          }
+        )
+      }
     }
 
     layer_params <- list()
@@ -4143,10 +4343,18 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(W_covariate_name_text)) {
       params_view$W_covariate_name_text <- W_covariate_name_text
     }
+    if (!is.null(W_experiment_text)) {
+      params_view$W_experiment_text <- W_experiment_text
+    }
     if (n_resp_covariates > 0L) {
       params_view$E_covariate_id <- E_covariate_id
       params_view$E_covariate_present <- E_covariate_present
-      params_view$V_covariate_value <- V_covariate_value
+      if (!is.null(V_covariate_value)) {
+        params_view$V_covariate_value <- V_covariate_value
+      }
+      if (!is.null(W_covariate_value_shared)) {
+        params_view$W_covariate_value_shared <- W_covariate_value_shared
+      }
     }
     for (d_ in 1L:D_local) {
       params_view[[paste0("E_factor_", d_)]] <- E_factor_list[[d_]]
@@ -6713,6 +6921,7 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_factor_name_text")
   maybe_site("W_level_name_text")
   maybe_site("W_covariate_name_text")
+  maybe_site("W_experiment_text")
   maybe_site("alpha_cross")
   maybe_site("RMS_cross")
   maybe_site("RMS_merge_cross")
@@ -6749,6 +6958,7 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("E_covariate_id")
     maybe_site("E_covariate_present")
     maybe_site("V_covariate_value")
+    maybe_site("W_covariate_value_shared")
   }
 
   for (d_ in seq_along(factor_levels_int)) {
@@ -6835,13 +7045,20 @@ generate_ModelOutcome_neural <- function(){
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
   predict_model_info$covariate_name_text <- covariate_name_text
+  predict_model_info$experiment_description_text <- experiment_description_text
+  predict_model_info$experiment_description_present <- experiment_description_present
+  predict_model_info$default_experiment_text <- default_experiment_text
+  predict_model_info$default_experiment_text_present <- default_experiment_text_present
   predict_model_info$covariate_names <- covariate_names_override
   predict_model_info$resp_cov_mean <- resp_cov_mean
+  predict_model_info$resp_cov_scale <- resp_cov_scale
   predict_model_info$resp_cov_default_present <- resp_cov_default_present
   predict_model_info$n_resp_covariates <- n_resp_covariates
   predict_model_info$experiment_levels <- experiment_levels_override
   predict_model_info$default_experiment_index <- if (is.na(default_experiment_index)) NULL else as.integer(default_experiment_index)
   predict_model_info$token_family_levels <- token_family_levels
+  predict_model_info$experiment_token_mode <- experiment_token_mode
+  predict_model_info$covariate_value_encoding <- covariate_value_encoding
   predict_pair_jit_response <- if (isTRUE(pairwise_mode)) {
     neural_get_predict_jit(
       model_info = predict_model_info,
@@ -7261,6 +7478,11 @@ generate_ModelOutcome_neural <- function(){
   } else {
     NULL
   }
+  resp_cov_scale_jnp <- if (!is.null(resp_cov_scale)) {
+    strenv$jnp$array(as.numeric(resp_cov_scale))$astype(ddtype_)
+  } else {
+    NULL
+  }
   resp_cov_default_present_jnp <- if (!is.null(resp_cov_default_present)) {
     strenv$jnp$array(as.numeric(resp_cov_default_present))$astype(ddtype_)
   } else {
@@ -7330,16 +7552,23 @@ generate_ModelOutcome_neural <- function(){
     resp_party_index_map = resp_party_index_map,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     resp_cov_mean = resp_cov_mean_jnp,
+    resp_cov_scale = resp_cov_scale_jnp,
     resp_cov_default_present = resp_cov_default_present_jnp,
     n_resp_covariates = n_resp_covariates,
     covariate_names = covariate_names_override,
     factor_name_text = factor_name_text,
     level_name_text = level_name_text,
     covariate_name_text = covariate_name_text,
+    experiment_description_text = experiment_description_text,
+    experiment_description_present = experiment_description_present,
+    default_experiment_text = default_experiment_text,
+    default_experiment_text_present = default_experiment_text_present,
     experiment_levels = experiment_levels_override,
     n_experiment_levels = as.integer(n_experiment_levels),
     default_experiment_index = if (is.na(default_experiment_index)) NULL else as.integer(default_experiment_index),
     token_family_levels = token_family_levels,
+    experiment_token_mode = experiment_token_mode,
+    covariate_value_encoding = covariate_value_encoding,
     text_semantic_dim = as.integer(text_semantic_dim),
     has_stage_token = !is.null(ParamsMean$E_stage),
     has_matchup_token = !is.null(ParamsMean$E_matchup),
@@ -7347,11 +7576,14 @@ generate_ModelOutcome_neural <- function(){
     has_rel_token = !is.null(ParamsMean$E_rel),
     has_feature_id_embedding = !is.null(ParamsMean$E_feature_id),
     has_token_family_embedding = !is.null(ParamsMean$E_token_family),
-    has_experiment_token = !is.null(ParamsMean$E_experiment),
+    has_experiment_token = !is.null(ParamsMean$E_experiment) || !is.null(ParamsMean$W_experiment_text),
+    has_experiment_id_embedding = !is.null(ParamsMean$E_experiment),
+    has_experiment_text_projection = !is.null(ParamsMean$W_experiment_text),
     has_factor_name_text = !is.null(ParamsMean$W_factor_name_text) && text_semantic_dim > 0L,
     has_level_name_text = !is.null(ParamsMean$W_level_name_text) && text_semantic_dim > 0L,
     has_covariate_name_text = !is.null(ParamsMean$W_covariate_name_text) && text_semantic_dim > 0L,
     has_covariate_tokens = !is.null(ParamsMean$E_covariate_id),
+    has_shared_covariate_value_projection = !is.null(ParamsMean$W_covariate_value_shared),
     has_segment_embedding = !is.null(ParamsMean$E_segment),
     has_sep_token = !is.null(ParamsMean$E_sep),
     has_stage_head = !is.null(ParamsMean$W_stage),

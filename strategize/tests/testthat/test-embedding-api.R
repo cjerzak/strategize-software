@@ -73,6 +73,9 @@ embedding_test_pairwise_experiment <- function(seed,
   }
   list(
     experiment_id = experiment_id,
+    experiment_description = paste(
+      "Experiment", experiment_id, "with factors", paste(factor_names, collapse = ", ")
+    ),
     Y = data$Y,
     W = W_df,
     X = X,
@@ -428,6 +431,7 @@ test_that("saved and loaded adapted predictors preserve extracted embeddings", {
     pair_id = target$pair_id,
     profile_order = target$profile_order,
     experiment_id = target$experiment_id,
+    experiment_description = target$experiment_description,
     canonical_factor_id = target$canonical_factor_id,
     neural_mcmc_control = embedding_test_neural_control()
   ))

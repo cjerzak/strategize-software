@@ -60,6 +60,9 @@ foundation_test_experiment <- function(seed,
 
   list(
     experiment_id = experiment_id,
+    experiment_description = paste(
+      "Experiment", experiment_id, "with factors", paste(factor_names, collapse = ", ")
+    ),
     Y = data$Y,
     W = W_df,
     X = X,
@@ -113,6 +116,8 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     group$x_feature_names,
     c("income", "household size", "GOPScore")
   )
+  expect_identical(group$token_control$experiment_token_mode, "description")
+  expect_identical(group$token_control$covariate_value_encoding, "shared_projection")
   expect_identical(group$x_schema$base_x_names, group$x_feature_names)
   expect_identical(group$x_schema$semantic_feature_names, character(0))
   expect_identical(group$x_schema$experiment_indicator_names, character(0))
@@ -133,9 +138,16 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   expect_true(isTRUE(group$fit$neural_model_info$has_covariate_tokens))
   expect_true(isTRUE(group$fit$neural_model_info$has_token_family_embedding))
   expect_true(isTRUE(group$fit$neural_model_info$has_experiment_token))
+  expect_false(isTRUE(group$fit$neural_model_info$has_experiment_id_embedding))
+  expect_true(isTRUE(group$fit$neural_model_info$has_experiment_text_projection))
   expect_true(isTRUE(group$fit$neural_model_info$has_factor_name_text))
   expect_true(isTRUE(group$fit$neural_model_info$has_level_name_text))
   expect_true(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
+  expect_true(isTRUE(group$fit$neural_model_info$has_shared_covariate_value_projection))
+  expect_length(
+    as.numeric(strategize:::cs2step_neural_to_r_array(group$fit$neural_model_info$resp_cov_scale)),
+    length(group$x_schema$base_x_names)
+  )
   expect_true(all(
     c("factor_candidate", "covariate", "experiment", "stage",
       "resp_party", "matchup", "choice", "separator") %in%
@@ -156,6 +168,13 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     rownames(pooled$token_info$covariate_name_text),
     group$x_schema$base_x_names
   )
+  expect_identical(
+    rownames(pooled$token_info$experiment_description_text),
+    c("study_a", "study_b")
+  )
+  expect_true(all(pooled$token_info$experiment_description_present))
+  expect_identical(pooled$token_info$experiment_token_mode, "description")
+  expect_identical(pooled$token_info$covariate_value_encoding, "shared_projection")
   expect_true(all(pooled$X_present[seq_len(nrow(study_a$W)), "GOPScore"] == 0))
   expect_true(all(
     pooled$X_present[-seq_len(nrow(study_a$W)), "household size"] == 0
@@ -262,6 +281,10 @@ test_that("adapt_conjoint_foundation_model builds shared and local covariate tok
     rownames(token_info$covariate_name_text),
     colnames(X_aug)
   )
+  expect_true(isTRUE(token_info$default_experiment_text_present))
+  expect_equal(nrow(token_info$default_experiment_text), 1L)
+  expect_identical(token_info$experiment_token_mode, "description")
+  expect_identical(token_info$covariate_value_encoding, "shared_projection")
 
   predictor <- adapt_conjoint_foundation_model(
     foundation_model = foundation_fit,
@@ -272,6 +295,7 @@ test_that("adapt_conjoint_foundation_model builds shared and local covariate tok
     pair_id = adapt_data$pair_id,
     profile_order = adapt_data$profile_order,
     experiment_id = adapt_data$experiment_id,
+    experiment_description = adapt_data$experiment_description,
     canonical_factor_id = adapt_data$canonical_factor_id,
     neural_mcmc_control = foundation_test_control()$neural_mcmc_control,
     foundation_adaptation_control = list(
@@ -285,6 +309,8 @@ test_that("adapt_conjoint_foundation_model builds shared and local covariate tok
     colnames(X_aug)
   )
   expect_true(isTRUE(predictor$fit$neural_model_info$has_covariate_tokens))
+  expect_true(isTRUE(predictor$fit$neural_model_info$default_experiment_text_present))
+  expect_null(predictor$fit$neural_model_info$default_experiment_index)
 
   preds <- predict(
     predictor,
@@ -308,6 +334,19 @@ test_that("adapt_conjoint_foundation_model builds shared and local covariate tok
   expect_true(all(preds >= 0 & preds <= 1))
   expect_true(all(is.finite(preds_with_x)))
   expect_true(all(preds_with_x >= 0 & preds_with_x <= 1))
+
+  preds_with_desc <- predict(
+    predictor,
+    newdata = list(
+      W = adapt_data$W,
+      X = adapt_data$X,
+      pair_id = adapt_data$pair_id,
+      profile_order = adapt_data$profile_order,
+      experiment_description = adapt_data$experiment_description
+    )
+  )
+  expect_true(all(is.finite(preds_with_desc)))
+  expect_true(all(preds_with_desc >= 0 & preds_with_desc <= 1))
 })
 
 test_that("foundation semantics stay backward compatible when text_embedding_fn is NULL", {
@@ -335,6 +374,8 @@ test_that("foundation semantics stay backward compatible when text_embedding_fn 
 
   group <- fit$groups[["pairwise::bernoulli::1"]]
   expect_null(group$text_registry)
+  expect_identical(group$token_control$experiment_token_mode, "description")
+  expect_identical(group$token_control$covariate_value_encoding, "shared_projection")
   expect_identical(group$x_schema$semantic_feature_names, character(0))
   expect_identical(group$x_schema$experiment_indicator_names, character(0))
   expect_false(any(grepl("^semantic_x_", group$x_feature_names)))
@@ -351,6 +392,44 @@ test_that("foundation semantics stay backward compatible when text_embedding_fn 
   expect_false(isTRUE(group$fit$neural_model_info$has_factor_name_text))
   expect_false(isTRUE(group$fit$neural_model_info$has_level_name_text))
   expect_false(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
+  expect_true(isTRUE(group$fit$neural_model_info$has_shared_covariate_value_projection))
+})
+
+test_that("legacy fine-tuning token controls remain available for ablation", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(
+      foundation_test_experiment(
+        seed = 7037,
+        experiment_id = "study_a",
+        factor_names = c("price", "message"),
+        x_names = c("income", "household size")
+      ),
+      foundation_test_experiment(
+        seed = 7038,
+        experiment_id = "study_b",
+        factor_names = c("price", "message", "messenger"),
+        x_names = c("income", "GOPScore")
+      )
+    ),
+    foundation_control = modifyList(
+      foundation_test_control_with_embeddings(),
+      list(
+        experiment_token_mode = "legacy_id",
+        covariate_value_encoding = "legacy_linear"
+      )
+    )
+  )
+
+  group <- fit$groups[["pairwise::bernoulli::1"]]
+  expect_identical(group$token_control$experiment_token_mode, "legacy_id")
+  expect_identical(group$token_control$covariate_value_encoding, "legacy_linear")
+  expect_true(isTRUE(group$fit$neural_model_info$has_experiment_id_embedding))
+  expect_false(isTRUE(group$fit$neural_model_info$has_experiment_text_projection))
+  expect_false(isTRUE(group$fit$neural_model_info$has_shared_covariate_value_projection))
 })
 
 test_that("foundation bundles preserve covariate token metadata across save/load", {
@@ -416,6 +495,7 @@ test_that("foundation bundles preserve covariate token metadata across save/load
     pair_id = adapt_data$pair_id,
     profile_order = adapt_data$profile_order,
     experiment_id = adapt_data$experiment_id,
+    experiment_description = adapt_data$experiment_description,
     canonical_factor_id = adapt_data$canonical_factor_id,
     neural_mcmc_control = foundation_test_control()$neural_mcmc_control
   )

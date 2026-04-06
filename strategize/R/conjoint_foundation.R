@@ -45,6 +45,8 @@ cs_foundation_default_control <- function() {
     add_experiment_indicators = TRUE,
     add_text_semantics = TRUE,
     text_embedding_fn = NULL,
+    experiment_token_mode = "description",
+    covariate_value_encoding = "shared_projection",
     neural_mcmc_control = list(
       subsample_method = "batch_vi",
       uncertainty_scope = "output",
@@ -59,8 +61,69 @@ cs_foundation_default_adaptation_control <- function() {
     strict_schema_match = FALSE,
     allow_extra_covariates = TRUE,
     use_text_semantics = TRUE,
-    text_embedding_fn = NULL
+    text_embedding_fn = NULL,
+    experiment_token_mode = "description",
+    covariate_value_encoding = "shared_projection"
   )
+}
+
+cs_foundation_resolve_adaptation_control <- function(group, adaptation_control = NULL) {
+  control <- modifyList(
+    cs_foundation_default_adaptation_control(),
+    adaptation_control %||% list()
+  )
+  token_control <- group$token_control %||% list()
+  if (is.null(adaptation_control) || !"experiment_token_mode" %in% names(adaptation_control)) {
+    control$experiment_token_mode <- token_control$experiment_token_mode %||%
+      control$experiment_token_mode
+  }
+  if (is.null(adaptation_control) || !"covariate_value_encoding" %in% names(adaptation_control)) {
+    control$covariate_value_encoding <- token_control$covariate_value_encoding %||%
+      control$covariate_value_encoding
+  }
+  control$experiment_token_mode <- cs_foundation_experiment_token_mode(
+    control$experiment_token_mode
+  )
+  control$covariate_value_encoding <- cs_foundation_covariate_value_encoding(
+    control$covariate_value_encoding
+  )
+  control
+}
+
+cs_foundation_experiment_token_mode <- function(mode) {
+  mode_use <- tolower(as.character(mode %||% "description"))
+  if (!mode_use %in% c("description", "hybrid", "legacy_id")) {
+    stop(
+      "'experiment_token_mode' must be one of 'description', 'hybrid', or 'legacy_id'.",
+      call. = FALSE
+    )
+  }
+  mode_use
+}
+
+cs_foundation_covariate_value_encoding <- function(mode) {
+  mode_use <- tolower(as.character(mode %||% "shared_projection"))
+  if (!mode_use %in% c("shared_projection", "legacy_linear")) {
+    stop(
+      "'covariate_value_encoding' must be one of 'shared_projection' or 'legacy_linear'.",
+      call. = FALSE
+    )
+  }
+  mode_use
+}
+
+cs_foundation_normalize_optional_text <- function(x, arg) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  x_use <- as.character(x)
+  if (length(x_use) != 1L) {
+    stop(sprintf("'%s' must be length 1 when supplied.", arg), call. = FALSE)
+  }
+  if (!nzchar(x_use)) {
+    return(NULL)
+  }
+  x_use
 }
 
 cs_foundation_mode <- function(mode, pair_id) {
@@ -382,10 +445,15 @@ cs_foundation_normalize_experiment <- function(experiment, index) {
     factor_names = factor_names,
     names_list = names_list
   )
+  experiment_description <- cs_foundation_normalize_optional_text(
+    experiment$experiment_description %||% NULL,
+    arg = "experiment_description"
+  )
 
   list(
     experiment_id = experiment_id,
     experiment_label = as.character(experiment$experiment_label %||% experiment_id),
+    experiment_description = experiment_description,
     Y = Y_use,
     Y_raw = Y_raw,
     W = W_df,
@@ -434,6 +502,19 @@ cs_foundation_text_embed <- function(text_embedding_fn, texts) {
   mat <- do.call(rbind, out_rows)
   storage.mode(mat) <- "double"
   mat
+}
+
+cs_foundation_collect_experiment_texts <- function(experiments) {
+  ids <- vapply(experiments, `[[`, character(1), "experiment_id")
+  desc <- vapply(experiments, function(exp) {
+    desc_use <- exp$experiment_description %||% NULL
+    if (is.null(desc_use)) {
+      return(NA_character_)
+    }
+    as.character(desc_use)
+  }, character(1))
+  names(desc) <- ids
+  desc[!is.na(desc) & nzchar(desc)]
 }
 
 cs_foundation_build_group_registry <- function(experiments) {
@@ -526,7 +607,8 @@ cs_foundation_build_group_registry <- function(experiments) {
 cs_foundation_build_text_registry <- function(experiments,
                                              registry,
                                              text_embedding_fn,
-                                             x_feature_names = character(0)) {
+                                             x_feature_names = character(0),
+                                             experiment_texts = NULL) {
   if (is.null(text_embedding_fn)) {
     return(NULL)
   }
@@ -548,11 +630,28 @@ cs_foundation_build_text_registry <- function(experiments,
   } else {
     NULL
   }
+  experiment_texts <- experiment_texts %||% character(0)
+  experiment_keys <- names(experiment_texts) %||% character(0)
+  experiment_texts <- as.character(unname(experiment_texts))
+  keep_experiment <- !is.na(experiment_texts) &
+    nzchar(experiment_texts) &
+    !is.na(experiment_keys) &
+    nzchar(experiment_keys)
+  experiment_texts <- experiment_texts[keep_experiment]
+  experiment_keys <- experiment_keys[keep_experiment]
+  experiment_emb <- if (length(experiment_texts) > 0L) {
+    emb <- cs_foundation_text_embed(text_embedding_fn, experiment_texts)
+    rownames(emb) <- experiment_keys
+    emb
+  } else {
+    NULL
+  }
 
   dims <- unique(c(
     if (ncol(slot_emb) > 0L) ncol(slot_emb) else integer(0),
     if (ncol(level_emb) > 0L) ncol(level_emb) else integer(0),
-    if (!is.null(x_feature_emb) && ncol(x_feature_emb) > 0L) ncol(x_feature_emb) else integer(0)
+    if (!is.null(x_feature_emb) && ncol(x_feature_emb) > 0L) ncol(x_feature_emb) else integer(0),
+    if (!is.null(experiment_emb) && ncol(experiment_emb) > 0L) ncol(experiment_emb) else integer(0)
   ))
   if (length(dims) > 1L) {
     stop("text_embedding_fn returned inconsistent embedding lengths.", call. = FALSE)
@@ -562,11 +661,16 @@ cs_foundation_build_text_registry <- function(experiments,
     x_feature_emb <- matrix(numeric(0), nrow = 0L, ncol = dim_use)
     rownames(x_feature_emb) <- character(0)
   }
+  if (is.null(experiment_emb)) {
+    experiment_emb <- matrix(numeric(0), nrow = 0L, ncol = dim_use)
+    rownames(experiment_emb) <- character(0)
+  }
 
   list(
     factor_embedding = slot_emb,
     level_embedding = level_emb,
     x_feature_embedding = x_feature_emb,
+    experiment_embedding = experiment_emb,
     x_feature_names = x_feature_names,
     dim = dim_use
   )
@@ -653,7 +757,10 @@ cs_foundation_build_token_info <- function(names_list,
                                            text_registry,
                                            covariate_names = character(0),
                                            experiment_levels = character(0),
-                                           experiment_index = NULL) {
+                                           experiment_index = NULL,
+                                           experiment_token_mode = "description",
+                                           covariate_value_encoding = "shared_projection",
+                                           default_experiment_key = NULL) {
   factor_names <- names(names_list)
   dim_use <- if (is.null(text_registry)) {
     0L
@@ -664,6 +771,10 @@ cs_foundation_build_token_info <- function(names_list,
   factor_name_text <- NULL
   level_name_text <- NULL
   covariate_name_text <- NULL
+  experiment_description_text <- NULL
+  experiment_description_present <- NULL
+  default_experiment_text <- NULL
+  default_experiment_text_present <- FALSE
   if (dim_use > 0L) {
     factor_keys <- vapply(factor_map[factor_names], function(x) {
       x$slot_key
@@ -696,6 +807,31 @@ cs_foundation_build_token_info <- function(names_list,
       )
       rownames(covariate_name_text) <- covariate_names
     }
+
+    experiment_levels <- as.character(experiment_levels %||% character(0))
+    if (length(experiment_levels) > 0L) {
+      experiment_description_text <- cs_foundation_get_embedding_rows(
+        emb_matrix = text_registry$experiment_embedding,
+        keys = experiment_levels
+      )
+      rownames(experiment_description_text) <- experiment_levels
+      experiment_description_present <- !is.na(match(
+        experiment_levels,
+        rownames(text_registry$experiment_embedding %||% matrix(numeric(0), nrow = 0L, ncol = dim_use))
+      ))
+    }
+    default_experiment_key <- as.character(default_experiment_key %||% character(0))
+    if (length(default_experiment_key) > 0L) {
+      default_experiment_text <- cs_foundation_get_embedding_rows(
+        emb_matrix = text_registry$experiment_embedding,
+        keys = default_experiment_key[[1L]]
+      )
+      rownames(default_experiment_text) <- default_experiment_key[[1L]]
+      default_experiment_text_present <- !is.na(match(
+        default_experiment_key[[1L]],
+        rownames(text_registry$experiment_embedding %||% matrix(numeric(0), nrow = 0L, ncol = dim_use))
+      ))
+    }
   }
 
   experiment_levels <- as.character(experiment_levels %||% character(0))
@@ -718,9 +854,15 @@ cs_foundation_build_token_info <- function(names_list,
     level_name_text = level_name_text,
     covariate_name_text = covariate_name_text,
     covariate_names = as.character(covariate_names %||% character(0)),
+    experiment_description_text = experiment_description_text,
+    experiment_description_present = experiment_description_present,
+    default_experiment_text = default_experiment_text,
+    default_experiment_text_present = isTRUE(default_experiment_text_present),
     experiment_levels = experiment_levels,
     experiment_index = experiment_index,
-    default_experiment_index = default_experiment_index
+    default_experiment_index = default_experiment_index,
+    experiment_token_mode = cs_foundation_experiment_token_mode(experiment_token_mode),
+    covariate_value_encoding = cs_foundation_covariate_value_encoding(covariate_value_encoding)
   )
 }
 
@@ -817,12 +959,19 @@ cs_foundation_stack_base_x <- function(experiments) {
 cs_foundation_build_group_training_data <- function(experiments, registry, control) {
   slot_names <- registry$slot_table$slot_name
   x_schema <- cs_foundation_stack_base_x(experiments)
+  experiment_token_mode <- cs_foundation_experiment_token_mode(
+    control$experiment_token_mode %||% "description"
+  )
+  covariate_value_encoding <- cs_foundation_covariate_value_encoding(
+    control$covariate_value_encoding %||% "shared_projection"
+  )
   text_registry <- if (isTRUE(control$add_text_semantics)) {
     cs_foundation_build_text_registry(
       experiments = experiments,
       registry = registry,
       text_embedding_fn = control$text_embedding_fn %||% NULL,
-      x_feature_names = x_schema$base_x_names
+      x_feature_names = x_schema$base_x_names,
+      experiment_texts = cs_foundation_collect_experiment_texts(experiments)
     )
   } else {
     NULL
@@ -878,7 +1027,9 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     text_registry = text_registry,
     covariate_names = x_schema$base_x_names,
     experiment_levels = experiment_levels,
-    experiment_index = unlist(experiment_index_all, use.names = FALSE)
+    experiment_index = unlist(experiment_index_all, use.names = FALSE),
+    experiment_token_mode = experiment_token_mode,
+    covariate_value_encoding = covariate_value_encoding
   )
 
   list(
@@ -900,7 +1051,11 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       experiment_token_levels = experiment_levels
     ),
     text_registry = text_registry,
-    token_info = token_info
+    token_info = token_info,
+    token_control = list(
+      experiment_token_mode = experiment_token_mode,
+      covariate_value_encoding = covariate_value_encoding
+    )
   )
 }
 
@@ -984,6 +1139,10 @@ cs_foundation_build_adaptation_x <- function(group,
                                              experiment,
                                              exp_map,
                                              adaptation_control) {
+  adaptation_control <- cs_foundation_resolve_adaptation_control(
+    group = group,
+    adaptation_control = adaptation_control
+  )
   x_schema <- group$x_schema %||% list(
     base_x_names = character(0),
     experiment_indicator_names = character(0),
@@ -1021,7 +1180,8 @@ cs_foundation_build_adaptation_x <- function(group,
           slot_level_labels = lapply(exp_map$level_map, names)
         ),
         text_embedding_fn = adaptation_control$text_embedding_fn,
-        x_feature_names = local_covariate_names
+        x_feature_names = local_covariate_names,
+        experiment_texts = cs_foundation_collect_experiment_texts(list(experiment))
       )
       if (!identical(as.integer(text_registry$dim %||% 0L), as.integer(group$text_registry$dim %||% 0L))) {
         stop(
@@ -1059,7 +1219,10 @@ cs_foundation_build_adaptation_x <- function(group,
     text_registry = text_registry,
     covariate_names = colnames(out),
     experiment_levels = experiment_levels,
-    experiment_index = experiment_index
+    experiment_index = experiment_index,
+    experiment_token_mode = adaptation_control$experiment_token_mode,
+    covariate_value_encoding = adaptation_control$covariate_value_encoding,
+    default_experiment_key = experiment$experiment_id
   )
 
   attr(out, "resp_cov_present") <- out_present
@@ -1499,6 +1662,7 @@ fit_conjoint_foundation_model <- function(experiments,
       x_feature_names = pooled$x_feature_names,
       x_schema = pooled$x_schema,
       text_registry = pooled$text_registry,
+      token_control = pooled$token_control,
       fit = fit
     )
   })
@@ -1513,6 +1677,7 @@ fit_conjoint_foundation_model <- function(experiments,
         created_at = Sys.time(),
         conda_env = conda_env,
         conda_env_required = conda_env_required,
+        text_embedding_fn = control$text_embedding_fn %||% NULL,
         experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
         grouping_note = "Experiments are pooled within compatible mode/likelihood families."
       )
@@ -1692,6 +1857,7 @@ adapt_conjoint_foundation_model <- function(foundation_model,
                                             pair_id = NULL,
                                             profile_order = NULL,
                                             experiment_id = "adaptation_target",
+                                            experiment_description = NULL,
                                             names_list = NULL,
                                             p_list = NULL,
                                             respondent_id = NULL,
@@ -1727,6 +1893,7 @@ adapt_conjoint_foundation_model <- function(foundation_model,
   experiment <- cs_foundation_normalize_experiment(
     experiment = list(
       experiment_id = experiment_id,
+      experiment_description = experiment_description,
       Y = Y,
       W = W,
       X = X,
@@ -1751,10 +1918,12 @@ adapt_conjoint_foundation_model <- function(foundation_model,
     n_outcomes = experiment$n_outcomes
   )
 
-  adaptation_control <- modifyList(
-    cs_foundation_default_adaptation_control(),
-    foundation_adaptation_control %||% list()
+  adaptation_control <- cs_foundation_resolve_adaptation_control(
+    group = group,
+    adaptation_control = foundation_adaptation_control %||% list()
   )
+  adaptation_control$text_embedding_fn <- adaptation_control$text_embedding_fn %||%
+    foundation_model$metadata$text_embedding_fn %||% NULL
   local_map <- cs_foundation_build_local_factor_map(experiment)
   X_aug <- cs_foundation_build_adaptation_x(
     group = group,
@@ -1812,9 +1981,12 @@ adapt_conjoint_foundation_model <- function(foundation_model,
       call = match.call(),
       conda_env = conda_env,
       conda_env_required = conda_env_required,
+      text_embedding_fn = adaptation_control$text_embedding_fn %||%
+        foundation_model$metadata$text_embedding_fn %||% NULL,
       foundation_group_key = group$group_key,
       foundation_experiment_ids = group$experiment_ids,
-      adaptation_experiment_id = experiment$experiment_id
+      adaptation_experiment_id = experiment$experiment_id,
+      adaptation_experiment_description = experiment$experiment_description %||% NULL
     )
   )
   if (!is.null(cache_path)) {

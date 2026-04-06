@@ -240,6 +240,7 @@ cs2step_neural_extract_internal <- function(object,
                                             W_new,
                                             X_new = NULL,
                                             experiment_id = NULL,
+                                            experiment_description = NULL,
                                             pair_id = NULL,
                                             profile_order = NULL,
                                             source_class = class(object)[[1]],
@@ -265,6 +266,27 @@ cs2step_neural_extract_internal <- function(object,
     conda_env_required = object$metadata$conda_env_required %||% TRUE
   )
   model_info <- prep_params$model_info
+  if (identical(object$mode, "pairwise") &&
+      !is.null(experiment_description) &&
+      length(experiment_description) == nrow(W_idx)) {
+    pair_info <- cs2step_build_pair_mat(
+      pair_id = pair_id,
+      W = W_idx,
+      profile_order = profile_order,
+      competing_group_variable_candidate = NULL
+    )
+    experiment_description <- experiment_description[pair_info$pair_mat[, 1], drop = TRUE]
+  }
+  model_info <- cs2step_neural_apply_experiment_description(
+    model_info = model_info,
+    experiment_description = experiment_description,
+    n_rows = if (identical(object$mode, "pairwise")) {
+      length(unique(pair_id))
+    } else {
+      nrow(W_idx)
+    },
+    text_embedding_fn = object$metadata$text_embedding_fn %||% NULL
+  )
   prep <- cs2step_neural_prepare_prediction_data(
     W_idx = W_idx,
     model_info = model_info,
@@ -329,6 +351,7 @@ extract_embeddings.strategic_predictor <- function(object,
     W_new = unpacked$W,
     X_new = unpacked$X,
     experiment_id = unpacked$experiment_id,
+    experiment_description = unpacked$experiment_description,
     pair_id = unpacked$pair_id,
     profile_order = unpacked$profile_order,
     source_class = "strategic_predictor"
@@ -350,7 +373,8 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
       X = newdata$X %||% NULL,
       pair_id = newdata$pair_id %||% NULL,
       profile_order = newdata$profile_order %||% NULL,
-      experiment_id = newdata$experiment_id %||% NULL
+      experiment_id = newdata$experiment_id %||% NULL,
+      experiment_description = newdata$experiment_description %||% NULL
     ))
   }
 
@@ -358,7 +382,12 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
   pair_id <- if ("pair_id" %in% colnames(newdata)) newdata[["pair_id"]] else NULL
   profile_order <- if ("profile_order" %in% colnames(newdata)) newdata[["profile_order"]] else NULL
   experiment_id <- if ("experiment_id" %in% colnames(newdata)) newdata[["experiment_id"]] else NULL
-  special_cols <- c("pair_id", "profile_order", "experiment_id")
+  experiment_description <- if ("experiment_description" %in% colnames(newdata)) {
+    newdata[["experiment_description"]]
+  } else {
+    NULL
+  }
+  special_cols <- c("pair_id", "profile_order", "experiment_id", "experiment_description")
   if (!is.null(factor_names)) {
     missing_cols <- setdiff(factor_names, colnames(newdata))
     if (length(missing_cols) > 0L) {
@@ -385,7 +414,8 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
     X = X,
     pair_id = pair_id,
     profile_order = profile_order,
-    experiment_id = experiment_id
+    experiment_id = experiment_id,
+    experiment_description = experiment_description
   )
 }
 
@@ -772,7 +802,9 @@ extract_embeddings.conjoint_foundation_model <- function(object,
       fit = group$fit,
       metadata = list(
         conda_env = conda_env,
-        conda_env_required = conda_env_required
+        conda_env_required = conda_env_required,
+        text_embedding_fn = adaptation_control$text_embedding_fn %||%
+          object$metadata$text_embedding_fn %||% NULL
       )
     ),
     class = "strategic_predictor"
@@ -783,6 +815,7 @@ extract_embeddings.conjoint_foundation_model <- function(object,
     W_new = mapped$W_group,
     X_new = X_group,
     experiment_id = request$experiment_id,
+    experiment_description = unpacked$experiment_description %||% NULL,
     pair_id = request$pair_id,
     profile_order = request$profile_order,
     source_class = "conjoint_foundation_model",

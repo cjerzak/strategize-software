@@ -61,7 +61,8 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
       X = newdata$X %||% NULL,
       pair_id = newdata$pair_id %||% NULL,
       profile_order = newdata$profile_order %||% NULL,
-      experiment_id = newdata$experiment_id %||% NULL
+      experiment_id = newdata$experiment_id %||% NULL,
+      experiment_description = newdata$experiment_description %||% NULL
     )
     return(out)
   }
@@ -70,6 +71,7 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   pair_id <- NULL
   profile_order <- NULL
   experiment_id <- NULL
+  experiment_description <- NULL
   if (identical(mode, "pairwise")) {
     if ("pair_id" %in% colnames(newdata)) {
       pair_id <- newdata[["pair_id"]]
@@ -81,14 +83,27 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   if ("experiment_id" %in% colnames(newdata)) {
     experiment_id <- newdata[["experiment_id"]]
   }
+  if ("experiment_description" %in% colnames(newdata)) {
+    experiment_description <- newdata[["experiment_description"]]
+  }
   W <- newdata[, factor_names, drop = FALSE]
-  extra_cols <- setdiff(colnames(newdata), c(factor_names, "pair_id", "profile_order", "experiment_id"))
+  extra_cols <- setdiff(
+    colnames(newdata),
+    c(factor_names, "pair_id", "profile_order", "experiment_id", "experiment_description")
+  )
   X <- if (length(extra_cols) > 0L) {
     newdata[, extra_cols, drop = FALSE]
   } else {
     NULL
   }
-  list(W = W, X = X, pair_id = pair_id, profile_order = profile_order, experiment_id = experiment_id)
+  list(
+    W = W,
+    X = X,
+    pair_id = pair_id,
+    profile_order = profile_order,
+    experiment_id = experiment_id,
+    experiment_description = experiment_description
+  )
 }
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
@@ -830,6 +845,74 @@ cs2step_neural_prepare_experiment_index <- function(experiment_id, model_info, n
   as.integer(matched - 1L)
 }
 
+cs2step_neural_embed_experiment_description <- function(experiment_description,
+                                                        model_info,
+                                                        n_rows,
+                                                        text_embedding_fn = NULL) {
+  if (is.null(experiment_description)) {
+    return(NULL)
+  }
+  if (is.null(text_embedding_fn) || !is.function(text_embedding_fn)) {
+    stop(
+      "Prediction-time experiment_description requires an available text_embedding_fn.",
+      call. = FALSE
+    )
+  }
+  text_dim <- as.integer(model_info$text_semantic_dim %||% 0L)
+  if (text_dim < 1L) {
+    stop(
+      "Prediction-time experiment_description is unavailable because this model has no text semantics.",
+      call. = FALSE
+    )
+  }
+  desc_use <- as.character(experiment_description)
+  if (length(desc_use) == 1L && n_rows > 1L) {
+    desc_use <- rep.int(desc_use, n_rows)
+  }
+  if (!length(desc_use) %in% c(1L, n_rows)) {
+    stop(
+      "experiment_description must have length one or the same number of prediction rows.",
+      call. = FALSE
+    )
+  }
+  emb <- cs_foundation_text_embed(text_embedding_fn, desc_use)
+  if (ncol(emb) != text_dim) {
+    stop(
+      "text_embedding_fn returned an experiment description embedding with incompatible width.",
+      call. = FALSE
+    )
+  }
+  if (nrow(emb) > 1L) {
+    emb <- matrix(colMeans(emb), nrow = 1L)
+  }
+  emb
+}
+
+cs2step_neural_apply_experiment_description <- function(model_info,
+                                                        experiment_description,
+                                                        n_rows,
+                                                        text_embedding_fn = NULL) {
+  if (is.null(experiment_description) ||
+      !identical(neural_experiment_token_mode(model_info), "description") &&
+      !identical(neural_experiment_token_mode(model_info), "hybrid")) {
+    return(model_info)
+  }
+  model_info$default_experiment_text <- cs2step_neural_embed_experiment_description(
+    experiment_description = experiment_description,
+    model_info = model_info,
+    n_rows = n_rows,
+    text_embedding_fn = text_embedding_fn
+  )
+  model_info$default_experiment_text_present <- TRUE
+  model_info$default_experiment_index <- NULL
+  model_info$jit_cache_key <- sprintf(
+    "%s::experiment_text_%d",
+    model_info$jit_cache_key %||% "predict",
+    as.integer(stats::runif(1, 1, 1e9))
+  )
+  model_info
+}
+
 cs2step_neural_prepare_prediction_data <- function(W_idx,
                                                    model_info,
                                                    resp_cov_new = NULL,
@@ -1043,6 +1126,7 @@ cs2step_neural_predict_internal <- function(object,
                                            W_new,
                                            X_new = NULL,
                                            experiment_id = NULL,
+                                           experiment_description = NULL,
                                            pair_id = NULL,
                                            profile_order = NULL,
                                            type = c("response", "link"),
@@ -1061,7 +1145,7 @@ cs2step_neural_predict_internal <- function(object,
   W_new <- cs2step_align_W(W_new, enc$factor_names)
   W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
 
-  use_internal <- is.function(object$fit$my_model)
+  use_internal <- is.function(object$fit$my_model) && is.null(experiment_description)
   model_info <- object$fit$neural_model_info
   prep <- NULL
 
@@ -1088,6 +1172,9 @@ cs2step_neural_predict_internal <- function(object,
     if (!is.null(experiment_id) && length(experiment_id) == nrow(W_idx)) {
       experiment_id <- experiment_id[pair_mat[, 1]]
     }
+    if (!is.null(experiment_description) && length(experiment_description) == nrow(W_idx)) {
+      experiment_description <- experiment_description[pair_mat[, 1]]
+    }
     resp_cov_prepped <- cs2step_neural_prepare_resp_cov(X_new, model_info, nrow(X_left))
     experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, nrow(X_left))
     if (isTRUE(use_internal)) {
@@ -1101,6 +1188,12 @@ cs2step_neural_predict_internal <- function(object,
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
       model_info <- prep_params$model_info
+      model_info <- cs2step_neural_apply_experiment_description(
+        model_info = model_info,
+        experiment_description = experiment_description,
+        n_rows = nrow(X_left),
+        text_embedding_fn = object$metadata$text_embedding_fn %||% NULL
+      )
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
         model_info = model_info,
@@ -1130,6 +1223,12 @@ cs2step_neural_predict_internal <- function(object,
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
       model_info <- prep_params$model_info
+      model_info <- cs2step_neural_apply_experiment_description(
+        model_info = model_info,
+        experiment_description = experiment_description,
+        n_rows = nrow(W_idx),
+        text_embedding_fn = object$metadata$text_embedding_fn %||% NULL
+      )
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
         model_info = model_info,
@@ -1278,6 +1377,7 @@ predict.strategic_predictor <- function(object,
   pair_id <- unpacked$pair_id
   profile_order <- unpacked$profile_order
   experiment_id <- unpacked$experiment_id
+  experiment_description <- unpacked$experiment_description
 
   if (identical(object$model_type, "glm")) {
     return(cs2step_glm_predict_internal(
@@ -1297,6 +1397,7 @@ predict.strategic_predictor <- function(object,
     W_new = W_new,
     X_new = X_new,
     experiment_id = experiment_id,
+    experiment_description = experiment_description,
     pair_id = pair_id,
     profile_order = profile_order,
     type = type,
@@ -1398,6 +1499,9 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$resp_cov_mean)) {
     out$resp_cov_mean <- as.numeric(cs2step_neural_to_r_array(out$resp_cov_mean))
   }
+  if (!is.null(out$resp_cov_scale)) {
+    out$resp_cov_scale <- as.numeric(cs2step_neural_to_r_array(out$resp_cov_scale))
+  }
   if (!is.null(out$resp_cov_default_present)) {
     out$resp_cov_default_present <- as.numeric(cs2step_neural_to_r_array(out$resp_cov_default_present))
   }
@@ -1412,6 +1516,24 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$covariate_name_text)) {
     out$covariate_name_text <- as.matrix(cs2step_neural_to_r_array(out$covariate_name_text))
   }
+  if (!is.null(out$experiment_description_text)) {
+    out$experiment_description_text <- as.matrix(
+      cs2step_neural_to_r_array(out$experiment_description_text)
+    )
+  }
+  if (!is.null(out$default_experiment_text)) {
+    out$default_experiment_text <- as.matrix(
+      cs2step_neural_to_r_array(out$default_experiment_text)
+    )
+  }
+  if (!is.null(out$experiment_description_present)) {
+    out$experiment_description_present <- as.logical(
+      cs2step_neural_to_r_array(out$experiment_description_present)
+    )
+  }
+  if (!is.null(out$default_experiment_text_present)) {
+    out$default_experiment_text_present <- isTRUE(out$default_experiment_text_present)
+  }
   if (!is.null(out$covariate_names)) {
     out$covariate_names <- as.character(out$covariate_names)
   }
@@ -1420,6 +1542,12 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   }
   if (!is.null(out$token_family_levels)) {
     out$token_family_levels <- as.character(out$token_family_levels)
+  }
+  if (!is.null(out$experiment_token_mode)) {
+    out$experiment_token_mode <- as.character(out$experiment_token_mode)
+  }
+  if (!is.null(out$covariate_value_encoding)) {
+    out$covariate_value_encoding <- as.character(out$covariate_value_encoding)
   }
   if (!is.null(out$factor_levels)) {
     out$factor_levels <- as.integer(out$factor_levels)
