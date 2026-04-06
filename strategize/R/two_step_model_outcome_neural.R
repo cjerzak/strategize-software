@@ -6188,6 +6188,7 @@ generate_ModelOutcome_neural <- function(){
       last_metric <- NA_real_
       no_improve_checks <- 0L
       chunk_size <- max(1L, as.integer(early_stopping_info$eval_every %||% svi_steps))
+      total_checks_planned <- max(1L, as.integer(ceiling(svi_steps / chunk_size)))
       svi_loss_chunks <- list()
       steps_remaining <- as.integer(svi_steps)
       steps_completed <- 0L
@@ -6230,6 +6231,11 @@ generate_ModelOutcome_neural <- function(){
           break
         }
 
+        previous_metric <- if (length(early_stopping_info$validation_loss_history) > 0L) {
+          tail(early_stopping_info$validation_loss_history, 1L)
+        } else {
+          NA_real_
+        }
         last_metric <- metric_value
         early_stopping_info$validation_loss_history <- c(
           early_stopping_info$validation_loss_history,
@@ -6245,19 +6251,53 @@ generate_ModelOutcome_neural <- function(){
           no_improve_checks <- 0L
         } else {
           no_improve_checks <- no_improve_checks + 1L
-          if (no_improve_checks >= early_stopping_info$patience &&
-              steps_completed < as.integer(svi_steps)) {
-            early_stopping_info$stopped_early <- TRUE
-            early_stopping_reason <- "patience_exhausted"
-            message(sprintf(
-              "SVI early stopping at step %d/%d on validation %s=%.6f.",
-              steps_completed,
-              svi_steps,
-              early_stopping_info$metric,
-              metric_value
-            ))
-            break
-          }
+        }
+
+        best_metric_for_message <- if (is.finite(early_stopping_info$best_metric)) {
+          early_stopping_info$best_metric
+        } else {
+          metric_value
+        }
+        best_step_for_message <- if (!is.na(early_stopping_info$best_step)) {
+          as.integer(early_stopping_info$best_step)
+        } else {
+          as.integer(steps_completed)
+        }
+        delta_prev <- if (is.finite(previous_metric)) {
+          metric_value - previous_metric
+        } else {
+          NA_real_
+        }
+        delta_prev_text <- if (is.finite(delta_prev)) {
+          sprintf("%+.6f", delta_prev)
+        } else {
+          "NA"
+        }
+        message(sprintf(
+          "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; best=%.6f at step %d; delta_prev=%s.",
+          as.integer(early_stopping_info$stop_check),
+          total_checks_planned,
+          steps_completed,
+          svi_steps,
+          early_stopping_info$metric,
+          metric_value,
+          best_metric_for_message,
+          best_step_for_message,
+          delta_prev_text
+        ))
+
+        if (no_improve_checks >= early_stopping_info$patience &&
+            steps_completed < as.integer(svi_steps)) {
+          early_stopping_info$stopped_early <- TRUE
+          early_stopping_reason <- "patience_exhausted"
+          message(sprintf(
+            "SVI early stopping at step %d/%d on validation %s=%.6f.",
+            steps_completed,
+            svi_steps,
+            early_stopping_info$metric,
+            metric_value
+          ))
+          break
         }
       }
       svi_loss_curve <- if (length(svi_loss_chunks) > 0L) {

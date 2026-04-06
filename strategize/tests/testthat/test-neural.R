@@ -1426,7 +1426,7 @@ test_that("output-only neural post-fit logging reuses computed OOS metrics", {
   expect_lt(metric_idx, optimize_idx)
 })
 
-test_that("average-case normal neural logging reports validation nll summaries", {
+test_that("average-case normal neural logging reports per-check validation nll summaries", {
   local_strategize_binding(
     "cs_compute_outcome_metrics",
     function(...) {
@@ -1443,10 +1443,18 @@ test_that("average-case normal neural logging reports validation nll summaries",
   )
   messages <- captured$messages
 
+  check_idx <- match(
+    TRUE,
+    grepl(
+      "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000)\\.$",
+      messages
+    )
+  )
   early_idx <- match(TRUE, grepl("^SVI early stopping at step [0-9]+/[0-9]+ on validation nll=1\\.000000\\.$", messages))
   summary_idx <- match(TRUE, grepl("^SVI fit summary: steps=[0-9]+/[0-9]+; best nll=1\\.000000 at step [0-9]+\\.$", messages))
 
-  expect_true(all(is.finite(c(early_idx, summary_idx))))
+  expect_true(all(is.finite(c(check_idx, early_idx, summary_idx))))
+  expect_lt(check_idx, early_idx)
   expect_lt(early_idx, summary_idx)
 })
 
