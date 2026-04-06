@@ -780,7 +780,7 @@ test_that("covariate context tokens distinguish absent from present zero via pre
   expect_equal(diff, c(10, 20, 30, 40), tolerance = 1e-6)
 })
 
-test_that("strategize runs neural outcome model (non-adversarial)", {
+test_that("default term-mode neural predictor returns valid pairwise probabilities", {
   fit <- get_neural_fit()
   res <- fit$res
   data <- fit$data
@@ -803,7 +803,15 @@ test_that("strategize runs neural outcome model (non-adversarial)", {
   X_right <- W_numeric[idx_right, , drop = FALSE]
   p_lr <- as.numeric(model(X_left_new = X_left, X_right_new = X_right))
   p_rl <- as.numeric(model(X_left_new = X_right, X_right_new = X_left))
-  expect_equal(p_lr + p_rl, rep(1, length(p_lr)), tolerance = 1e-4)
+
+  # The default pairwise neural mode uses the opponent-dependent "term"
+  # interaction, so swap-complementarity is not a valid invariant here.
+  expect_length(p_lr, nrow(X_left))
+  expect_length(p_rl, nrow(X_left))
+  expect_true(all(is.finite(p_lr)))
+  expect_true(all(is.finite(p_rl)))
+  expect_true(all(p_lr >= 0 & p_lr <= 1))
+  expect_true(all(p_rl >= 0 & p_rl <= 1))
 })
 
 test_that("neural attn predictor remains antisymmetric", {
