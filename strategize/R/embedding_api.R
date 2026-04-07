@@ -63,7 +63,9 @@ cs2step_neural_extract_single_prepared <- function(params,
     resp_party_idx = prep$resp_party,
     resp_cov = prep$resp_cov,
     resp_cov_present = prep$resp_cov_present %||% NULL,
+    resp_cov_order = prep$resp_cov_order %||% NULL,
     experiment_idx = prep$experiment_idx %||% NULL,
+    factor_order = prep$factor_order %||% NULL,
     return_tokens = FALSE
   )
 }
@@ -84,48 +86,79 @@ cs2step_neural_extract_pair_prepared <- function(params,
   if (isTRUE(use_cross_encoder)) {
     n_batch <- ai(prep$X_left$shape[[1]])
     choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
-    ctx_tokens <- neural_build_context_tokens_batch(
+    choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+    ctx_info <- neural_build_context_tokens_batch(
       model_info = model_info,
       resp_party_idx = prep$resp_party,
       stage_idx = stage_idx,
       matchup_idx = matchup_idx,
       resp_cov = prep$resp_cov,
       resp_cov_present = prep$resp_cov_present %||% NULL,
+      resp_cov_order = prep$resp_cov_order %||% NULL,
       experiment_idx = prep$experiment_idx %||% NULL,
-      params = params
+      params = params,
+      return_mask = TRUE
+    )
+    ctx_tokens <- ctx_info$tokens %||% NULL
+    ctx_mask <- ctx_info$mask %||% NULL
+    left_info <- neural_build_candidate_tokens_hard(
+      prep$X_left,
+      prep$party_left,
+      model_info = model_info,
+      resp_party_idx = prep$resp_party,
+      experiment_idx = prep$experiment_idx %||% NULL,
+      factor_order = prep$factor_order %||% NULL,
+      params = params,
+      return_mask = TRUE
     )
     left_tokens <- neural_add_segment_embedding(
-      neural_build_candidate_tokens_hard(
-        prep$X_left,
-        prep$party_left,
-        model_info = model_info,
-        resp_party_idx = prep$resp_party,
-        params = params
-      ),
+      left_info$tokens,
       0L,
       model_info = model_info,
       params = params
     )
+    right_info <- neural_build_candidate_tokens_hard(
+      prep$X_right,
+      prep$party_right,
+      model_info = model_info,
+      resp_party_idx = prep$resp_party,
+      experiment_idx = prep$experiment_idx %||% NULL,
+      factor_order = prep$factor_order %||% NULL,
+      params = params,
+      return_mask = TRUE
+    )
     right_tokens <- neural_add_segment_embedding(
-      neural_build_candidate_tokens_hard(
-        prep$X_right,
-        prep$party_right,
-        model_info = model_info,
-        resp_party_idx = prep$resp_party,
-        params = params
-      ),
+      right_info$tokens,
       1L,
       model_info = model_info,
       params = params
     )
     sep_tok <- neural_build_sep_token(model_info, n_batch = n_batch, params = params)
     token_parts <- list(choice_tok)
+    mask_parts <- list(choice_mask)
     if (!is.null(ctx_tokens)) {
       token_parts <- c(token_parts, list(ctx_tokens))
+      mask_parts <- c(mask_parts, list(ctx_mask))
     }
     token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+    mask_parts <- c(
+      mask_parts,
+      list(
+        strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj),
+        left_info$mask,
+        strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj),
+        right_info$mask
+      )
+    )
     tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+    token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+    transformer_out <- neural_run_transformer(
+      tokens,
+      model_info,
+      params,
+      token_mask = token_mask,
+      return_details = TRUE
+    )
     return(list(joint = neural_extract_choice_representation(transformer_out)))
   }
 
@@ -139,8 +172,14 @@ cs2step_neural_extract_pair_prepared <- function(params,
   resp_c_present_all <- if (is.null(prep$resp_cov_present)) NULL else {
     strenv$jnp$concatenate(list(prep$resp_cov_present, prep$resp_cov_present), axis = 0L)
   }
+  resp_c_order_all <- if (is.null(prep$resp_cov_order)) NULL else {
+    strenv$jnp$concatenate(list(prep$resp_cov_order, prep$resp_cov_order), axis = 0L)
+  }
   experiment_idx_all <- if (is.null(prep$experiment_idx)) NULL else {
     strenv$jnp$concatenate(list(prep$experiment_idx, prep$experiment_idx), axis = 0L)
+  }
+  factor_order_all <- if (is.null(prep$factor_order)) NULL else {
+    strenv$jnp$concatenate(list(prep$factor_order, prep$factor_order), axis = 0L)
   }
   stage_all <- if (is.null(stage_idx)) NULL else {
     strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
@@ -158,13 +197,16 @@ cs2step_neural_extract_pair_prepared <- function(params,
       resp_party_idx = resp_p_all,
       resp_cov = resp_c_all,
       resp_cov_present = resp_c_present_all,
+      resp_cov_order = resp_c_order_all,
       experiment_idx = experiment_idx_all,
+      factor_order = factor_order_all,
       stage_idx = stage_all,
       matchup_idx = matchup_all,
       return_tokens = TRUE
     )
     phi_all <- enc_all$phi
     cand_all <- enc_all$cand_tokens_out
+    cand_mask_all <- enc_all$cand_token_mask
   } else {
     phi_all <- neural_encode_candidate_core_prepared(
       params = params,
@@ -174,12 +216,15 @@ cs2step_neural_extract_pair_prepared <- function(params,
       resp_party_idx = resp_p_all,
       resp_cov = resp_c_all,
       resp_cov_present = resp_c_present_all,
+      resp_cov_order = resp_c_order_all,
       experiment_idx = experiment_idx_all,
+      factor_order = factor_order_all,
       stage_idx = stage_all,
       matchup_idx = matchup_all,
       return_tokens = FALSE
     )
     cand_all <- NULL
+    cand_mask_all <- NULL
   }
 
   idx_left <- strenv$jnp$arange(n_batch)
@@ -190,17 +235,21 @@ cs2step_neural_extract_pair_prepared <- function(params,
   if (isTRUE(use_cross_attn)) {
     cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
     cand_right_out <- strenv$jnp$take(cand_all, idx_right, axis = 0L)
+    cand_left_mask <- strenv$jnp$take(cand_mask_all, idx_left, axis = 0L)
+    cand_right_mask <- strenv$jnp$take(cand_mask_all, idx_right, axis = 0L)
     ctx_left <- neural_cross_attend_cls_to_tokens(
       phi_left,
       cand_right_out,
       model_info = model_info,
-      params = params
+      params = params,
+      kv_token_mask = cand_right_mask
     )
     ctx_right <- neural_cross_attend_cls_to_tokens(
       phi_right,
       cand_left_out,
       model_info = model_info,
-      params = params
+      params = params,
+      kv_token_mask = cand_left_mask
     )
     phi_left <- neural_merge_cross_attn_representation(
       phi_left,
@@ -239,6 +288,7 @@ cs2step_neural_extract_prepared <- function(params,
 cs2step_neural_extract_internal <- function(object,
                                             W_new,
                                             X_new = NULL,
+                                            factor_order_new = NULL,
                                             experiment_id = NULL,
                                             experiment_description = NULL,
                                             pair_id = NULL,
@@ -253,6 +303,7 @@ cs2step_neural_extract_internal <- function(object,
   }
 
   enc <- object$encoder
+  W_raw <- as.data.frame(W_new, check.names = FALSE)
   W_new <- cs2step_align_W(W_new, enc$factor_names)
   W_idx <- cs2step_encode_W_indices(
     W = W_new,
@@ -291,6 +342,12 @@ cs2step_neural_extract_internal <- function(object,
     W_idx = W_idx,
     model_info = model_info,
     resp_cov_new = X_new,
+    factor_order_new = factor_order_new %||%
+      if (identical(neural_factor_tokenization(model_info), "language_span")) {
+        neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
+      } else {
+        NULL
+      },
     experiment_id = experiment_id,
     pair_id = pair_id,
     profile_order = profile_order,
@@ -591,6 +648,7 @@ cs_foundation_map_request_to_group <- function(group,
   unmatched_factors <- character(0)
   unmatched_levels <- character(0)
   used_slots <- character(0)
+  factor_order_names <- character(0)
 
   for (factor_name in request$factor_names) {
     slot_name <- if (factor_name %in% slot_table$slot_name) {
@@ -625,6 +683,7 @@ cs_foundation_map_request_to_group <- function(group,
       )
     }
     used_slots <- c(used_slots, slot_name)
+    factor_order_names <- c(factor_order_names, slot_name)
 
     level_key_map <- local_map$level_map[[factor_name]]
     raw_vals <- as.character(request$W[[factor_name]])
@@ -670,6 +729,7 @@ cs_foundation_map_request_to_group <- function(group,
 
   list(
     W_group = out,
+    factor_order = neural_factor_order_from_names(factor_order_names, slot_table$slot_name),
     unmatched_factors = unique(unmatched_factors),
     unmatched_levels = unique(unmatched_levels)
   )
@@ -814,6 +874,7 @@ extract_embeddings.conjoint_foundation_model <- function(object,
     object = tmp_predictor,
     W_new = mapped$W_group,
     X_new = X_group,
+    factor_order_new = mapped$factor_order,
     experiment_id = request$experiment_id,
     experiment_description = unpacked$experiment_description %||% NULL,
     pair_id = request$pair_id,

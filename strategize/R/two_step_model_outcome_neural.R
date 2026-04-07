@@ -175,7 +175,8 @@ neural_params_from_theta <- function(theta_vec, model_info){
       schema <- neural_build_param_schema(
         params = model_info$params,
         n_factors = model_info$n_factors,
-        model_depth = model_info$model_depth
+        model_depth = model_info$model_depth,
+        factor_tokenization = neural_factor_tokenization(model_info)
       )
       model_info$param_names <- schema$param_names
       model_info$param_shapes <- schema$param_shapes
@@ -240,7 +241,8 @@ neural_params_from_theta <- function(theta_vec, model_info){
 
 neural_build_param_schema <- function(params,
                                       n_factors,
-                                      model_depth) {
+                                      model_depth,
+                                      factor_tokenization = NULL) {
   if (is.null(params) || !is.list(params)) {
     stop("neural_build_param_schema requires a params list.", call. = FALSE)
   }
@@ -253,8 +255,21 @@ neural_build_param_schema <- function(params,
     stop("neural_build_param_schema requires model_depth >= 1.", call. = FALSE)
   }
 
-  param_names <- c(paste0("E_factor_", seq_len(n_factors)),
-                   "E_feature_id",
+  factor_mode <- if (is.null(factor_tokenization)) {
+    if (!is.null(params$E_factor_start)) {
+      "language_span"
+    } else {
+      "legacy_indexed"
+    }
+  } else {
+    neural_factor_tokenization(mode = factor_tokenization)
+  }
+
+  param_names <- c(if (identical(factor_mode, "language_span")) {
+                     c("E_factor_start", "E_factor_end", "E_factor_role")
+                   } else {
+                     c(paste0("E_factor_", seq_len(n_factors)), "E_feature_id")
+                   },
                    "E_party", "E_resp_party", "E_choice",
                    "E_token_family", "E_experiment",
                    "E_sep", "E_segment")
@@ -267,7 +282,17 @@ neural_build_param_schema <- function(params,
   if (!is.null(params$E_rel)) {
     param_names <- c(param_names, "E_rel")
   }
-  if (!is.null(params$E_covariate_id)) {
+  if (!is.null(params$E_covariate_start)) {
+    param_names <- c(
+      param_names,
+      "E_covariate_start",
+      "E_covariate_end",
+      "E_covariate_role"
+    )
+    if (!is.null(params$W_covariate_value_shared)) {
+      param_names <- c(param_names, "W_covariate_value_shared")
+    }
+  } else if (!is.null(params$E_covariate_id)) {
     param_names <- c(param_names, "E_covariate_id", "E_covariate_present")
     if (!is.null(params$V_covariate_value)) {
       param_names <- c(param_names, "V_covariate_value")
@@ -459,6 +484,10 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        cand_party_to_resp_idx = NULL,
                                                        n_party_levels = NULL,
                                                        n_candidate_tokens = NULL,
+                                                       factor_tokenization = NULL,
+                                                       max_factor_tokens = NULL,
+                                                       factor_order_by_experiment = NULL,
+                                                       default_factor_order = NULL,
                                                        cross_candidate_encoder_mode = "none",
                                                        cross_candidate_encoder = FALSE,
                                                        likelihood = "bernoulli",
@@ -474,6 +503,10 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   info$cand_party_to_resp_idx <- cand_party_to_resp_idx
   info$n_party_levels <- n_party_levels
   info$n_candidate_tokens <- n_candidate_tokens
+  info$factor_tokenization <- factor_tokenization
+  info$max_factor_tokens <- max_factor_tokens
+  info$factor_order_by_experiment <- factor_order_by_experiment
+  info$default_factor_order <- default_factor_order
   info$cross_candidate_encoder_mode <- cross_candidate_encoder_mode
   info$cross_candidate_encoder <- cross_candidate_encoder
   info$likelihood <- likelihood
@@ -491,10 +524,18 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  n_party_levels = NULL,
                                                  factor_name_text = NULL,
                                                  level_name_text = NULL,
+                                                 factor_order_by_experiment = NULL,
+                                                 default_factor_order = NULL,
+                                                 factor_tokenization = NULL,
+                                                 max_factor_tokens = NULL,
                                                  covariate_name_text = NULL,
+                                                 covariate_names = NULL,
                                                  resp_cov_mean = NULL,
                                                  resp_cov_scale = NULL,
                                                  resp_cov_default_present = NULL,
+                                                 covariate_order_by_experiment = NULL,
+                                                 default_covariate_order = NULL,
+                                                 max_covariate_tokens = NULL,
                                                  default_experiment_index = NULL,
                                                  token_family_levels = NULL,
                                                  experiment_token_mode = NULL,
@@ -509,10 +550,34 @@ neural_make_runtime_token_model_info <- function(model_dims,
     n_party_levels = n_party_levels,
     factor_name_text = factor_name_text,
     level_name_text = level_name_text,
+    factor_order_by_experiment = factor_order_by_experiment,
+    default_factor_order = if (is.null(default_factor_order)) {
+      NULL
+    } else {
+      as.integer(default_factor_order)
+    },
+    factor_tokenization = factor_tokenization,
+    max_factor_tokens = if (is.null(max_factor_tokens)) {
+      NULL
+    } else {
+      as.integer(max_factor_tokens)
+    },
     covariate_name_text = covariate_name_text,
+    covariate_names = as.character(covariate_names %||% character(0)),
     resp_cov_mean = resp_cov_mean,
     resp_cov_scale = resp_cov_scale,
     resp_cov_default_present = resp_cov_default_present,
+    covariate_order_by_experiment = covariate_order_by_experiment,
+    default_covariate_order = if (is.null(default_covariate_order)) {
+      NULL
+    } else {
+      as.integer(default_covariate_order)
+    },
+    max_covariate_tokens = if (is.null(max_covariate_tokens)) {
+      NULL
+    } else {
+      as.integer(max_covariate_tokens)
+    },
     default_experiment_index = if (is.null(default_experiment_index) || is.na(default_experiment_index)) {
       NULL
     } else {
@@ -558,7 +623,10 @@ neural_model_jit_cache_key <- function(model_info) {
     neural_cross_encoder_mode(model_info),
     tryCatch(as.character(model_info$likelihood), error = function(e) "na"),
     tryCatch(as.character(model_info$experiment_token_mode), error = function(e) "na"),
+    tryCatch(as.character(model_info$factor_tokenization), error = function(e) "na"),
+    tryCatch(as.character(model_info$max_factor_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$covariate_value_encoding), error = function(e) "na"),
+    tryCatch(as.character(model_info$max_covariate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_candidate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
     map_token
@@ -1068,6 +1136,324 @@ neural_token_family_levels <- function() {
   )
 }
 
+neural_factor_tokenization <- function(model_info = NULL, mode = NULL) {
+  mode_use <- tolower(as.character(mode %||% model_info$factor_tokenization %||% "legacy_indexed"))
+  if (!mode_use %in% c("legacy_indexed", "language_span")) {
+    stop(
+      "'factor_tokenization' must be one of 'legacy_indexed' or 'language_span'.",
+      call. = FALSE
+    )
+  }
+  mode_use
+}
+
+neural_default_max_factor_tokens <- function() {
+  256L
+}
+
+neural_factor_span_width <- function() {
+  4L
+}
+
+neural_resolve_max_factor_tokens <- function(value = NULL) {
+  value_use <- if (is.null(value)) {
+    neural_default_max_factor_tokens()
+  } else {
+    value
+  }
+  value_use <- suppressWarnings(as.integer(value_use)[[1L]])
+  if (is.na(value_use) || value_use < 0L) {
+    stop("'max_factor_tokens' must be a single non-negative integer.", call. = FALSE)
+  }
+  value_use
+}
+
+neural_max_factor_spans <- function(model_info = NULL,
+                                    max_factor_tokens = NULL) {
+  token_budget <- if (is.null(max_factor_tokens)) {
+    model_info$max_factor_tokens %||% neural_default_max_factor_tokens()
+  } else {
+    max_factor_tokens
+  }
+  token_budget <- neural_resolve_max_factor_tokens(token_budget)
+  as.integer(floor(token_budget / neural_factor_span_width()))
+}
+
+neural_validate_factor_token_budget <- function(n_factors,
+                                                max_factor_tokens = NULL,
+                                                context = "FM language span encoder") {
+  n_factors <- as.integer(n_factors %||% 0L)
+  max_spans <- neural_max_factor_spans(
+    max_factor_tokens = max_factor_tokens
+  )
+  if (n_factors > max_spans) {
+    stop(
+      sprintf(
+        "%s received %d factors but max_factor_tokens=%d only supports %d factor spans.",
+        context,
+        n_factors,
+        neural_resolve_max_factor_tokens(max_factor_tokens),
+        max_spans
+      ),
+      call. = FALSE
+    )
+  }
+  invisible(n_factors)
+}
+
+neural_factor_order_from_names <- function(order_names, factor_names) {
+  factor_names <- as.character(factor_names %||% character(0))
+  order_names <- as.character(order_names %||% character(0))
+  if (length(order_names) < 1L || length(factor_names) < 1L) {
+    return(integer(0))
+  }
+  idx <- match(order_names, factor_names) - 1L
+  idx[!is.na(idx)]
+}
+
+neural_factor_order_lookup_matrix <- function(order_list,
+                                              max_factor_tokens = NULL) {
+  order_list <- order_list %||% list()
+  max_spans <- neural_max_factor_spans(
+    max_factor_tokens = max_factor_tokens
+  )
+  if (length(order_list) < 1L) {
+    return(matrix(-1L, nrow = 0L, ncol = max_spans))
+  }
+  out <- matrix(-1L, nrow = length(order_list), ncol = max_spans)
+  for (i in seq_along(order_list)) {
+    idx <- as.integer(order_list[[i]] %||% integer(0))
+    if (length(idx) > max_spans) {
+      stop(
+        sprintf(
+          "Factor order %d contains %d factors but max_factor_tokens=%d only supports %d factor spans.",
+          i,
+          length(idx),
+          neural_resolve_max_factor_tokens(max_factor_tokens),
+          max_spans
+        ),
+        call. = FALSE
+      )
+    }
+    if (length(idx) > 0L) {
+      out[i, seq_along(idx)] <- idx
+    }
+  }
+  out
+}
+
+neural_build_default_factor_order_matrix <- function(order_idx,
+                                                     n_rows,
+                                                     max_factor_tokens = NULL) {
+  order_idx <- as.integer(order_idx %||% integer(0))
+  max_spans <- neural_max_factor_spans(
+    max_factor_tokens = max_factor_tokens
+  )
+  if (length(order_idx) > max_spans) {
+    stop(
+      sprintf(
+        "Default factor order contains %d factors but max_factor_tokens=%d only supports %d factor spans.",
+        length(order_idx),
+        neural_resolve_max_factor_tokens(max_factor_tokens),
+        max_spans
+      ),
+      call. = FALSE
+    )
+  }
+  out <- matrix(-1L, nrow = as.integer(n_rows), ncol = max_spans)
+  if (length(order_idx) > 0L) {
+    out[, seq_along(order_idx)] <- rep(order_idx, each = as.integer(n_rows))
+  }
+  out
+}
+
+neural_default_max_covariate_tokens <- function() {
+  512L
+}
+
+neural_covariate_span_width <- function() {
+  4L
+}
+
+neural_resolve_max_covariate_tokens <- function(value = NULL) {
+  out <- if (is.null(value)) {
+    neural_default_max_covariate_tokens()
+  } else {
+    as.integer(value)
+  }
+  if (length(out) != 1L || is.na(out) || out < 0L) {
+    stop("'max_covariate_tokens' must be a single non-negative integer.", call. = FALSE)
+  }
+  out
+}
+
+neural_max_covariate_spans <- function(model_info = NULL,
+                                       max_covariate_tokens = NULL) {
+  token_budget <- if (is.null(max_covariate_tokens)) {
+    model_info$max_covariate_tokens %||% neural_default_max_covariate_tokens()
+  } else {
+    max_covariate_tokens
+  }
+  token_budget <- neural_resolve_max_covariate_tokens(token_budget)
+  as.integer(floor(token_budget / neural_covariate_span_width()))
+}
+
+neural_validate_covariate_token_budget <- function(n_covariates,
+                                                   max_covariate_tokens = NULL,
+                                                   context = "Covariate encoder") {
+  n_covariates <- as.integer(n_covariates %||% 0L)
+  max_spans <- neural_max_covariate_spans(
+    max_covariate_tokens = max_covariate_tokens
+  )
+  if (n_covariates > max_spans) {
+    stop(
+      sprintf(
+        "%s received %d covariates but max_covariate_tokens=%d only supports %d covariate spans.",
+        context,
+        n_covariates,
+        neural_resolve_max_covariate_tokens(max_covariate_tokens),
+        max_spans
+      ),
+      call. = FALSE
+    )
+  }
+  invisible(max_spans)
+}
+
+neural_covariate_order_from_names <- function(order_names, covariate_names) {
+  covariate_names <- as.character(covariate_names %||% character(0))
+  order_names <- as.character(order_names %||% character(0))
+  if (length(order_names) < 1L || length(covariate_names) < 1L) {
+    return(integer(0))
+  }
+  idx <- match(order_names, covariate_names) - 1L
+  idx <- idx[!is.na(idx) & idx >= 0L]
+  as.integer(idx)
+}
+
+neural_covariate_order_lookup_matrix <- function(order_list,
+                                                 max_covariate_tokens = NULL) {
+  order_list <- order_list %||% list()
+  max_spans <- neural_max_covariate_spans(
+    max_covariate_tokens = max_covariate_tokens
+  )
+  if (length(order_list) < 1L) {
+    return(NULL)
+  }
+  out <- matrix(-1L, nrow = length(order_list), ncol = max_spans)
+  for (i in seq_along(order_list)) {
+    ord <- as.integer(order_list[[i]] %||% integer(0))
+    if (length(ord) > max_spans) {
+      stop(
+        sprintf(
+          "Covariate order %d contains %d covariates but max_covariate_tokens=%d only supports %d covariate spans.",
+          i,
+          length(ord),
+          neural_resolve_max_covariate_tokens(max_covariate_tokens),
+          max_spans
+        ),
+        call. = FALSE
+      )
+    }
+    if (length(ord) > 0L) {
+      out[i, seq_along(ord)] <- ord
+    }
+  }
+  out
+}
+
+neural_build_default_covariate_order_matrix <- function(order_idx,
+                                                        n_rows,
+                                                        max_covariate_tokens = NULL) {
+  order_idx <- as.integer(order_idx %||% integer(0))
+  max_spans <- neural_max_covariate_spans(
+    max_covariate_tokens = max_covariate_tokens
+  )
+  if (length(order_idx) > max_spans) {
+    stop(
+      sprintf(
+        "Default covariate order contains %d covariates but max_covariate_tokens=%d only supports %d covariate spans.",
+        length(order_idx),
+        neural_resolve_max_covariate_tokens(max_covariate_tokens),
+        max_spans
+      ),
+      call. = FALSE
+    )
+  }
+  out <- matrix(-1L, nrow = as.integer(n_rows), ncol = max_spans)
+  if (length(order_idx) > 0L) {
+    out[, seq_along(order_idx)] <- matrix(
+      rep(order_idx, each = as.integer(n_rows)),
+      nrow = as.integer(n_rows)
+    )
+  }
+  out
+}
+
+neural_resolve_factor_order_jnp <- function(model_info,
+                                            factor_order = NULL,
+                                            experiment_idx = NULL,
+                                            n_batch = 1L,
+                                            n_factors = NULL) {
+  if (!identical(neural_factor_tokenization(model_info), "language_span")) {
+    return(NULL)
+  }
+  max_spans <- neural_max_factor_spans(
+    model_info = model_info,
+    max_factor_tokens = model_info$max_factor_tokens %||% NULL
+  )
+  if (max_spans < 1L) {
+    return(NULL)
+  }
+  n_factors_use <- if (is.null(n_factors)) {
+    length(model_info$factor_name_text %||% list())
+  } else {
+    as.integer(n_factors)
+  }
+  if (n_factors_use < 1L) {
+    return(NULL)
+  }
+  if (!is.null(factor_order)) {
+    order_mat <- strenv$jnp$atleast_2d(factor_order)
+    if (ai(order_mat$shape[[2]]) != max_spans) {
+      stop(
+        sprintf(
+          "factor_order must have width %d under max_factor_tokens=%d.",
+          max_spans,
+          neural_resolve_max_factor_tokens(model_info$max_factor_tokens %||% NULL)
+        ),
+        call. = FALSE
+      )
+    }
+    if (ai(order_mat$shape[[1]]) == 1L && n_batch > 1L) {
+      order_mat <- order_mat * strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$jnp$int32)
+    }
+    return(strenv$jnp$astype(order_mat, strenv$jnp$int32))
+  }
+  if (!is.null(experiment_idx) && length(model_info$factor_order_by_experiment %||% list()) > 0L) {
+    lookup <- neural_factor_order_lookup_matrix(
+      order_list = model_info$factor_order_by_experiment %||% list(),
+      max_factor_tokens = model_info$max_factor_tokens %||% NULL
+    )
+    if (!is.null(lookup) && nrow(lookup) > 0L) {
+      lookup_jnp <- strenv$jnp$array(lookup)$astype(strenv$jnp$int32)
+      exp_idx <- strenv$jnp$atleast_1d(experiment_idx)
+      exp_idx <- strenv$jnp$astype(exp_idx, strenv$jnp$int32)
+      if (ai(exp_idx$shape[[1]]) == 1L && n_batch > 1L) {
+        exp_idx <- exp_idx * strenv$jnp$ones(list(n_batch), dtype = strenv$jnp$int32)
+      }
+      exp_idx <- strenv$jnp$clip(exp_idx, ai(0L), ai(nrow(lookup) - 1L))
+      return(strenv$jnp$take(lookup_jnp, exp_idx, axis = 0L))
+    }
+  }
+  default_mat <- neural_build_default_factor_order_matrix(
+    order_idx = model_info$default_factor_order %||% integer(0),
+    n_rows = n_batch,
+    max_factor_tokens = model_info$max_factor_tokens %||% NULL
+  )
+  strenv$jnp$array(default_mat)$astype(strenv$jnp$int32)
+}
+
 neural_token_family_index <- function(model_info, family_name) {
   levels <- as.character(model_info$token_family_levels %||% neural_token_family_levels())
   idx <- match(as.character(family_name), levels)
@@ -1178,6 +1564,211 @@ neural_covariate_basis <- function(resp_cov_mat,
   z <- z * resp_cov_present_mat
   z_sq <- z * z
   strenv$jnp$stack(list(z, z_sq, resp_cov_present_mat), axis = 2L)
+}
+
+neural_covariate_z_scores <- function(resp_cov_mat, model_info) {
+  if (is.null(resp_cov_mat)) {
+    return(NULL)
+  }
+  cov_mean <- model_info$resp_cov_mean %||% NULL
+  cov_scale <- model_info$resp_cov_scale %||% NULL
+  n_covariates <- ai(resp_cov_mat$shape[[2]])
+  mean_mat <- if (!is.null(cov_mean)) {
+    strenv$jnp$atleast_2d(cov_mean)
+  } else {
+    strenv$jnp$zeros(list(1L, n_covariates), dtype = strenv$dtj)
+  }
+  scale_mat <- if (!is.null(cov_scale)) {
+    strenv$jnp$atleast_2d(cov_scale)
+  } else {
+    strenv$jnp$ones(list(1L, n_covariates), dtype = strenv$dtj)
+  }
+  safe_scale <- strenv$jnp$maximum(scale_mat, strenv$jnp$array(1e-6, dtype = strenv$dtj))
+  (resp_cov_mat - mean_mat) / safe_scale
+}
+
+neural_resolve_covariate_order_jnp <- function(model_info,
+                                               resp_cov_order = NULL,
+                                               experiment_idx = NULL,
+                                               n_batch = 1L,
+                                               n_covariates = 0L) {
+  max_spans <- neural_max_covariate_spans(model_info = model_info)
+  if (max_spans < 1L || n_covariates < 1L) {
+    return(NULL)
+  }
+
+  if (!is.null(resp_cov_order)) {
+    order_arr <- strenv$jnp$atleast_2d(resp_cov_order)
+    order_arr <- strenv$jnp$astype(order_arr, strenv$jnp$int32)
+    if (ai(order_arr$shape[[2]]) != max_spans) {
+      stop(
+        sprintf(
+          "resp_cov_order must have width %d under max_covariate_tokens=%d.",
+          max_spans,
+          neural_resolve_max_covariate_tokens(model_info$max_covariate_tokens %||% NULL)
+        ),
+        call. = FALSE
+      )
+    }
+    if (ai(order_arr$shape[[1]]) == 1L && n_batch > 1L) {
+      order_arr <- order_arr * strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$jnp$int32)
+    }
+    return(order_arr)
+  }
+
+  lookup <- neural_covariate_order_lookup_matrix(
+    order_list = model_info$covariate_order_by_experiment %||% NULL,
+    max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
+  )
+  if (!is.null(lookup) && !is.null(experiment_idx)) {
+    lookup_jnp <- strenv$jnp$array(lookup)$astype(strenv$jnp$int32)
+    exp_idx <- strenv$jnp$astype(strenv$jnp$atleast_1d(experiment_idx), strenv$jnp$int32)
+    if (ai(exp_idx$shape[[1]]) == 1L && n_batch > 1L) {
+      exp_idx <- exp_idx * strenv$jnp$ones(list(n_batch), dtype = strenv$jnp$int32)
+    }
+    return(strenv$jnp$take(lookup_jnp, exp_idx, axis = 0L))
+  }
+
+  default_order <- as.integer(
+    model_info$default_covariate_order %||%
+      if (n_covariates > 0L) seq.int(0L, n_covariates - 1L) else integer(0)
+  )
+  default_matrix <- neural_build_default_covariate_order_matrix(
+    order_idx = default_order,
+    n_rows = n_batch,
+    max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
+  )
+  strenv$jnp$array(default_matrix)$astype(strenv$jnp$int32)
+}
+
+neural_build_covariate_span_tokens <- function(model_info,
+                                               params,
+                                               resp_cov_mat,
+                                               resp_cov_present_mat = NULL,
+                                               resp_cov_order = NULL,
+                                               experiment_idx = NULL,
+                                               n_batch = 1L) {
+  n_covariates <- length(model_info$covariate_names %||% character(0))
+  max_spans <- neural_max_covariate_spans(model_info = model_info)
+  if (n_covariates < 1L || max_spans < 1L) {
+    return(list(tokens = NULL, mask = NULL))
+  }
+
+  order_idx <- neural_resolve_covariate_order_jnp(
+    model_info = model_info,
+    resp_cov_order = resp_cov_order,
+    experiment_idx = experiment_idx,
+    n_batch = n_batch,
+    n_covariates = n_covariates
+  )
+  if (is.null(order_idx)) {
+    return(list(tokens = NULL, mask = NULL))
+  }
+
+  if (is.null(resp_cov_mat)) {
+    resp_cov_mat <- strenv$jnp$zeros(list(n_batch, n_covariates), dtype = strenv$dtj)
+  }
+  if (is.null(resp_cov_present_mat)) {
+    resp_cov_present_mat <- strenv$jnp$ones(resp_cov_mat$shape, dtype = strenv$dtj)
+  }
+
+  idx_valid <- order_idx >= 0L
+  idx_safe <- strenv$jnp$maximum(order_idx, ai(0L))
+  gathered_present <- strenv$jnp$take_along_axis(
+    resp_cov_present_mat,
+    idx_safe,
+    axis = 1L
+  ) * strenv$jnp$astype(idx_valid, strenv$dtj)
+  span_mask <- gathered_present > 0
+
+  z_all <- neural_covariate_z_scores(resp_cov_mat, model_info)
+  gathered_z <- strenv$jnp$take_along_axis(
+    z_all,
+    idx_safe,
+    axis = 1L
+  )
+
+  dims <- ai(model_info$model_dims)
+  span_mask_expanded <- strenv$jnp$expand_dims(
+    strenv$jnp$astype(span_mask, strenv$dtj),
+    axis = 2L
+  )
+
+  start_tok <- strenv$jnp$reshape(
+    params$E_covariate_start,
+    list(1L, 1L, dims)
+  ) * strenv$jnp$ones(list(n_batch, max_spans, 1L), dtype = strenv$dtj)
+  end_tok <- strenv$jnp$reshape(
+    params$E_covariate_end,
+    list(1L, 1L, dims)
+  ) * strenv$jnp$ones(list(n_batch, max_spans, 1L), dtype = strenv$dtj)
+
+  role_start <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_covariate_role, ai(0L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_name <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_covariate_role, ai(1L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_value <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_covariate_role, ai(2L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_end <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_covariate_role, ai(3L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+
+  start_tok <- (start_tok + role_start) * span_mask_expanded
+  end_tok <- (end_tok + role_end) * span_mask_expanded
+
+  name_tok <- strenv$jnp$zeros(list(n_batch, max_spans, dims), dtype = strenv$dtj)
+  cov_text_proj <- neural_project_text_matrix(
+    model_info$covariate_name_text,
+    params$W_covariate_name_text
+  )
+  if (!is.null(cov_text_proj)) {
+    name_tok <- strenv$jnp$take(cov_text_proj, idx_safe, axis = 0L)
+    name_tok <- (name_tok + role_name) * span_mask_expanded
+  }
+
+  value_proj <- strenv$jnp$reshape(
+    params$W_covariate_value_shared,
+    list(1L, 1L, dims)
+  )
+  value_tok <- strenv$jnp$expand_dims(gathered_z, axis = 2L) * value_proj
+  value_tok <- (value_tok + role_value) * span_mask_expanded
+
+  span_tokens <- strenv$jnp$stack(
+    list(start_tok, name_tok, value_tok, end_tok),
+    axis = 2L
+  )
+  span_tokens <- strenv$jnp$reshape(
+    span_tokens,
+    list(n_batch, ai(max_spans * neural_covariate_span_width()), dims)
+  )
+  span_tokens <- neural_add_token_family_embedding(
+    span_tokens,
+    "covariate",
+    model_info,
+    params
+  )
+  span_tokens <- span_tokens * strenv$jnp$reshape(
+    strenv$jnp[["repeat"]](
+      strenv$jnp$reshape(strenv$jnp$astype(span_mask, strenv$dtj), list(n_batch, max_spans, 1L)),
+      repeats = ai(neural_covariate_span_width()),
+      axis = 1L
+    ),
+    list(n_batch, ai(max_spans * neural_covariate_span_width()), 1L)
+  )
+  token_mask <- strenv$jnp[["repeat"]](
+    strenv$jnp$astype(span_mask, strenv$dtj),
+    repeats = ai(neural_covariate_span_width()),
+    axis = 1L
+  )
+
+  list(tokens = span_tokens, mask = token_mask)
 }
 
 neural_add_token_family_embedding <- function(tokens,
@@ -1321,13 +1912,16 @@ add_context_tokens <- function(model_info,
                                matchup_idx = NULL,
                                resp_cov = NULL,
                                resp_cov_present = NULL,
+                               resp_cov_order = NULL,
                                experiment_idx = NULL,
                                params = NULL,
-                               batch = FALSE){
+                               batch = FALSE,
+                               return_mask = FALSE){
   if (is.null(params)) {
     params <- model_info$params
   }
   token_list <- list()
+  token_mask_list <- list()
   dims <- ai(model_info$model_dims)
   is_batch <- isTRUE(batch)
 
@@ -1441,26 +2035,57 @@ add_context_tokens <- function(model_info,
       params
     )
     token_list[[length(token_list) + 1L]] <- experiment_tok
+    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+      list(N_batch, 1L),
+      dtype = strenv$dtj
+    )
   }
   if (!is.null(params$E_stage) && !is.null(stage_idx_use)) {
     stage_vec <- params$E_stage[resp_party_idx_use, stage_idx_use]
     stage_tok <- strenv$jnp$reshape(stage_vec, list(-1L, 1L, dims))
     stage_tok <- neural_add_token_family_embedding(stage_tok, "stage", model_info, params)
     token_list[[length(token_list) + 1L]] <- stage_tok
+    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+      list(N_batch, 1L),
+      dtype = strenv$dtj
+    )
   }
   if (!is.null(params$E_resp_party)) {
     resp_vec <- strenv$jnp$take(params$E_resp_party, resp_party_idx_use, axis = 0L)
     resp_tok <- strenv$jnp$reshape(resp_vec, list(-1L, 1L, dims))
     resp_tok <- neural_add_token_family_embedding(resp_tok, "resp_party", model_info, params)
     token_list[[length(token_list) + 1L]] <- resp_tok
+    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+      list(N_batch, 1L),
+      dtype = strenv$dtj
+    )
   }
   if (!is.null(params$E_matchup) && !is.null(matchup_idx_use)) {
     matchup_vec <- strenv$jnp$take(params$E_matchup, matchup_idx_use, axis = 0L)
     matchup_tok <- strenv$jnp$reshape(matchup_vec, list(-1L, 1L, dims))
     matchup_tok <- neural_add_token_family_embedding(matchup_tok, "matchup", model_info, params)
     token_list[[length(token_list) + 1L]] <- matchup_tok
+    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+      list(N_batch, 1L),
+      dtype = strenv$dtj
+    )
   }
-  if (!is.null(params$E_covariate_id)) {
+  if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
+      !is.null(params$E_covariate_start)) {
+    cov_span <- neural_build_covariate_span_tokens(
+      model_info = model_info,
+      params = params,
+      resp_cov_mat = resp_cov_mat,
+      resp_cov_present_mat = resp_cov_present_mat,
+      resp_cov_order = resp_cov_order,
+      experiment_idx = experiment_idx_use,
+      n_batch = N_batch
+    )
+    if (!is.null(cov_span$tokens)) {
+      token_list[[length(token_list) + 1L]] <- cov_span$tokens
+      token_mask_list[[length(token_mask_list) + 1L]] <- cov_span$mask
+    }
+  } else if (!is.null(params$E_covariate_id)) {
     n_covariates <- ai(params$E_covariate_id$shape[[1]])
     if (n_covariates > 0L) {
       if (is.null(resp_cov_mat)) {
@@ -1516,27 +2141,115 @@ add_context_tokens <- function(model_info,
       }
       cov_tok <- neural_add_token_family_embedding(cov_tok, "covariate", model_info, params)
       token_list[[length(token_list) + 1L]] <- cov_tok
+      token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+        list(N_batch, n_covariates),
+        dtype = strenv$dtj
+      )
     }
   }
 
   if (length(token_list) == 0L) {
-    return(NULL)
+    if (!isTRUE(return_mask)) {
+      return(NULL)
+    }
+    return(list(tokens = NULL, mask = NULL))
   }
-  strenv$jnp$concatenate(token_list, axis = 1L)
+  out_tokens <- strenv$jnp$concatenate(token_list, axis = 1L)
+  if (!isTRUE(return_mask)) {
+    return(out_tokens)
+  }
+  out_mask <- if (length(token_mask_list) > 0L) {
+    strenv$jnp$concatenate(token_mask_list, axis = 1L)
+  } else {
+    NULL
+  }
+  list(tokens = out_tokens, mask = out_mask)
 }
 
-neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
-                                               resp_party_idx = NULL,
-                                               params = NULL){
-  if (is.null(params)) {
-    params <- model_info$params
-  }
+neural_build_factor_span_tokens_hard <- function(X_idx,
+                                                 model_info,
+                                                 params,
+                                                 factor_order = NULL,
+                                                 experiment_idx = NULL) {
   D_local <- ai(X_idx$shape[[2]])
-  token_list <- vector("list", D_local)
-  for (d_ in 1L:D_local) {
-    E_d <- params[[paste0("E_factor_", d_)]]
-    idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-    token_d <- strenv$jnp$take(E_d, idx_d, axis = 0L)
+  n_batch <- ai(X_idx$shape[[1]])
+  max_spans <- neural_max_factor_spans(model_info = model_info)
+  if (D_local < 1L || max_spans < 1L) {
+    return(list(tokens = NULL, mask = NULL))
+  }
+
+  order_idx <- neural_resolve_factor_order_jnp(
+    model_info = model_info,
+    factor_order = factor_order,
+    experiment_idx = experiment_idx,
+    n_batch = n_batch,
+    n_factors = D_local
+  )
+  if (is.null(order_idx)) {
+    return(list(tokens = NULL, mask = NULL))
+  }
+
+  idx_valid <- order_idx >= 0L
+  idx_safe <- strenv$jnp$maximum(order_idx, ai(0L))
+  span_mask <- idx_valid
+  span_mask_expanded <- strenv$jnp$expand_dims(
+    strenv$jnp$astype(span_mask, strenv$dtj),
+    axis = 2L
+  )
+  dims <- ai(model_info$model_dims)
+
+  start_tok <- strenv$jnp$reshape(
+    params$E_factor_start,
+    list(1L, 1L, dims)
+  ) * strenv$jnp$ones(list(n_batch, max_spans, 1L), dtype = strenv$dtj)
+  end_tok <- strenv$jnp$reshape(
+    params$E_factor_end,
+    list(1L, 1L, dims)
+  ) * strenv$jnp$ones(list(n_batch, max_spans, 1L), dtype = strenv$dtj)
+
+  role_start <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(0L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_factor <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(1L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_level <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(2L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_end <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(3L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+
+  gather_idx <- strenv$jnp[["repeat"]](
+    strenv$jnp$expand_dims(idx_safe, axis = 2L),
+    repeats = ai(dims),
+    axis = 2L
+  )
+
+  factor_tok_all <- strenv$jnp$zeros(list(n_batch, D_local, dims), dtype = strenv$dtj)
+  factor_text_proj <- neural_project_text_matrix(
+    model_info$factor_name_text,
+    params$W_factor_name_text
+  )
+  if (!is.null(factor_text_proj)) {
+    factor_tok_all <- strenv$jnp$reshape(
+      factor_text_proj,
+      list(1L, D_local, dims)
+    ) * strenv$jnp$ones(list(n_batch, 1L, 1L), dtype = strenv$dtj)
+  }
+  factor_tok <- strenv$jnp$take_along_axis(
+    factor_tok_all,
+    gather_idx,
+    axis = 1L
+  )
+
+  level_token_list <- vector("list", D_local)
+  for (d_ in seq_len(D_local)) {
+    token_d <- strenv$jnp$zeros(list(n_batch, dims), dtype = strenv$dtj)
     if (!is.null(params$W_level_name_text) &&
         !is.null(model_info$level_name_text) &&
         length(model_info$level_name_text) >= d_) {
@@ -1545,36 +2258,137 @@ neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
         params$W_level_name_text
       )
       if (!is.null(level_text_proj)) {
-        token_d <- token_d + strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
+        idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+        token_d <- strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
       }
     }
-    token_list[[d_]] <- token_d
+    level_token_list[[d_]] <- token_d
   }
-  tokens <- strenv$jnp$stack(token_list, axis = 1L)
-  if (!is.null(params$E_feature_id)) {
-    feature_tok <- strenv$jnp$reshape(
-      params$E_feature_id,
-      list(1L, D_local, ai(model_info$model_dims))
-    )
-    tokens <- tokens + feature_tok
-  }
-  factor_text_proj <- neural_project_text_matrix(
-    model_info$factor_name_text,
-    params$W_factor_name_text
+  level_tok_all <- strenv$jnp$stack(level_token_list, axis = 1L)
+  level_tok <- strenv$jnp$take_along_axis(
+    level_tok_all,
+    gather_idx,
+    axis = 1L
   )
-  if (!is.null(factor_text_proj)) {
-    tokens <- tokens + strenv$jnp$reshape(
-      factor_text_proj,
-      list(1L, D_local, ai(model_info$model_dims))
+
+  start_tok <- (start_tok + role_start) * span_mask_expanded
+  factor_tok <- (factor_tok + role_factor) * span_mask_expanded
+  level_tok <- (level_tok + role_level) * span_mask_expanded
+  end_tok <- (end_tok + role_end) * span_mask_expanded
+
+  span_tokens <- strenv$jnp$stack(
+    list(start_tok, factor_tok, level_tok, end_tok),
+    axis = 2L
+  )
+  span_tokens <- strenv$jnp$reshape(
+    span_tokens,
+    list(n_batch, ai(max_spans * neural_factor_span_width()), dims)
+  )
+  span_tokens <- neural_add_token_family_embedding(
+    span_tokens,
+    "factor_candidate",
+    model_info,
+    params
+  )
+  token_mask <- strenv$jnp[["repeat"]](
+    strenv$jnp$astype(span_mask, strenv$dtj),
+    repeats = ai(neural_factor_span_width()),
+    axis = 1L
+  )
+  span_tokens <- span_tokens * strenv$jnp$reshape(
+    token_mask,
+    list(n_batch, ai(max_spans * neural_factor_span_width()), 1L)
+  )
+  list(tokens = span_tokens, mask = token_mask)
+}
+
+neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
+                                               resp_party_idx = NULL,
+                                               experiment_idx = NULL,
+                                               factor_order = NULL,
+                                               params = NULL,
+                                               return_mask = FALSE){
+  if (is.null(params)) {
+    params <- model_info$params
+  }
+  n_batch <- ai(X_idx$shape[[1]])
+  if (identical(neural_factor_tokenization(model_info), "language_span") &&
+      !is.null(params$E_factor_start)) {
+    cand_info <- neural_build_factor_span_tokens_hard(
+      X_idx = X_idx,
+      model_info = model_info,
+      params = params,
+      factor_order = factor_order,
+      experiment_idx = experiment_idx
+    )
+    tokens <- cand_info$tokens %||% strenv$jnp$zeros(
+      list(n_batch, 0L, ai(model_info$model_dims)),
+      dtype = strenv$dtj
+    )
+    token_mask <- cand_info$mask %||% strenv$jnp$zeros(list(n_batch, 0L), dtype = strenv$dtj)
+  } else {
+    D_local <- ai(X_idx$shape[[2]])
+    token_list <- vector("list", D_local)
+    for (d_ in 1L:D_local) {
+      E_d <- params[[paste0("E_factor_", d_)]]
+      idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+      token_d <- strenv$jnp$take(E_d, idx_d, axis = 0L)
+      if (!is.null(params$W_level_name_text) &&
+          !is.null(model_info$level_name_text) &&
+          length(model_info$level_name_text) >= d_) {
+        level_text_proj <- neural_project_text_matrix(
+          model_info$level_name_text[[d_]],
+          params$W_level_name_text
+        )
+        if (!is.null(level_text_proj)) {
+          token_d <- token_d + strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
+        }
+      }
+      token_list[[d_]] <- token_d
+    }
+    tokens <- strenv$jnp$stack(token_list, axis = 1L)
+    if (!is.null(params$E_feature_id)) {
+      feature_tok <- strenv$jnp$reshape(
+        params$E_feature_id,
+        list(1L, D_local, ai(model_info$model_dims))
+      )
+      tokens <- tokens + feature_tok
+    }
+    factor_text_proj <- neural_project_text_matrix(
+      model_info$factor_name_text,
+      params$W_factor_name_text
+    )
+    if (!is.null(factor_text_proj)) {
+      tokens <- tokens + strenv$jnp$reshape(
+        factor_text_proj,
+        list(1L, D_local, ai(model_info$model_dims))
+      )
+    }
+    tokens <- neural_add_token_family_embedding(tokens, "factor_candidate", model_info, params)
+    token_mask <- strenv$jnp$ones(
+      list(n_batch, ai(tokens$shape[[2]])),
+      dtype = strenv$dtj
     )
   }
-  tokens <- neural_add_token_family_embedding(tokens, "factor_candidate", model_info, params)
-  add_party_rel_tokens(tokens,
-                       party_idx = party_idx,
-                       resp_party_idx = resp_party_idx,
-                       model_info = model_info,
-                       params = params,
-                       require_party = FALSE)
+  width_before_aux <- ai(tokens$shape[[2]])
+  tokens <- add_party_rel_tokens(tokens,
+                                 party_idx = party_idx,
+                                 resp_party_idx = resp_party_idx,
+                                 model_info = model_info,
+                                 params = params,
+                                 require_party = FALSE)
+  if (!isTRUE(return_mask)) {
+    return(tokens)
+  }
+  width_after_aux <- ai(tokens$shape[[2]])
+  if (width_after_aux > width_before_aux) {
+    aux_mask <- strenv$jnp$ones(
+      list(n_batch, ai(width_after_aux - width_before_aux)),
+      dtype = strenv$dtj
+    )
+    token_mask <- strenv$jnp$concatenate(list(token_mask, aux_mask), axis = 1L)
+  }
+  list(tokens = tokens, mask = token_mask)
 }
 
 neural_build_context_tokens_batch <- function(model_info,
@@ -1583,47 +2397,67 @@ neural_build_context_tokens_batch <- function(model_info,
                                               matchup_idx = NULL,
                                               resp_cov = NULL,
                                               resp_cov_present = NULL,
+                                              resp_cov_order = NULL,
                                               experiment_idx = NULL,
-                                              params = NULL){
+                                              params = NULL,
+                                              return_mask = FALSE){
   add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
                      matchup_idx = matchup_idx,
                      resp_cov = resp_cov,
                      resp_cov_present = resp_cov_present,
+                     resp_cov_order = resp_cov_order,
                      experiment_idx = experiment_idx,
                      params = params,
-                     batch = TRUE)
+                     batch = TRUE,
+                     return_mask = return_mask)
 }
 
-neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model_info, params = NULL,
-                                               use_role = FALSE, resp_party_idx = NULL){
-  if (is.null(params)) {
-    params <- model_info$params
+neural_build_factor_span_tokens_soft <- function(pi_vec,
+                                                 model_info,
+                                                 params,
+                                                 factor_order = NULL) {
+  n_factors <- ai(model_info$n_factors)
+  max_spans <- neural_max_factor_spans(model_info = model_info)
+  if (n_factors < 1L || max_spans < 1L) {
+    return(list(tokens = NULL, mask = NULL))
   }
+
+  order_idx <- neural_resolve_factor_order_jnp(
+    model_info = model_info,
+    factor_order = factor_order,
+    n_batch = 1L,
+    n_factors = n_factors
+  )
+  if (is.null(order_idx)) {
+    return(list(tokens = NULL, mask = NULL))
+  }
+
   pi_vec <- strenv$jnp$reshape(pi_vec, list(-1L))
-  token_list <- vector("list", ai(model_info$n_factors))
-  for (d_ in seq_len(ai(model_info$n_factors))) {
+  dims <- ai(model_info$model_dims)
+  factor_token_list <- vector("list", n_factors)
+  level_token_list <- vector("list", n_factors)
+  factor_text_proj <- neural_project_text_matrix(
+    model_info$factor_name_text,
+    params$W_factor_name_text
+  )
+  for (d_ in seq_len(n_factors)) {
+    factor_token_list[[d_]] <- if (!is.null(factor_text_proj)) {
+      strenv$jnp$take(factor_text_proj, ai(d_ - 1L), axis = 0L)
+    } else {
+      strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
+    }
+    token_d <- strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
     idx <- model_info$factor_index_list[[d_]]
     idx <- strenv$jnp$atleast_1d(idx)
     p_sub <- strenv$jnp$take(pi_vec, idx, axis = 0L)
-    p_full <- apply_implicit_parameterization_jnp(p_sub,
-                                                  implicit = isTRUE(model_info$implicit),
-                                                  axis = 0L,
-                                                  clip = TRUE)
-    E_d <- params[[paste0("E_factor_", d_)]]
-    n_p <- ai(p_full$shape[[1]])
-    n_e <- ai(E_d$shape[[1]])
-    if (!is.na(n_p) && !is.na(n_e) && n_p != n_e) {
-      if (n_e > n_p) {
-        pad_n <- ai(n_e - n_p)
-        pad <- strenv$jnp$zeros(list(pad_n), dtype = strenv$dtj)
-        p_full <- strenv$jnp$concatenate(list(p_full, pad), axis = 0L)
-      } else {
-        p_full <- strenv$jnp$take(p_full, strenv$jnp$arange(ai(n_e)), axis = 0L)
-      }
-    }
-    token_d <- strenv$jnp$einsum("l,lm->m", p_full, E_d)
+    p_full <- apply_implicit_parameterization_jnp(
+      p_sub,
+      implicit = isTRUE(model_info$implicit),
+      axis = 0L,
+      clip = TRUE
+    )
     if (!is.null(params$W_level_name_text) &&
         !is.null(model_info$level_name_text) &&
         length(model_info$level_name_text) >= d_) {
@@ -1632,23 +2466,171 @@ neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model
         params$W_level_name_text
       )
       if (!is.null(level_text_proj)) {
-        token_d <- token_d + strenv$jnp$einsum("l,lm->m", p_full, level_text_proj)
+        n_p <- ai(p_full$shape[[1]])
+        n_e <- ai(level_text_proj$shape[[1]])
+        if (!is.na(n_p) && !is.na(n_e) && n_p != n_e) {
+          if (n_e > n_p) {
+            pad_n <- ai(n_e - n_p)
+            pad <- strenv$jnp$zeros(list(pad_n), dtype = strenv$dtj)
+            p_full <- strenv$jnp$concatenate(list(p_full, pad), axis = 0L)
+          } else {
+            p_full <- strenv$jnp$take(p_full, strenv$jnp$arange(ai(n_e)), axis = 0L)
+          }
+        }
+        token_d <- strenv$jnp$einsum("l,lm->m", p_full, level_text_proj)
       }
     }
-    token_list[[d_]] <- token_d
+    level_token_list[[d_]] <- token_d
   }
-  tokens <- strenv$jnp$stack(token_list, axis = 0L)
-  if (!is.null(params$E_feature_id)) {
-    tokens <- tokens + params$E_feature_id
-  }
-  factor_text_proj <- neural_project_text_matrix(
-    model_info$factor_name_text,
-    params$W_factor_name_text
+
+  factor_tok_all <- strenv$jnp$reshape(
+    strenv$jnp$stack(factor_token_list, axis = 0L),
+    list(1L, n_factors, dims)
   )
-  if (!is.null(factor_text_proj)) {
-    tokens <- tokens + factor_text_proj
+  level_tok_all <- strenv$jnp$reshape(
+    strenv$jnp$stack(level_token_list, axis = 0L),
+    list(1L, n_factors, dims)
+  )
+  idx_valid <- order_idx >= 0L
+  idx_safe <- strenv$jnp$maximum(order_idx, ai(0L))
+  gather_idx <- strenv$jnp[["repeat"]](
+    strenv$jnp$expand_dims(idx_safe, axis = 2L),
+    repeats = ai(dims),
+    axis = 2L
+  )
+  span_mask <- idx_valid
+  span_mask_expanded <- strenv$jnp$expand_dims(
+    strenv$jnp$astype(span_mask, strenv$dtj),
+    axis = 2L
+  )
+  start_tok <- strenv$jnp$reshape(
+    params$E_factor_start,
+    list(1L, 1L, dims)
+  ) * strenv$jnp$ones(list(1L, max_spans, 1L), dtype = strenv$dtj)
+  end_tok <- strenv$jnp$reshape(
+    params$E_factor_end,
+    list(1L, 1L, dims)
+  ) * strenv$jnp$ones(list(1L, max_spans, 1L), dtype = strenv$dtj)
+  role_start <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(0L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_factor <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(1L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_level <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(2L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  role_end <- strenv$jnp$reshape(
+    strenv$jnp$take(params$E_factor_role, ai(3L), axis = 0L),
+    list(1L, 1L, dims)
+  )
+  factor_tok <- strenv$jnp$take_along_axis(factor_tok_all, gather_idx, axis = 1L)
+  level_tok <- strenv$jnp$take_along_axis(level_tok_all, gather_idx, axis = 1L)
+  start_tok <- (start_tok + role_start) * span_mask_expanded
+  factor_tok <- (factor_tok + role_factor) * span_mask_expanded
+  level_tok <- (level_tok + role_level) * span_mask_expanded
+  end_tok <- (end_tok + role_end) * span_mask_expanded
+  span_tokens <- strenv$jnp$stack(
+    list(start_tok, factor_tok, level_tok, end_tok),
+    axis = 2L
+  )
+  span_tokens <- strenv$jnp$reshape(
+    span_tokens,
+    list(1L, ai(max_spans * neural_factor_span_width()), dims)
+  )
+  span_tokens <- neural_add_token_family_embedding(
+    span_tokens,
+    "factor_candidate",
+    model_info,
+    params
+  )
+  token_mask <- strenv$jnp[["repeat"]](
+    strenv$jnp$astype(span_mask, strenv$dtj),
+    repeats = ai(neural_factor_span_width()),
+    axis = 1L
+  )
+  span_tokens <- span_tokens * strenv$jnp$reshape(
+    token_mask,
+    list(1L, ai(max_spans * neural_factor_span_width()), 1L)
+  )
+  list(tokens = span_tokens, mask = token_mask)
+}
+
+neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model_info, params = NULL,
+                                               use_role = FALSE, resp_party_idx = NULL,
+                                               factor_order = NULL, return_mask = FALSE){
+  if (is.null(params)) {
+    params <- model_info$params
   }
-  tokens <- neural_add_token_family_embedding(tokens, "factor_candidate", model_info, params)
+  if (identical(neural_factor_tokenization(model_info), "language_span") &&
+      !is.null(params$E_factor_start)) {
+    cand_info <- neural_build_factor_span_tokens_soft(
+      pi_vec = pi_vec,
+      model_info = model_info,
+      params = params,
+      factor_order = factor_order
+    )
+    tokens <- cand_info$tokens %||% strenv$jnp$zeros(
+      list(1L, 0L, ai(model_info$model_dims)),
+      dtype = strenv$dtj
+    )
+    token_mask <- cand_info$mask %||% strenv$jnp$zeros(list(1L, 0L), dtype = strenv$dtj)
+  } else {
+    pi_vec <- strenv$jnp$reshape(pi_vec, list(-1L))
+    token_list <- vector("list", ai(model_info$n_factors))
+    for (d_ in seq_len(ai(model_info$n_factors))) {
+      idx <- model_info$factor_index_list[[d_]]
+      idx <- strenv$jnp$atleast_1d(idx)
+      p_sub <- strenv$jnp$take(pi_vec, idx, axis = 0L)
+      p_full <- apply_implicit_parameterization_jnp(p_sub,
+                                                    implicit = isTRUE(model_info$implicit),
+                                                    axis = 0L,
+                                                    clip = TRUE)
+      E_d <- params[[paste0("E_factor_", d_)]]
+      n_p <- ai(p_full$shape[[1]])
+      n_e <- ai(E_d$shape[[1]])
+      if (!is.na(n_p) && !is.na(n_e) && n_p != n_e) {
+        if (n_e > n_p) {
+          pad_n <- ai(n_e - n_p)
+          pad <- strenv$jnp$zeros(list(pad_n), dtype = strenv$dtj)
+          p_full <- strenv$jnp$concatenate(list(p_full, pad), axis = 0L)
+        } else {
+          p_full <- strenv$jnp$take(p_full, strenv$jnp$arange(ai(n_e)), axis = 0L)
+        }
+      }
+      token_d <- strenv$jnp$einsum("l,lm->m", p_full, E_d)
+      if (!is.null(params$W_level_name_text) &&
+          !is.null(model_info$level_name_text) &&
+          length(model_info$level_name_text) >= d_) {
+        level_text_proj <- neural_project_text_matrix(
+          model_info$level_name_text[[d_]],
+          params$W_level_name_text
+        )
+        if (!is.null(level_text_proj)) {
+          token_d <- token_d + strenv$jnp$einsum("l,lm->m", p_full, level_text_proj)
+        }
+      }
+      token_list[[d_]] <- token_d
+    }
+    tokens <- strenv$jnp$stack(token_list, axis = 0L)
+    if (!is.null(params$E_feature_id)) {
+      tokens <- tokens + params$E_feature_id
+    }
+    factor_text_proj <- neural_project_text_matrix(
+      model_info$factor_name_text,
+      params$W_factor_name_text
+    )
+    if (!is.null(factor_text_proj)) {
+      tokens <- tokens + factor_text_proj
+    }
+    tokens <- neural_add_token_family_embedding(tokens, "factor_candidate", model_info, params)
+    tokens <- strenv$jnp$reshape(tokens, list(1L, tokens$shape[[1]], model_info$model_dims))
+    token_mask <- strenv$jnp$ones(list(1L, ai(tokens$shape[[2]])), dtype = strenv$dtj)
+  }
+  width_before_aux <- ai(tokens$shape[[2]])
   tokens <- add_party_rel_tokens(tokens,
                                  party_idx = party_idx,
                                  role_id = role_id,
@@ -1656,7 +2638,15 @@ neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model
                                  resp_party_idx = resp_party_idx,
                                  model_info = model_info,
                                  params = params)
-  strenv$jnp$reshape(tokens, list(1L, tokens$shape[[1]], model_info$model_dims))
+  if (!isTRUE(return_mask)) {
+    return(tokens)
+  }
+  width_after_aux <- ai(tokens$shape[[2]])
+  if (width_after_aux > width_before_aux) {
+    aux_mask <- strenv$jnp$ones(list(1L, ai(width_after_aux - width_before_aux)), dtype = strenv$dtj)
+    token_mask <- strenv$jnp$concatenate(list(token_mask, aux_mask), axis = 1L)
+  }
+  list(tokens = tokens, mask = token_mask)
 }
 
 neural_build_context_tokens <- function(model_info,
@@ -1665,17 +2655,21 @@ neural_build_context_tokens <- function(model_info,
                                         matchup_idx = NULL,
                                         resp_cov_vec = NULL,
                                         resp_cov_present_vec = NULL,
+                                        resp_cov_order = NULL,
                                         experiment_idx = NULL,
-                                        params = NULL){
+                                        params = NULL,
+                                        return_mask = FALSE){
   add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
                      matchup_idx = matchup_idx,
                      resp_cov = resp_cov_vec,
                      resp_cov_present = resp_cov_present_vec,
+                     resp_cov_order = resp_cov_order,
                      experiment_idx = experiment_idx,
                      params = params,
-                     batch = FALSE)
+                     batch = FALSE,
+                     return_mask = return_mask)
 }
 
 neural_build_choice_token <- function(model_info, params = NULL){
@@ -1694,6 +2688,7 @@ neural_build_choice_token <- function(model_info, params = NULL){
 neural_run_transformer <- function(tokens,
                                    model_info,
                                    params = NULL,
+                                   token_mask = NULL,
                                    return_details = FALSE){
   if (is.null(params)) {
     params <- model_info$params
@@ -1750,6 +2745,14 @@ neural_run_transformer <- function(tokens,
     Kh <- neural_rms_norm(Kh, RMS_k, model_info$head_dim)
     scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
     scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
+    if (!is.null(token_mask)) {
+      mask_use <- strenv$jnp$reshape(
+        strenv$jnp$astype(token_mask > 0, scores$dtype),
+        list(token_mask$shape[[1]], 1L, 1L, token_mask$shape[[2]])
+      )
+      large_neg <- strenv$jnp$array(-1e9, dtype = scores$dtype)
+      scores <- strenv$jnp$where(mask_use > 0, scores, large_neg)
+    }
     attn <- strenv$jax$nn$softmax(scores, axis = -1L)
     context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
     context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]],
@@ -1797,7 +2800,8 @@ neural_run_transformer <- function(tokens,
 }
 
 neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
-                                              params = NULL, return_attn = FALSE) {
+                                              params = NULL, kv_token_mask = NULL,
+                                              return_attn = FALSE) {
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -1824,6 +2828,14 @@ neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
   Kh <- neural_rms_norm(Kh, params$RMS_k_cross, model_info$head_dim)
   scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
   scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
+  if (!is.null(kv_token_mask)) {
+    kv_mask <- strenv$jnp$reshape(
+      strenv$jnp$astype(kv_token_mask > 0, scores$dtype),
+      list(kv_token_mask$shape[[1]], 1L, 1L, kv_token_mask$shape[[2]])
+    )
+    neg_inf <- strenv$jnp$array(-1e30, dtype = scores$dtype)
+    scores <- strenv$jnp$where(kv_mask > 0, scores, neg_inf)
+  }
   attn <- strenv$jax$nn$softmax(scores, axis = -1L)
   ctx_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
   ctx <- strenv$jnp$reshape(ctx_h, list(ctx_h$shape[[1]], 1L, ai(model_info$model_dims)))
@@ -1862,41 +2874,61 @@ neural_encode_candidate_core_prepared <- function(params,
                                                   resp_party_idx,
                                                   resp_cov = NULL,
                                                   resp_cov_present = NULL,
+                                                  resp_cov_order = NULL,
                                                   experiment_idx = NULL,
+                                                  factor_order = NULL,
                                                   stage_idx = NULL,
                                                   matchup_idx = NULL,
                                                   return_tokens = FALSE) {
   n_batch <- ai(X_idx$shape[[1]])
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
-  ctx_tokens <- neural_build_context_tokens_batch(
+  choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+  ctx_info <- neural_build_context_tokens_batch(
     model_info = model_info,
     resp_party_idx = resp_party_idx,
     stage_idx = stage_idx,
     matchup_idx = matchup_idx,
     resp_cov = resp_cov,
     resp_cov_present = resp_cov_present,
+    resp_cov_order = resp_cov_order,
     experiment_idx = experiment_idx,
-    params = params
+    params = params,
+    return_mask = TRUE
   )
-  cand_tokens <- neural_build_candidate_tokens_hard(
+  ctx_tokens <- ctx_info$tokens %||% NULL
+  ctx_mask <- ctx_info$mask %||% NULL
+  cand_info <- neural_build_candidate_tokens_hard(
     X_idx,
     party_idx,
     model_info = model_info,
     resp_party_idx = resp_party_idx,
-    params = params
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    params = params,
+    return_mask = TRUE
   )
+  cand_tokens <- cand_info$tokens
+  cand_mask <- cand_info$mask
   if (is.null(ctx_tokens)) {
     tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
+    token_mask <- strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
   } else {
     tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
+    token_mask <- strenv$jnp$concatenate(list(choice_mask, ctx_mask, cand_mask), axis = 1L)
   }
-  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  transformer_out <- neural_run_transformer(
+    tokens,
+    model_info,
+    params,
+    token_mask = token_mask,
+    return_details = TRUE
+  )
   phi <- neural_extract_choice_representation(transformer_out)
   if (!isTRUE(return_tokens)) {
     return(phi)
   }
   cand_out <- neural_extract_candidate_tokens(transformer_out, model_info)
-  list(phi = phi, cand_tokens_out = cand_out)
+  list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = cand_mask)
 }
 
 neural_predict_pair_cross_core_prepared <- function(params,
@@ -1908,53 +2940,81 @@ neural_predict_pair_cross_core_prepared <- function(params,
                                                     resp_p,
                                                     resp_c = NULL,
                                                     resp_c_present = NULL,
+                                                    resp_c_order = NULL,
                                                     experiment_idx = NULL,
+                                                    factor_order = NULL,
                                                     stage_idx,
                                                     matchup_idx = NULL) {
   n_batch <- ai(Xl$shape[[1]])
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
-  ctx_tokens <- neural_build_context_tokens_batch(
+  choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+  ctx_info <- neural_build_context_tokens_batch(
     model_info = model_info,
     resp_party_idx = resp_p,
     stage_idx = stage_idx,
     matchup_idx = matchup_idx,
     resp_cov = resp_c,
     resp_cov_present = resp_c_present,
+    resp_cov_order = resp_c_order,
     experiment_idx = experiment_idx,
-    params = params
+    params = params,
+    return_mask = TRUE
+  )
+  ctx_tokens <- ctx_info$tokens %||% NULL
+  ctx_mask <- ctx_info$mask %||% NULL
+  left_info <- neural_build_candidate_tokens_hard(
+    Xl,
+    pl,
+    model_info = model_info,
+    resp_party_idx = resp_p,
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    params = params,
+    return_mask = TRUE
   )
   left_tokens <- neural_add_segment_embedding(
-    neural_build_candidate_tokens_hard(
-      Xl,
-      pl,
-      model_info = model_info,
-      resp_party_idx = resp_p,
-      params = params
-    ),
+    left_info$tokens,
     0L,
     model_info = model_info,
     params = params
   )
+  right_info <- neural_build_candidate_tokens_hard(
+    Xr,
+    pr,
+    model_info = model_info,
+    resp_party_idx = resp_p,
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    params = params,
+    return_mask = TRUE
+  )
   right_tokens <- neural_add_segment_embedding(
-    neural_build_candidate_tokens_hard(
-      Xr,
-      pr,
-      model_info = model_info,
-      resp_party_idx = resp_p,
-      params = params
-    ),
+    right_info$tokens,
     1L,
     model_info = model_info,
     params = params
   )
   sep_tok <- neural_build_sep_token(model_info, n_batch = n_batch, params = params)
+  sep_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+  left_mask <- left_info$mask
+  right_mask <- right_info$mask
   token_parts <- list(choice_tok)
+  mask_parts <- list(choice_mask)
   if (!is.null(ctx_tokens)) {
     token_parts <- c(token_parts, list(ctx_tokens))
+    mask_parts <- c(mask_parts, list(ctx_mask))
   }
   token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+  mask_parts <- c(mask_parts, list(sep_mask, left_mask, sep_mask, right_mask))
   tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+  transformer_out <- neural_run_transformer(
+    tokens,
+    model_info,
+    params,
+    token_mask = token_mask,
+    return_details = TRUE
+  )
   cls_out <- neural_extract_choice_representation(transformer_out)
   neural_linear_head(cls_out, params$W_out, params$b_out)
 }
@@ -1968,7 +3028,9 @@ neural_predict_pair_core_prepared <- function(params,
                                               resp_p,
                                               resp_c = NULL,
                                               resp_c_present = NULL,
+                                              resp_c_order = NULL,
                                               experiment_idx = NULL,
+                                              factor_order = NULL,
                                               return_logits = FALSE) {
   mode <- neural_cross_encoder_mode(model_info)
   use_cross_encoder <- identical(mode, "full")
@@ -1992,7 +3054,9 @@ neural_predict_pair_core_prepared <- function(params,
       resp_p = resp_p,
       resp_c = resp_c,
       resp_c_present = resp_c_present,
+      resp_c_order = resp_c_order,
       experiment_idx = experiment_idx,
+      factor_order = factor_order,
       stage_idx = stage_idx,
       matchup_idx = matchup_idx
     )
@@ -2006,6 +3070,12 @@ neural_predict_pair_core_prepared <- function(params,
     }
     resp_c_present_all <- if (is.null(resp_c_present)) NULL else {
       strenv$jnp$concatenate(list(resp_c_present, resp_c_present), axis = 0L)
+    }
+    resp_c_order_all <- if (is.null(resp_c_order)) NULL else {
+      strenv$jnp$concatenate(list(resp_c_order, resp_c_order), axis = 0L)
+    }
+    factor_order_all <- if (is.null(factor_order)) NULL else {
+      strenv$jnp$concatenate(list(factor_order, factor_order), axis = 0L)
     }
     experiment_idx_all <- if (is.null(experiment_idx)) NULL else {
       strenv$jnp$concatenate(list(experiment_idx, experiment_idx), axis = 0L)
@@ -2026,13 +3096,16 @@ neural_predict_pair_core_prepared <- function(params,
         resp_party_idx = resp_p_all,
         resp_cov = resp_c_all,
         resp_cov_present = resp_c_present_all,
+        resp_cov_order = resp_c_order_all,
         experiment_idx = experiment_idx_all,
+        factor_order = factor_order_all,
         stage_idx = stage_all,
         matchup_idx = matchup_all,
         return_tokens = TRUE
       )
       phi_all <- enc_all$phi
       cand_all <- enc_all$cand_tokens_out
+      cand_mask_all <- enc_all$cand_token_mask
     } else {
       phi_all <- neural_encode_candidate_core_prepared(
         params = params,
@@ -2042,12 +3115,15 @@ neural_predict_pair_core_prepared <- function(params,
         resp_party_idx = resp_p_all,
         resp_cov = resp_c_all,
         resp_cov_present = resp_c_present_all,
+        resp_cov_order = resp_c_order_all,
         experiment_idx = experiment_idx_all,
+        factor_order = factor_order_all,
         stage_idx = stage_all,
         matchup_idx = matchup_all,
         return_tokens = FALSE
       )
       cand_all <- NULL
+      cand_mask_all <- NULL
     }
 
     idx_left <- strenv$jnp$arange(n_batch)
@@ -2058,17 +3134,21 @@ neural_predict_pair_core_prepared <- function(params,
     if (isTRUE(use_cross_attn)) {
       cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
       cand_right_out <- strenv$jnp$take(cand_all, idx_right, axis = 0L)
+      cand_left_mask <- strenv$jnp$take(cand_mask_all, idx_left, axis = 0L)
+      cand_right_mask <- strenv$jnp$take(cand_mask_all, idx_right, axis = 0L)
       ctx_left <- neural_cross_attend_cls_to_tokens(
         phi_l,
         cand_right_out,
         model_info = model_info,
-        params = params
+        params = params,
+        kv_token_mask = cand_right_mask
       )
       ctx_right <- neural_cross_attend_cls_to_tokens(
         phi_r,
         cand_left_out,
         model_info = model_info,
-        params = params
+        params = params,
+        kv_token_mask = cand_left_mask
       )
       phi_l <- neural_merge_cross_attn_representation(
         phi_l,
@@ -2121,7 +3201,9 @@ neural_predict_single_core_prepared <- function(params,
                                                 resp_p,
                                                 resp_c = NULL,
                                                 resp_c_present = NULL,
+                                                resp_c_order = NULL,
                                                 experiment_idx = NULL,
+                                                factor_order = NULL,
                                                 return_logits = FALSE) {
   choice_out <- neural_encode_candidate_core_prepared(
     params = params,
@@ -2131,7 +3213,9 @@ neural_predict_single_core_prepared <- function(params,
     resp_party_idx = resp_p,
     resp_cov = resp_c,
     resp_cov_present = resp_c_present,
+    resp_cov_order = resp_c_order,
     experiment_idx = experiment_idx,
+    factor_order = factor_order,
     return_tokens = FALSE
   )
   logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
@@ -2166,7 +3250,9 @@ neural_predict_prepared <- function(params,
       resp_p = prep$resp_party,
       resp_c = prep$resp_cov,
       resp_c_present = prep$resp_cov_present %||% NULL,
+      resp_c_order = prep$resp_cov_order %||% NULL,
       experiment_idx = prep$experiment_idx %||% NULL,
+      factor_order = prep$factor_order %||% NULL,
       return_logits = return_logits
     ))
   }
@@ -2178,7 +3264,9 @@ neural_predict_prepared <- function(params,
     resp_p = prep$resp_party,
     resp_c = prep$resp_cov,
     resp_c_present = prep$resp_cov_present %||% NULL,
+    resp_c_order = prep$resp_cov_order %||% NULL,
     experiment_idx = prep$experiment_idx %||% NULL,
+    factor_order = prep$factor_order %||% NULL,
     return_logits = return_logits
   )
 }
@@ -2208,7 +3296,7 @@ neural_get_predict_jit <- function(model_info,
   )
   if (!exists(cache_key, envir = neural_prediction_jit_cache, inherits = FALSE)) {
     compiled <- if (isTRUE(pairwise)) {
-      strenv$jax$jit(function(params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, experiment_idx) {
+      strenv$jax$jit(function(params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
         neural_predict_pair_core_prepared(
           params = params,
           model_info = model_info,
@@ -2219,12 +3307,14 @@ neural_get_predict_jit <- function(model_info,
           resp_p = resp_p,
           resp_c = resp_c,
           resp_c_present = resp_c_present,
+          resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          factor_order = factor_order,
           return_logits = return_logits
         )
       })
     } else {
-      strenv$jax$jit(function(params, Xb, party_idx, resp_p, resp_c, resp_c_present, experiment_idx) {
+      strenv$jax$jit(function(params, Xb, party_idx, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
         neural_predict_single_core_prepared(
           params = params,
           model_info = model_info,
@@ -2233,7 +3323,9 @@ neural_get_predict_jit <- function(model_info,
           resp_p = resp_p,
           resp_c = resp_c,
           resp_c_present = resp_c_present,
+          resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          factor_order = factor_order,
           return_logits = return_logits
         )
       })
@@ -2255,7 +3347,7 @@ neural_get_predict_from_theta_jit <- function(model_info,
   )
   if (!exists(cache_key, envir = neural_prediction_jit_cache, inherits = FALSE)) {
     compiled <- if (isTRUE(pairwise)) {
-      predict_one <- function(theta_vec, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, experiment_idx) {
+      predict_one <- function(theta_vec, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
         params <- neural_params_from_theta(theta_vec, model_info)
         neural_predict_pair_core_prepared(
           params = params,
@@ -2267,17 +3359,19 @@ neural_get_predict_from_theta_jit <- function(model_info,
           resp_p = resp_p,
           resp_c = resp_c,
           resp_c_present = resp_c_present,
+          resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          factor_order = factor_order,
           return_logits = return_logits
         )
       }
       vmapped <- strenv$jax$vmap(
         predict_one,
-        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
       )
       strenv$jax$jit(vmapped)
     } else {
-      predict_one <- function(theta_vec, Xb, party_idx, resp_p, resp_c, resp_c_present, experiment_idx) {
+      predict_one <- function(theta_vec, Xb, party_idx, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
         params <- neural_params_from_theta(theta_vec, model_info)
         neural_predict_single_core_prepared(
           params = params,
@@ -2287,13 +3381,15 @@ neural_get_predict_from_theta_jit <- function(model_info,
           resp_p = resp_p,
           resp_c = resp_c,
           resp_c_present = resp_c_present,
+          resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          factor_order = factor_order,
           return_logits = return_logits
         )
       }
       vmapped <- strenv$jax$vmap(
         predict_one,
-        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL)
+        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
       )
       strenv$jax$jit(vmapped)
     }
@@ -2321,7 +3417,9 @@ neural_predict_prepared_jitted <- function(params,
       prep$resp_party,
       prep$resp_cov,
       prep$resp_cov_present %||% NULL,
-      prep$experiment_idx %||% NULL
+      prep$resp_cov_order %||% NULL,
+      prep$experiment_idx %||% NULL,
+      prep$factor_order %||% NULL
     ))
   }
   predict_fn(
@@ -2331,7 +3429,9 @@ neural_predict_prepared_jitted <- function(params,
     prep$resp_party,
     prep$resp_cov,
     prep$resp_cov_present %||% NULL,
-    prep$experiment_idx %||% NULL
+    prep$resp_cov_order %||% NULL,
+    prep$experiment_idx %||% NULL,
+    prep$factor_order %||% NULL
   )
 }
 
@@ -2354,7 +3454,9 @@ neural_predict_from_theta_prepared_jitted <- function(theta_batch,
       prep$resp_party,
       prep$resp_cov,
       prep$resp_cov_present %||% NULL,
-      prep$experiment_idx %||% NULL
+      prep$resp_cov_order %||% NULL,
+      prep$experiment_idx %||% NULL,
+      prep$factor_order %||% NULL
     ))
   }
   predict_fn(
@@ -2364,7 +3466,9 @@ neural_predict_from_theta_prepared_jitted <- function(theta_batch,
     prep$resp_party,
     prep$resp_cov,
     prep$resp_cov_present %||% NULL,
-    prep$experiment_idx %||% NULL
+    prep$resp_cov_order %||% NULL,
+    prep$experiment_idx %||% NULL,
+    prep$factor_order %||% NULL
   )
 }
 
@@ -2378,21 +3482,36 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
     params <- model_info$params
   }
   choice_tok <- neural_build_choice_token(model_info, params)
-  resp_tokens <- neural_build_context_tokens(model_info,
-                                             resp_party_idx = resp_party_idx,
-                                             stage_idx = stage_idx,
-                                             matchup_idx = matchup_idx,
-                                             resp_cov_vec = resp_cov_vec,
-                                             params = params)
-  cand_tokens <- neural_build_candidate_tokens_soft(pi_vec, party_idx, 0L, model_info, params,
-                                                    use_role = use_role,
-                                                    resp_party_idx = resp_party_idx)
+  choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
+  resp_info <- neural_build_context_tokens(model_info,
+                                           resp_party_idx = resp_party_idx,
+                                           stage_idx = stage_idx,
+                                           matchup_idx = matchup_idx,
+                                           resp_cov_vec = resp_cov_vec,
+                                           params = params,
+                                           return_mask = TRUE)
+  resp_tokens <- resp_info$tokens %||% NULL
+  resp_mask <- resp_info$mask %||% NULL
+  cand_info <- neural_build_candidate_tokens_soft(pi_vec, party_idx, 0L, model_info, params,
+                                                  use_role = use_role,
+                                                  resp_party_idx = resp_party_idx,
+                                                  return_mask = TRUE)
+  cand_tokens <- cand_info$tokens
+  cand_mask <- cand_info$mask
   if (!is.null(resp_tokens)) {
     tokens <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, cand_tokens), axis = 1L)
+    token_mask <- strenv$jnp$concatenate(list(choice_mask, resp_mask, cand_mask), axis = 1L)
   } else {
     tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
+    token_mask <- strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
   }
-  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  transformer_out <- neural_run_transformer(
+    tokens,
+    model_info,
+    params,
+    token_mask = token_mask,
+    return_details = TRUE
+  )
   neural_extract_choice_representation(transformer_out)
 }
 
@@ -2410,27 +3529,48 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     params <- model_info$params
   }
   choice_tok <- neural_build_choice_token(model_info, params)
-  resp_tokens <- neural_build_context_tokens(model_info,
-                                             resp_party_idx = resp_party_idx,
-                                             stage_idx = stage_idx,
-                                             matchup_idx = matchup_idx,
-                                             resp_cov_vec = resp_cov_vec,
-                                             params = params)
-  left_tokens <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
-                                                    use_role = use_role,
-                                                    resp_party_idx = resp_party_idx)
-  right_tokens <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 0L, model_info, params,
-                                                     use_role = use_role,
-                                                     resp_party_idx = resp_party_idx)
+  choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
+  resp_info <- neural_build_context_tokens(model_info,
+                                           resp_party_idx = resp_party_idx,
+                                           stage_idx = stage_idx,
+                                           matchup_idx = matchup_idx,
+                                           resp_cov_vec = resp_cov_vec,
+                                           params = params,
+                                           return_mask = TRUE)
+  resp_tokens <- resp_info$tokens %||% NULL
+  resp_mask <- resp_info$mask %||% NULL
+  left_info <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
+                                                  use_role = use_role,
+                                                  resp_party_idx = resp_party_idx,
+                                                  return_mask = TRUE)
+  right_info <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 0L, model_info, params,
+                                                   use_role = use_role,
+                                                   resp_party_idx = resp_party_idx,
+                                                   return_mask = TRUE)
+  left_tokens <- left_info$tokens
+  right_tokens <- right_info$tokens
+  left_mask <- left_info$mask
+  right_mask <- right_info$mask
   if (!is.null(resp_tokens)) {
     tokens_left <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, left_tokens), axis = 1L)
     tokens_right <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, right_tokens), axis = 1L)
+    token_mask_left <- strenv$jnp$concatenate(list(choice_mask, resp_mask, left_mask), axis = 1L)
+    token_mask_right <- strenv$jnp$concatenate(list(choice_mask, resp_mask, right_mask), axis = 1L)
   } else {
     tokens_left <- strenv$jnp$concatenate(list(choice_tok, left_tokens), axis = 1L)
     tokens_right <- strenv$jnp$concatenate(list(choice_tok, right_tokens), axis = 1L)
+    token_mask_left <- strenv$jnp$concatenate(list(choice_mask, left_mask), axis = 1L)
+    token_mask_right <- strenv$jnp$concatenate(list(choice_mask, right_mask), axis = 1L)
   }
   tokens <- strenv$jnp$concatenate(list(tokens_left, tokens_right), axis = 0L)
-  transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+  token_mask <- strenv$jnp$concatenate(list(token_mask_left, token_mask_right), axis = 0L)
+  transformer_out <- neural_run_transformer(
+    tokens,
+    model_info,
+    params,
+    token_mask = token_mask,
+    return_details = TRUE
+  )
   phi_all <- neural_extract_choice_representation(transformer_out)
   idx_left <- strenv$jnp$arange(1L)
   idx_right <- strenv$jnp$arange(1L, 2L)
@@ -2442,6 +3582,8 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     cand_tokens <- neural_extract_candidate_tokens(transformer_out, model_info)
     out$cand_left_out <- strenv$jnp$take(cand_tokens, idx_left, axis = 0L)
     out$cand_right_out <- strenv$jnp$take(cand_tokens, idx_right, axis = 0L)
+    out$cand_left_mask <- left_mask
+    out$cand_right_mask <- right_mask
   }
   out
 }
@@ -2484,34 +3626,60 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
   }
   if (isTRUE(use_cross_encoder)) {
     choice_tok <- neural_build_choice_token(model_info, params)
-    ctx_tokens <- neural_build_context_tokens(model_info,
-                                              resp_party_idx = resp_party_idx,
-                                              stage_idx = stage_idx,
-                                              matchup_idx = matchup_idx,
-                                              resp_cov_vec = resp_cov_vec,
-                                              params = params)
+    choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
+    ctx_info <- neural_build_context_tokens(model_info,
+                                            resp_party_idx = resp_party_idx,
+                                            stage_idx = stage_idx,
+                                            matchup_idx = matchup_idx,
+                                            resp_cov_vec = resp_cov_vec,
+                                            params = params,
+                                            return_mask = TRUE)
+    ctx_tokens <- ctx_info$tokens %||% NULL
+    ctx_mask <- ctx_info$mask %||% NULL
+    left_info <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
+                                                    resp_party_idx = resp_party_idx,
+                                                    return_mask = TRUE)
+    right_info <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 1L, model_info, params,
+                                                     resp_party_idx = resp_party_idx,
+                                                     return_mask = TRUE)
     left_tokens <- neural_add_segment_embedding(
-      neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
-                                         resp_party_idx = resp_party_idx),
+      left_info$tokens,
       0L,
       model_info = model_info,
       params = params
     )
     right_tokens <- neural_add_segment_embedding(
-      neural_build_candidate_tokens_soft(pi_right, party_right_idx, 1L, model_info, params,
-                                         resp_party_idx = resp_party_idx),
+      right_info$tokens,
       1L,
       model_info = model_info,
       params = params
     )
     sep_tok <- neural_build_sep_token(model_info, params = params)
     token_parts <- list(choice_tok)
+    mask_parts <- list(choice_mask)
     if (!is.null(ctx_tokens)) {
       token_parts <- c(token_parts, list(ctx_tokens))
+      mask_parts <- c(mask_parts, list(ctx_mask))
     }
     token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+    mask_parts <- c(
+      mask_parts,
+      list(
+        strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj),
+        left_info$mask,
+        strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj),
+        right_info$mask
+      )
+    )
     tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    transformer_out <- neural_run_transformer(tokens, model_info, params, return_details = TRUE)
+    token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+    transformer_out <- neural_run_transformer(
+      tokens,
+      model_info,
+      params,
+      token_mask = token_mask,
+      return_details = TRUE
+    )
     cls_out <- neural_extract_choice_representation(transformer_out)
     logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
   } else {
@@ -2529,10 +3697,12 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
     if (isTRUE(use_cross_attn)) {
       ctx_left <- neural_cross_attend_cls_to_tokens(phi_left, phi_pair$cand_right_out,
                                                     model_info = model_info,
-                                                    params = params)
+                                                    params = params,
+                                                    kv_token_mask = phi_pair$cand_right_mask)
       ctx_right <- neural_cross_attend_cls_to_tokens(phi_right, phi_pair$cand_left_out,
                                                      model_info = model_info,
-                                                     params = params)
+                                                     params = params,
+                                                     kv_token_mask = phi_pair$cand_left_mask)
       phi_left <- neural_merge_cross_attn_representation(
         phi_left, ctx_left, params, model_info$model_dims
       )
@@ -3092,7 +4262,6 @@ generate_ModelOutcome_neural <- function(){
     offset <- offset + n_levels_use
   }
   n_rel_levels <- ai(3L)
-  n_candidate_tokens <- ai(length(factor_levels) + 2L)
 
   # Party token mapping (candidates)
   party_levels_override <- NULL
@@ -3168,9 +4337,32 @@ generate_ModelOutcome_neural <- function(){
   token_family_levels <- as.character(
     neural_token_info_use$token_family_levels %||% neural_token_family_levels()
   )
+  factor_tokenization <- neural_factor_tokenization(
+    mode = neural_token_info_use$factor_tokenization %||% "legacy_indexed"
+  )
+  factor_order_by_experiment <- lapply(
+    neural_token_info_use$factor_order_by_experiment %||% list(),
+    as.integer
+  )
+  default_factor_order <- as.integer(
+    neural_token_info_use$default_factor_order %||% integer(0)
+  )
+  max_factor_tokens <- neural_resolve_max_factor_tokens(
+    neural_token_info_use$max_factor_tokens %||% NULL
+  )
+  max_covariate_tokens <- neural_resolve_max_covariate_tokens(
+    neural_token_info_use$max_covariate_tokens %||% NULL
+  )
   factor_name_text <- neural_token_info_use$factor_name_text %||% NULL
   level_name_text <- neural_token_info_use$level_name_text %||% NULL
   covariate_name_text <- neural_token_info_use$covariate_name_text %||% NULL
+  covariate_order_by_experiment <- lapply(
+    neural_token_info_use$covariate_order_by_experiment %||% list(),
+    as.integer
+  )
+  default_covariate_order <- as.integer(
+    neural_token_info_use$default_covariate_order %||% integer(0)
+  )
   experiment_description_text <- neural_token_info_use$experiment_description_text %||% NULL
   experiment_description_present <- neural_token_info_use$experiment_description_present %||% NULL
   default_experiment_text <- neural_token_info_use$default_experiment_text %||% NULL
@@ -3186,6 +4378,12 @@ generate_ModelOutcome_neural <- function(){
   covariate_names_override <- as.character(
     neural_token_info_use$covariate_names %||% colnames(X_) %||% character(0)
   )
+  if (length(default_factor_order) < 1L && length(factor_levels_int) > 0L) {
+    default_factor_order <- seq.int(0L, length(factor_levels_int) - 1L)
+  }
+  if (length(default_covariate_order) < 1L && length(covariate_names_override) > 0L) {
+    default_covariate_order <- seq.int(0L, length(covariate_names_override) - 1L)
+  }
   experiment_levels_override <- as.character(
     neural_token_info_use$experiment_levels %||% character(0)
   )
@@ -3203,6 +4401,11 @@ generate_ModelOutcome_neural <- function(){
     NA_integer_
   }
   text_semantic_dim <- as.integer(neural_token_info_use$text_dim %||% 0L)
+  n_candidate_tokens <- if (identical(factor_tokenization, "language_span")) {
+    ai(max_factor_tokens + 2L)
+  } else {
+    ai(length(factor_levels) + 2L)
+  }
 
   # Helper to sanitize integer indices (adds explicit missing/OOV level per factor)
   to_index_matrix <- function(x_mat){
@@ -3280,6 +4483,24 @@ generate_ModelOutcome_neural <- function(){
     X_use <- X_
     X_present_use <- X_present_
     experiment_index_use <- experiment_index_all
+  }
+  if (identical(covariate_value_encoding, "shared_projection") && !is.null(X_use) && ncol(X_use) > 0L) {
+    present_mask <- if (!is.null(X_present_use) && ncol(X_present_use) == ncol(X_use)) {
+      X_present_use > 0
+    } else {
+      matrix(TRUE, nrow = nrow(X_use), ncol = ncol(X_use))
+    }
+    bad_mask <- present_mask & !is.finite(X_use)
+    if (any(bad_mask, na.rm = TRUE)) {
+      bad_cols <- unique(colnames(X_use)[col(bad_mask)[bad_mask]])
+      stop(
+        sprintf(
+          "shared_projection does not support NA/Inf covariate values. Offending covariates: %s",
+          paste(bad_cols, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
   }
 
   stage_diagnostics <- NULL
@@ -3535,47 +4756,95 @@ generate_ModelOutcome_neural <- function(){
     tau_segment <- tau_context * (segment_embed_sd_scale / context_embed_sd_scale)
 
     E_factor_list <- vector("list", D_local)
-    for (d_ in 1L:D_local) {
-      raw_name <- paste0("E_factor_", d_, "_raw")
-      raw_shape <- reticulate::tuple(ai(factor_levels_aug[d_]), ModelDims)
-      E_factor_raw <- p2d(
-        name = raw_name,
+    E_feature_id <- NULL
+    E_factor_start <- NULL
+    E_factor_end <- NULL
+    E_factor_role <- NULL
+    if (identical(factor_tokenization, "language_span")) {
+      span_shape <- reticulate::tuple(ModelDims)
+      role_shape <- reticulate::tuple(ai(neural_factor_span_width()), ModelDims)
+      E_factor_start <- p2d(
+        name = "E_factor_start",
         sample_fxn = function() {
           strenv$numpyro$sample(
-            raw_name,
-            strenv$numpyro$distributions$Normal(0., tau_factor),
-            sample_shape = raw_shape
+            "E_factor_start",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = span_shape
           )
         },
         init_fxn = function() {
-          p2d_init_normal(raw_name, tau_factor, raw_shape)
+          p2d_init_normal("E_factor_start", tau_context, span_shape)
         }
       )
-      E_factor_centered <- center_factor_embeddings(E_factor_raw, factor_levels_int[d_])
-      E_factor_list[[d_]] <- strenv$numpyro$deterministic(
-        paste0("E_factor_", d_),
-        E_factor_centered
+      E_factor_end <- p2d(
+        name = "E_factor_end",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_factor_end",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = span_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_factor_end", tau_context, span_shape)
+        }
+      )
+      E_factor_role <- p2d(
+        name = "E_factor_role",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_factor_role",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = role_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_factor_role", tau_context, role_shape)
+        }
+      )
+    } else {
+      for (d_ in 1L:D_local) {
+        raw_name <- paste0("E_factor_", d_, "_raw")
+        raw_shape <- reticulate::tuple(ai(factor_levels_aug[d_]), ModelDims)
+        E_factor_raw <- p2d(
+          name = raw_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              raw_name,
+              strenv$numpyro$distributions$Normal(0., tau_factor),
+              sample_shape = raw_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal(raw_name, tau_factor, raw_shape)
+          }
+        )
+        E_factor_centered <- center_factor_embeddings(E_factor_raw, factor_levels_int[d_])
+        E_factor_list[[d_]] <- strenv$numpyro$deterministic(
+          paste0("E_factor_", d_),
+          E_factor_centered
+        )
+      }
+
+      E_feature_shape <- reticulate::tuple(ai(D_local), ModelDims)
+      E_feature_id_raw <- p2d(
+        name = "E_feature_id_raw",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_feature_id_raw",
+            strenv$numpyro$distributions$Normal(0., tau_feature_id),
+            sample_shape = E_feature_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_feature_id_raw", tau_feature_id, E_feature_shape)
+        }
+      )
+      E_feature_id <- strenv$numpyro$deterministic(
+        "E_feature_id",
+        neural_center_token_rows(E_feature_id_raw)
       )
     }
-
-    E_feature_shape <- reticulate::tuple(ai(D_local), ModelDims)
-    E_feature_id_raw <- p2d(
-      name = "E_feature_id_raw",
-      sample_fxn = function() {
-        strenv$numpyro$sample(
-          "E_feature_id_raw",
-          strenv$numpyro$distributions$Normal(0., tau_feature_id),
-          sample_shape = E_feature_shape
-        )
-      },
-      init_fxn = function() {
-        p2d_init_normal("E_feature_id_raw", tau_feature_id, E_feature_shape)
-      }
-    )
-    E_feature_id <- strenv$numpyro$deterministic(
-      "E_feature_id",
-      neural_center_token_rows(E_feature_id_raw)
-    )
 
     E_party_shape <- reticulate::tuple(ai(n_party_levels), ModelDims)
     E_party <- p2d(
@@ -3808,41 +5077,58 @@ generate_ModelOutcome_neural <- function(){
       }
     }
 
+    E_covariate_start <- NULL
+    E_covariate_end <- NULL
+    E_covariate_role <- NULL
     E_covariate_id <- NULL
     E_covariate_present <- NULL
     V_covariate_value <- NULL
     W_covariate_value_shared <- NULL
     if (n_resp_covariates > 0L) {
-      covariate_shape <- reticulate::tuple(ai(n_resp_covariates), ModelDims)
-      E_covariate_id <- p2d(
-        name = "E_covariate_id",
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            "E_covariate_id",
-            strenv$numpyro$distributions$Normal(0., tau_context),
-            sample_shape = covariate_shape
-          )
-        },
-        init_fxn = function() {
-          p2d_init_normal("E_covariate_id", tau_context, covariate_shape)
-        }
-      )
-      E_covariate_present <- p2d(
-        name = "E_covariate_present",
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            "E_covariate_present",
-            strenv$numpyro$distributions$Normal(0., tau_context),
-            sample_shape = covariate_shape
-          )
-        },
-        init_fxn = function() {
-          p2d_init_normal("E_covariate_present", tau_context, covariate_shape)
-        }
-      )
       if (identical(covariate_value_encoding, "shared_projection")) {
-        value_proj_shape <- reticulate::tuple(ai(3L), ModelDims)
-        value_proj_sd <- tau_context / sqrt(3)
+        span_context_shape <- reticulate::tuple(ModelDims)
+        role_shape <- reticulate::tuple(ai(neural_covariate_span_width()), ModelDims)
+        E_covariate_start <- p2d(
+          name = "E_covariate_start",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "E_covariate_start",
+              strenv$numpyro$distributions$Normal(0., tau_context),
+              sample_shape = span_context_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("E_covariate_start", tau_context, span_context_shape)
+          }
+        )
+        E_covariate_end <- p2d(
+          name = "E_covariate_end",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "E_covariate_end",
+              strenv$numpyro$distributions$Normal(0., tau_context),
+              sample_shape = span_context_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("E_covariate_end", tau_context, span_context_shape)
+          }
+        )
+        E_covariate_role <- p2d(
+          name = "E_covariate_role",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "E_covariate_role",
+              strenv$numpyro$distributions$Normal(0., tau_context),
+              sample_shape = role_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("E_covariate_role", tau_context, role_shape)
+          }
+        )
+        value_proj_shape <- reticulate::tuple(ai(1L), ModelDims)
+        value_proj_sd <- tau_context
         W_covariate_value_shared <- p2d(
           name = "W_covariate_value_shared",
           sample_fxn = function() {
@@ -3857,6 +5143,33 @@ generate_ModelOutcome_neural <- function(){
           }
         )
       } else {
+        covariate_shape <- reticulate::tuple(ai(n_resp_covariates), ModelDims)
+        E_covariate_id <- p2d(
+          name = "E_covariate_id",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "E_covariate_id",
+              strenv$numpyro$distributions$Normal(0., tau_context),
+              sample_shape = covariate_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("E_covariate_id", tau_context, covariate_shape)
+          }
+        )
+        E_covariate_present <- p2d(
+          name = "E_covariate_present",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "E_covariate_present",
+              strenv$numpyro$distributions$Normal(0., tau_context),
+              sample_shape = covariate_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("E_covariate_present", tau_context, covariate_shape)
+          }
+        )
         V_covariate_value <- p2d(
           name = "V_covariate_value",
           sample_fxn = function() {
@@ -4350,7 +5663,6 @@ generate_ModelOutcome_neural <- function(){
 
     params_view <- if (isTRUE(pairwise)) {
       list(
-        E_feature_id = E_feature_id,
         E_party = E_party,
         E_rel = E_rel,
         E_resp_party = E_resp_party,
@@ -4362,13 +5674,20 @@ generate_ModelOutcome_neural <- function(){
       )
     } else {
       list(
-        E_feature_id = E_feature_id,
         E_party = E_party,
         E_rel = E_rel,
         E_resp_party = E_resp_party,
         E_token_family = E_token_family,
         E_choice = E_choice
       )
+    }
+    if (!is.null(E_feature_id)) {
+      params_view$E_feature_id <- E_feature_id
+    }
+    if (!is.null(E_factor_start)) {
+      params_view$E_factor_start <- E_factor_start
+      params_view$E_factor_end <- E_factor_end
+      params_view$E_factor_role <- E_factor_role
     }
     if (!is.null(E_experiment)) {
       params_view$E_experiment <- E_experiment
@@ -4389,8 +5708,15 @@ generate_ModelOutcome_neural <- function(){
       params_view$W_experiment_text <- W_experiment_text
     }
     if (n_resp_covariates > 0L) {
-      params_view$E_covariate_id <- E_covariate_id
-      params_view$E_covariate_present <- E_covariate_present
+      if (!is.null(E_covariate_start)) {
+        params_view$E_covariate_start <- E_covariate_start
+        params_view$E_covariate_end <- E_covariate_end
+        params_view$E_covariate_role <- E_covariate_role
+      }
+      if (!is.null(E_covariate_id)) {
+        params_view$E_covariate_id <- E_covariate_id
+        params_view$E_covariate_present <- E_covariate_present
+      }
       if (!is.null(V_covariate_value)) {
         params_view$V_covariate_value <- V_covariate_value
       }
@@ -4398,8 +5724,10 @@ generate_ModelOutcome_neural <- function(){
         params_view$W_covariate_value_shared <- W_covariate_value_shared
       }
     }
-    for (d_ in 1L:D_local) {
-      params_view[[paste0("E_factor_", d_)]] <- E_factor_list[[d_]]
+    if (!identical(factor_tokenization, "language_span")) {
+      for (d_ in 1L:D_local) {
+        params_view[[paste0("E_factor_", d_)]] <- E_factor_list[[d_]]
+      }
     }
     params_view <- c(params_view, layer_params)
     if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
@@ -4495,10 +5823,18 @@ generate_ModelOutcome_neural <- function(){
       n_party_levels = ai(n_party_levels),
       factor_name_text = factor_name_text,
       level_name_text = level_name_text,
+      factor_order_by_experiment = factor_order_by_experiment,
+      default_factor_order = default_factor_order,
+      factor_tokenization = factor_tokenization,
+      max_factor_tokens = max_factor_tokens,
       covariate_name_text = covariate_name_text,
+      covariate_names = covariate_names_override,
       resp_cov_mean = resp_cov_mean,
       resp_cov_scale = resp_cov_scale,
       resp_cov_default_present = resp_cov_default_present,
+      covariate_order_by_experiment = covariate_order_by_experiment,
+      default_covariate_order = default_covariate_order,
+      max_covariate_tokens = max_covariate_tokens,
       default_experiment_index = default_experiment_index,
       token_family_levels = token_family_levels,
       experiment_token_mode = experiment_token_mode,
@@ -4509,11 +5845,14 @@ generate_ModelOutcome_neural <- function(){
       default_experiment_text_present = default_experiment_text_present
     )
 
-    embed_candidate <- function(X_idx, party_idx, resp_p) {
+    embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
+                                return_mask = FALSE) {
       neural_build_candidate_tokens_hard(X_idx, party_idx,
                                          model_info = model_info_local,
                                          resp_party_idx = resp_p,
-                                         params = params_view)
+                                         experiment_idx = experiment_idx,
+                                         params = params_view,
+                                         return_mask = return_mask)
     }
 
     add_segment_embedding <- function(tokens, segment_idx) {
@@ -4522,10 +5861,11 @@ generate_ModelOutcome_neural <- function(){
                                    params = params_view)
     }
 
-    run_transformer <- function(tokens, return_details = FALSE) {
+    run_transformer <- function(tokens, token_mask = NULL, return_details = FALSE) {
       neural_run_transformer(tokens,
                              model_info = transformer_model_info,
                              params = params_view,
+                             token_mask = token_mask,
                              return_details = return_details)
     }
 
@@ -4538,7 +5878,8 @@ generate_ModelOutcome_neural <- function(){
                                     resp_c,
                                     resp_c_present = NULL,
                                     experiment_idx = NULL,
-                                    matchup_idx = NULL) {
+                                    matchup_idx = NULL,
+                                    return_mask = FALSE) {
       neural_build_context_tokens_batch(model_info = model_info_local,
                                         resp_party_idx = resp_p,
                                         stage_idx = stage_idx,
@@ -4546,7 +5887,8 @@ generate_ModelOutcome_neural <- function(){
                                         resp_cov = resp_c,
                                         resp_cov_present = resp_c_present,
                                         experiment_idx = experiment_idx,
-                                        params = params_view)
+                                        params = params_view,
+                                        return_mask = return_mask)
     }
 
     build_sep_token <- function(N_batch) {
@@ -4560,17 +5902,42 @@ generate_ModelOutcome_neural <- function(){
       N_batch <- ai(Xl$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
-      ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, resp_c_present, experiment_idx, matchup_idx)
-      left_tokens <- add_segment_embedding(embed_candidate(Xl, pl, resp_p), 0L)
-      right_tokens <- add_segment_embedding(embed_candidate(Xr, pr, resp_p), 1L)
+      choice_mask <- strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_)
+      ctx_info <- build_context_tokens(
+        stage_idx,
+        resp_p,
+        resp_c,
+        resp_c_present,
+        experiment_idx,
+        matchup_idx,
+        return_mask = TRUE
+      )
+      ctx_tokens <- ctx_info$tokens %||% NULL
+      ctx_mask <- ctx_info$mask %||% NULL
+      left_info <- embed_candidate(Xl, pl, resp_p, experiment_idx, return_mask = TRUE)
+      right_info <- embed_candidate(Xr, pr, resp_p, experiment_idx, return_mask = TRUE)
+      left_tokens <- add_segment_embedding(left_info$tokens, 0L)
+      right_tokens <- add_segment_embedding(right_info$tokens, 1L)
       sep_tok <- build_sep_token(N_batch)
       token_parts <- list(choice_tok)
+      mask_parts <- list(choice_mask)
       if (!is.null(ctx_tokens)) {
         token_parts <- c(token_parts, list(ctx_tokens))
+        mask_parts <- c(mask_parts, list(ctx_mask))
       }
       token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
+      mask_parts <- c(
+        mask_parts,
+        list(
+          strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_),
+          left_info$mask,
+          strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_),
+          right_info$mask
+        )
+      )
       tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+      transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       cls_out <- neural_extract_choice_representation(transformer_out)
       neural_linear_head(cls_out, W_out, b_out)
     }
@@ -4581,14 +5948,29 @@ generate_ModelOutcome_neural <- function(){
       N_batch <- ai(Xa$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
-      ctx_tokens <- build_context_tokens(stage_idx, resp_p, resp_c, resp_c_present, experiment_idx, matchup_idx)
-      cand_tokens <- embed_candidate(Xa, pa, resp_p)
+      choice_mask <- strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_)
+      ctx_info <- build_context_tokens(
+        stage_idx,
+        resp_p,
+        resp_c,
+        resp_c_present,
+        experiment_idx,
+        matchup_idx,
+        return_mask = TRUE
+      )
+      ctx_tokens <- ctx_info$tokens %||% NULL
+      ctx_mask <- ctx_info$mask %||% NULL
+      cand_info <- embed_candidate(Xa, pa, resp_p, experiment_idx, return_mask = TRUE)
+      cand_tokens <- cand_info$tokens
+      cand_mask <- cand_info$mask
       if (!is.null(ctx_tokens)) {
         tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
+        token_mask <- strenv$jnp$concatenate(list(choice_mask, ctx_mask, cand_mask), axis = 1L)
       } else {
         tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
+        token_mask <- strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
       }
-      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       phi <- neural_extract_choice_representation(transformer_out)
       if (!isTRUE(return_tokens)) {
         return(phi)
@@ -4598,7 +5980,7 @@ generate_ModelOutcome_neural <- function(){
         transformer_model_info,
         n_candidate_tokens = n_candidate_tokens
       )
-      list(phi = phi, cand_tokens_out = cand_out)
+      list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = cand_mask)
     }
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
@@ -4633,6 +6015,8 @@ generate_ModelOutcome_neural <- function(){
       if (isTRUE(use_cross_attn)) {
         out$cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
         out$cand_right_out <- strenv$jnp$take(cand_all, idx_right, axis = 0L)
+        out$cand_left_mask <- strenv$jnp$take(enc_all$cand_token_mask, idx_left, axis = 0L)
+        out$cand_right_mask <- strenv$jnp$take(enc_all$cand_token_mask, idx_right, axis = 0L)
       }
       out
     }
@@ -4657,10 +6041,12 @@ generate_ModelOutcome_neural <- function(){
         if (isTRUE(use_cross_attn)) {
           ctx_left <- neural_cross_attend_cls_to_tokens(phi_l, phi_pair$cand_right_out,
                                                         model_info = transformer_model_info,
-                                                        params = params_view)
+                                                        params = params_view,
+                                                        kv_token_mask = phi_pair$cand_right_mask)
           ctx_right <- neural_cross_attend_cls_to_tokens(phi_r, phi_pair$cand_left_out,
                                                          model_info = transformer_model_info,
-                                                         params = params_view)
+                                                         params = params_view,
+                                                         kv_token_mask = phi_pair$cand_left_mask)
           phi_l <- neural_merge_cross_attn_representation(
             phi_l, ctx_left, params_view, transformer_model_info$model_dims
           )
@@ -4762,10 +6148,18 @@ generate_ModelOutcome_neural <- function(){
       n_party_levels = ai(n_party_levels),
       factor_name_text = factor_name_text,
       level_name_text = level_name_text,
+      factor_order_by_experiment = factor_order_by_experiment,
+      default_factor_order = default_factor_order,
+      factor_tokenization = factor_tokenization,
+      max_factor_tokens = max_factor_tokens,
       covariate_name_text = covariate_name_text,
+      covariate_names = covariate_names_override,
       resp_cov_mean = resp_cov_mean,
       resp_cov_scale = resp_cov_scale,
       resp_cov_default_present = resp_cov_default_present,
+      covariate_order_by_experiment = covariate_order_by_experiment,
+      default_covariate_order = default_covariate_order,
+      max_covariate_tokens = max_covariate_tokens,
       default_experiment_index = default_experiment_index,
       token_family_levels = token_family_levels,
       experiment_token_mode = experiment_token_mode,
@@ -4776,17 +6170,21 @@ generate_ModelOutcome_neural <- function(){
       default_experiment_text_present = default_experiment_text_present
     )
 
-    embed_candidate <- function(X_idx, party_idx, resp_p) {
+    embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
+                                return_mask = FALSE) {
       neural_build_candidate_tokens_hard(X_idx, party_idx,
                                          model_info = model_info_local,
                                          resp_party_idx = resp_p,
-                                         params = params_view)
+                                         experiment_idx = experiment_idx,
+                                         params = params_view,
+                                         return_mask = return_mask)
     }
 
-    run_transformer <- function(tokens, return_details = FALSE) {
+    run_transformer <- function(tokens, token_mask = NULL, return_details = FALSE) {
       neural_run_transformer(tokens,
                              model_info = transformer_model_info,
                              params = params_view,
+                             token_mask = token_mask,
                              return_details = return_details)
     }
 
@@ -4795,20 +6193,31 @@ generate_ModelOutcome_neural <- function(){
       N_batch <- ai(Xb$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
-      ctx_tokens <- neural_build_context_tokens_batch(model_info = model_info_local,
-                                                      resp_party_idx = resp_p,
-                                                      resp_cov = resp_c,
-                                                      resp_cov_present = resp_c_present,
-                                                      experiment_idx = experiment_idx,
-                                                      params = params_view)
-      cand_tokens <- embed_candidate(Xb, pb, resp_p)
+      choice_mask <- strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_)
+      ctx_info <- neural_build_context_tokens_batch(model_info = model_info_local,
+                                                    resp_party_idx = resp_p,
+                                                    resp_cov = resp_c,
+                                                    resp_cov_present = resp_c_present,
+                                                    experiment_idx = experiment_idx,
+                                                    params = params_view,
+                                                    return_mask = TRUE)
+      ctx_tokens <- ctx_info$tokens %||% NULL
+      ctx_mask <- ctx_info$mask %||% NULL
+      cand_info <- embed_candidate(Xb, pb, resp_p, experiment_idx, return_mask = TRUE)
+      cand_tokens <- cand_info$tokens
+      cand_mask <- cand_info$mask
       token_parts <- list(choice_tok)
       if (!is.null(ctx_tokens)) {
         token_parts <- c(token_parts, list(ctx_tokens))
       }
       token_parts <- c(token_parts, list(cand_tokens))
       tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-      transformer_out <- run_transformer(tokens, return_details = TRUE)
+      token_mask <- if (!is.null(ctx_tokens)) {
+        strenv$jnp$concatenate(list(choice_mask, ctx_mask, cand_mask), axis = 1L)
+      } else {
+        strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
+      }
+      transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       choice_out <- neural_extract_choice_representation(transformer_out)
       logits <- neural_linear_head(choice_out, W_out, b_out)
 
@@ -5574,9 +6983,13 @@ generate_ModelOutcome_neural <- function(){
       maybe_site("sigma")
     }
     if (n_resp_covariates > 0L) {
+      maybe_site("E_covariate_start")
+      maybe_site("E_covariate_end")
+      maybe_site("E_covariate_role")
       maybe_site("E_covariate_id")
       maybe_site("E_covariate_present")
       maybe_site("V_covariate_value")
+      maybe_site("W_covariate_value_shared")
     }
 
     for (d_ in seq_along(factor_levels_int)) {
@@ -5623,8 +7036,31 @@ generate_ModelOutcome_neural <- function(){
     cross_candidate_encoder_mode = cross_candidate_encoder_mode,
     cross_candidate_encoder = !identical(cross_candidate_encoder_mode, "none"),
     likelihood = likelihood,
+    factor_order_by_experiment = factor_order_by_experiment,
+    default_factor_order = default_factor_order,
+    factor_tokenization = factor_tokenization,
+    max_factor_tokens = max_factor_tokens,
     jit_cache_key = sprintf("svi_validation_%d", as.integer(stats::runif(1, 1, 1e9)))
   )
+  validation_model_info$factor_name_text <- factor_name_text
+  validation_model_info$level_name_text <- level_name_text
+  validation_model_info$covariate_name_text <- covariate_name_text
+  validation_model_info$covariate_names <- covariate_names_override
+  validation_model_info$resp_cov_mean <- resp_cov_mean
+  validation_model_info$resp_cov_scale <- resp_cov_scale
+  validation_model_info$resp_cov_default_present <- resp_cov_default_present
+  validation_model_info$n_resp_covariates <- n_resp_covariates
+  validation_model_info$covariate_order_by_experiment <- covariate_order_by_experiment
+  validation_model_info$default_covariate_order <- default_covariate_order
+  validation_model_info$max_covariate_tokens <- max_covariate_tokens
+  validation_model_info$default_experiment_index <- if (is.na(default_experiment_index)) NULL else as.integer(default_experiment_index)
+  validation_model_info$token_family_levels <- token_family_levels
+  validation_model_info$experiment_token_mode <- experiment_token_mode
+  validation_model_info$covariate_value_encoding <- covariate_value_encoding
+  validation_model_info$experiment_description_text <- experiment_description_text
+  validation_model_info$experiment_description_present <- experiment_description_present
+  validation_model_info$default_experiment_text <- default_experiment_text
+  validation_model_info$default_experiment_text_present <- default_experiment_text_present
   validation_predict_jit <- neural_get_predict_jit(
     model_info = validation_model_info,
     pairwise = pairwise_mode,
@@ -5688,9 +7124,26 @@ generate_ModelOutcome_neural <- function(){
       } else {
         NULL
       }
-      # Keep validation prediction aligned with neural_get_predict_jit's current signature.
+      resp_c_order <- if (is.null(resp_cov_mean) || n_resp_covariates < 1L) {
+        NULL
+      } else {
+        strenv$jnp$array(as.matrix(build_resp_cov_order_new(
+          X_use[idx, , drop = FALSE],
+          length(idx),
+          experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
+        )))$astype(strenv$jnp$int32)
+      }
+      factor_order <- if (identical(factor_tokenization, "language_span")) {
+        strenv$jnp$array(as.matrix(build_factor_order_new(
+          X_left[idx, , drop = FALSE],
+          length(idx),
+          experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
+        )))$astype(strenv$jnp$int32)
+      } else {
+        NULL
+      }
       pred <- validation_predict_jit(
-        params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, experiment_idx
+        params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order
       )
       return(coerce_prediction_output_local(pred))
     }
@@ -5714,8 +7167,26 @@ generate_ModelOutcome_neural <- function(){
     } else {
       NULL
     }
+    resp_c_order <- if (is.null(resp_cov_mean) || n_resp_covariates < 1L) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(build_resp_cov_order_new(
+        X_use[idx, , drop = FALSE],
+        length(idx),
+        experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
+      )))$astype(strenv$jnp$int32)
+    }
+    factor_order <- if (identical(factor_tokenization, "language_span")) {
+      strenv$jnp$array(as.matrix(build_factor_order_new(
+        X_single[idx, , drop = FALSE],
+        length(idx),
+        experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
+      )))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
     pred <- validation_predict_jit(
-      params, Xb, pb, resp_p, resp_c, resp_c_present, experiment_idx
+      params, Xb, pb, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order
     )
     coerce_prediction_output_local(pred)
   }
@@ -6877,7 +8348,7 @@ generate_ModelOutcome_neural <- function(){
     0.5 * (raw_draws - strenv$jnp$transpose(raw_draws, trans_axes))
   }
   get_param_draws <- function(name) {
-    if (startsWith(name, "E_factor_")) {
+    if (grepl("^E_factor_[0-9]+$", name)) {
       return(get_centered_factor_draws(name))
     }
     if (identical(name, "E_feature_id")) {
@@ -6968,6 +8439,9 @@ generate_ModelOutcome_neural <- function(){
 
   maybe_site("E_sep")
   maybe_site("E_segment")
+  maybe_site("E_factor_start")
+  maybe_site("E_factor_end")
+  maybe_site("E_factor_role")
   maybe_site("E_feature_id")
   maybe_site("E_rel")
   maybe_site("E_token_family")
@@ -7011,6 +8485,9 @@ generate_ModelOutcome_neural <- function(){
   }
 
   if (n_resp_covariates > 0L) {
+    maybe_site("E_covariate_start")
+    maybe_site("E_covariate_end")
+    maybe_site("E_covariate_role")
     maybe_site("E_covariate_id")
     maybe_site("E_covariate_present")
     maybe_site("V_covariate_value")
@@ -7096,6 +8573,10 @@ generate_ModelOutcome_neural <- function(){
     cross_candidate_encoder_mode = cross_candidate_encoder_mode,
     cross_candidate_encoder = !identical(cross_candidate_encoder_mode, "none"),
     likelihood = likelihood,
+    factor_order_by_experiment = factor_order_by_experiment,
+    default_factor_order = default_factor_order,
+    factor_tokenization = factor_tokenization,
+    max_factor_tokens = max_factor_tokens,
     jit_cache_key = sprintf("fitted_predict_%d", as.integer(stats::runif(1, 1, 1e9)))
   )
   predict_model_info$factor_name_text <- factor_name_text
@@ -7106,6 +8587,9 @@ generate_ModelOutcome_neural <- function(){
   predict_model_info$default_experiment_text <- default_experiment_text
   predict_model_info$default_experiment_text_present <- default_experiment_text_present
   predict_model_info$covariate_names <- covariate_names_override
+  predict_model_info$covariate_order_by_experiment <- covariate_order_by_experiment
+  predict_model_info$default_covariate_order <- default_covariate_order
+  predict_model_info$max_covariate_tokens <- max_covariate_tokens
   predict_model_info$resp_cov_mean <- resp_cov_mean
   predict_model_info$resp_cov_scale <- resp_cov_scale
   predict_model_info$resp_cov_default_present <- resp_cov_default_present
@@ -7152,10 +8636,92 @@ generate_ModelOutcome_neural <- function(){
     NULL
   }
 
+  build_resp_cov_order_new <- function(resp_cov_new, n_rows, experiment_idx_new = NULL) {
+    if (!identical(covariate_value_encoding, "shared_projection") ||
+        length(covariate_names_override) < 1L) {
+      return(NULL)
+    }
+    if (!is.null(experiment_idx_new) && length(covariate_order_by_experiment) > 0L) {
+      use_experiment_lookup <- is.null(resp_cov_new)
+      if (!use_experiment_lookup && (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new))) {
+        cols <- colnames(resp_cov_new)
+        use_experiment_lookup <- is.null(cols) || identical(as.character(cols), covariate_names_override)
+      }
+      if (isTRUE(use_experiment_lookup)) {
+        lookup <- neural_covariate_order_lookup_matrix(
+          order_list = covariate_order_by_experiment,
+          max_covariate_tokens = max_covariate_tokens
+        )
+        exp_idx <- as.integer(experiment_idx_new)
+        if (length(exp_idx) == 1L && n_rows > 1L) {
+          exp_idx <- rep.int(exp_idx, n_rows)
+        }
+        if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
+          return(lookup[exp_idx + 1L, , drop = FALSE])
+        }
+      }
+    }
+    order_idx <- default_covariate_order
+    if (!is.null(resp_cov_new)) {
+      if (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new)) {
+        if (!is.null(colnames(resp_cov_new))) {
+          order_idx <- neural_covariate_order_from_names(
+            colnames(resp_cov_new),
+            covariate_names_override
+          )
+        }
+      } else if (length(covariate_names_override) == 1L) {
+        order_idx <- 0L
+      }
+    }
+    neural_build_default_covariate_order_matrix(
+      order_idx = order_idx,
+      n_rows = n_rows,
+      max_covariate_tokens = max_covariate_tokens
+    )
+  }
+
+  build_factor_order_new <- function(W_new, n_rows, experiment_idx_new = NULL) {
+    if (!identical(factor_tokenization, "language_span")) {
+      return(NULL)
+    }
+    if (!is.null(W_new)) {
+      W_df <- as.data.frame(W_new, check.names = FALSE)
+      if (!is.null(colnames(W_df))) {
+        order_idx <- neural_factor_order_from_names(colnames(W_df), names(names_list))
+        return(neural_build_default_factor_order_matrix(
+          order_idx = order_idx,
+          n_rows = n_rows,
+          max_factor_tokens = max_factor_tokens
+        ))
+      }
+    }
+    if (!is.null(experiment_idx_new) && length(factor_order_by_experiment) > 0L) {
+      lookup <- neural_factor_order_lookup_matrix(
+        order_list = factor_order_by_experiment,
+        max_factor_tokens = max_factor_tokens
+      )
+      exp_idx <- as.integer(experiment_idx_new)
+      if (length(exp_idx) == 1L && n_rows > 1L) {
+        exp_idx <- rep.int(exp_idx, n_rows)
+      }
+      if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
+        return(lookup[exp_idx + 1L, , drop = FALSE])
+      }
+    }
+    neural_build_default_factor_order_matrix(
+      order_idx = default_factor_order,
+      n_rows = n_rows,
+      max_factor_tokens = max_factor_tokens
+    )
+  }
+
   TransformerPredict_pair <- function(params, Xl_new, Xr_new, pl_new, pr_new,
                                       resp_party_new = NULL, resp_cov_new = NULL,
                                       resp_cov_present_new = NULL,
+                                      resp_cov_order_new = NULL,
                                       experiment_idx_new = NULL,
+                                      factor_order_new = NULL,
                                       return_logits = FALSE) {
     Xl <- strenv$jnp$array(to_index_matrix(Xl_new))$astype(strenv$jnp$int32)
     Xr <- strenv$jnp$array(to_index_matrix(Xr_new))$astype(strenv$jnp$int32)
@@ -7183,6 +8749,18 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     resp_c_present <- strenv$jnp$array(as.matrix(resp_cov_present_new))$astype(ddtype_)
+    if (is.null(resp_cov_order_new)) {
+      resp_cov_order_new <- build_resp_cov_order_new(
+        resp_cov_new,
+        nrow(Xl_new),
+        experiment_idx_new = experiment_idx_new
+      )
+    }
+    resp_c_order <- if (is.null(resp_cov_order_new)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(resp_cov_order_new))$astype(strenv$jnp$int32)
+    }
     experiment_idx <- if (!is.null(experiment_idx_new)) {
       strenv$jnp$array(as.integer(experiment_idx_new))$astype(strenv$jnp$int32)
     } else if (!is.na(default_experiment_index)) {
@@ -7190,18 +8768,35 @@ generate_ModelOutcome_neural <- function(){
     } else {
       NULL
     }
+    if (is.null(factor_order_new)) {
+      factor_order_new <- build_factor_order_new(
+        Xl_new,
+        nrow(Xl_new),
+        experiment_idx_new = experiment_idx_new
+      )
+    }
+    factor_order <- if (is.null(factor_order_new)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(factor_order_new))$astype(strenv$jnp$int32)
+    }
     predict_fn <- if (isTRUE(return_logits)) {
       predict_pair_jit_logits
     } else {
       predict_pair_jit_response
     }
-    predict_fn(params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, experiment_idx)
+    predict_fn(
+      params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present,
+      resp_c_order, experiment_idx, factor_order
+    )
   }
 
   TransformerPredict_single <- function(params, X_new, party_new,
                                         resp_party_new = NULL, resp_cov_new = NULL,
                                         resp_cov_present_new = NULL,
+                                        resp_cov_order_new = NULL,
                                         experiment_idx_new = NULL,
+                                        factor_order_new = NULL,
                                         return_logits = FALSE) {
     Xb <- strenv$jnp$array(to_index_matrix(X_new))$astype(strenv$jnp$int32)
     pb <- strenv$jnp$array(as.integer(party_new))$astype(strenv$jnp$int32)
@@ -7227,6 +8822,18 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     resp_c_present <- strenv$jnp$array(as.matrix(resp_cov_present_new))$astype(ddtype_)
+    if (is.null(resp_cov_order_new)) {
+      resp_cov_order_new <- build_resp_cov_order_new(
+        resp_cov_new,
+        nrow(X_new),
+        experiment_idx_new = experiment_idx_new
+      )
+    }
+    resp_c_order <- if (is.null(resp_cov_order_new)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(resp_cov_order_new))$astype(strenv$jnp$int32)
+    }
     experiment_idx <- if (!is.null(experiment_idx_new)) {
       strenv$jnp$array(as.integer(experiment_idx_new))$astype(strenv$jnp$int32)
     } else if (!is.na(default_experiment_index)) {
@@ -7234,12 +8841,27 @@ generate_ModelOutcome_neural <- function(){
     } else {
       NULL
     }
+    if (is.null(factor_order_new)) {
+      factor_order_new <- build_factor_order_new(
+        X_new,
+        nrow(X_new),
+        experiment_idx_new = experiment_idx_new
+      )
+    }
+    factor_order <- if (is.null(factor_order_new)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(factor_order_new))$astype(strenv$jnp$int32)
+    }
     predict_fn <- if (isTRUE(return_logits)) {
       predict_single_jit_logits
     } else {
       predict_single_jit_response
     }
-    predict_fn(params, Xb, pb, resp_p, resp_c, resp_c_present, experiment_idx)
+    predict_fn(
+      params, Xb, pb, resp_p, resp_c, resp_c_present,
+      resp_c_order, experiment_idx, factor_order
+    )
   }
 
   coerce_party_idx_base <- function(party_vec, n_rows, levels, n_levels) {
@@ -7300,7 +8922,9 @@ generate_ModelOutcome_neural <- function(){
       resp_party_new <- args$resp_party_new
       resp_cov_new <- args$resp_cov_new
       resp_cov_present_new <- args$resp_cov_present_new
+      resp_cov_order_new <- args$resp_cov_order_new
       experiment_idx_new <- args$experiment_idx_new
+      factor_order_new <- args$factor_order_new
 
       if (is.null(X_left_new) || is.null(X_right_new)) {
         if (length(args) < 2L) {
@@ -7313,7 +8937,17 @@ generate_ModelOutcome_neural <- function(){
         if (length(args) >= 5L && is.null(resp_party_new)) resp_party_new <- args[[5]]
         if (length(args) >= 6L && is.null(resp_cov_new)) resp_cov_new <- args[[6]]
         if (length(args) >= 7L && is.null(resp_cov_present_new)) resp_cov_present_new <- args[[7]]
-        if (length(args) >= 8L && is.null(experiment_idx_new)) experiment_idx_new <- args[[8]]
+        if (length(args) >= 8L) {
+          arg8 <- args[[8]]
+          if (is.null(resp_cov_order_new) &&
+              (is.matrix(arg8) || is.data.frame(arg8))) {
+            resp_cov_order_new <- arg8
+          } else if (is.null(experiment_idx_new)) {
+            experiment_idx_new <- arg8
+          }
+        }
+        if (length(args) >= 9L && is.null(experiment_idx_new)) experiment_idx_new <- args[[9]]
+        if (length(args) >= 10L && is.null(factor_order_new)) factor_order_new <- args[[10]]
       }
 
       party_left_new <- coerce_party_idx(party_left_new, nrow(X_left_new))
@@ -7322,7 +8956,8 @@ generate_ModelOutcome_neural <- function(){
       pred <- TransformerPredict_pair(ParamsMean, X_left_new, X_right_new,
                                       party_left_new, party_right_new,
                                       resp_party_new, resp_cov_new,
-                                      resp_cov_present_new, experiment_idx_new)
+                                      resp_cov_present_new, resp_cov_order_new,
+                                      experiment_idx_new, factor_order_new)
       return(coerce_prediction_output(pred))
     }
 
@@ -7331,7 +8966,9 @@ generate_ModelOutcome_neural <- function(){
     resp_party_new <- args$resp_party_new
     resp_cov_new <- args$resp_cov_new
     resp_cov_present_new <- args$resp_cov_present_new
+    resp_cov_order_new <- args$resp_cov_order_new
     experiment_idx_new <- args$experiment_idx_new
+    factor_order_new <- args$factor_order_new
 
     if (is.null(X_new)) {
       if (!is.null(args$X_left_new)) {
@@ -7345,7 +8982,17 @@ generate_ModelOutcome_neural <- function(){
         if (length(args) >= 3L && is.null(resp_party_new)) resp_party_new <- args[[3]]
         if (length(args) >= 4L && is.null(resp_cov_new)) resp_cov_new <- args[[4]]
         if (length(args) >= 5L && is.null(resp_cov_present_new)) resp_cov_present_new <- args[[5]]
-        if (length(args) >= 6L && is.null(experiment_idx_new)) experiment_idx_new <- args[[6]]
+        if (length(args) >= 6L) {
+          arg6 <- args[[6]]
+          if (is.null(resp_cov_order_new) &&
+              (is.matrix(arg6) || is.data.frame(arg6))) {
+            resp_cov_order_new <- arg6
+          } else if (is.null(experiment_idx_new)) {
+            experiment_idx_new <- arg6
+          }
+        }
+        if (length(args) >= 7L && is.null(experiment_idx_new)) experiment_idx_new <- args[[7]]
+        if (length(args) >= 8L && is.null(factor_order_new)) factor_order_new <- args[[8]]
       }
     }
 
@@ -7356,7 +9003,8 @@ generate_ModelOutcome_neural <- function(){
     resp_party_new <- coerce_resp_party_idx(resp_party_new, nrow(X_new))
     pred <- TransformerPredict_single(ParamsMean, X_new, party_new,
                                       resp_party_new, resp_cov_new,
-                                      resp_cov_present_new, experiment_idx_new)
+                                      resp_cov_present_new, resp_cov_order_new,
+                                      experiment_idx_new, factor_order_new)
     coerce_prediction_output(pred)
   }
 
@@ -7477,7 +9125,8 @@ generate_ModelOutcome_neural <- function(){
   param_schema <- neural_build_param_schema(
     params = ParamsMean,
     n_factors = length(factor_levels),
-    model_depth = ModelDepth
+    model_depth = ModelDepth,
+    factor_tokenization = factor_tokenization
   )
   param_names <- param_schema$param_names
   param_shapes <- param_schema$param_shapes
@@ -7612,6 +9261,13 @@ generate_ModelOutcome_neural <- function(){
     resp_cov_default_present = resp_cov_default_present_jnp,
     n_resp_covariates = n_resp_covariates,
     covariate_names = covariate_names_override,
+    covariate_order_by_experiment = covariate_order_by_experiment,
+    default_covariate_order = default_covariate_order,
+    max_covariate_tokens = max_covariate_tokens,
+    factor_order_by_experiment = factor_order_by_experiment,
+    default_factor_order = default_factor_order,
+    factor_tokenization = factor_tokenization,
+    max_factor_tokens = max_factor_tokens,
     factor_name_text = factor_name_text,
     level_name_text = level_name_text,
     covariate_name_text = covariate_name_text,
@@ -7631,6 +9287,7 @@ generate_ModelOutcome_neural <- function(){
     has_resp_party_token = !is.null(ParamsMean$E_resp_party),
     has_rel_token = !is.null(ParamsMean$E_rel),
     has_feature_id_embedding = !is.null(ParamsMean$E_feature_id),
+    has_factor_span_tokens = !is.null(ParamsMean$E_factor_start),
     has_token_family_embedding = !is.null(ParamsMean$E_token_family),
     has_experiment_token = !is.null(ParamsMean$E_experiment) || !is.null(ParamsMean$W_experiment_text),
     has_experiment_id_embedding = !is.null(ParamsMean$E_experiment),
@@ -7638,7 +9295,8 @@ generate_ModelOutcome_neural <- function(){
     has_factor_name_text = !is.null(ParamsMean$W_factor_name_text) && text_semantic_dim > 0L,
     has_level_name_text = !is.null(ParamsMean$W_level_name_text) && text_semantic_dim > 0L,
     has_covariate_name_text = !is.null(ParamsMean$W_covariate_name_text) && text_semantic_dim > 0L,
-    has_covariate_tokens = !is.null(ParamsMean$E_covariate_id),
+    has_covariate_tokens = !is.null(ParamsMean$E_covariate_start) || !is.null(ParamsMean$E_covariate_id),
+    has_covariate_span_tokens = !is.null(ParamsMean$E_covariate_start),
     has_shared_covariate_value_projection = !is.null(ParamsMean$W_covariate_value_shared),
     has_segment_embedding = !is.null(ParamsMean$E_segment),
     has_sep_token = !is.null(ParamsMean$E_sep),

@@ -84,6 +84,74 @@ foundation_test_control_with_embeddings <- function() {
   )
 }
 
+test_that("foundation defaults use language-span factor tokenization", {
+  control <- strategize:::cs_foundation_default_control()
+  expect_identical(control$factor_tokenization, "language_span")
+  expect_identical(control$max_factor_tokens, 256L)
+})
+
+test_that("foundation token info preserves raw covariate order and token budget", {
+  study_a <- foundation_test_experiment(
+    seed = 7001,
+    experiment_id = "study_a",
+    factor_names = c("price", "message"),
+    x_names = c("income", "household size")
+  )
+  study_b <- foundation_test_experiment(
+    seed = 7002,
+    experiment_id = "study_b",
+    factor_names = c("price", "message", "messenger"),
+    x_names = c("GOPScore", "income")
+  )
+  experiments_norm <- list(
+    strategize:::cs_foundation_normalize_experiment(study_a, index = 1L),
+    strategize:::cs_foundation_normalize_experiment(study_b, index = 2L)
+  )
+  registry <- strategize:::cs_foundation_build_group_registry(experiments_norm)
+  control <- foundation_test_control_with_embeddings()
+  control$factor_tokenization <- "legacy_indexed"
+  control$max_covariate_tokens <- 12L
+
+  pooled <- strategize:::cs_foundation_build_group_training_data(experiments_norm, registry, control)
+  expect_identical(pooled$token_control$max_covariate_tokens, 12L)
+  expect_identical(pooled$token_info$max_covariate_tokens, 12L)
+  expect_identical(pooled$x_schema$base_x_names, c("income", "household size", "GOPScore"))
+  expect_identical(pooled$token_info$covariate_order_by_experiment[[1]], c(0L, 1L))
+  expect_identical(pooled$token_info$covariate_order_by_experiment[[2]], c(2L, 0L))
+})
+
+test_that("foundation token info preserves raw factor order and factor token budget", {
+  study_a <- foundation_test_experiment(
+    seed = 7101,
+    experiment_id = "study_a",
+    factor_names = c("price", "message"),
+    x_names = c("income")
+  )
+  study_b <- foundation_test_experiment(
+    seed = 7102,
+    experiment_id = "study_b",
+    factor_names = c("messenger", "price", "message"),
+    x_names = c("income")
+  )
+  experiments_norm <- list(
+    strategize:::cs_foundation_normalize_experiment(study_a, index = 1L),
+    strategize:::cs_foundation_normalize_experiment(study_b, index = 2L)
+  )
+  registry <- strategize:::cs_foundation_build_group_registry(experiments_norm)
+  control <- foundation_test_control_with_embeddings()
+  control$factor_tokenization <- "legacy_indexed"
+  control$max_factor_tokens <- 20L
+
+  pooled <- strategize:::cs_foundation_build_group_training_data(experiments_norm, registry, control)
+
+  expect_identical(pooled$token_control$factor_tokenization, "legacy_indexed")
+  expect_identical(pooled$token_control$max_factor_tokens, 20L)
+  expect_identical(pooled$token_info$factor_tokenization, "legacy_indexed")
+  expect_identical(pooled$token_info$max_factor_tokens, 20L)
+  expect_identical(pooled$token_info$factor_order_by_experiment[[1]], c(0L, 1L))
+  expect_identical(pooled$token_info$factor_order_by_experiment[[2]], c(2L, 0L, 1L))
+})
+
 test_that("fit_conjoint_foundation_model pools compatible pairwise studies with X-name semantics", {
   skip_on_cran()
   skip_if_no_jax()
@@ -118,6 +186,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   )
   expect_identical(group$token_control$experiment_token_mode, "description")
   expect_identical(group$token_control$covariate_value_encoding, "shared_projection")
+  expect_identical(group$token_control$max_covariate_tokens, 512L)
   expect_identical(group$x_schema$base_x_names, group$x_feature_names)
   expect_identical(group$x_schema$semantic_feature_names, character(0))
   expect_identical(group$x_schema$experiment_indicator_names, character(0))
@@ -136,6 +205,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     group$x_schema$base_x_names
   )
   expect_true(isTRUE(group$fit$neural_model_info$has_covariate_tokens))
+  expect_true(isTRUE(group$fit$neural_model_info$has_covariate_span_tokens))
   expect_true(isTRUE(group$fit$neural_model_info$has_token_family_embedding))
   expect_true(isTRUE(group$fit$neural_model_info$has_experiment_token))
   expect_false(isTRUE(group$fit$neural_model_info$has_experiment_id_embedding))
@@ -175,6 +245,9 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   expect_true(all(pooled$token_info$experiment_description_present))
   expect_identical(pooled$token_info$experiment_token_mode, "description")
   expect_identical(pooled$token_info$covariate_value_encoding, "shared_projection")
+  expect_identical(pooled$token_info$max_covariate_tokens, 512L)
+  expect_identical(pooled$token_info$covariate_order_by_experiment[[1]], c(0L, 1L))
+  expect_identical(pooled$token_info$covariate_order_by_experiment[[2]], c(0L, 2L))
   expect_true(all(pooled$X_present[seq_len(nrow(study_a$W)), "GOPScore"] == 0))
   expect_true(all(
     pooled$X_present[-seq_len(nrow(study_a$W)), "household size"] == 0
@@ -188,9 +261,13 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     factor_name_text = group$fit$neural_model_info$factor_name_text,
     level_name_text = group$fit$neural_model_info$level_name_text,
     covariate_name_text = group$fit$neural_model_info$covariate_name_text,
+    covariate_names = group$fit$neural_model_info$covariate_names,
     resp_cov_mean = group$fit$neural_model_info$resp_cov_mean,
     resp_cov_scale = group$fit$neural_model_info$resp_cov_scale,
     resp_cov_default_present = group$fit$neural_model_info$resp_cov_default_present,
+    covariate_order_by_experiment = group$fit$neural_model_info$covariate_order_by_experiment,
+    default_covariate_order = group$fit$neural_model_info$default_covariate_order,
+    max_covariate_tokens = group$fit$neural_model_info$max_covariate_tokens,
     default_experiment_index = group$fit$neural_model_info$default_experiment_index,
     token_family_levels = group$fit$neural_model_info$token_family_levels,
     experiment_token_mode = group$fit$neural_model_info$experiment_token_mode,

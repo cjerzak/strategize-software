@@ -704,6 +704,7 @@ cs2step_neural_to_index_matrix <- function(x_mat, factor_levels) {
 cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
   covariate_names <- as.character(model_info$covariate_names %||% character(0))
   n_covariates <- length(covariate_names)
+  encoding <- neural_covariate_value_encoding(model_info)
 
   resp_cov_mean <- cs2step_neural_to_r_array(model_info$resp_cov_mean)
   resp_cov_mean <- if (is.null(resp_cov_mean)) numeric(0) else as.numeric(resp_cov_mean)
@@ -732,7 +733,8 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
   if (n_covariates < 1L) {
     return(list(
       values = matrix(0, nrow = n_rows, ncol = 0L),
-      present = matrix(0, nrow = n_rows, ncol = 0L)
+      present = matrix(0, nrow = n_rows, ncol = 0L),
+      order = NULL
     ))
   }
 
@@ -740,9 +742,29 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
   present <- matrix(rep(resp_cov_default_present, each = n_rows), nrow = n_rows, ncol = n_covariates)
   colnames(values) <- covariate_names
   colnames(present) <- covariate_names
+  order_idx <- if (identical(encoding, "shared_projection")) {
+    as.integer(
+      model_info$default_covariate_order %||%
+        seq.int(0L, n_covariates - 1L)
+    )
+  } else {
+    NULL
+  }
 
   if (is.null(resp_cov_new)) {
-    return(list(values = values, present = present))
+    return(list(
+      values = values,
+      present = present,
+      order = if (is.null(order_idx)) {
+        NULL
+      } else {
+        neural_build_default_covariate_order_matrix(
+          order_idx = order_idx,
+          n_rows = n_rows,
+          max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
+        )
+      }
+    ))
   }
 
   if (is.atomic(resp_cov_new) && !is.matrix(resp_cov_new) && !is.data.frame(resp_cov_new)) {
@@ -788,12 +810,34 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
   idx <- match(colnames(resp_cov_new), covariate_names)
   ok <- which(!is.na(idx))
   if (length(ok) < 1L) {
-    return(list(values = values, present = present))
+    return(list(
+      values = values,
+      present = present,
+      order = if (is.null(order_idx)) {
+        NULL
+      } else {
+        neural_build_default_covariate_order_matrix(
+          order_idx = integer(0),
+          n_rows = n_rows,
+          max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
+        )
+      }
+    ))
   }
 
   for (k in ok) {
     col_vals <- suppressWarnings(as.numeric(resp_cov_new[[k]]))
-    observed <- !is.na(col_vals)
+    if (identical(encoding, "shared_projection")) {
+      if (any(!is.finite(col_vals))) {
+        stop(
+          "Prediction-time X contains NA/Inf values, which are unsupported under shared_projection.",
+          call. = FALSE
+        )
+      }
+      observed <- rep(TRUE, length(col_vals))
+    } else {
+      observed <- !is.na(col_vals)
+    }
     tgt <- idx[[k]]
     values[observed, tgt] <- col_vals[observed]
     values[!observed, tgt] <- 0
@@ -801,7 +845,77 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new, model_info, n_rows) {
     present[!observed, tgt] <- 0
   }
 
-  list(values = values, present = present)
+  if (identical(encoding, "shared_projection")) {
+    order_idx <- as.integer(idx[ok] - 1L)
+  }
+
+  list(
+    values = values,
+    present = present,
+    order = if (is.null(order_idx)) {
+      NULL
+    } else {
+      neural_build_default_covariate_order_matrix(
+        order_idx = order_idx,
+        n_rows = n_rows,
+        max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
+      )
+    }
+  )
+}
+
+cs2step_neural_prepare_factor_order <- function(factor_order_new, model_info, n_rows) {
+  if (!identical(neural_factor_tokenization(model_info), "language_span")) {
+    return(NULL)
+  }
+  if (is.null(factor_order_new)) {
+    return(NULL)
+  }
+
+  max_spans <- neural_max_factor_spans(model_info = model_info)
+  if (is.data.frame(factor_order_new)) {
+    factor_order_new <- as.matrix(factor_order_new)
+  }
+
+  if (is.matrix(factor_order_new)) {
+    order_mat <- matrix(
+      as.integer(factor_order_new),
+      nrow = nrow(factor_order_new),
+      ncol = ncol(factor_order_new)
+    )
+    if (nrow(order_mat) == 1L && n_rows > 1L) {
+      order_mat <- order_mat[rep.int(1L, n_rows), , drop = FALSE]
+    }
+    if (nrow(order_mat) != n_rows) {
+      stop(
+        "Prediction-time factor_order must have one row or the same number of rows as the prediction data.",
+        call. = FALSE
+      )
+    }
+    if (ncol(order_mat) > max_spans) {
+      stop(
+        sprintf(
+          "Prediction-time factor_order has %d columns but max_factor_tokens=%d only supports %d factor spans.",
+          ncol(order_mat),
+          model_info$max_factor_tokens %||% neural_default_max_factor_tokens(),
+          max_spans
+        ),
+        call. = FALSE
+      )
+    }
+    out <- matrix(-1L, nrow = n_rows, ncol = max_spans)
+    if (ncol(order_mat) > 0L) {
+      order_mat[is.na(order_mat) | order_mat < 0L] <- -1L
+      out[, seq_len(ncol(order_mat))] <- order_mat
+    }
+    return(out)
+  }
+
+  neural_build_default_factor_order_matrix(
+    order_idx = as.integer(factor_order_new),
+    n_rows = n_rows,
+    max_factor_tokens = model_info$max_factor_tokens %||% NULL
+  )
 }
 
 cs2step_neural_prepare_experiment_index <- function(experiment_id, model_info, n_rows) {
@@ -916,6 +1030,7 @@ cs2step_neural_apply_experiment_description <- function(model_info,
 cs2step_neural_prepare_prediction_data <- function(W_idx,
                                                    model_info,
                                                    resp_cov_new = NULL,
+                                                   factor_order_new = NULL,
                                                    experiment_id = NULL,
                                                    pair_id = NULL,
                                                    profile_order = NULL,
@@ -947,6 +1062,11 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     if (!is.null(experiment_id) && length(experiment_id) == nrow(W_idx)) {
       experiment_id <- experiment_id[pair_mat[, 1]]
     }
+    if (!is.null(factor_order_new) && (is.matrix(factor_order_new) || is.data.frame(factor_order_new))) {
+      if (nrow(factor_order_new) == nrow(W_idx)) {
+        factor_order_new <- factor_order_new[pair_mat[, 1], , drop = FALSE]
+      }
+    }
     X_left <- strenv$jnp$array(
       cs2step_neural_to_index_matrix(X_left_raw, model_info$factor_levels)
     )$astype(strenv$jnp$int32)
@@ -959,11 +1079,22 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     resp_cov <- cs2step_neural_prepare_resp_cov(resp_cov_new, model_info, n_rows)
     resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov$values))$astype(strenv$dtj)
     resp_cov_present_jnp <- strenv$jnp$array(as.matrix(resp_cov$present))$astype(strenv$dtj)
+    resp_cov_order_jnp <- if (is.null(resp_cov$order)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(resp_cov$order))$astype(strenv$jnp$int32)
+    }
     experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, n_rows)
     experiment_idx_jnp <- if (is.null(experiment_idx)) {
       NULL
     } else {
       strenv$jnp$array(as.integer(experiment_idx))$astype(strenv$jnp$int32)
+    }
+    factor_order <- cs2step_neural_prepare_factor_order(factor_order_new, model_info, n_rows)
+    factor_order_jnp <- if (is.null(factor_order)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(factor_order))$astype(strenv$jnp$int32)
     }
 
     return(list(
@@ -975,7 +1106,9 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
       resp_party = resp_party,
       resp_cov = resp_cov_jnp,
       resp_cov_present = resp_cov_present_jnp,
-      experiment_idx = experiment_idx_jnp
+      resp_cov_order = resp_cov_order_jnp,
+      experiment_idx = experiment_idx_jnp,
+      factor_order = factor_order_jnp
     ))
   }
 
@@ -988,11 +1121,22 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
   resp_cov <- cs2step_neural_prepare_resp_cov(resp_cov_new, model_info, n_rows)
   resp_cov_jnp <- strenv$jnp$array(as.matrix(resp_cov$values))$astype(strenv$dtj)
   resp_cov_present_jnp <- strenv$jnp$array(as.matrix(resp_cov$present))$astype(strenv$dtj)
+  resp_cov_order_jnp <- if (is.null(resp_cov$order)) {
+    NULL
+  } else {
+    strenv$jnp$array(as.matrix(resp_cov$order))$astype(strenv$jnp$int32)
+  }
   experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, n_rows)
   experiment_idx_jnp <- if (is.null(experiment_idx)) {
     NULL
   } else {
     strenv$jnp$array(as.integer(experiment_idx))$astype(strenv$jnp$int32)
+  }
+  factor_order <- cs2step_neural_prepare_factor_order(factor_order_new, model_info, n_rows)
+  factor_order_jnp <- if (is.null(factor_order)) {
+    NULL
+  } else {
+    strenv$jnp$array(as.matrix(factor_order))$astype(strenv$jnp$int32)
   }
 
   list(
@@ -1002,7 +1146,9 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     resp_party = resp_party,
     resp_cov = resp_cov_jnp,
     resp_cov_present = resp_cov_present_jnp,
-    experiment_idx = experiment_idx_jnp
+    resp_cov_order = resp_cov_order_jnp,
+    experiment_idx = experiment_idx_jnp,
+    factor_order = factor_order_jnp
   )
 }
 
@@ -1018,6 +1164,13 @@ cs2step_neural_prepare_params <- function(object,
   model_info <- object$fit$neural_model_info
   if (is.null(model_info)) {
     stop("Neural predictor is missing model metadata.", call. = FALSE)
+  }
+  if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
+      !isTRUE(model_info$has_covariate_span_tokens)) {
+    stop(
+      "This shared_projection predictor uses the pre-span covariate encoder. Refit under the updated architecture.",
+      call. = FALSE
+    )
   }
   neural_validate_full_attn_compatibility(
     model_info = model_info,
@@ -1142,11 +1295,17 @@ cs2step_neural_predict_internal <- function(object,
   n_draws <- as.integer(n_draws)
 
   enc <- object$encoder
+  model_info <- object$fit$neural_model_info
+  W_raw <- as.data.frame(W_new, check.names = FALSE)
+  factor_order_new <- if (identical(neural_factor_tokenization(model_info), "language_span")) {
+    neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
+  } else {
+    NULL
+  }
   W_new <- cs2step_align_W(W_new, enc$factor_names)
   W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
 
   use_internal <- is.function(object$fit$my_model) && is.null(experiment_description)
-  model_info <- object$fit$neural_model_info
   prep <- NULL
 
   if (identical(object$mode, "pairwise")) {
@@ -1183,7 +1342,9 @@ cs2step_neural_predict_internal <- function(object,
         X_right_new = X_right,
         resp_cov_new = resp_cov_prepped$values,
         resp_cov_present_new = resp_cov_prepped$present,
-        experiment_idx_new = experiment_idx
+        resp_cov_order_new = resp_cov_prepped$order,
+        experiment_idx_new = experiment_idx,
+        factor_order_new = factor_order_new
       )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
@@ -1198,6 +1359,7 @@ cs2step_neural_predict_internal <- function(object,
         W_idx = W_idx,
         model_info = model_info,
         resp_cov_new = X_new,
+        factor_order_new = factor_order_new,
         experiment_id = experiment_id,
         pair_id = pair_id,
         profile_order = profile_order,
@@ -1218,7 +1380,9 @@ cs2step_neural_predict_internal <- function(object,
         X_new = W_idx,
         resp_cov_new = resp_cov_prepped$values,
         resp_cov_present_new = resp_cov_prepped$present,
-        experiment_idx_new = experiment_idx
+        resp_cov_order_new = resp_cov_prepped$order,
+        experiment_idx_new = experiment_idx,
+        factor_order_new = factor_order_new
       )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
@@ -1233,6 +1397,7 @@ cs2step_neural_predict_internal <- function(object,
         W_idx = W_idx,
         model_info = model_info,
         resp_cov_new = X_new,
+        factor_order_new = factor_order_new,
         experiment_id = experiment_id,
         mode = "single"
       )
@@ -1287,6 +1452,7 @@ cs2step_neural_predict_internal <- function(object,
       W_idx = W_idx,
       model_info = model_info,
       resp_cov_new = X_new,
+      factor_order_new = factor_order_new,
       experiment_id = experiment_id,
       pair_id = pair_id,
       profile_order = profile_order,
@@ -1516,6 +1682,24 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$covariate_name_text)) {
     out$covariate_name_text <- as.matrix(cs2step_neural_to_r_array(out$covariate_name_text))
   }
+  if (!is.null(out$factor_order_by_experiment)) {
+    out$factor_order_by_experiment <- lapply(
+      out$factor_order_by_experiment,
+      function(x) as.integer(cs2step_neural_to_r_array(x))
+    )
+  }
+  if (!is.null(out$default_factor_order)) {
+    out$default_factor_order <- as.integer(cs2step_neural_to_r_array(out$default_factor_order))
+  }
+  if (!is.null(out$covariate_order_by_experiment)) {
+    out$covariate_order_by_experiment <- lapply(
+      out$covariate_order_by_experiment,
+      function(x) as.integer(cs2step_neural_to_r_array(x))
+    )
+  }
+  if (!is.null(out$default_covariate_order)) {
+    out$default_covariate_order <- as.integer(cs2step_neural_to_r_array(out$default_covariate_order))
+  }
   if (!is.null(out$experiment_description_text)) {
     out$experiment_description_text <- as.matrix(
       cs2step_neural_to_r_array(out$experiment_description_text)
@@ -1546,6 +1730,9 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$experiment_token_mode)) {
     out$experiment_token_mode <- as.character(out$experiment_token_mode)
   }
+  if (!is.null(out$factor_tokenization)) {
+    out$factor_tokenization <- as.character(out$factor_tokenization)
+  }
   if (!is.null(out$covariate_value_encoding)) {
     out$covariate_value_encoding <- as.character(out$covariate_value_encoding)
   }
@@ -1565,7 +1752,8 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
                   "n_matchup_levels", "n_resp_covariates", "model_dims", "model_depth",
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
-                  "default_experiment_index", "text_semantic_dim")
+                  "default_experiment_index", "text_semantic_dim", "max_factor_tokens",
+                  "max_covariate_tokens")
   for (field in int_fields) {
     if (!is.null(out[[field]])) {
       out[[field]] <- as.integer(out[[field]])
@@ -1657,6 +1845,15 @@ cs2step_unpack_predictor <- function(bundle,
 
   if (!cs2step_has_reticulate()) {
     stop("Loading neural predictors requires the 'reticulate' package.", call. = FALSE)
+  }
+  if (identical(
+    neural_covariate_value_encoding(bundle$fit$neural_model_info),
+    "shared_projection"
+  ) && !isTRUE(bundle$fit$neural_model_info$has_covariate_span_tokens)) {
+    stop(
+      "This shared_projection bundle uses the pre-span covariate encoder. Refit the model under the updated architecture.",
+      call. = FALSE
+    )
   }
   neural_validate_full_attn_compatibility(
     model_info = bundle$fit$neural_model_info,

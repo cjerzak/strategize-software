@@ -46,7 +46,10 @@ cs_foundation_default_control <- function() {
     add_text_semantics = TRUE,
     text_embedding_fn = NULL,
     experiment_token_mode = "description",
+    factor_tokenization = "language_span",
+    max_factor_tokens = 256L,
     covariate_value_encoding = "shared_projection",
+    max_covariate_tokens = 512L,
     neural_mcmc_control = list(
       subsample_method = "batch_vi",
       uncertainty_scope = "output",
@@ -63,7 +66,10 @@ cs_foundation_default_adaptation_control <- function() {
     use_text_semantics = TRUE,
     text_embedding_fn = NULL,
     experiment_token_mode = "description",
-    covariate_value_encoding = "shared_projection"
+    factor_tokenization = "language_span",
+    max_factor_tokens = 256L,
+    covariate_value_encoding = "shared_projection",
+    max_covariate_tokens = 512L
   )
 }
 
@@ -77,15 +83,36 @@ cs_foundation_resolve_adaptation_control <- function(group, adaptation_control =
     control$experiment_token_mode <- token_control$experiment_token_mode %||%
       control$experiment_token_mode
   }
+  if (is.null(adaptation_control) || !"factor_tokenization" %in% names(adaptation_control)) {
+    control$factor_tokenization <- token_control$factor_tokenization %||%
+      control$factor_tokenization
+  }
+  if (is.null(adaptation_control) || !"max_factor_tokens" %in% names(adaptation_control)) {
+    control$max_factor_tokens <- token_control$max_factor_tokens %||%
+      control$max_factor_tokens
+  }
   if (is.null(adaptation_control) || !"covariate_value_encoding" %in% names(adaptation_control)) {
     control$covariate_value_encoding <- token_control$covariate_value_encoding %||%
       control$covariate_value_encoding
   }
+  if (is.null(adaptation_control) || !"max_covariate_tokens" %in% names(adaptation_control)) {
+    control$max_covariate_tokens <- token_control$max_covariate_tokens %||%
+      control$max_covariate_tokens
+  }
   control$experiment_token_mode <- cs_foundation_experiment_token_mode(
     control$experiment_token_mode
   )
+  control$factor_tokenization <- cs_foundation_factor_tokenization(
+    control$factor_tokenization
+  )
+  control$max_factor_tokens <- neural_resolve_max_factor_tokens(
+    control$max_factor_tokens %||% NULL
+  )
   control$covariate_value_encoding <- cs_foundation_covariate_value_encoding(
     control$covariate_value_encoding
+  )
+  control$max_covariate_tokens <- neural_resolve_max_covariate_tokens(
+    control$max_covariate_tokens %||% NULL
   )
   control
 }
@@ -106,6 +133,17 @@ cs_foundation_covariate_value_encoding <- function(mode) {
   if (!mode_use %in% c("shared_projection", "legacy_linear")) {
     stop(
       "'covariate_value_encoding' must be one of 'shared_projection' or 'legacy_linear'.",
+      call. = FALSE
+    )
+  }
+  mode_use
+}
+
+cs_foundation_factor_tokenization <- function(mode) {
+  mode_use <- tolower(as.character(mode %||% "language_span"))
+  if (!mode_use %in% c("language_span", "legacy_indexed")) {
+    stop(
+      "'factor_tokenization' must be one of 'language_span' or 'legacy_indexed'.",
       call. = FALSE
     )
   }
@@ -755,11 +793,18 @@ cs_foundation_build_token_info <- function(names_list,
                                            factor_map,
                                            level_map,
                                            text_registry,
+                                           factor_order_by_experiment = NULL,
+                                           default_factor_order = NULL,
                                            covariate_names = character(0),
+                                           covariate_order_by_experiment = NULL,
+                                           default_covariate_order = NULL,
                                            experiment_levels = character(0),
                                            experiment_index = NULL,
                                            experiment_token_mode = "description",
+                                           factor_tokenization = "language_span",
+                                           max_factor_tokens = 256L,
                                            covariate_value_encoding = "shared_projection",
+                                           max_covariate_tokens = 512L,
                                            default_experiment_key = NULL) {
   factor_names <- names(names_list)
   dim_use <- if (is.null(text_registry)) {
@@ -770,6 +815,9 @@ cs_foundation_build_token_info <- function(names_list,
 
   factor_name_text <- NULL
   level_name_text <- NULL
+  factor_name_text_present <- rep(FALSE, length(factor_names))
+  names(factor_name_text_present) <- factor_names
+  level_name_text_present <- setNames(vector("list", length(factor_names)), factor_names)
   covariate_name_text <- NULL
   experiment_description_text <- NULL
   experiment_description_present <- NULL
@@ -779,25 +827,35 @@ cs_foundation_build_token_info <- function(names_list,
     factor_keys <- vapply(factor_map[factor_names], function(x) {
       x$slot_key
     }, character(1))
+    factor_name_text_present <- !is.na(match(
+      factor_keys,
+      rownames(text_registry$factor_embedding %||% matrix(numeric(0), nrow = 0L, ncol = dim_use))
+    ))
     factor_name_text <- cs_foundation_get_embedding_rows(
       emb_matrix = text_registry$factor_embedding,
       keys = factor_keys
     )
     rownames(factor_name_text) <- factor_names
 
-    level_name_text <- setNames(lapply(factor_names, function(factor_name) {
+    level_name_text_info <- setNames(lapply(factor_names, function(factor_name) {
       levels_here <- names_list[[factor_name]][[1]]
       out <- matrix(0, nrow = length(levels_here) + 1L, ncol = dim_use)
       rownames(out) <- c(levels_here, "__holdout__")
       level_keys <- unname(level_map[[factor_name]][levels_here])
+      level_present <- !is.na(match(
+        level_keys,
+        rownames(text_registry$level_embedding %||% matrix(numeric(0), nrow = 0L, ncol = dim_use))
+      ))
       if (length(level_keys) > 0L) {
         out[seq_along(levels_here), ] <- cs_foundation_get_embedding_rows(
           emb_matrix = text_registry$level_embedding,
           keys = level_keys
         )
       }
-      out
+      list(text = out, present = level_present)
     }), factor_names)
+    level_name_text <- lapply(level_name_text_info, `[[`, "text")
+    level_name_text_present <- lapply(level_name_text_info, `[[`, "present")
 
     covariate_names <- as.character(covariate_names %||% character(0))
     if (length(covariate_names) > 0L) {
@@ -847,13 +905,34 @@ cs_foundation_build_token_info <- function(names_list,
       default_experiment_index <- as.integer(idx_ok[[1]])
     }
   }
+  covariate_order_by_experiment <- lapply(
+    covariate_order_by_experiment %||% list(),
+    as.integer
+  )
+  default_covariate_order <- as.integer(default_covariate_order %||% integer(0))
+  factor_order_by_experiment <- lapply(
+    factor_order_by_experiment %||% list(),
+    as.integer
+  )
+  default_factor_order <- as.integer(default_factor_order %||% integer(0))
+  factor_tokenization <- cs_foundation_factor_tokenization(factor_tokenization)
+  max_factor_tokens <- neural_resolve_max_factor_tokens(max_factor_tokens)
+  max_covariate_tokens <- neural_resolve_max_covariate_tokens(max_covariate_tokens)
 
   list(
     text_dim = as.integer(dim_use),
     factor_name_text = factor_name_text,
     level_name_text = level_name_text,
+    factor_name_text_present = factor_name_text_present,
+    level_name_text_present = level_name_text_present,
+    factor_order_by_experiment = factor_order_by_experiment,
+    default_factor_order = default_factor_order,
+    factor_tokenization = factor_tokenization,
+    max_factor_tokens = max_factor_tokens,
     covariate_name_text = covariate_name_text,
     covariate_names = as.character(covariate_names %||% character(0)),
+    covariate_order_by_experiment = covariate_order_by_experiment,
+    default_covariate_order = default_covariate_order,
     experiment_description_text = experiment_description_text,
     experiment_description_present = experiment_description_present,
     default_experiment_text = default_experiment_text,
@@ -862,8 +941,43 @@ cs_foundation_build_token_info <- function(names_list,
     experiment_index = experiment_index,
     default_experiment_index = default_experiment_index,
     experiment_token_mode = cs_foundation_experiment_token_mode(experiment_token_mode),
-    covariate_value_encoding = cs_foundation_covariate_value_encoding(covariate_value_encoding)
+    covariate_value_encoding = cs_foundation_covariate_value_encoding(covariate_value_encoding),
+    max_covariate_tokens = max_covariate_tokens
   )
+}
+
+cs_foundation_validate_language_span_text <- function(token_info,
+                                                      context = "Foundation model") {
+  if (!identical(token_info$factor_tokenization %||% NULL, "language_span")) {
+    return(invisible(token_info))
+  }
+  if (as.integer(token_info$text_dim %||% 0L) < 1L ||
+      is.null(token_info$factor_name_text) ||
+      is.null(token_info$level_name_text)) {
+    stop(
+      sprintf(
+        "%s requires token-native factor and level text embeddings under factor_tokenization='language_span'.",
+        context
+      ),
+      call. = FALSE
+    )
+  }
+  factor_ok <- all(token_info$factor_name_text_present %||% FALSE)
+  level_ok <- all(vapply(
+    token_info$level_name_text_present %||% list(),
+    function(x) all(as.logical(x %||% FALSE)),
+    logical(1)
+  ))
+  if (!isTRUE(factor_ok) || !isTRUE(level_ok)) {
+    stop(
+      sprintf(
+        "%s requires complete factor and level text coverage under factor_tokenization='language_span'. Supply a compatible text_embedding_fn.",
+        context
+      ),
+      call. = FALSE
+    )
+  }
+  invisible(token_info)
 }
 
 cs_foundation_row_semantics <- function(W_df, exp_map, text_registry, X_mat = NULL) {
@@ -962,6 +1076,12 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   experiment_token_mode <- cs_foundation_experiment_token_mode(
     control$experiment_token_mode %||% "description"
   )
+  factor_tokenization <- cs_foundation_factor_tokenization(
+    control$factor_tokenization %||% "language_span"
+  )
+  max_factor_tokens <- neural_resolve_max_factor_tokens(
+    control$max_factor_tokens %||% NULL
+  )
   covariate_value_encoding <- cs_foundation_covariate_value_encoding(
     control$covariate_value_encoding %||% "shared_projection"
   )
@@ -988,6 +1108,17 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   X_all <- vector("list", length(experiments))
   X_present_all <- vector("list", length(experiments))
   experiment_index_all <- vector("list", length(experiments))
+  factor_order_by_experiment <- vector("list", length(experiments))
+  covariate_order_by_experiment <- vector("list", length(experiments))
+
+  if (identical(factor_tokenization, "language_span")) {
+    if (is.null(text_registry) || as.integer(text_registry$dim %||% 0L) < 1L) {
+      stop(
+        "Foundation pooled training requires text_embedding_fn and add_text_semantics=TRUE under factor_tokenization='language_span'.",
+        call. = FALSE
+      )
+    }
+  }
 
   for (i in seq_along(experiments)) {
     exp <- experiments[[i]]
@@ -1002,12 +1133,36 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       level_map <- exp_map$level_map[[factor_name]]
       pooled_W[[factor_meta$slot_name]] <- unname(level_map[as.character(exp$W[[factor_name]])])
     }
+    factor_order_by_experiment[[i]] <- neural_factor_order_from_names(
+      vapply(exp$factor_names, function(factor_name) {
+        exp_map$factor_map[[factor_name]]$slot_name
+      }, character(1)),
+      slot_names
+    )
+    if (identical(factor_tokenization, "language_span")) {
+      neural_validate_factor_token_budget(
+        n_factors = length(factor_order_by_experiment[[i]]),
+        max_factor_tokens = max_factor_tokens,
+        context = sprintf("Foundation experiment '%s'", exp$experiment_id)
+      )
+    }
 
     covariate_block <- cs_foundation_align_covariate_block(
       schema_names = x_schema$base_x_names,
       X_mat = exp$X,
       n_rows = nrow(exp$W)
     )
+    covariate_order_by_experiment[[i]] <- neural_covariate_order_from_names(
+      colnames(exp$X %||% matrix(numeric(0), nrow = 0L, ncol = 0L)),
+      x_schema$base_x_names
+    )
+    if (identical(covariate_value_encoding, "shared_projection")) {
+      neural_validate_covariate_token_budget(
+        n_covariates = length(covariate_order_by_experiment[[i]]),
+        max_covariate_tokens = control$max_covariate_tokens %||% NULL,
+        context = sprintf("Foundation experiment '%s'", exp$experiment_id)
+      )
+    }
 
     X_all[[i]] <- covariate_block$values
     X_present_all[[i]] <- covariate_block$present
@@ -1025,11 +1180,20 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     factor_map = registry_slot_maps$factor_map,
     level_map = registry_slot_maps$level_map,
     text_registry = text_registry,
+    factor_order_by_experiment = factor_order_by_experiment,
     covariate_names = x_schema$base_x_names,
+    covariate_order_by_experiment = covariate_order_by_experiment,
     experiment_levels = experiment_levels,
     experiment_index = unlist(experiment_index_all, use.names = FALSE),
     experiment_token_mode = experiment_token_mode,
-    covariate_value_encoding = covariate_value_encoding
+    factor_tokenization = factor_tokenization,
+    max_factor_tokens = max_factor_tokens,
+    covariate_value_encoding = covariate_value_encoding,
+    max_covariate_tokens = control$max_covariate_tokens %||% NULL
+  )
+  cs_foundation_validate_language_span_text(
+    token_info = token_info,
+    context = "Foundation pooled training"
   )
 
   list(
@@ -1054,7 +1218,12 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     token_info = token_info,
     token_control = list(
       experiment_token_mode = experiment_token_mode,
-      covariate_value_encoding = covariate_value_encoding
+      factor_tokenization = factor_tokenization,
+      max_factor_tokens = max_factor_tokens,
+      covariate_value_encoding = covariate_value_encoding,
+      max_covariate_tokens = neural_resolve_max_covariate_tokens(
+        control$max_covariate_tokens %||% NULL
+      )
     )
   )
 }
@@ -1217,13 +1386,42 @@ cs_foundation_build_adaptation_x <- function(group,
     factor_map = exp_map$factor_map,
     level_map = exp_map$level_map,
     text_registry = text_registry,
+    default_factor_order = neural_factor_order_from_names(
+      experiment$factor_names,
+      experiment$factor_names
+    ),
     covariate_names = colnames(out),
+    default_covariate_order = neural_covariate_order_from_names(
+      colnames(experiment$X %||% matrix(numeric(0), nrow = 0L, ncol = 0L)),
+      colnames(out)
+    ),
     experiment_levels = experiment_levels,
     experiment_index = experiment_index,
     experiment_token_mode = adaptation_control$experiment_token_mode,
+    factor_tokenization = adaptation_control$factor_tokenization,
+    max_factor_tokens = adaptation_control$max_factor_tokens %||% NULL,
     covariate_value_encoding = adaptation_control$covariate_value_encoding,
+    max_covariate_tokens = adaptation_control$max_covariate_tokens %||% NULL,
     default_experiment_key = experiment$experiment_id
   )
+  if (identical(adaptation_control$factor_tokenization, "language_span")) {
+    neural_validate_factor_token_budget(
+      n_factors = length(experiment$factor_names),
+      max_factor_tokens = adaptation_control$max_factor_tokens %||% NULL,
+      context = sprintf("Adaptation experiment '%s'", experiment$experiment_id)
+    )
+  }
+  cs_foundation_validate_language_span_text(
+    token_info = token_info,
+    context = sprintf("Adaptation experiment '%s'", experiment$experiment_id)
+  )
+  if (identical(adaptation_control$covariate_value_encoding, "shared_projection")) {
+    neural_validate_covariate_token_budget(
+      n_covariates = length(token_info$default_covariate_order %||% integer(0)),
+      max_covariate_tokens = adaptation_control$max_covariate_tokens %||% NULL,
+      context = sprintf("Adaptation experiment '%s'", experiment$experiment_id)
+    )
+  }
 
   attr(out, "resp_cov_present") <- out_present
   attr(out, "token_info") <- token_info
@@ -1243,6 +1441,11 @@ cs_foundation_build_init_site_values <- function(group,
   )
   params <- group_prepped$fit$neural_model_info$params
   registry <- group$schema_registry
+  factor_tokenization <- cs_foundation_factor_tokenization(
+    group$token_control$factor_tokenization %||%
+      group_prepped$fit$neural_model_info$factor_tokenization %||%
+      "legacy_indexed"
+  )
   exp_map <- cs_foundation_build_local_factor_map(experiment)
   slot_lookup <- setNames(registry$slot_table$slot_name, registry$slot_table$slot_key)
   init_values <- list()
@@ -1260,7 +1463,8 @@ cs_foundation_build_init_site_values <- function(group,
     )
   }
 
-  feature_id_src <- if (!is.null(params$E_feature_id)) {
+  feature_id_src <- if (!identical(factor_tokenization, "language_span") &&
+                        !is.null(params$E_feature_id)) {
     cs2step_neural_to_r_array(params$E_feature_id)
   } else {
     NULL
@@ -1287,39 +1491,41 @@ cs_foundation_build_init_site_values <- function(group,
     init_values[["E_feature_id_raw"]] <- feature_id_tgt
   }
 
-  for (j in seq_along(experiment$factor_names)) {
-    factor_name <- experiment$factor_names[[j]]
-    slot_name <- slot_lookup[[exp_map$factor_map[[factor_name]]$slot_key]] %||% NULL
-    local_levels <- experiment$names_list[[factor_name]][[1]]
-    model_dims <- as.integer(group$fit$neural_model_info$model_dims)
-    tgt <- matrix(0, nrow = length(local_levels) + 1L, ncol = model_dims)
-    if (is.null(slot_name)) {
-      if (isTRUE(strict_schema_match)) {
-        stop(
-          sprintf("No shared slot found for factor '%s' during adaptation.", factor_name),
-          call. = FALSE
-        )
-      }
-    } else {
-      src_idx <- match(slot_name, registry$slot_table$slot_name)
-      src_name <- paste0("E_factor_", src_idx)
-      src_val <- params[[src_name]]
-      if (!is.null(src_val)) {
-        src_mat <- cs2step_neural_to_r_array(src_val)
-        src_level_keys <- registry$slot_level_keys[[slot_name]]
-        local_level_keys <- exp_map$level_map[[factor_name]]
-        for (lvl in local_levels) {
-          src_row <- match(local_level_keys[[lvl]], src_level_keys)
-          if (!is.na(src_row) && src_row <= nrow(src_mat)) {
-            tgt[match(lvl, local_levels), ] <- src_mat[src_row, ]
+  if (!identical(factor_tokenization, "language_span")) {
+    for (j in seq_along(experiment$factor_names)) {
+      factor_name <- experiment$factor_names[[j]]
+      slot_name <- slot_lookup[[exp_map$factor_map[[factor_name]]$slot_key]] %||% NULL
+      local_levels <- experiment$names_list[[factor_name]][[1]]
+      model_dims <- as.integer(group$fit$neural_model_info$model_dims)
+      tgt <- matrix(0, nrow = length(local_levels) + 1L, ncol = model_dims)
+      if (is.null(slot_name)) {
+        if (isTRUE(strict_schema_match)) {
+          stop(
+            sprintf("No shared slot found for factor '%s' during adaptation.", factor_name),
+            call. = FALSE
+          )
+        }
+      } else {
+        src_idx <- match(slot_name, registry$slot_table$slot_name)
+        src_name <- paste0("E_factor_", src_idx)
+        src_val <- params[[src_name]]
+        if (!is.null(src_val)) {
+          src_mat <- cs2step_neural_to_r_array(src_val)
+          src_level_keys <- registry$slot_level_keys[[slot_name]]
+          local_level_keys <- exp_map$level_map[[factor_name]]
+          for (lvl in local_levels) {
+            src_row <- match(local_level_keys[[lvl]], src_level_keys)
+            if (!is.na(src_row) && src_row <= nrow(src_mat)) {
+              tgt[match(lvl, local_levels), ] <- src_mat[src_row, ]
+            }
+          }
+          if (nrow(src_mat) >= length(src_level_keys) + 1L) {
+            tgt[nrow(tgt), ] <- src_mat[nrow(src_mat), ]
           }
         }
-        if (nrow(src_mat) >= length(src_level_keys) + 1L) {
-          tgt[nrow(tgt), ] <- src_mat[nrow(src_mat), ]
-        }
       }
+      init_values[[paste0("E_factor_", j, "_raw")]] <- tgt
     }
-    init_values[[paste0("E_factor_", j, "_raw")]] <- tgt
   }
 
   if (!is.null(params$E_segment)) {
