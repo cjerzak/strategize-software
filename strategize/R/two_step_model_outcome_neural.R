@@ -593,6 +593,43 @@ neural_make_runtime_token_model_info <- function(model_dims,
   )
 }
 
+neural_resolve_covariate_value_encoding <- function(mode = NULL) {
+  mode_use <- tolower(as.character(mode %||% "legacy_linear"))
+  if (!mode_use %in% c("shared_projection", "legacy_linear")) {
+    stop(
+      "'covariate_value_encoding' must be one of 'shared_projection' or 'legacy_linear'.",
+      call. = FALSE
+    )
+  }
+  mode_use
+}
+
+neural_resolve_token_runtime_config <- function(neural_token_info = NULL,
+                                                mcmc_control = NULL) {
+  resolved <- neural_token_info %||% list()
+  resolved$factor_tokenization <- neural_factor_tokenization(
+    mode = resolved$factor_tokenization %||%
+      mcmc_control$factor_tokenization %||%
+      "legacy_indexed"
+  )
+  resolved$max_factor_tokens <- neural_resolve_max_factor_tokens(
+    resolved$max_factor_tokens %||%
+      mcmc_control$max_factor_tokens %||%
+      NULL
+  )
+  resolved$covariate_value_encoding <- neural_resolve_covariate_value_encoding(
+    resolved$covariate_value_encoding %||%
+      mcmc_control$covariate_value_encoding %||%
+      "legacy_linear"
+  )
+  resolved$max_covariate_tokens <- neural_resolve_max_covariate_tokens(
+    resolved$max_covariate_tokens %||%
+      mcmc_control$max_covariate_tokens %||%
+      NULL
+  )
+  resolved
+}
+
 neural_prediction_jit_cache <- new.env(parent = emptyenv())
 
 neural_model_jit_cache_key <- function(model_info) {
@@ -4334,12 +4371,14 @@ generate_ModelOutcome_neural <- function(){
   } else {
     list()
   }
+  neural_token_info_use <- neural_resolve_token_runtime_config(
+    neural_token_info = neural_token_info_use,
+    mcmc_control = mcmc_control
+  )
   token_family_levels <- as.character(
     neural_token_info_use$token_family_levels %||% neural_token_family_levels()
   )
-  factor_tokenization <- neural_factor_tokenization(
-    mode = neural_token_info_use$factor_tokenization %||% "legacy_indexed"
-  )
+  factor_tokenization <- neural_token_info_use$factor_tokenization
   factor_order_by_experiment <- lapply(
     neural_token_info_use$factor_order_by_experiment %||% list(),
     as.integer
@@ -4347,12 +4386,8 @@ generate_ModelOutcome_neural <- function(){
   default_factor_order <- as.integer(
     neural_token_info_use$default_factor_order %||% integer(0)
   )
-  max_factor_tokens <- neural_resolve_max_factor_tokens(
-    neural_token_info_use$max_factor_tokens %||% NULL
-  )
-  max_covariate_tokens <- neural_resolve_max_covariate_tokens(
-    neural_token_info_use$max_covariate_tokens %||% NULL
-  )
+  max_factor_tokens <- as.integer(neural_token_info_use$max_factor_tokens)
+  max_covariate_tokens <- as.integer(neural_token_info_use$max_covariate_tokens)
   factor_name_text <- neural_token_info_use$factor_name_text %||% NULL
   level_name_text <- neural_token_info_use$level_name_text %||% NULL
   covariate_name_text <- neural_token_info_use$covariate_name_text %||% NULL
@@ -4372,18 +4407,19 @@ generate_ModelOutcome_neural <- function(){
   experiment_token_mode <- tolower(as.character(
     neural_token_info_use$experiment_token_mode %||% "legacy_id"
   ))
-  covariate_value_encoding <- tolower(as.character(
-    neural_token_info_use$covariate_value_encoding %||% "legacy_linear"
-  ))
+  covariate_value_encoding <- neural_token_info_use$covariate_value_encoding
   covariate_names_override <- as.character(
     neural_token_info_use$covariate_names %||% colnames(X_) %||% character(0)
   )
+  neural_token_info_use$covariate_names <- covariate_names_override
   if (length(default_factor_order) < 1L && length(factor_levels_int) > 0L) {
     default_factor_order <- seq.int(0L, length(factor_levels_int) - 1L)
   }
   if (length(default_covariate_order) < 1L && length(covariate_names_override) > 0L) {
     default_covariate_order <- seq.int(0L, length(covariate_names_override) - 1L)
   }
+  neural_token_info_use$default_factor_order <- default_factor_order
+  neural_token_info_use$default_covariate_order <- default_covariate_order
   experiment_levels_override <- as.character(
     neural_token_info_use$experiment_levels %||% character(0)
   )

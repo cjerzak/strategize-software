@@ -1645,6 +1645,11 @@ test_that("output-only neural early stopping validates ordered factor and covari
 
   expect_true(isTRUE(model_info$early_stopping$enabled))
   expect_true(isTRUE(model_info$early_stopping$active))
+  expect_identical(model_info$factor_tokenization, "language_span")
+  expect_identical(model_info$covariate_value_encoding, "shared_projection")
+  expect_true(isTRUE(model_info$has_factor_span_tokens))
+  expect_true(isTRUE(model_info$has_covariate_span_tokens))
+  expect_true(isTRUE(model_info$has_shared_covariate_value_projection))
   expect_null(model_info$early_stopping$error_message)
   expect_false(identical(model_info$early_stopping$reason, "validation_error"))
   expect_false(identical(model_info$early_stopping$reason, "metric_failed"))
