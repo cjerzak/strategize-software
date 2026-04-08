@@ -49,6 +49,7 @@ cs_foundation_default_control <- function() {
     factor_tokenization = "language_span",
     max_factor_tokens = 256L,
     covariate_value_encoding = "shared_projection",
+    shared_projection_value_encoder = "name_dist_moe",
     max_covariate_tokens = 512L,
     neural_mcmc_control = list(
       subsample_method = "batch_vi",
@@ -69,6 +70,7 @@ cs_foundation_default_adaptation_control <- function() {
     factor_tokenization = "language_span",
     max_factor_tokens = 256L,
     covariate_value_encoding = "shared_projection",
+    shared_projection_value_encoder = "name_dist_moe",
     max_covariate_tokens = 512L
   )
 }
@@ -95,6 +97,10 @@ cs_foundation_resolve_adaptation_control <- function(group, adaptation_control =
     control$covariate_value_encoding <- token_control$covariate_value_encoding %||%
       control$covariate_value_encoding
   }
+  if (is.null(adaptation_control) || !"shared_projection_value_encoder" %in% names(adaptation_control)) {
+    control$shared_projection_value_encoder <- token_control$shared_projection_value_encoder %||%
+      control$shared_projection_value_encoder
+  }
   if (is.null(adaptation_control) || !"max_covariate_tokens" %in% names(adaptation_control)) {
     control$max_covariate_tokens <- token_control$max_covariate_tokens %||%
       control$max_covariate_tokens
@@ -110,6 +116,9 @@ cs_foundation_resolve_adaptation_control <- function(group, adaptation_control =
   )
   control$covariate_value_encoding <- cs_foundation_covariate_value_encoding(
     control$covariate_value_encoding
+  )
+  control$shared_projection_value_encoder <- cs_foundation_shared_projection_value_encoder(
+    control$shared_projection_value_encoder %||% NULL
   )
   control$max_covariate_tokens <- neural_resolve_max_covariate_tokens(
     control$max_covariate_tokens %||% NULL
@@ -137,6 +146,10 @@ cs_foundation_covariate_value_encoding <- function(mode) {
     )
   }
   mode_use
+}
+
+cs_foundation_shared_projection_value_encoder <- function(mode) {
+  neural_resolve_shared_projection_value_encoder(mode %||% "name_dist_moe")
 }
 
 cs_foundation_factor_tokenization <- function(mode) {
@@ -804,6 +817,7 @@ cs_foundation_build_token_info <- function(names_list,
                                            factor_tokenization = "language_span",
                                            max_factor_tokens = 256L,
                                            covariate_value_encoding = "shared_projection",
+                                           shared_projection_value_encoder = "name_dist_moe",
                                            max_covariate_tokens = 512L,
                                            default_experiment_key = NULL) {
   factor_names <- names(names_list)
@@ -917,6 +931,9 @@ cs_foundation_build_token_info <- function(names_list,
   default_factor_order <- as.integer(default_factor_order %||% integer(0))
   factor_tokenization <- cs_foundation_factor_tokenization(factor_tokenization)
   max_factor_tokens <- neural_resolve_max_factor_tokens(max_factor_tokens)
+  shared_projection_value_encoder <- cs_foundation_shared_projection_value_encoder(
+    shared_projection_value_encoder
+  )
   max_covariate_tokens <- neural_resolve_max_covariate_tokens(max_covariate_tokens)
 
   list(
@@ -942,6 +959,7 @@ cs_foundation_build_token_info <- function(names_list,
     default_experiment_index = default_experiment_index,
     experiment_token_mode = cs_foundation_experiment_token_mode(experiment_token_mode),
     covariate_value_encoding = cs_foundation_covariate_value_encoding(covariate_value_encoding),
+    shared_projection_value_encoder = shared_projection_value_encoder,
     max_covariate_tokens = max_covariate_tokens
   )
 }
@@ -1085,6 +1103,9 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   covariate_value_encoding <- cs_foundation_covariate_value_encoding(
     control$covariate_value_encoding %||% "shared_projection"
   )
+  shared_projection_value_encoder <- cs_foundation_shared_projection_value_encoder(
+    control$shared_projection_value_encoder %||% "name_dist_moe"
+  )
   text_registry <- if (isTRUE(control$add_text_semantics)) {
     cs_foundation_build_text_registry(
       experiments = experiments,
@@ -1189,6 +1210,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens,
     covariate_value_encoding = covariate_value_encoding,
+    shared_projection_value_encoder = shared_projection_value_encoder,
     max_covariate_tokens = control$max_covariate_tokens %||% NULL
   )
   cs_foundation_validate_language_span_text(
@@ -1221,6 +1243,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       factor_tokenization = factor_tokenization,
       max_factor_tokens = max_factor_tokens,
       covariate_value_encoding = covariate_value_encoding,
+      shared_projection_value_encoder = shared_projection_value_encoder,
       max_covariate_tokens = neural_resolve_max_covariate_tokens(
         control$max_covariate_tokens %||% NULL
       )
@@ -1401,6 +1424,7 @@ cs_foundation_build_adaptation_x <- function(group,
     factor_tokenization = adaptation_control$factor_tokenization,
     max_factor_tokens = adaptation_control$max_factor_tokens %||% NULL,
     covariate_value_encoding = adaptation_control$covariate_value_encoding,
+    shared_projection_value_encoder = adaptation_control$shared_projection_value_encoder,
     max_covariate_tokens = adaptation_control$max_covariate_tokens %||% NULL,
     default_experiment_key = experiment$experiment_id
   )

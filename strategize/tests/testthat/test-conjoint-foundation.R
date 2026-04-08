@@ -88,6 +88,7 @@ test_that("foundation defaults use language-span factor tokenization", {
   control <- strategize:::cs_foundation_default_control()
   expect_identical(control$factor_tokenization, "language_span")
   expect_identical(control$max_factor_tokens, 256L)
+  expect_identical(control$shared_projection_value_encoder, "name_dist_moe")
 })
 
 test_that("foundation token info preserves raw covariate order and token budget", {
@@ -115,6 +116,8 @@ test_that("foundation token info preserves raw covariate order and token budget"
   pooled <- strategize:::cs_foundation_build_group_training_data(experiments_norm, registry, control)
   expect_identical(pooled$token_control$max_covariate_tokens, 12L)
   expect_identical(pooled$token_info$max_covariate_tokens, 12L)
+  expect_identical(pooled$token_control$shared_projection_value_encoder, "name_dist_moe")
+  expect_identical(pooled$token_info$shared_projection_value_encoder, "name_dist_moe")
   expect_identical(pooled$x_schema$base_x_names, c("income", "household size", "GOPScore"))
   expect_identical(pooled$token_info$covariate_order_by_experiment[[1]], c(0L, 1L))
   expect_identical(pooled$token_info$covariate_order_by_experiment[[2]], c(2L, 0L))
@@ -186,6 +189,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   )
   expect_identical(group$token_control$experiment_token_mode, "description")
   expect_identical(group$token_control$covariate_value_encoding, "shared_projection")
+  expect_identical(group$token_control$shared_projection_value_encoder, "name_dist_moe")
   expect_identical(group$token_control$max_covariate_tokens, 512L)
   expect_identical(group$x_schema$base_x_names, group$x_feature_names)
   expect_identical(group$x_schema$semantic_feature_names, character(0))
@@ -214,6 +218,11 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   expect_true(isTRUE(group$fit$neural_model_info$has_level_name_text))
   expect_true(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
   expect_true(isTRUE(group$fit$neural_model_info$has_shared_covariate_value_projection))
+  expect_true(isTRUE(group$fit$neural_model_info$has_conditioned_covariate_value_encoder))
+  expect_identical(
+    group$fit$neural_model_info$shared_projection_value_encoder,
+    "name_dist_moe"
+  )
   expect_length(
     as.numeric(strategize:::cs2step_neural_to_r_array(group$fit$neural_model_info$resp_cov_scale)),
     length(group$x_schema$base_x_names)
@@ -536,6 +545,7 @@ test_that("foundation semantics stay backward compatible when text_embedding_fn 
   expect_false(isTRUE(group$fit$neural_model_info$has_level_name_text))
   expect_false(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
   expect_true(isTRUE(group$fit$neural_model_info$has_shared_covariate_value_projection))
+  expect_true(isTRUE(group$fit$neural_model_info$has_conditioned_covariate_value_encoder))
 })
 
 test_that("legacy fine-tuning token controls remain available for ablation", {
