@@ -228,6 +228,7 @@ cs2step_eval_outcome_model_glm <- function(Y,
 
 cs2step_eval_outcome_model_neural <- function(Y,
                                              W_idx,
+                                             names_list = NULL,
                                              factor_levels,
                                              diff,
                                              pair_id = NULL,
@@ -279,6 +280,7 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$W_ <- W_idx
   eval_env$Y <- Y
   eval_env$Y_ <- Y
+  eval_env$names_list <- names_list
   eval_env$factor_levels <- factor_levels
   eval_env$indi_ <- seq_len(nrow(W_idx))
 
@@ -495,6 +497,7 @@ strategic_prediction <- function(Y,
     cs2step_eval_outcome_model_neural(
       Y = as.numeric(Y),
       W_idx = W_idx_train,
+      names_list = names_list,
       factor_levels = factor_levels,
       diff = diff,
       pair_id = pair_id,

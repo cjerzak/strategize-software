@@ -6879,6 +6879,27 @@ generate_ModelOutcome_neural <- function(){
     if (!identical(factor_tokenization, "language_span")) {
       return(NULL)
     }
+    if (!is.null(experiment_idx_new) && length(factor_order_by_experiment) > 0L) {
+      use_experiment_lookup <- is.null(W_new)
+      if (!use_experiment_lookup) {
+        W_df <- as.data.frame(W_new, check.names = FALSE)
+        cols <- colnames(W_df)
+        use_experiment_lookup <- is.null(cols) || identical(as.character(cols), names(names_list))
+      }
+      if (isTRUE(use_experiment_lookup)) {
+        lookup <- neural_factor_order_lookup_matrix(
+          order_list = factor_order_by_experiment,
+          max_factor_tokens = max_factor_tokens
+        )
+        exp_idx <- as.integer(experiment_idx_new)
+        if (length(exp_idx) == 1L && n_rows > 1L) {
+          exp_idx <- rep.int(exp_idx, n_rows)
+        }
+        if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
+          return(lookup[exp_idx + 1L, , drop = FALSE])
+        }
+      }
+    }
     if (!is.null(W_new)) {
       W_df <- as.data.frame(W_new, check.names = FALSE)
       if (!is.null(colnames(W_df))) {
@@ -6888,19 +6909,6 @@ generate_ModelOutcome_neural <- function(){
           n_rows = n_rows,
           max_factor_tokens = max_factor_tokens
         ))
-      }
-    }
-    if (!is.null(experiment_idx_new) && length(factor_order_by_experiment) > 0L) {
-      lookup <- neural_factor_order_lookup_matrix(
-        order_list = factor_order_by_experiment,
-        max_factor_tokens = max_factor_tokens
-      )
-      exp_idx <- as.integer(experiment_idx_new)
-      if (length(exp_idx) == 1L && n_rows > 1L) {
-        exp_idx <- rep.int(exp_idx, n_rows)
-      }
-      if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
-        return(lookup[exp_idx + 1L, , drop = FALSE])
       }
     }
     neural_build_default_factor_order_matrix(
@@ -7020,9 +7028,13 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("E_experiment")
     maybe_site("E_stage")
     maybe_site("E_matchup")
+    maybe_site("E_factor_start")
+    maybe_site("E_factor_end")
+    maybe_site("E_factor_role")
     maybe_site("W_factor_name_text")
     maybe_site("W_level_name_text")
     maybe_site("W_covariate_name_text")
+    maybe_site("W_experiment_text")
     maybe_site("alpha_cross")
     maybe_site("RMS_cross")
     maybe_site("RMS_merge_cross")
