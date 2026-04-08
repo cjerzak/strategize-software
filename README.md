@@ -1,89 +1,118 @@
-# `strategize`: An R package for discovering optimal treatment strategies in high-dimensional data
+# `strategize`
 
 [<img src="https://img.shields.io/badge/Demo-View%20Demo-blue" alt="Demo Button">](https://connorjerzak.com/wp-content/uploads/2025/02/MainVignette.html)
 
-Software for implementing optimal stochastic intervention analysis. Current implementation handles conjoint data from experiments. Future work may also include text, network, and time series data, with observational designs potentially supported.
+`strategize` is an R package for learning optimal or adversarial probability distributions over factor levels in conjoint and related factorial experiments. The main workflow fits an outcome model, shifts the design distribution toward better-performing profiles, and returns both the learned distribution and the implied outcome under that distribution.
+
+Today the package supports:
+
+- single-study optimization with `strategize()` and `cv_strategize()`
+- adversarial optimization for two-player settings
+- prediction-only outcome modeling with `strategic_prediction()`
+- cached predictor and neural bundle I/O with `save_strategic_predictor()`, `load_strategic_predictor()`, `save_neural_outcome_bundle()`, and `load_neural_outcome_bundle()`
+- multi-study pooled neural training with `fit_conjoint_foundation_model()` and `adapt_conjoint_foundation_model()`
 
 # Installation
 
-The most recent version of `strategize` can be installed directly from the repository using the `remotes` package:
+Install the package directly from GitHub:
+
 ```r
 remotes::install_github("cjerzak/strategize-software/strategize")
-```
-
-This installs the package together with the required R dependencies declared in the package metadata.
-
-The package can then be loaded into your R session:
-```r
 library(strategize)
 ```
-Package functions can also be accessed as `strategize::function_name`.
 
-## Python Backend Setup
+## Backend Setup
 
-The package uses JAX for automatic differentiation in the neural backend. After installing the R package, set up the Python backend with:
+The optimization workflow in `strategize()` and `cv_strategize()`, along with the neural prediction and foundation-model APIs, uses the package's JAX-backed computational environment. After installing the R package, run this once:
+
 ```r
 strategize::build_backend(conda_env = "strategize_env")
 ```
-This creates a conda environment with JAX, numpy, optax, equinox, and numpyro. On Linux with NVIDIA GPUs, it auto-detects the driver version and installs appropriate CUDA wheels.
 
-# Tutorial
+This creates a conda environment with JAX, numpy, optax, equinox, numpyro, and the other Python-side dependencies used by the package.
 
-Below is a minimal example demonstrating how to discover an optimal set of
-factor‐level probabilities for a simple conjoint design.  Because the package
-does not ship with data, we begin by simulating a small dataset.
+# Minimal Example
+
+The example below uses a simple pairwise conjoint setup with two factors and a binary forced-choice outcome.
 
 ```r
 set.seed(123)
 
-# Example data with two factors and a binary outcome
-n <- 200
-W <- data.frame(
-  sex   = sample(c("Male", "Female"), n, replace = TRUE),
-  party = sample(c("A", "B"),       n, replace = TRUE)
-)
-Y <- rbinom(n, 1, 0.5)
+n_pairs <- 200
 
-# Original (uniform) assignment probabilities for each factor
-p_list <- list(
-  sex   = c(Male = 0.5, Female = 0.5),
-  party = c(A = 0.5,   B = 0.5)
+W_left <- data.frame(
+  Gender = sample(c("Male", "Female"), n_pairs, replace = TRUE),
+  Message = sample(c("Jobs", "Taxes"), n_pairs, replace = TRUE)
 )
 
-# Search for a probability distribution that maximizes the expected outcome
-library(strategize)
+W_right <- data.frame(
+  Gender = sample(c("Male", "Female"), n_pairs, replace = TRUE),
+  Message = sample(c("Jobs", "Taxes"), n_pairs, replace = TRUE)
+)
+
+score_left <- 0.15 * (W_left$Gender == "Female") + 0.20 * (W_left$Message == "Jobs")
+score_right <- 0.15 * (W_right$Gender == "Female") + 0.20 * (W_right$Message == "Jobs")
+
+Y_left <- as.numeric(score_left > score_right)
+Y <- c(Y_left, 1 - Y_left)
+
+W <- rbind(W_left, W_right)
+pair_id <- c(seq_len(n_pairs), seq_len(n_pairs))
+profile_order <- c(rep(1L, n_pairs), rep(2L, n_pairs))
+
+p_list <- create_p_list(W, uniform = TRUE)
+
 fit <- cv_strategize(
   Y = Y,
   W = W,
   p_list = p_list,
-  lambda = 0.1,
+  lambda_seq = c(0.01, 0.1, 0.5),
+  pair_id = pair_id,
+  profile_order = profile_order,
+  diff = TRUE,
   nSGD = 100,
-  adversarial = FALSE
+  compute_se = TRUE
 )
 
-# Optimized factor-level probabilities and predicted outcome
 fit$pi_star_point
-fit$Q_point_mEst
+fit$Q_point
+fit$Q_se
 ```
 
-This script simulates a two-factor forced-choice design, fits the model, and
-returns `pi_star_point`, the recommended distribution over factor levels, along
-with the expected outcome `Q_point_mEst` under that distribution.
+The return object retains backward-compatible aliases for older code, but the current documentation uses `Q_point` and `Q_se` as the primary public result fields.
 
-# Key Features
+# Other Workflows
 
-- **Adversarial Mode**: Set `adversarial = TRUE` to find Nash equilibrium strategies in two-player zero-sum games (e.g., competing candidates)
-- **Optimistic Updates**: Toggle `optimism = "ogda"`, `optimism = "smp"`, or `optimism = "none"`; default is `optimism = "extragrad"` (extra-gradient look-ahead) for more stable min-max training
-- **Cross-Validation**: Use `cv_strategize()` to automatically select the regularization parameter lambda
-- **Deprecated One-Step Estimator**: The legacy one-step implementation is archived under `strategize/inst/deprecated/onestep/` for reference only
-- **Helper Functions**: Use `create_p_list()` to easily create probability lists from your data, and `strategize_preset()` for quick analysis with sensible defaults
-- **Validation & Diagnostics**: Use `validate_equilibrium()` to verify Nash equilibrium quality, `plot_convergence()` to visualize optimization, `plot_quadrant_breakdown()` for scenario analysis, and `summarize_adversarial()` for comprehensive summaries
+## Prediction-only API
+
+Use `strategic_prediction()` when you want the fitted outcome model without the intervention optimization step:
+
+```r
+predictor <- strategic_prediction(
+  Y = Y,
+  W = W,
+  model = "glm",
+  mode = "pairwise",
+  pair_id = pair_id,
+  profile_order = profile_order
+)
+
+predict(predictor, newdata = list(W = W, pair_id = pair_id, profile_order = profile_order))
+```
+
+Predictors can be cached and reused with `save_strategic_predictor()` and `load_strategic_predictor()`.
+
+## Foundation-model workflow
+
+For pooled neural training across many studies, fit a shared representation with `fit_conjoint_foundation_model()` and adapt it to a target study with `adapt_conjoint_foundation_model()`.
 
 # Documentation
 
-- [Main Vignette](https://connorjerzak.com/wp-content/uploads/2025/02/MainVignette.html) - Comprehensive tutorial and methodology overview
-- QuickStart vignette (`vignettes/QuickStart.Rmd`) - Getting started guide
-- Troubleshooting vignette (`vignettes/Troubleshooting.Rmd`) - Common issues and solutions
+- [Quick Start](strategize/vignettes/QuickStart.Rmd)
+- [Main Vignette](strategize/vignettes/MainVignette.Rmd)
+- [Foundation Models](strategize/vignettes/FoundationModels.Rmd)
+- [Troubleshooting](strategize/vignettes/Troubleshooting.Rmd)
+- [Reference Manual](strategize.pdf)
 
 # License
 
@@ -101,6 +130,6 @@ Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2025. "Selecting Optimal 
       eprint={2504.19043},
       archivePrefix={arXiv},
       primaryClass={stat.ME},
-      url={https://arxiv.org/abs/2504.19043}, 
+      url={https://arxiv.org/abs/2504.19043},
 }
 ```

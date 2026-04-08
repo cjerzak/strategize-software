@@ -244,7 +244,7 @@ before stopping.}
 using M-estimation or the Delta method. Defaults to \code{TRUE}.}
 
 \item{conda_env}{A character specifying the name of a Conda environment for
-\pkg{reticulate}. Defaults to \code{"strategize_env"}.}
+the JAX-backed optimization workflow. Defaults to \code{"strategize_env"}.}
 
 \item{conda_env_required}{Logical. If \code{TRUE}, errors if the specified 
 Conda environment \code{conda_env} cannot be found. Otherwise tries to fall 
@@ -322,8 +322,14 @@ A named list with components:
   \item{pi_star_point}{The estimated optimal probability distribution(s) over 
   candidate profiles (\eqn{\hat{\boldsymbol{\pi}}^*}).}
 
-  \item{Q_point_mEst}{The estimated expected outcome (e.g., vote share) 
+  \item{Q_point}{The primary estimated expected outcome (e.g., vote share)
   under the selected optimal distribution.}
+
+  \item{Q_se}{The primary standard error for \code{Q_point}, when standard
+  errors are requested.}
+
+  \item{Q_point_mEst, Q_se_mEst}{Backward-compatible aliases for
+  \code{Q_point} and \code{Q_se}.}
 
   \item{lambda}{The chosen \eqn{\lambda} value from cross-validation (and 
   any other relevant hyperparameters).}

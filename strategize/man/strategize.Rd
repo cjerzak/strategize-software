@@ -251,8 +251,8 @@ estimates (via the delta method or related expansions). Defaults to \code{FALSE}
 uses implicit differentiation at the solution (adversarial equilibrium or non-adversarial optimum).}
 
 \item{conda_env}{A character string naming a Python conda environment that includes \pkg{jax},
-\pkg{optax}, and other dependencies. If not \code{NULL}, the function attempts to activate
-that environment. Defaults to \code{"strategize_env"}.}
+\pkg{optax}, and other dependencies used by the optimization workflow. If not \code{NULL},
+the function attempts to activate that environment. Defaults to \code{"strategize_env"}.}
 
 \item{conda_env_required}{Logical; if \code{TRUE}, raises an error if the environment given by
 \code{conda_env} cannot be activated. Otherwise, the function attempts to proceed with any
@@ -380,9 +380,11 @@ Structure depends on parameters:
 
 \item{\code{pi_star_se}}{Standard errors for entries in \code{pi_star_point}. Mirrors the structure of \code{pi_star_point} (e.g., a pair of SEs if \code{adversarial = TRUE} and \code{K = 1}). Only present if \code{compute_se = TRUE}.}
 
-\item{\code{Q_point_mEst}}{Point estimate(s) of the optimized outcome (e.g., utility/vote share). Matches the structure of \code{pi_star_point}.}
+\item{\code{Q_point}}{Primary point estimate(s) of the optimized outcome (e.g., utility or vote share). Matches the structure of \code{pi_star_point}.}
 
-\item{\code{Q_se_mEst}}{Standard errors for \code{Q_point_mEst}. Only present if \code{compute_se = TRUE}.}
+\item{\code{Q_se}}{Primary standard errors for \code{Q_point}. Only present if \code{compute_se = TRUE}.}
+
+\item{\code{Q_point_mEst}, \code{Q_se_mEst}}{Backward-compatible aliases for \code{Q_point} and \code{Q_se}.}
 
 \item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
 

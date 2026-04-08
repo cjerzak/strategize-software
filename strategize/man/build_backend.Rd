@@ -2,9 +2,7 @@
 % Please edit documentation in R/build_backend.R
 \name{build_backend}
 \alias{build_backend}
-\title{Build the environment for \code{strategize}. Creates a conda environment in which
-JAX and NumPy are installed. Users may also create such an environment
-themselves.}
+\title{Build the computational environment for \code{strategize}}
 \usage{
 build_backend(conda_env = "strategize_env", conda = "auto")
 }
@@ -23,18 +21,18 @@ This function requires an Internet connection.
 You can find a list of conda Python paths via: \code{Sys.which("python")}
 }
 \description{
-Build the environment for \code{strategize}. Creates a conda environment in which
-JAX and NumPy are installed. Users may also create such an environment
-themselves.
+Creates the conda environment used by the package's JAX-backed optimization
+workflow and neural APIs. Users may also create and manage a compatible
+environment themselves.
 }
 \examples{
 \dontrun{
-# Create a conda environment named "strategize"
+# Create a conda environment named "strategize_env"
 # and install the required Python packages (jax, numpy, etc.)
-build_backend(conda_env = "strategize", conda = "auto")
+build_backend(conda_env = "strategize_env", conda = "auto")
 
 # If you want to specify a particular conda path:
-# build_backend(conda_env = "strategize", conda = "/usr/local/bin/conda")
+# build_backend(conda_env = "strategize_env", conda = "/usr/local/bin/conda")
 }
 
 }

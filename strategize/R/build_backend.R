@@ -1,6 +1,8 @@
-#' Build the environment for `strategize`. Creates a conda environment in which
-#' JAX and NumPy are installed. Users may also create such an environment
-#' themselves.
+#' Build the computational environment for `strategize`
+#'
+#' Creates the conda environment used by the package's JAX-backed optimization
+#' workflow and neural APIs. Users may also create and manage a compatible
+#' environment themselves.
 #'
 #' @param conda_env Name of the conda environment in which to place the backends.
 #'   Defaults to \code{"strategize_env"}.
@@ -15,12 +17,12 @@
 #'
 #' @examples
 #' \dontrun{
-#' # Create a conda environment named "strategize"
+#' # Create a conda environment named "strategize_env"
 #' # and install the required Python packages (jax, numpy, etc.)
-#' build_backend(conda_env = "strategize", conda = "auto")
+#' build_backend(conda_env = "strategize_env", conda = "auto")
 #'
 #' # If you want to specify a particular conda path:
-#' # build_backend(conda_env = "strategize", conda = "/usr/local/bin/conda")
+#' # build_backend(conda_env = "strategize_env", conda = "/usr/local/bin/conda")
 #' }
 #'
 #' @export

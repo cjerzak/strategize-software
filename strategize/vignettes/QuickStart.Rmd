@@ -36,13 +36,13 @@ devtools::install_github("cjerzak/strategize-software/strategize")
 # Load the package
 library(strategize)
 
-# Set up Python/JAX backend (required, takes ~5 min first time)
-# This creates a conda environment with JAX for gradient computation
+# Set up the JAX-backed computational environment (required once)
+# This environment is used by strategize(), cv_strategize(), and the neural APIs
 build_backend(conda_env = "strategize_env")
 ```
 
-**Note:** You only need to run `build_backend()` once. After that, strategize
-will automatically use the created environment.
+**Note:** You only need to run `build_backend()` once. After that, the package
+can reuse the created environment for optimization and neural modeling.
 
 ## Step 2: Prepare Your Data
 
@@ -121,6 +121,9 @@ result$pi_star_point
 result$Q_point
 # [1] 0.58  <- 58% expected win rate (compared to ~50% under baseline)
 
+# Standard error for the optimized outcome
+result$Q_se
+
 # View confidence intervals (if compute_se = TRUE)
 result$pi_star_lb  # Lower bounds
 result$pi_star_ub  # Upper bounds
@@ -165,6 +168,8 @@ result <- strategize(Y = Y, W = W, lambda = 0.1, nSGD = 500,
 
 - **Cross-validation**: Use `cv_strategize()` to select optimal lambda
 - **Adversarial mode**: Set `adversarial = TRUE` for two-player games
+- **Prediction-only API**: Use `strategic_prediction()` when you want the fitted
+  outcome model without the optimization step
 - **Foundation models**: For pooled neural training across many conjoint studies,
   see `vignette("FoundationModels")`
 - **Full tutorial**: See `vignette("MainVignette")`

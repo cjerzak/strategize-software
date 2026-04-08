@@ -23,6 +23,56 @@
     devtools::test(path)
   }
 
+  run_doc_checks <- function(repo_path) {
+    script_path <- file.path(repo_path, "scripts", "check_docs_consistency.R")
+    if (!file.exists(script_path)) {
+      stop("Documentation consistency script is missing: ", script_path)
+    }
+
+    status <- system2(
+      command = file.path(R.home("bin"), "Rscript"),
+      args = script_path
+    )
+
+    if (!identical(status, 0L)) {
+      stop("Documentation consistency checks failed.")
+    }
+
+    invisible(TRUE)
+  }
+
+  maybe_linearize_pdf <- function(pdf_path) {
+    qpdf_bin <- Sys.which("qpdf")
+    if (!nzchar(qpdf_bin)) {
+      message("qpdf not found on PATH; skipping PDF linearization.")
+      return(invisible(FALSE))
+    }
+
+    if (!file.exists(pdf_path)) {
+      stop("Cannot linearize missing PDF: ", pdf_path)
+    }
+
+    tmp_pdf <- tempfile(pattern = "strategize-linearized-", fileext = ".pdf")
+    status <- system2(
+      command = qpdf_bin,
+      args = c("--linearize", normalizePath(pdf_path), tmp_pdf)
+    )
+
+    if (!identical(status, 0L) || !file.exists(tmp_pdf)) {
+      stop("qpdf linearization failed for: ", pdf_path)
+    }
+
+    if (file.exists(pdf_path)) {
+      file.remove(pdf_path)
+    }
+    if (!file.rename(tmp_pdf, pdf_path)) {
+      stop("Failed to replace PDF after linearization: ", pdf_path)
+    }
+
+    message("Linearized PDF: ", pdf_path)
+    invisible(TRUE)
+  }
+
   setwd(base_path)
   package_path <- file.path(base_path, package_name)
 
@@ -39,12 +89,16 @@
   # Document package (generates .Rd files and NAMESPACE)
   devtools::document(package_path)
 
+  # Validate README, vignettes, and roxygen docs before building artifacts
+  run_doc_checks(base_path)
+
   # Remove old PDF manual
   pdf_file <- sprintf("./%s.pdf", package_name)
   try(file.remove(pdf_file), silent = TRUE)
 
   # Create new PDF manual
   system(sprintf("R CMD Rd2pdf %s", shQuote(package_path)))
+  maybe_linearize_pdf(pdf_file)
 
   # Run tests (stop on failure)
   test_results <- run_initial_tests(package_path)

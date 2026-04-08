@@ -17,13 +17,13 @@ knitr::opts_chunk$set(
 )
 ```
 
-This guide covers common issues when using the `strategize` package and their solutions.
+This guide covers common issues when using the `strategize` package and their solutions. The JAX-backed `strategize_env` environment is used by `strategize()`, `cv_strategize()`, and the package's neural APIs.
 
 ## Setup Issues
 
 ### "Conda environment not found"
 
-**Symptom:** Error message about missing conda environment when running `strategize()`.
+**Symptom:** Error message about a missing conda environment when running `strategize()`, `cv_strategize()`, or a neural workflow.
 
 **Solution:**
 
@@ -46,7 +46,7 @@ reticulate::install_miniconda()
 
 ### "JAX import error" or "Module not found"
 
-**Symptom:** Python import errors for JAX or related packages.
+**Symptom:** Python import errors for JAX or related packages when the package initializes its computational backend.
 
 **Solutions:**
 
@@ -60,6 +60,9 @@ build_backend(conda_env = "strategize_env")
 reticulate::use_condaenv("strategize_env")
 reticulate::py_module_available("jax")
 # Should return TRUE
+
+# strategize-specific check
+strategize::check_jax_available("strategize_env", required = FALSE)
 ```
 
 3. On Mac with Apple Silicon, ensure you have XCode command line tools:
