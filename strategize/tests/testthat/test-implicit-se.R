@@ -281,3 +281,80 @@ test_that("implicit SEs complete for large-support neural average-case fits", {
   expect_null(strategize:::strenv$reinforce_baseline_ast, info = followup_info)
   expect_null(strategize:::strenv$reinforce_baseline_dag, info = followup_info)
 })
+
+test_that("full-trace SEs complete for large-support neural REINFORCE fits", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_SKIP_EVAL = "true"
+  ))
+
+  fixture <- generate_linear_average_case_fixture(
+    n_obs = 120L,
+    k_factors = 12L,
+    monte_i = 1L
+  )
+  params <- default_strategize_params(fast = TRUE)
+  params$lambda <- fixture$lambda
+  params$nSGD <- 5L
+  params$nMonte_Qglm <- 4L
+  params$outcome_model_type <- "neural"
+  params$diff <- FALSE
+  params$adversarial <- FALSE
+  params$compute_se <- TRUE
+  params$se_method <- "full"
+  params$penalty_type <- "L2"
+  params$use_regularization <- FALSE
+  params$use_optax <- FALSE
+  params$force_gaussian <- FALSE
+  params$force_reinforce <- TRUE
+  params$a_init_sd <- 0.0
+  params$primary_pushforward <- "linearized"
+  params$compute_hessian <- FALSE
+  params$optimism <- "none"
+  params$neural_mcmc_control <- modifyList(
+    params$neural_mcmc_control,
+    list(
+      subsample_method = "batch_vi",
+      optimizer = "adamw",
+      batch_size = 16L,
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      vi_guide = "auto_diagonal",
+      uncertainty_scope = "output",
+      svi_steps = 20L,
+      svi_num_draws = 5L,
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+
+  withr::local_seed(20260408L)
+  res <- suppressWarnings(do.call(strategize, c(
+    list(Y = fixture$Y, W = fixture$W),
+    params
+  )))
+
+  info_msg <- sprintf(
+    paste0(
+      "objective_gradient_mode=%s; force_reinforce=%s; Q_se=%s; ",
+      "finite_pi_se=%d; reinforce_nonfinite_ast_steps=%d"
+    ),
+    res$convergence_history$objective_gradient_mode,
+    as.character(res$force_reinforce),
+    format(res$Q_se, digits = 6),
+    sum(is.finite(res$pi_star_se_vec)),
+    as.integer(res$convergence_history$reinforce_nonfinite_ast_steps)
+  )
+
+  expect_true(isTRUE(res$force_reinforce), info = info_msg)
+  expect_identical(res$convergence_history$objective_gradient_mode, "reinforce", info = info_msg)
+  expect_true(is.finite(res$Q_se), info = info_msg)
+  expect_true(any(is.finite(res$pi_star_se_vec)), info = info_msg)
+  expect_identical(as.integer(res$convergence_history$reinforce_nonfinite_ast_steps), 0L, info = info_msg)
+  expect_null(strategize:::strenv$reinforce_baseline_ast, info = info_msg)
+  expect_null(strategize:::strenv$reinforce_baseline_dag, info = info_msg)
+})
