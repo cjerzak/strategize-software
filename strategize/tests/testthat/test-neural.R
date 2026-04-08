@@ -1599,6 +1599,58 @@ test_that("output-only neural early stopping advances SVI through chunked run ca
   )
 })
 
+test_that("output-only neural early stopping validates ordered factor and covariate spans", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+    STRATEGIZE_NEURAL_EVAL_SEED = "123"
+  ))
+
+  data <- add_respondent_covariates(
+    generate_test_data(n = 24, seed = 20260408),
+    n_covariates = 2,
+    seed = 20260409
+  )
+  params <- default_strategize_params(fast = TRUE)
+  params$outcome_model_type <- "neural"
+  params$neural_mcmc_control <- modifyList(
+    params$neural_mcmc_control,
+    list(
+      cross_candidate_encoder = "attn",
+      ModelDims = 16L,
+      ModelDepth = 1L,
+      subsample_method = "batch_vi",
+      uncertainty_scope = "output",
+      svi_steps = 25L,
+      batch_size = 16L,
+      early_stopping = TRUE,
+      eval_enabled = FALSE,
+      factor_tokenization = "language_span",
+      covariate_value_encoding = "shared_projection",
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+
+  p_list <- generate_test_p_list(data$W)
+  res <- suppressWarnings(do.call(strategize, c(
+    list(Y = data$Y, W = data$W, X = data$X, p_list = p_list),
+    data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+    params
+  )))
+  model_info <- get_neural_model_info(res)
+
+  expect_true(isTRUE(model_info$early_stopping$enabled))
+  expect_true(isTRUE(model_info$early_stopping$active))
+  expect_null(model_info$early_stopping$error_message)
+  expect_false(identical(model_info$early_stopping$reason, "validation_error"))
+  expect_false(identical(model_info$early_stopping$reason, "metric_failed"))
+  expect_true(length(model_info$early_stopping$validation_loss_history) >= 1L)
+})
+
 test_that("output-only neural early stopping still honors patience exhaustion", {
   local_strategize_binding(
     "cs_compute_outcome_metrics",
@@ -1624,6 +1676,44 @@ test_that("output-only neural early stopping still honors patience exhaustion", 
   expect_identical(as.integer(model_info$early_stopping$stop_step), 24L)
   expect_identical(as.integer(model_info$svi_steps_completed), 24L)
   expect_length(model_info$svi_loss_curve, 24L)
+})
+
+test_that("output-only neural early stopping surfaces validation errors explicitly", {
+  local_strategize_binding(
+    "cs_compute_outcome_metrics",
+    function(...) {
+      stop("synthetic validation failure", call. = FALSE)
+    },
+    env = environment()
+  )
+
+  captured <- capture_messages(
+    suppressWarnings(run_output_only_attn_vi_fit(
+      seed = 20260404,
+      early_stopping = TRUE,
+      svi_steps = 25L
+    ))
+  )
+  messages <- captured$messages
+  model_info <- get_neural_model_info(captured$value)
+
+  summary_idx <- match(
+    TRUE,
+    grepl(
+      "^SVI fit summary: steps=[0-9]+/[0-9]+; validation error at step [0-9]+ \\(synthetic validation failure\\)\\.$",
+      messages
+    )
+  )
+
+  expect_true(is.finite(summary_idx))
+  expect_false(any(grepl("^SVI fit summary: steps=[0-9]+/[0-9]+; final ELBO=", messages)))
+  expect_identical(model_info$early_stopping$reason, "validation_error")
+  expect_match(model_info$early_stopping$error_message, "synthetic validation failure")
+  expect_identical(
+    as.integer(model_info$early_stopping$stop_step),
+    as.integer(model_info$svi_steps_completed)
+  )
+  expect_length(model_info$early_stopping$validation_loss_history, 0L)
 })
 
 test_that("output-only neural logging surfaces structure and fit summary before optimization", {

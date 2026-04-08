@@ -6830,6 +6830,86 @@ generate_ModelOutcome_neural <- function(){
   model_fn_base <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
   model_fn <- model_fn_base
 
+  build_resp_cov_order_new <- function(resp_cov_new, n_rows, experiment_idx_new = NULL) {
+    if (!identical(covariate_value_encoding, "shared_projection") ||
+        length(covariate_names_override) < 1L) {
+      return(NULL)
+    }
+    if (!is.null(experiment_idx_new) && length(covariate_order_by_experiment) > 0L) {
+      use_experiment_lookup <- is.null(resp_cov_new)
+      if (!use_experiment_lookup && (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new))) {
+        cols <- colnames(resp_cov_new)
+        use_experiment_lookup <- is.null(cols) || identical(as.character(cols), covariate_names_override)
+      }
+      if (isTRUE(use_experiment_lookup)) {
+        lookup <- neural_covariate_order_lookup_matrix(
+          order_list = covariate_order_by_experiment,
+          max_covariate_tokens = max_covariate_tokens
+        )
+        exp_idx <- as.integer(experiment_idx_new)
+        if (length(exp_idx) == 1L && n_rows > 1L) {
+          exp_idx <- rep.int(exp_idx, n_rows)
+        }
+        if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
+          return(lookup[exp_idx + 1L, , drop = FALSE])
+        }
+      }
+    }
+    order_idx <- default_covariate_order
+    if (!is.null(resp_cov_new)) {
+      if (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new)) {
+        if (!is.null(colnames(resp_cov_new))) {
+          order_idx <- neural_covariate_order_from_names(
+            colnames(resp_cov_new),
+            covariate_names_override
+          )
+        }
+      } else if (length(covariate_names_override) == 1L) {
+        order_idx <- 0L
+      }
+    }
+    neural_build_default_covariate_order_matrix(
+      order_idx = order_idx,
+      n_rows = n_rows,
+      max_covariate_tokens = max_covariate_tokens
+    )
+  }
+
+  build_factor_order_new <- function(W_new, n_rows, experiment_idx_new = NULL) {
+    if (!identical(factor_tokenization, "language_span")) {
+      return(NULL)
+    }
+    if (!is.null(W_new)) {
+      W_df <- as.data.frame(W_new, check.names = FALSE)
+      if (!is.null(colnames(W_df))) {
+        order_idx <- neural_factor_order_from_names(colnames(W_df), names(names_list))
+        return(neural_build_default_factor_order_matrix(
+          order_idx = order_idx,
+          n_rows = n_rows,
+          max_factor_tokens = max_factor_tokens
+        ))
+      }
+    }
+    if (!is.null(experiment_idx_new) && length(factor_order_by_experiment) > 0L) {
+      lookup <- neural_factor_order_lookup_matrix(
+        order_list = factor_order_by_experiment,
+        max_factor_tokens = max_factor_tokens
+      )
+      exp_idx <- as.integer(experiment_idx_new)
+      if (length(exp_idx) == 1L && n_rows > 1L) {
+        exp_idx <- rep.int(exp_idx, n_rows)
+      }
+      if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
+        return(lookup[exp_idx + 1L, , drop = FALSE])
+      }
+    }
+    neural_build_default_factor_order_matrix(
+      order_idx = default_factor_order,
+      n_rows = n_rows,
+      max_factor_tokens = max_factor_tokens
+    )
+  }
+
   build_params_from_sites_for_svi_validation <- function(param_sites,
                                                          fallback_params = NULL) {
     if (is.null(param_sites) && is.null(fallback_params)) {
@@ -7302,8 +7382,28 @@ generate_ModelOutcome_neural <- function(){
 
     summary_line <- NULL
     if (isTRUE(early_stopping_info$active) &&
-        is.finite(early_stopping_info$best_metric) &&
-        !is.na(early_stopping_info$best_step)) {
+        identical(early_stopping_info$reason, "validation_error")) {
+      error_text <- early_stopping_info$error_message %||% "validation metric execution failed"
+      error_text <- trimws(gsub("[\r\n]+", " ", as.character(error_text)))
+      summary_line <- sprintf(
+        "SVI fit summary: steps=%d/%d; validation error at step %d (%s).",
+        completed_steps,
+        planned_steps,
+        as.integer(early_stopping_info$stop_step %||% completed_steps),
+        error_text
+      )
+    } else if (isTRUE(early_stopping_info$active) &&
+               identical(early_stopping_info$reason, "metric_failed")) {
+      summary_line <- sprintf(
+        "SVI fit summary: steps=%d/%d; validation %s unavailable at step %d.",
+        completed_steps,
+        planned_steps,
+        early_stopping_info$metric %||% "metric",
+        as.integer(early_stopping_info$stop_step %||% completed_steps)
+      )
+    } else if (isTRUE(early_stopping_info$active) &&
+               is.finite(early_stopping_info$best_metric) &&
+               !is.na(early_stopping_info$best_step)) {
       summary_line <- sprintf(
         "SVI fit summary: steps=%d/%d; best %s=%.6f at step %d.",
         completed_steps,
@@ -7357,6 +7457,7 @@ generate_ModelOutcome_neural <- function(){
     active = FALSE,
     stopped_early = FALSE,
     reason = if (isTRUE(early_stopping_enabled)) "not_initialized" else "disabled",
+    error_message = NULL,
     metric = NULL,
     n_checks = NA_integer_,
     eval_every = NA_integer_,
@@ -7995,10 +8096,19 @@ generate_ModelOutcome_neural <- function(){
         steps_remaining <- steps_remaining - as.integer(chunk_steps)
         svi_steps_completed <- as.integer(steps_completed)
 
+        validation_metric_error <- NULL
         metric_value <- tryCatch(
           compute_svi_validation_metric(svi_state, validation_split),
-          error = function(e) NA_real_
+          error = function(e) {
+            validation_metric_error <<- conditionMessage(e)
+            NA_real_
+          }
         )
+        if (!is.null(validation_metric_error)) {
+          early_stopping_info$error_message <- validation_metric_error
+          early_stopping_reason <- "validation_error"
+          break
+        }
         if (!is.finite(metric_value)) {
           early_stopping_reason <- "metric_failed"
           break
@@ -8084,7 +8194,8 @@ generate_ModelOutcome_neural <- function(){
       } else if (is.finite(last_metric)) {
         early_stopping_info$final_metric <- last_metric
       }
-      if (!is.null(best_svi_state) && !identical(early_stopping_reason, "metric_failed")) {
+      if (!is.null(best_svi_state) &&
+          !early_stopping_reason %in% c("metric_failed", "validation_error")) {
         svi_state <- best_svi_state
       }
       early_stopping_info$reason <- early_stopping_reason
@@ -8634,86 +8745,6 @@ generate_ModelOutcome_neural <- function(){
     )
   } else {
     NULL
-  }
-
-  build_resp_cov_order_new <- function(resp_cov_new, n_rows, experiment_idx_new = NULL) {
-    if (!identical(covariate_value_encoding, "shared_projection") ||
-        length(covariate_names_override) < 1L) {
-      return(NULL)
-    }
-    if (!is.null(experiment_idx_new) && length(covariate_order_by_experiment) > 0L) {
-      use_experiment_lookup <- is.null(resp_cov_new)
-      if (!use_experiment_lookup && (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new))) {
-        cols <- colnames(resp_cov_new)
-        use_experiment_lookup <- is.null(cols) || identical(as.character(cols), covariate_names_override)
-      }
-      if (isTRUE(use_experiment_lookup)) {
-        lookup <- neural_covariate_order_lookup_matrix(
-          order_list = covariate_order_by_experiment,
-          max_covariate_tokens = max_covariate_tokens
-        )
-        exp_idx <- as.integer(experiment_idx_new)
-        if (length(exp_idx) == 1L && n_rows > 1L) {
-          exp_idx <- rep.int(exp_idx, n_rows)
-        }
-        if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
-          return(lookup[exp_idx + 1L, , drop = FALSE])
-        }
-      }
-    }
-    order_idx <- default_covariate_order
-    if (!is.null(resp_cov_new)) {
-      if (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new)) {
-        if (!is.null(colnames(resp_cov_new))) {
-          order_idx <- neural_covariate_order_from_names(
-            colnames(resp_cov_new),
-            covariate_names_override
-          )
-        }
-      } else if (length(covariate_names_override) == 1L) {
-        order_idx <- 0L
-      }
-    }
-    neural_build_default_covariate_order_matrix(
-      order_idx = order_idx,
-      n_rows = n_rows,
-      max_covariate_tokens = max_covariate_tokens
-    )
-  }
-
-  build_factor_order_new <- function(W_new, n_rows, experiment_idx_new = NULL) {
-    if (!identical(factor_tokenization, "language_span")) {
-      return(NULL)
-    }
-    if (!is.null(W_new)) {
-      W_df <- as.data.frame(W_new, check.names = FALSE)
-      if (!is.null(colnames(W_df))) {
-        order_idx <- neural_factor_order_from_names(colnames(W_df), names(names_list))
-        return(neural_build_default_factor_order_matrix(
-          order_idx = order_idx,
-          n_rows = n_rows,
-          max_factor_tokens = max_factor_tokens
-        ))
-      }
-    }
-    if (!is.null(experiment_idx_new) && length(factor_order_by_experiment) > 0L) {
-      lookup <- neural_factor_order_lookup_matrix(
-        order_list = factor_order_by_experiment,
-        max_factor_tokens = max_factor_tokens
-      )
-      exp_idx <- as.integer(experiment_idx_new)
-      if (length(exp_idx) == 1L && n_rows > 1L) {
-        exp_idx <- rep.int(exp_idx, n_rows)
-      }
-      if (!is.null(lookup) && length(exp_idx) == n_rows && all(!is.na(exp_idx))) {
-        return(lookup[exp_idx + 1L, , drop = FALSE])
-      }
-    }
-    neural_build_default_factor_order_matrix(
-      order_idx = default_factor_order,
-      n_rows = n_rows,
-      max_factor_tokens = max_factor_tokens
-    )
   }
 
   TransformerPredict_pair <- function(params, Xl_new, Xr_new, pl_new, pr_new,
