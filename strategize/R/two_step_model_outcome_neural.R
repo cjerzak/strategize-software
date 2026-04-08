@@ -8713,6 +8713,15 @@ generate_ModelOutcome_neural <- function(){
           NULL
         }
       }, error = function(e) NULL)
+      params <- tryCatch({
+        if (reticulate::py_has_attr(run_result, "params")) {
+          run_result$params
+        } else if (!is.null(run_result$params)) {
+          run_result$params
+        } else {
+          NULL
+        }
+      }, error = function(e) NULL)
       state <- if (!is.null(run_result$state)) {
         run_result$state
       } else if (length(run_result) > 0L) {
@@ -8720,7 +8729,122 @@ generate_ModelOutcome_neural <- function(){
       } else {
         run_result
       }
-      list(state = state, losses = losses)
+      list(state = state, losses = losses, params = params)
+    }
+    flatten_svi_numeric_tree <- function(tree) {
+      if (is.null(tree)) {
+        return(numeric(0))
+      }
+      leaves <- tryCatch(strenv$jax$tree_util$tree_leaves(tree), error = function(e) NULL)
+      if (is.null(leaves) || length(leaves) < 1L) {
+        return(numeric(0))
+      }
+      out <- numeric(0)
+      for (leaf in leaves) {
+        arr <- tryCatch(as.numeric(strenv$np$array(leaf)), error = function(e) numeric(0))
+        if (length(arr) > 0L) {
+          out <- c(out, arr)
+        }
+      }
+      out[is.finite(out)]
+    }
+    svi_tree_rms <- function(tree) {
+      vals <- flatten_svi_numeric_tree(tree)
+      if (length(vals) < 1L) {
+        return(NA_real_)
+      }
+      sqrt(mean(vals ^ 2))
+    }
+    svi_tree_l2 <- function(tree) {
+      vals <- flatten_svi_numeric_tree(tree)
+      if (length(vals) < 1L) {
+        return(NA_real_)
+      }
+      sqrt(sum(vals ^ 2))
+    }
+    svi_param_delta_rms <- function(previous_tree, current_tree) {
+      if (is.null(previous_tree) || is.null(current_tree)) {
+        return(NA_real_)
+      }
+      previous_leaves <- tryCatch(strenv$jax$tree_util$tree_leaves(previous_tree), error = function(e) NULL)
+      current_leaves <- tryCatch(strenv$jax$tree_util$tree_leaves(current_tree), error = function(e) NULL)
+      if (is.null(previous_leaves) || is.null(current_leaves) ||
+          length(previous_leaves) != length(current_leaves)) {
+        return(NA_real_)
+      }
+      deltas <- numeric(0)
+      for (leaf_idx in seq_along(previous_leaves)) {
+        prev_vals <- tryCatch(
+          as.numeric(strenv$np$array(previous_leaves[[leaf_idx]])),
+          error = function(e) numeric(0)
+        )
+        curr_vals <- tryCatch(
+          as.numeric(strenv$np$array(current_leaves[[leaf_idx]])),
+          error = function(e) numeric(0)
+        )
+        if (length(prev_vals) != length(curr_vals) || length(prev_vals) < 1L) {
+          return(NA_real_)
+        }
+        keep <- is.finite(prev_vals) & is.finite(curr_vals)
+        if (!any(keep)) {
+          next
+        }
+        deltas <- c(deltas, curr_vals[keep] - prev_vals[keep])
+      }
+      if (length(deltas) < 1L) {
+        return(NA_real_)
+      }
+      sqrt(mean(deltas ^ 2))
+    }
+    extract_svi_optimizer_moment_diagnostics <- function(svi_state_current,
+                                                         optimizer_tag_current) {
+      diagnostics <- list(
+        muon_mu_l2 = NA_real_,
+        adam_mu_l2 = NA_real_,
+        adam_nu_rms = NA_real_
+      )
+      if (!identical(optimizer_tag_current, "muon") || is.null(svi_state_current)) {
+        return(diagnostics)
+      }
+      optim_state <- tryCatch(svi_state_current$optim_state, error = function(e) NULL)
+      if (is.null(optim_state) || length(optim_state) < 2L) {
+        return(diagnostics)
+      }
+      inner_state <- tryCatch(optim_state[[2]], error = function(e) NULL)
+      if (is.null(inner_state) || length(inner_state) < 2L) {
+        return(diagnostics)
+      }
+      partition_state <- tryCatch(inner_state[[2]], error = function(e) NULL)
+      inner_states <- tryCatch(partition_state$inner_states, error = function(e) NULL)
+      if (is.null(inner_states)) {
+        return(diagnostics)
+      }
+
+      muon_state <- tryCatch(inner_states$muon$inner_state[[1]], error = function(e) NULL)
+      adam_state <- tryCatch(inner_states$adam$inner_state[[1]], error = function(e) NULL)
+
+      diagnostics$muon_mu_l2 <- if (!is.null(muon_state)) {
+        svi_tree_l2(muon_state$mu)
+      } else {
+        NA_real_
+      }
+      diagnostics$adam_mu_l2 <- if (!is.null(adam_state)) {
+        svi_tree_l2(adam_state$mu)
+      } else {
+        NA_real_
+      }
+      diagnostics$adam_nu_rms <- if (!is.null(adam_state)) {
+        svi_tree_rms(adam_state$nu)
+      } else {
+        NA_real_
+      }
+      diagnostics
+    }
+    format_svi_diag_value <- function(value, digits = 8L) {
+      if (length(value) != 1L || !is.finite(value)) {
+        return("NA")
+      }
+      sprintf(paste0("%.", as.integer(digits), "f"), as.numeric(value))
     }
 
     validation_split <- NULL
@@ -8799,6 +8923,7 @@ generate_ModelOutcome_neural <- function(){
       svi_loss_chunks <- list()
       steps_remaining <- as.integer(svi_steps)
       steps_completed <- 0L
+      previous_params_for_diag <- NULL
 
       while (steps_remaining > 0L) {
         chunk_steps <- min(chunk_size, steps_remaining)
@@ -8828,6 +8953,10 @@ generate_ModelOutcome_neural <- function(){
         steps_completed <- steps_completed + as.integer(chunk_steps)
         steps_remaining <- steps_remaining - as.integer(chunk_steps)
         svi_steps_completed <- as.integer(steps_completed)
+        current_params_for_diag <- run_parts$params
+        if (is.null(current_params_for_diag)) {
+          current_params_for_diag <- tryCatch(svi$get_params(svi_state), error = function(e) NULL)
+        }
 
         validation_metric_error <- NULL
         metric_value <- tryCatch(
@@ -8889,18 +9018,44 @@ generate_ModelOutcome_neural <- function(){
         } else {
           "NA"
         }
+        train_elbo_value <- if (length(chunk_losses) > 0L) {
+          tail(chunk_losses, 1L)
+        } else {
+          NA_real_
+        }
+        elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
+        optimizer_diag <- extract_svi_optimizer_moment_diagnostics(
+          svi_state_current = svi_state,
+          optimizer_tag_current = optimizer_tag
+        )
         message(sprintf(
-          "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; best=%.6f at step %d; delta_prev=%s.",
+          paste0(
+            "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; ",
+            "train_elbo=%s; param_rms=%s; param_delta_rms=%s; ",
+            "muon_mu_l2=%s; adam_mu_l2=%s; adam_nu_rms=%s; ",
+            "best=%.6f at step %d; delta_prev=%s; elapsed=%ss."
+          ),
           as.integer(early_stopping_info$stop_check),
           total_checks_planned,
           steps_completed,
           svi_steps,
           early_stopping_info$metric,
           metric_value,
+          format_svi_diag_value(train_elbo_value, digits = 2L),
+          format_svi_diag_value(svi_tree_rms(current_params_for_diag), digits = 8L),
+          format_svi_diag_value(
+            svi_param_delta_rms(previous_params_for_diag, current_params_for_diag),
+            digits = 8L
+          ),
+          format_svi_diag_value(optimizer_diag$muon_mu_l2, digits = 8L),
+          format_svi_diag_value(optimizer_diag$adam_mu_l2, digits = 8L),
+          format_svi_diag_value(optimizer_diag$adam_nu_rms, digits = 8L),
           best_metric_for_message,
           best_step_for_message,
-          delta_prev_text
+          delta_prev_text,
+          format_svi_diag_value(elapsed_seconds, digits = 3L)
         ))
+        previous_params_for_diag <- current_params_for_diag
 
         if (no_improve_checks >= early_stopping_info$patience &&
             steps_completed < as.integer(svi_steps)) {

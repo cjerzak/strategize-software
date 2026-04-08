@@ -468,7 +468,8 @@ run_output_only_attn_vi_fit <- function(seed,
                                         early_stopping = TRUE,
                                         svi_steps = 25L,
                                         residual_mode = "standard",
-                                        eval_enabled = FALSE) {
+                                        eval_enabled = FALSE,
+                                        optimizer = NULL) {
   skip_on_cran()
   skip_if_no_jax()
 
@@ -498,6 +499,9 @@ run_output_only_attn_vi_fit <- function(seed,
       warn_min_cell_n = 0L
     )
   )
+  if (!is.null(optimizer)) {
+    params$neural_mcmc_control$optimizer <- optimizer
+  }
 
   p_list <- generate_test_p_list(data$W)
 
@@ -2002,19 +2006,71 @@ test_that("average-case normal neural logging reports per-check validation nll s
   )
   messages <- captured$messages
 
-  check_idx <- match(
-    TRUE,
-    grepl(
-      "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000)\\.$",
-      messages
-    )
-  )
+  check_idx <- match(TRUE, grepl("^SVI early-stop check [0-9]+/[0-9]+: ", messages))
   early_idx <- match(TRUE, grepl("^SVI early stopping at step [0-9]+/[0-9]+ on validation nll=1\\.000000\\.$", messages))
   summary_idx <- match(TRUE, grepl("^SVI fit summary: steps=[0-9]+/[0-9]+; best nll=1\\.000000 at step [0-9]+\\.$", messages))
 
   expect_true(all(is.finite(c(check_idx, early_idx, summary_idx))))
+  expect_match(
+    messages[[check_idx]],
+    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); param_rms=(NA|-?[0-9]+\\.[0-9]{8}); param_delta_rms=(NA|-?[0-9]+\\.[0-9]{8}); muon_mu_l2=NA; adam_mu_l2=NA; adam_nu_rms=NA; best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+  )
   expect_lt(check_idx, early_idx)
   expect_lt(early_idx, summary_idx)
+})
+
+test_that("output-only attn VI logging reports Muon optimizer diagnostics when Muon stays active", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+
+  if (!reticulate::py_has_attr(strategize:::strenv$optax, "contrib") ||
+      !reticulate::py_has_attr(strategize:::strenv$optax$contrib, "muon")) {
+    skip("optax.contrib.muon not available")
+  }
+
+  captured <- capture_messages(
+    suppressWarnings(run_output_only_attn_vi_fit(
+      seed = 20260408,
+      svi_steps = 25L,
+      optimizer = "muon"
+    ))
+  )
+  messages <- captured$messages
+  early_stop_lines <- grep("^SVI early-stop check [0-9]+/[0-9]+: ", messages, value = TRUE)
+
+  expect_gt(length(early_stop_lines), 0L)
+  expect_match(
+    early_stop_lines[[1]],
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); param_rms=(NA|-?[0-9]+\\.[0-9]{8}); param_delta_rms=NA; muon_mu_l2=(NA|-?[0-9]+\\.[0-9]{8}); adam_mu_l2=(NA|-?[0-9]+\\.[0-9]{8}); adam_nu_rms=(NA|-?[0-9]+\\.[0-9]{8}); .*elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+  )
+  expect_true(any(grepl("muon_mu_l2=-?[0-9]+\\.[0-9]{8}", early_stop_lines)))
+  expect_true(any(grepl("adam_mu_l2=-?[0-9]+\\.[0-9]{8}", early_stop_lines)))
+  expect_true(any(grepl("adam_nu_rms=-?[0-9]+\\.[0-9]{8}", early_stop_lines)))
+  if (length(early_stop_lines) > 1L) {
+    expect_true(any(grepl("param_delta_rms=-?[0-9]+\\.[0-9]{8}", early_stop_lines[-1L])))
+  }
+})
+
+test_that("output-only attn VI logging keeps Muon diagnostic fields as NA for non-Muon optimizers", {
+  captured <- capture_messages(
+    suppressWarnings(run_output_only_attn_vi_fit(
+      seed = 20260409,
+      svi_steps = 25L,
+      optimizer = "adabelief"
+    ))
+  )
+  messages <- captured$messages
+  early_stop_lines <- grep("^SVI early-stop check [0-9]+/[0-9]+: ", messages, value = TRUE)
+
+  expect_gt(length(early_stop_lines), 0L)
+  expect_match(
+    early_stop_lines[[1]],
+    "param_rms=(NA|-?[0-9]+\\.[0-9]{8}); param_delta_rms=NA; muon_mu_l2=NA; adam_mu_l2=NA; adam_nu_rms=NA; .*elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+  )
+  if (length(early_stop_lines) > 1L) {
+    expect_true(any(grepl("param_delta_rms=-?[0-9]+\\.[0-9]{8}", early_stop_lines[-1L])))
+  }
 })
 
 test_that("output-only full-attn attn VI routes training through shared candidate extraction", {
