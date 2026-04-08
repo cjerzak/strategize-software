@@ -9,6 +9,20 @@
   package_name <- "strategize"
   base_path <- sprintf("~/Documents/%s-software", package_name)
 
+  run_initial_tests <- function(path) {
+    old_max_fails <- Sys.getenv("TESTTHAT_MAX_FAILS", unset = NA_character_)
+    on.exit({
+      if (is.na(old_max_fails)) {
+        Sys.unsetenv("TESTTHAT_MAX_FAILS")
+      } else {
+        Sys.setenv(TESTTHAT_MAX_FAILS = old_max_fails)
+      }
+    }, add = TRUE)
+
+    Sys.setenv(TESTTHAT_MAX_FAILS = "Inf")
+    devtools::test(path)
+  }
+
   setwd(base_path)
   package_path <- file.path(base_path, package_name)
 
@@ -33,7 +47,7 @@
   system(sprintf("R CMD Rd2pdf %s", shQuote(package_path)))
 
   # Run tests (stop on failure)
-  test_results <- devtools::test(package_path)
+  test_results <- run_initial_tests(package_path)
   if (any(as.data.frame(test_results)$failed > 0)) {
     stop("Tests failed! Stopping build process.")
   }
