@@ -63,12 +63,17 @@ Optional fields:
   \item{\code{profile_order}}{Optional within-pair ordering, typically
   \code{1}/\code{2}.}
   \item{\code{X}}{Optional numeric covariates aligned row-wise to
-  \code{W}. Non-numeric columns are rejected. Raw numeric values are used
-  directly as-is. In the neural foundation backend, pooled training builds
-  one covariate token per pooled \code{X} column, keeps an explicit
-  presence mask so absent covariates are not conflated with numeric zeros,
-  and optionally adds projected \code{X}-name text embeddings to those
-  tokens when \code{text_embedding_fn} is supplied.}
+  \code{W}. Non-numeric columns are rejected. Raw numeric values remain
+  unchanged at the API boundary. In the default FM covariate path
+  (\code{covariate_value_encoding = "shared_projection"} with
+  \code{shared_projection_value_encoder = "name_dist_moe"}), each present
+  covariate is emitted as a 4-token span
+  \code{<start_covariate, covariate_name_token, value_token, end_covariate>}.
+  The name token can include projected \code{X}-name text embeddings, and
+  the value token combines the standardized numeric value with local
+  study-specific distribution summaries and covariate-name semantics.
+  Absent covariates are masked structurally rather than represented by a
+  separate learned presence embedding.}
   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
   respondent/task identifiers used when available for clustering and
   evaluation logic.}
@@ -112,10 +117,34 @@ The \code{foundation_control} list supports:
   \item{\code{text_embedding_fn}}{Optional function that maps character input
   to numeric embeddings. It may accept a character vector and return a matrix
   with matching rows, or accept one string at a time and return a fixed-width
-  numeric vector. These embeddings are projected into factor-name,
-  level-label, and pooled \code{X}-name token components while learned
-  factor and covariate identity embeddings remain the primary identity
-  mechanism.}
+  numeric vector. These embeddings are projected into FM factor-name,
+  factor-level, and pooled \code{X}-name token components. Canonical ids
+  still govern cross-study pooling and schema sharing.}
+  \item{\code{experiment_token_mode}}{Experiment token mode for FM training.
+  \code{"description"} uses experiment-description text, \code{"hybrid"}
+  combines description text and learned pooled experiment ids, and
+  \code{"legacy_id"} uses only learned pooled experiment ids. Default
+  \code{"description"}.}
+  \item{\code{factor_tokenization}}{FM factor tokenizer. The default
+  \code{"language_span"} emits factor spans as
+  \code{<start_factor, factor_name_token, factor_level_token, end_factor>}.
+  \code{"legacy_indexed"} retains the older fixed one-token-per-factor
+  encoder for ablations. Default \code{"language_span"}.}
+  \item{\code{max_factor_tokens}}{Total factor-token budget used by the FM
+  factor span encoder. The default \code{256L} supports up to 64 factor
+  spans per profile.}
+  \item{\code{covariate_value_encoding}}{FM covariate encoder family.
+  \code{"shared_projection"} is the span-based default. \code{"legacy_linear"}
+  retains the older fixed-width covariate path for ablations. Default
+  \code{"shared_projection"}.}
+  \item{\code{shared_projection_value_encoder}}{Value-token generator used
+  inside \code{"shared_projection"}. The default \code{"name_dist_moe"}
+  conditions each covariate value token on covariate-name semantics and
+  local distribution summaries. \code{"legacy_scalar"} falls back to the
+  older standardized scalar projection.}
+  \item{\code{max_covariate_tokens}}{Total covariate-token budget used by
+  the FM covariate span encoder. The default \code{512L} supports up to 128
+  covariate spans per row.}
   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
   neural outcome backend. Defaults to a pooled SVI configuration using
   output-only uncertainty.}

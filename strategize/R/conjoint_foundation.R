@@ -29,9 +29,10 @@
 #'
 #' Cross-study sharing is driven by explicit canonical ids. Raw label equality
 #' alone does not force two studies to share factor or level identities.
-#' Optional text embeddings act as side information for pooled factor names,
-#' factor levels, and numeric covariate names during training and adaptation,
-#' not as the main identity mechanism.
+#' Optional text embeddings now enter the FM encoder directly: factor spans use
+#' language-native factor-name and level-label tokens, and covariate spans use
+#' covariate-name tokens plus value tokens conditioned on local covariate
+#' distributions. Canonical ids still determine schema sharing across studies.
 #'
 #' See \code{\link{fit_conjoint_foundation_model}()} for the full experiment
 #' specification and \code{\link{adapt_conjoint_foundation_model}()} for the
@@ -1697,12 +1698,17 @@ cs_foundation_unpack_group <- function(group,
 #'   \item{\code{profile_order}}{Optional within-pair ordering, typically
 #'   \code{1}/\code{2}.}
 #'   \item{\code{X}}{Optional numeric covariates aligned row-wise to
-#'   \code{W}. Non-numeric columns are rejected. Raw numeric values are used
-#'   directly as-is. In the neural foundation backend, pooled training builds
-#'   one covariate token per pooled \code{X} column, keeps an explicit
-#'   presence mask so absent covariates are not conflated with numeric zeros,
-#'   and optionally adds projected \code{X}-name text embeddings to those
-#'   tokens when \code{text_embedding_fn} is supplied.}
+#'   \code{W}. Non-numeric columns are rejected. Raw numeric values remain
+#'   unchanged at the API boundary. In the default FM covariate path
+#'   (\code{covariate_value_encoding = "shared_projection"} with
+#'   \code{shared_projection_value_encoder = "name_dist_moe"}), each present
+#'   covariate is emitted as a 4-token span
+#'   \code{<start_covariate, covariate_name_token, value_token, end_covariate>}.
+#'   The name token can include projected \code{X}-name text embeddings, and
+#'   the value token combines the standardized numeric value with local
+#'   study-specific distribution summaries and covariate-name semantics.
+#'   Absent covariates are masked structurally rather than represented by a
+#'   separate learned presence embedding.}
 #'   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
 #'   respondent/task identifiers used when available for clustering and
 #'   evaluation logic.}
@@ -1746,10 +1752,34 @@ cs_foundation_unpack_group <- function(group,
 #'   \item{\code{text_embedding_fn}}{Optional function that maps character input
 #'   to numeric embeddings. It may accept a character vector and return a matrix
 #'   with matching rows, or accept one string at a time and return a fixed-width
-#'   numeric vector. These embeddings are projected into factor-name,
-#'   level-label, and pooled \code{X}-name token components while learned
-#'   factor and covariate identity embeddings remain the primary identity
-#'   mechanism.}
+#'   numeric vector. These embeddings are projected into FM factor-name,
+#'   factor-level, and pooled \code{X}-name token components. Canonical ids
+#'   still govern cross-study pooling and schema sharing.}
+#'   \item{\code{experiment_token_mode}}{Experiment token mode for FM training.
+#'   \code{"description"} uses experiment-description text, \code{"hybrid"}
+#'   combines description text and learned pooled experiment ids, and
+#'   \code{"legacy_id"} uses only learned pooled experiment ids. Default
+#'   \code{"description"}.}
+#'   \item{\code{factor_tokenization}}{FM factor tokenizer. The default
+#'   \code{"language_span"} emits factor spans as
+#'   \code{<start_factor, factor_name_token, factor_level_token, end_factor>}.
+#'   \code{"legacy_indexed"} retains the older fixed one-token-per-factor
+#'   encoder for ablations. Default \code{"language_span"}.}
+#'   \item{\code{max_factor_tokens}}{Total factor-token budget used by the FM
+#'   factor span encoder. The default \code{256L} supports up to 64 factor
+#'   spans per profile.}
+#'   \item{\code{covariate_value_encoding}}{FM covariate encoder family.
+#'   \code{"shared_projection"} is the span-based default. \code{"legacy_linear"}
+#'   retains the older fixed-width covariate path for ablations. Default
+#'   \code{"shared_projection"}.}
+#'   \item{\code{shared_projection_value_encoder}}{Value-token generator used
+#'   inside \code{"shared_projection"}. The default \code{"name_dist_moe"}
+#'   conditions each covariate value token on covariate-name semantics and
+#'   local distribution summaries. \code{"legacy_scalar"} falls back to the
+#'   older standardized scalar projection.}
+#'   \item{\code{max_covariate_tokens}}{Total covariate-token budget used by
+#'   the FM covariate span encoder. The default \code{512L} supports up to 128
+#'   covariate spans per row.}
 #'   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
 #'   neural outcome backend. Defaults to a pooled SVI configuration using
 #'   output-only uncertainty.}
@@ -1963,7 +1993,11 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #' @param neural_mcmc_control Optional list passed to the Bayesian neural backend.
 #' @param foundation_adaptation_control Optional list controlling adaptation.
 #'   Supported keys are \code{strict_schema_match}, \code{allow_extra_covariates},
-#'   \code{use_text_semantics}, and \code{text_embedding_fn}.
+#'   \code{use_text_semantics}, \code{text_embedding_fn},
+#'   \code{experiment_token_mode}, \code{factor_tokenization},
+#'   \code{max_factor_tokens}, \code{covariate_value_encoding},
+#'   \code{shared_projection_value_encoder}, and
+#'   \code{max_covariate_tokens}.
 #' @param conda_env Conda env name for the neural backend.
 #' @param conda_env_required Require the conda env to exist.
 #' @param cache_path Optional predictor cache path.
@@ -1993,10 +2027,13 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   \item \code{length(Y) == nrow(W)};
 #'   \item pairwise studies require \code{pair_id};
 #'   \item \code{X}, when supplied, must be numeric and row-aligned to
-#'   \code{W}; raw numeric values remain unchanged during adaptation, while any
-#'   shared pooled covariate tokens are aligned by pooled \code{X} name,
-#'   receive explicit presence masks, and optionally receive rebuilt
-#'   \code{X}-name text embeddings when text semantics are enabled;
+#'   \code{W}; raw numeric values remain unchanged during adaptation. Under the
+#'   default FM covariate path, shared covariate spans are aligned by pooled
+#'   \code{X} name, name tokens optionally receive rebuilt \code{X}-name text
+#'   embeddings, and value tokens are rebuilt from standardized numeric values
+#'   plus local adaptation-study distribution summaries. Absent covariates are
+#'   masked structurally rather than represented with a separate presence
+#'   embedding;
 #'   \item categorical adaptation follows the same \code{n_outcomes} rule as
 #'   pooled training.
 #' }
@@ -2015,7 +2052,7 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   \item{\code{strict_schema_match}}{Require every local factor to match a
 #'   pooled foundation slot. Default \code{FALSE}.}
 #'   \item{\code{allow_extra_covariates}}{Allow local covariates that were not
-#'   present during pooled training. Extra local covariate tokens are appended
+#'   present during pooled training. Extra local covariate spans are appended
 #'   after the shared pooled covariate vocabulary. Default \code{TRUE}.}
 #'   \item{\code{use_text_semantics}}{Reuse token-native text semantics during
 #'   adaptation when the foundation object includes them, including factor-name,
@@ -2026,6 +2063,19 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #'   adaptation reuses the stored pooled text registry when available. Any
 #'   supplied function must return the same embedding width as the pooled
 #'   foundation text registry.}
+#'   \item{\code{experiment_token_mode}}{Experiment token mode for the adapted
+#'   fit. Defaults to the pooled group's FM setting.}
+#'   \item{\code{factor_tokenization}}{Factor tokenizer used during adaptation.
+#'   Defaults to the pooled group's FM setting.}
+#'   \item{\code{max_factor_tokens}}{Total factor-token budget used during
+#'   adaptation. Defaults to the pooled group's FM setting.}
+#'   \item{\code{covariate_value_encoding}}{Covariate encoder family used during
+#'   adaptation. Defaults to the pooled group's FM setting.}
+#'   \item{\code{shared_projection_value_encoder}}{Value-token generator used
+#'   inside \code{"shared_projection"} during adaptation. Defaults to the
+#'   pooled group's FM setting.}
+#'   \item{\code{max_covariate_tokens}}{Total covariate-token budget used during
+#'   adaptation. Defaults to the pooled group's FM setting.}
 #' }
 #'
 #' @examples

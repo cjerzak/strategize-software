@@ -256,24 +256,29 @@ When supplied, the same embedding hook is used for:
 Under the current foundation-model backend, those embeddings are projected into
 the corresponding tokens:
 
-- factor-name embeddings are added to factor candidate tokens
-- level-label embeddings are added to the selected level token path
-- covariate-name embeddings are added to one covariate token per pooled `X`
-  column
+- factor-name embeddings are emitted as factor-name tokens inside
+  `<start_factor, factor_name_token, factor_level_token, end_factor>`
+- level-label embeddings are emitted as factor-level tokens inside the same
+  factor span
+- covariate-name embeddings are emitted as name tokens inside
+  `<start_covariate, covariate_name_token, value_token, end_covariate>`
 
-Raw numeric `X` values still enter directly and are not scaled or
-canonicalized. Pooled training builds a deterministic pooled covariate order
-from the union of `X` column names within each compatible foundation group.
-Each row then carries:
+Raw numeric `X` values still enter directly at the API boundary and are not
+globally canonicalized across studies. Pooled training builds a deterministic
+pooled covariate order from the union of `X` column names within each
+compatible foundation group. Under the current default
+`shared_projection_value_encoder = "name_dist_moe"`, each present covariate
+span combines:
 
-- the raw numeric value for each pooled covariate slot
-- an explicit presence mask so missing covariates are not confused with
-  present covariates whose value happens to be zero
+- a covariate-name token
+- a value token built from the standardized numeric value, local study-specific
+  distribution summaries, and covariate-name semantics
+- structural masking for absent covariates rather than a separate learned
+  presence embedding
 
 So the old dense `semantic_x_*` side block is gone in the foundation/adaptation
 path. Instead, covariate meaning now lives directly inside the emitted
-covariate tokens through identity, optional name text, raw value direction, and
-presence state.
+covariate spans through name tokens and conditioned value tokens.
 
 These embeddings do not override canonical ids and they do not force schema
 merges on their own. This pass also does not canonicalize or scale `X` across
@@ -359,11 +364,13 @@ schema elements fall back to local initialization unless you request strict
 schema matching.
 
 For covariates, adaptation aligns the target study's `X` columns to the pooled
-shared covariate vocabulary by raw column name. Shared pooled covariate tokens
+shared covariate vocabulary by raw column name. Shared pooled covariate spans
 warm-start by matched name. If `allow_extra_covariates = TRUE`, local extra
 covariates are appended after the shared pooled slots and initialized locally.
-As in pooled training, adaptation keeps explicit presence masks so absent
-covariates remain distinct from present-zero covariates.
+Under `shared_projection`, the adapted value token is rebuilt from local
+adaptation-study distribution summaries plus covariate-name semantics, and
+absent covariates are masked structurally rather than represented by a learned
+presence embedding.
 
 If the foundation group includes text semantics, adaptation rebuilds the same
 token-native text components for factor names, level labels, and covariate
@@ -372,7 +379,7 @@ experiment token is emitted only when the local `experiment_id` matches a
 pooled training experiment; otherwise no experiment token is emitted.
 
 At prediction time, if `X` is unavailable, the adapted predictor falls back to
-the stored default covariate-token metadata rather than erroring.
+the stored default covariate summaries rather than erroring.
 
 # Save and Load
 

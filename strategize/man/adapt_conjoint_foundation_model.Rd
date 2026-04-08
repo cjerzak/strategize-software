@@ -68,7 +68,11 @@ adapt_conjoint_foundation_model(
 
 \item{foundation_adaptation_control}{Optional list controlling adaptation.
 Supported keys are \code{strict_schema_match}, \code{allow_extra_covariates},
-\code{use_text_semantics}, and \code{text_embedding_fn}.}
+\code{use_text_semantics}, \code{text_embedding_fn},
+\code{experiment_token_mode}, \code{factor_tokenization},
+\code{max_factor_tokens}, \code{covariate_value_encoding},
+\code{shared_projection_value_encoder}, and
+\code{max_covariate_tokens}.}
 
 \item{conda_env}{Conda env name for the neural backend.}
 
@@ -108,10 +112,13 @@ The target-study data contract mirrors the per-experiment contract used by
   \item \code{length(Y) == nrow(W)};
   \item pairwise studies require \code{pair_id};
   \item \code{X}, when supplied, must be numeric and row-aligned to
-  \code{W}; raw numeric values remain unchanged during adaptation, while any
-  shared pooled covariate tokens are aligned by pooled \code{X} name,
-  receive explicit presence masks, and optionally receive rebuilt
-  \code{X}-name text embeddings when text semantics are enabled;
+  \code{W}; raw numeric values remain unchanged during adaptation. Under the
+  default FM covariate path, shared covariate spans are aligned by pooled
+  \code{X} name, name tokens optionally receive rebuilt \code{X}-name text
+  embeddings, and value tokens are rebuilt from standardized numeric values
+  plus local adaptation-study distribution summaries. Absent covariates are
+  masked structurally rather than represented with a separate presence
+  embedding;
   \item categorical adaptation follows the same \code{n_outcomes} rule as
   pooled training.
 }
@@ -130,7 +137,7 @@ The \code{foundation_adaptation_control} list supports:
   \item{\code{strict_schema_match}}{Require every local factor to match a
   pooled foundation slot. Default \code{FALSE}.}
   \item{\code{allow_extra_covariates}}{Allow local covariates that were not
-  present during pooled training. Extra local covariate tokens are appended
+  present during pooled training. Extra local covariate spans are appended
   after the shared pooled covariate vocabulary. Default \code{TRUE}.}
   \item{\code{use_text_semantics}}{Reuse token-native text semantics during
   adaptation when the foundation object includes them, including factor-name,
@@ -141,6 +148,19 @@ The \code{foundation_adaptation_control} list supports:
   adaptation reuses the stored pooled text registry when available. Any
   supplied function must return the same embedding width as the pooled
   foundation text registry.}
+  \item{\code{experiment_token_mode}}{Experiment token mode for the adapted
+  fit. Defaults to the pooled group's FM setting.}
+  \item{\code{factor_tokenization}}{Factor tokenizer used during adaptation.
+  Defaults to the pooled group's FM setting.}
+  \item{\code{max_factor_tokens}}{Total factor-token budget used during
+  adaptation. Defaults to the pooled group's FM setting.}
+  \item{\code{covariate_value_encoding}}{Covariate encoder family used during
+  adaptation. Defaults to the pooled group's FM setting.}
+  \item{\code{shared_projection_value_encoder}}{Value-token generator used
+  inside \code{"shared_projection"} during adaptation. Defaults to the
+  pooled group's FM setting.}
+  \item{\code{max_covariate_tokens}}{Total covariate-token budget used during
+  adaptation. Defaults to the pooled group's FM setting.}
 }
 }
 \examples{
