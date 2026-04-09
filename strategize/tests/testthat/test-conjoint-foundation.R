@@ -74,6 +74,44 @@ foundation_test_experiment <- function(seed,
   )
 }
 
+foundation_test_single_experiment <- function(seed,
+                                              experiment_id,
+                                              factor_names = c("price", "message"),
+                                              x_names = NULL,
+                                              likelihood = c("bernoulli", "normal")) {
+  likelihood <- match.arg(likelihood)
+  set.seed(seed)
+  n <- 24L
+  W_df <- data.frame(
+    matrix(sample(c("A", "B"), n * length(factor_names), replace = TRUE), nrow = n),
+    stringsAsFactors = FALSE
+  )
+  colnames(W_df) <- factor_names
+  x_full <- foundation_test_covariates(W_df)
+  X <- if (is.null(x_names) || length(x_names) < 1L) {
+    NULL
+  } else {
+    x_full[, x_names, drop = FALSE]
+  }
+  signal <- 0.8 * (W_df[[1]] == "B") - 0.5 * (W_df[[2]] == "A")
+  Y <- if (identical(likelihood, "bernoulli")) {
+    stats::rbinom(n, size = 1L, prob = stats::plogis(-0.25 + signal))
+  } else {
+    stats::rnorm(n, mean = 0.4 + signal, sd = 0.2)
+  }
+
+  list(
+    experiment_id = experiment_id,
+    experiment_description = paste("Single experiment", experiment_id),
+    Y = Y,
+    W = W_df,
+    X = X,
+    mode = "single",
+    likelihood = likelihood,
+    canonical_factor_id = stats::setNames(factor_names, factor_names)
+  )
+}
+
 foundation_test_control_with_embeddings <- function() {
   modifyList(
     strategize:::cs_foundation_default_control(),
@@ -485,6 +523,64 @@ test_that("fit_conjoint_foundation_model splits incompatible likelihood families
   expect_identical(names(fit$groups), foundation_universal_group_key())
   expect_identical(sort(fit$groups[[foundation_universal_group_key()]]$supported_modes), c("pairwise", "single"))
   expect_identical(sort(fit$groups[[foundation_universal_group_key()]]$supported_likelihoods), c("bernoulli", "normal"))
+})
+
+test_that("mixed-family universal fits report OOS metrics across Bernoulli and normal rows", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_EVAL_FOLDS = "2",
+    STRATEGIZE_NEURAL_EVAL_SEED = "123"
+  ))
+
+  control <- foundation_test_control()
+  control$neural_mcmc_control$eval_enabled <- TRUE
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(
+      foundation_test_single_experiment(8011, "single_binary", likelihood = "bernoulli"),
+      foundation_test_single_experiment(8012, "single_normal", likelihood = "normal")
+    ),
+    foundation_control = control
+  )
+
+  group <- fit$groups[[foundation_universal_group_key()]]
+  metrics <- group$fit$fit_metrics
+  expect_identical(metrics$likelihood, "mixed")
+  expect_true(is.finite(metrics$nll))
+  expect_true(all(c("bernoulli", "normal") %in% names(metrics$by_family)))
+  expect_true(is.finite(metrics$by_family$bernoulli$log_loss))
+  expect_true(is.finite(metrics$by_family$normal$nll))
+})
+
+test_that("mixed-family universal fits use NLL early stopping", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_EVAL_SEED = "123"
+  ))
+
+  control <- foundation_test_control()
+  control$neural_mcmc_control$eval_enabled <- FALSE
+  control$neural_mcmc_control$early_stopping <- TRUE
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(
+      foundation_test_single_experiment(8021, "single_binary_es", likelihood = "bernoulli"),
+      foundation_test_single_experiment(8022, "single_normal_es", likelihood = "normal")
+    ),
+    foundation_control = control
+  )
+
+  group <- fit$groups[[foundation_universal_group_key()]]
+  es <- group$fit$neural_model_info$early_stopping
+  expect_true(isTRUE(es$enabled))
+  expect_true(isTRUE(es$active))
+  expect_identical(es$metric, "nll")
+  expect_true(length(es$validation_loss_history) >= 1L)
+  expect_true(is.finite(es$best_metric))
 })
 
 test_that("adapt_conjoint_foundation_model builds shared and local covariate tokens and predictions stay finite", {

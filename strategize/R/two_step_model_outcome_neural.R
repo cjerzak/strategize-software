@@ -5566,6 +5566,7 @@ generate_ModelOutcome_neural <- function(){
     length(unique(universal_likelihood_use)) > 1L
   universal_has_normal <- isTRUE(universal_enabled) &&
     any(universal_likelihood_use == "normal")
+  universal_likelihood_levels <- c("bernoulli", "categorical", "normal")
 
   if (!is.null(likelihood_override)) {
     likelihood <- tolower(as.character(likelihood_override))
@@ -5611,6 +5612,265 @@ generate_ModelOutcome_neural <- function(){
     } else {
       1.0
     }
+  }
+
+  universal_likelihood_code_use <- if (isTRUE(universal_enabled) &&
+                                       !is.null(universal_likelihood_use)) {
+    as.integer(match(universal_likelihood_use, universal_likelihood_levels) - 1L)
+  } else {
+    NULL
+  }
+  universal_n_outcomes_use_int <- if (isTRUE(universal_enabled) &&
+                                      !is.null(universal_n_outcomes_use)) {
+    as.integer(universal_n_outcomes_use)
+  } else {
+    NULL
+  }
+
+  mixed_row_is_valid_r <- function(y,
+                                   likelihood_code_obs,
+                                   n_outcomes_obs) {
+    y_num <- as.numeric(y)
+    code <- as.integer(likelihood_code_obs)
+    n_outcomes_obs <- as.integer(n_outcomes_obs)
+    ok <- is.finite(y_num) & is.finite(code)
+    bern_idx <- ok & code == 0L
+    if (any(bern_idx)) {
+      ok[bern_idx] <- y_num[bern_idx] %in% c(0, 1)
+    }
+    cat_idx <- ok & code == 1L
+    if (any(cat_idx)) {
+      y_cat <- suppressWarnings(as.integer(round(y_num[cat_idx])))
+      ok[cat_idx] <- is.finite(y_cat) &
+        abs(y_num[cat_idx] - y_cat) < 1e-8 &
+        is.finite(n_outcomes_obs[cat_idx]) &
+        n_outcomes_obs[cat_idx] >= 2L &
+        y_cat >= 0L &
+        y_cat < n_outcomes_obs[cat_idx]
+    }
+    norm_idx <- ok & code == 2L
+    if (any(norm_idx)) {
+      ok[norm_idx] <- is.finite(y_num[norm_idx])
+    }
+    ok
+  }
+
+  mixed_eval_strata_r <- function(y,
+                                  likelihood_code_obs,
+                                  experiment_index = NULL,
+                                  n_outcomes_obs = NULL) {
+    n <- length(y)
+    exp_label <- if (!is.null(experiment_index) && length(experiment_index) == n) {
+      paste0("exp", as.integer(experiment_index))
+    } else {
+      rep("exp_all", n)
+    }
+    fam_label <- rep("unknown", n)
+    fam_label[likelihood_code_obs == 0L] <- "bernoulli"
+    fam_label[likelihood_code_obs == 1L] <- "categorical"
+    fam_label[likelihood_code_obs == 2L] <- "normal"
+    strata <- paste(fam_label, exp_label, sep = "::")
+    class_idx <- likelihood_code_obs %in% c(0L, 1L) & is.finite(as.numeric(y))
+    if (any(class_idx)) {
+      y_class <- suppressWarnings(as.integer(round(as.numeric(y[class_idx]))))
+      strata[class_idx] <- paste(strata[class_idx], paste0("class", y_class), sep = "::")
+    }
+    if (!is.null(n_outcomes_obs) && length(n_outcomes_obs) == n) {
+      cat_idx <- likelihood_code_obs == 1L & is.finite(as.numeric(n_outcomes_obs))
+      if (any(cat_idx)) {
+        strata[cat_idx] <- paste(
+          strata[cat_idx],
+          paste0("k", as.integer(n_outcomes_obs[cat_idx])),
+          sep = "::"
+        )
+      }
+    }
+    strata
+  }
+
+  mixed_softmax_prob_matrix_r <- function(logits, n_outcomes_obs) {
+    logits <- as.matrix(logits)
+    if (!length(logits)) {
+      return(matrix(numeric(0), nrow = 0L, ncol = ncol(logits)))
+    }
+    n <- nrow(logits)
+    k_max <- ncol(logits)
+    probs <- matrix(0, nrow = n, ncol = k_max)
+    for (i in seq_len(n)) {
+      k_i <- as.integer(n_outcomes_obs[[i]])
+      if (!is.finite(k_i) || k_i < 1L) {
+        next
+      }
+      k_i <- min(k_i, k_max)
+      row_logits <- as.numeric(logits[i, seq_len(k_i), drop = TRUE])
+      if (!all(is.finite(row_logits))) {
+        probs[i, seq_len(k_i)] <- rep(1 / k_i, k_i)
+        next
+      }
+      max_logit <- max(row_logits)
+      weights <- exp(row_logits - max_logit)
+      denom <- sum(weights)
+      if (!is.finite(denom) || denom <= 0) {
+        probs[i, seq_len(k_i)] <- rep(1 / k_i, k_i)
+      } else {
+        probs[i, seq_len(k_i)] <- weights / denom
+      }
+    }
+    probs
+  }
+
+  mixed_sigma_vector_r <- function(sigma, n) {
+    if (is.null(sigma)) {
+      return(rep(NA_real_, n))
+    }
+    sigma_vec <- as.numeric(sigma)
+    if (length(sigma_vec) == 1L && n > 1L) {
+      sigma_vec <- rep(sigma_vec, n)
+    }
+    if (length(sigma_vec) != n) {
+      sigma_vec <- rep(NA_real_, n)
+    }
+    sigma_vec
+  }
+
+  mixed_row_log_prob_r <- function(logits,
+                                   y,
+                                   likelihood_code_obs,
+                                   n_outcomes_obs,
+                                   sigma = NULL) {
+    logits <- as.matrix(logits)
+    n <- nrow(logits)
+    if (n < 1L) {
+      return(numeric(0))
+    }
+    y_num <- as.numeric(y)
+    code <- as.integer(likelihood_code_obs)
+    n_outcomes_obs <- as.integer(n_outcomes_obs)
+    sigma_vec <- mixed_sigma_vector_r(sigma, n)
+    out <- rep(NA_real_, n)
+
+    bern_idx <- which(code == 0L)
+    if (length(bern_idx) > 0L) {
+      z <- as.numeric(logits[bern_idx, 1L])
+      yb <- y_num[bern_idx]
+      keep <- is.finite(z) & is.finite(yb) & yb %in% c(0, 1)
+      if (any(keep)) {
+        p <- stats::plogis(z[keep])
+        p <- pmin(pmax(p, 1e-12), 1 - 1e-12)
+        out_bern <- ifelse(yb[keep] >= 0.5, log(p), log1p(-p))
+        out[bern_idx[keep]] <- out_bern
+      }
+    }
+
+    cat_idx <- which(code == 1L)
+    if (length(cat_idx) > 0L) {
+      for (j in seq_along(cat_idx)) {
+        row_idx <- cat_idx[[j]]
+        k_i <- as.integer(n_outcomes_obs[[row_idx]])
+        y_i <- suppressWarnings(as.integer(round(y_num[[row_idx]])))
+        if (!is.finite(k_i) || k_i < 2L || !is.finite(y_i) || y_i < 0L) {
+          next
+        }
+        k_i <- min(k_i, ncol(logits))
+        if (y_i >= k_i) {
+          next
+        }
+        row_logits <- as.numeric(logits[row_idx, seq_len(k_i), drop = TRUE])
+        if (!all(is.finite(row_logits))) {
+          next
+        }
+        max_logit <- max(row_logits)
+        log_denom <- max_logit + log(sum(exp(row_logits - max_logit)))
+        out[[row_idx]] <- row_logits[[y_i + 1L]] - log_denom
+      }
+    }
+
+    norm_idx <- which(code == 2L)
+    if (length(norm_idx) > 0L) {
+      mu <- as.numeric(logits[norm_idx, 1L])
+      y_norm <- y_num[norm_idx]
+      sigma_norm <- sigma_vec[norm_idx]
+      keep <- is.finite(mu) & is.finite(y_norm) & is.finite(sigma_norm) & sigma_norm > 0
+      if (any(keep)) {
+        out_norm <- stats::dnorm(
+          y_norm[keep],
+          mean = mu[keep],
+          sd = sigma_norm[keep],
+          log = TRUE
+        )
+        out[norm_idx[keep]] <- out_norm
+      }
+    }
+
+    out
+  }
+
+  compute_mixed_outcome_metrics_r <- function(y_eval,
+                                              pred_eval,
+                                              likelihood_code_obs,
+                                              n_outcomes_obs,
+                                              threshold = 0.5) {
+    logits <- as.matrix(pred_eval$logits %||% pred_eval)
+    sigma_vec <- mixed_sigma_vector_r(pred_eval$sigma %||% NULL, nrow(logits))
+    code <- as.integer(likelihood_code_obs)
+    n_outcomes_obs <- as.integer(n_outcomes_obs)
+    y_num <- as.numeric(y_eval)
+    log_prob <- mixed_row_log_prob_r(
+      logits = logits,
+      y = y_num,
+      likelihood_code_obs = code,
+      n_outcomes_obs = n_outcomes_obs,
+      sigma = sigma_vec
+    )
+    keep <- is.finite(log_prob)
+    out <- list(
+      likelihood = "mixed",
+      n_eval = sum(keep),
+      n_obs = sum(keep),
+      nll = if (any(keep)) -mean(log_prob[keep]) else NA_real_,
+      by_family = list()
+    )
+
+    bern_idx <- which(code == 0L)
+    if (length(bern_idx) > 0L) {
+      prob <- stats::plogis(as.numeric(logits[bern_idx, 1L]))
+      metrics_bern <- cs_compute_outcome_metrics(
+        y_eval = y_num[bern_idx],
+        pred_eval = prob,
+        likelihood = "bernoulli",
+        threshold = threshold
+      )
+      metrics_bern$n_obs <- metrics_bern$n_eval %||% length(bern_idx)
+      out$by_family$bernoulli <- metrics_bern
+    }
+
+    cat_idx <- which(code == 1L)
+    if (length(cat_idx) > 0L) {
+      prob_mat <- mixed_softmax_prob_matrix_r(logits[cat_idx, , drop = FALSE], n_outcomes_obs[cat_idx])
+      metrics_cat <- cs_compute_outcome_metrics(
+        y_eval = suppressWarnings(as.integer(round(y_num[cat_idx]))),
+        pred_eval = prob_mat,
+        likelihood = "categorical"
+      )
+      metrics_cat$n_obs <- metrics_cat$n_eval %||% length(cat_idx)
+      out$by_family$categorical <- metrics_cat
+    }
+
+    norm_idx <- which(code == 2L)
+    if (length(norm_idx) > 0L) {
+      metrics_norm <- cs_compute_outcome_metrics(
+        y_eval = y_num[norm_idx],
+        pred_eval = list(
+          mu = as.numeric(logits[norm_idx, 1L]),
+          sigma = sigma_vec[norm_idx]
+        ),
+        likelihood = "normal"
+      )
+      metrics_norm$n_obs <- metrics_norm$n_eval %||% length(norm_idx)
+      out$by_family$normal <- metrics_norm
+    }
+
+    out
   }
 
   pdtype_ <- ddtype_ <- strenv$jnp$float32
@@ -6838,6 +7098,41 @@ generate_ModelOutcome_neural <- function(){
     )
   }
 
+  universal_row_log_prob_jnp <- function(logits,
+                                         Yb,
+                                         likelihood_code_obs,
+                                         n_outcomes_obs,
+                                         sigma = NULL) {
+    out_dim <- ai(logits$shape[[2]])
+    class_axis <- strenv$jnp$arange(out_dim)$astype(strenv$jnp$int32)
+    class_mask <- strenv$jnp$less(
+      strenv$jnp$reshape(class_axis, list(1L, out_dim)),
+      strenv$jnp$reshape(n_outcomes_obs, list(-1L, 1L))
+    )
+    neg_large <- strenv$jnp$full(
+      logits$shape,
+      strenv$jnp$array(-1e9, dtype = ddtype_),
+      dtype = ddtype_
+    )
+    masked_logits <- strenv$jnp$where(class_mask, logits, neg_large)
+    y_numeric <- Yb$astype(ddtype_)
+    y_int <- strenv$jnp$astype(strenv$jnp$round(y_numeric), strenv$jnp$int32)
+    like_bern <- strenv$jnp$equal(likelihood_code_obs, ai(0L))$astype(ddtype_)
+    like_cat <- strenv$jnp$equal(likelihood_code_obs, ai(1L))$astype(ddtype_)
+    like_norm <- strenv$jnp$equal(likelihood_code_obs, ai(2L))$astype(ddtype_)
+    bern_logits <- strenv$jnp$take(logits, ai(0L), axis = 1L)
+    bern_logp <- strenv$numpyro$distributions$Bernoulli(logits = bern_logits)$log_prob(y_numeric)
+    cat_logp <- strenv$numpyro$distributions$Categorical(logits = masked_logits)$log_prob(y_int)
+    mu <- strenv$jnp$take(logits, ai(0L), axis = 1L)
+    sigma_use <- if (is.null(sigma)) {
+      strenv$jnp$array(1., dtype = ddtype_)
+    } else {
+      sigma
+    }
+    norm_logp <- strenv$numpyro$distributions$Normal(mu, sigma_use)$log_prob(y_numeric)
+    like_bern * bern_logp + like_cat * cat_logp + like_norm * norm_logp
+  }
+
   apply_observation_likelihood <- function(logits,
                                            Yb,
                                            likelihood_code_obs = NULL,
@@ -6874,34 +7169,13 @@ generate_ModelOutcome_neural <- function(){
     if (is.null(likelihood_code_obs) || is.null(n_outcomes_obs)) {
       stop("Universal foundation training requires likelihood_code_obs and n_outcomes_obs.", call. = FALSE)
     }
-    out_dim <- ai(logits$shape[[2]])
-    class_axis <- strenv$jnp$arange(out_dim)$astype(strenv$jnp$int32)
-    class_mask <- strenv$jnp$less(
-      strenv$jnp$reshape(class_axis, list(1L, out_dim)),
-      strenv$jnp$reshape(n_outcomes_obs, list(-1L, 1L))
+    total_logp <- universal_row_log_prob_jnp(
+      logits = logits,
+      Yb = Yb,
+      likelihood_code_obs = likelihood_code_obs,
+      n_outcomes_obs = n_outcomes_obs,
+      sigma = sigma
     )
-    neg_large <- strenv$jnp$full(
-      logits$shape,
-      strenv$jnp$array(-1e9, dtype = ddtype_),
-      dtype = ddtype_
-    )
-    masked_logits <- strenv$jnp$where(class_mask, logits, neg_large)
-    y_numeric <- Yb$astype(ddtype_)
-    y_int <- strenv$jnp$astype(strenv$jnp$round(y_numeric), strenv$jnp$int32)
-    like_bern <- strenv$jnp$equal(likelihood_code_obs, ai(0L))$astype(ddtype_)
-    like_cat <- strenv$jnp$equal(likelihood_code_obs, ai(1L))$astype(ddtype_)
-    like_norm <- strenv$jnp$equal(likelihood_code_obs, ai(2L))$astype(ddtype_)
-    bern_logits <- strenv$jnp$take(logits, ai(0L), axis = 1L)
-    bern_logp <- strenv$numpyro$distributions$Bernoulli(logits = bern_logits)$log_prob(y_numeric)
-    cat_logp <- strenv$numpyro$distributions$Categorical(logits = masked_logits)$log_prob(y_int)
-    mu <- strenv$jnp$take(logits, ai(0L), axis = 1L)
-    sigma_use <- if (is.null(sigma)) {
-      strenv$jnp$array(1., dtype = ddtype_)
-    } else {
-      sigma
-    }
-    norm_logp <- strenv$numpyro$distributions$Normal(mu, sigma_use)$log_prob(y_numeric)
-    total_logp <- like_bern * bern_logp + like_cat * cat_logp + like_norm * norm_logp
     strenv$numpyro$factor(site_name, total_logp)
     invisible(NULL)
   }
@@ -7464,13 +7738,6 @@ generate_ModelOutcome_neural <- function(){
   if (exists("neural_oos_eval_internal", inherits = TRUE)) {
     neural_skip_oos_eval <- isTRUE(get("neural_oos_eval_internal", inherits = TRUE))
   }
-  if (identical(likelihood, "mixed")) {
-    neural_skip_oos_eval <- TRUE
-    fit_metrics <- list(
-      likelihood = likelihood,
-      eval_note = "oos_skipped_for_mixed_family_universal_training"
-    )
-  }
   if (!isTRUE(neural_skip_oos_eval) && isTRUE(eval_control$enabled)) {
     fit_metrics <- local({
       restore_rng_state <- function(old_seed) {
@@ -7510,9 +7777,27 @@ generate_ModelOutcome_neural <- function(){
         }
 
         y_all <- NULL
+        likelihood_code_all <- NULL
+        n_outcomes_all <- NULL
+        stratify_y <- NULL
         y_levels_full <- NULL
         ok_rows <- rep(TRUE, n_total)
-        if (likelihood == "bernoulli") {
+        if (likelihood == "mixed") {
+          y_all <- as.numeric(Y_use)
+          likelihood_code_all <- universal_likelihood_code_use
+          n_outcomes_all <- universal_n_outcomes_use_int
+          ok_rows <- mixed_row_is_valid_r(
+            y = y_all,
+            likelihood_code_obs = likelihood_code_all,
+            n_outcomes_obs = n_outcomes_all
+          )
+          stratify_y <- mixed_eval_strata_r(
+            y = y_all,
+            likelihood_code_obs = likelihood_code_all,
+            experiment_index = experiment_index_use,
+            n_outcomes_obs = n_outcomes_all
+          )
+        } else if (likelihood == "bernoulli") {
           y_all <- as.numeric(Y_use)
           ok_rows <- is.finite(y_all) & (y_all %in% c(0, 1))
         } else if (likelihood == "categorical") {
@@ -7614,10 +7899,15 @@ generate_ModelOutcome_neural <- function(){
           n_folds <- 2L
         }
 
+	        fold_y <- if (identical(likelihood, "mixed")) {
+	          stratify_y[eval_idx]
+	        } else {
+	          y_all[eval_idx]
+	        }
 	        folds_out <- cs_make_stratified_folds(
 	          n = n_eval_total,
 	          n_folds = n_folds,
-	          y = y_all[eval_idx],
+	          y = fold_y,
 	          cluster = cluster_eval,
 	          seed = eval_control$seed
 	        )
@@ -7633,7 +7923,15 @@ generate_ModelOutcome_neural <- function(){
             sprintf(fmt, label, value)
           }
 
-          compute_metrics <- function(y_eval, pred_eval) {
+          compute_metrics <- function(y_eval, pred_eval, idx_use = NULL) {
+            if (identical(likelihood, "mixed")) {
+              return(compute_mixed_outcome_metrics_r(
+                y_eval = y_eval,
+                pred_eval = pred_eval,
+                likelihood_code_obs = likelihood_code_all[idx_use],
+                n_outcomes_obs = n_outcomes_all[idx_use]
+              ))
+            }
             cs_compute_outcome_metrics(
               y_eval = y_eval,
               pred_eval = pred_eval,
@@ -7641,8 +7939,45 @@ generate_ModelOutcome_neural <- function(){
             )
           }
 
+          format_mixed_metric_items <- function(metrics) {
+            if (is.null(metrics)) {
+              return(character(0))
+            }
+            items <- Filter(Negate(is.null), list(
+              format_metric("NLL", metrics$nll, 4)
+            ))
+            by_family <- metrics$by_family %||% list()
+            if (!is.null(by_family$bernoulli)) {
+              items <- c(items, Filter(Negate(is.null), list(
+                format_metric("BernAUC", by_family$bernoulli$auc, 4),
+                format_metric("BernLL", by_family$bernoulli$log_loss, 4),
+                format_metric("BernAcc", by_family$bernoulli$accuracy, 3),
+                format_metric("BernBrier", by_family$bernoulli$brier, 4)
+              )))
+            }
+            if (!is.null(by_family$categorical)) {
+              items <- c(items, Filter(Negate(is.null), list(
+                format_metric("CatLL", by_family$categorical$log_loss, 4),
+                format_metric("CatAcc", by_family$categorical$accuracy, 3)
+              )))
+            }
+            if (!is.null(by_family$normal)) {
+              items <- c(items, Filter(Negate(is.null), list(
+                format_metric("NormRMSE", by_family$normal$rmse, 4),
+                format_metric("NormMAE", by_family$normal$mae, 4),
+                format_metric("NormNLL", by_family$normal$nll, 4)
+              )))
+            }
+            items
+          }
+
           pred_oos <- NULL
-          if (likelihood == "bernoulli") {
+          if (likelihood == "mixed") {
+            pred_oos <- list(
+              logits = matrix(NA_real_, nrow = n_total, ncol = as.integer(nOutcomes)),
+              sigma = rep(NA_real_, n_total)
+            )
+          } else if (likelihood == "bernoulli") {
             pred_oos <- rep(NA_real_, n_total)
           } else if (likelihood == "categorical") {
             pred_oos <- matrix(NA_real_, nrow = n_total, ncol = as.integer(nOutcomes))
@@ -7663,7 +7998,54 @@ generate_ModelOutcome_neural <- function(){
             train_idx <- eval_idx[train_pos]
 
             fallback <- NULL
-            if (likelihood == "bernoulli") {
+            if (likelihood == "mixed") {
+              fallback_logits <- matrix(0, nrow = length(test_idx), ncol = as.integer(nOutcomes))
+              fallback_sigma <- rep(1, length(test_idx))
+              train_code <- likelihood_code_all[train_idx]
+              train_n_out <- n_outcomes_all[train_idx]
+              train_y <- y_all[train_idx]
+
+              bern_train <- train_y[train_code == 0L]
+              bern_p <- mean(bern_train, na.rm = TRUE)
+              if (!is.finite(bern_p)) bern_p <- 0.5
+              bern_p <- min(max(bern_p, 1e-6), 1 - 1e-6)
+
+              norm_train <- train_y[train_code == 2L]
+              norm_mu <- mean(norm_train, na.rm = TRUE)
+              if (!is.finite(norm_mu)) norm_mu <- 0
+              norm_sigma <- suppressWarnings(stats::sd(norm_train, na.rm = TRUE))
+              if (!is.finite(norm_sigma) || norm_sigma <= 0) norm_sigma <- 1
+
+              test_code <- likelihood_code_all[test_idx]
+              test_n_out <- n_outcomes_all[test_idx]
+              for (row_idx in seq_along(test_idx)) {
+                code_i <- test_code[[row_idx]]
+                if (identical(code_i, 0L)) {
+                  fallback_logits[row_idx, 1L] <- stats::qlogis(bern_p)
+                } else if (identical(code_i, 1L)) {
+                  k_i <- max(2L, min(as.integer(test_n_out[[row_idx]]), as.integer(nOutcomes)))
+                  train_cat <- train_y[train_code == 1L & train_n_out == test_n_out[[row_idx]]]
+                  probs <- vapply(0:(k_i - 1L), function(k_) {
+                    mean(train_cat == k_, na.rm = TRUE)
+                  }, numeric(1))
+                  if (!any(is.finite(probs)) || sum(probs, na.rm = TRUE) <= 0) {
+                    probs <- rep(1 / k_i, k_i)
+                  } else {
+                    probs[!is.finite(probs)] <- 0
+                    probs_sum <- sum(probs)
+                    probs <- if (probs_sum <= 0) rep(1 / k_i, k_i) else probs / probs_sum
+                  }
+                  fallback_logits[row_idx, seq_len(k_i)] <- log(pmax(probs, 1e-12))
+                } else {
+                  fallback_logits[row_idx, 1L] <- norm_mu
+                  fallback_sigma[[row_idx]] <- norm_sigma
+                }
+              }
+              fallback <- list(
+                logits = fallback_logits,
+                sigma = fallback_sigma
+              )
+            } else if (likelihood == "bernoulli") {
               y_train <- y_all[train_idx]
               fallback_val <- mean(y_train, na.rm = TRUE)
               if (!is.finite(fallback_val)) fallback_val <- 0.5
@@ -7705,8 +8087,10 @@ generate_ModelOutcome_neural <- function(){
 
             fold_env <- new.env(parent = environment())
             fold_env$neural_oos_eval_internal <- TRUE
-            fold_env$neural_likelihood_override <- likelihood
-            fold_env$neural_nOutcomes_override <- nOutcomes
+            if (!identical(likelihood, "mixed")) {
+              fold_env$neural_likelihood_override <- likelihood
+              fold_env$neural_nOutcomes_override <- nOutcomes
+            }
             fold_env$party_levels_fixed <- party_levels
             fold_env$resp_party_levels_fixed <- resp_party_levels
             if (!is.null(y_levels_full)) {
@@ -7725,6 +8109,19 @@ generate_ModelOutcome_neural <- function(){
               fold_token_info <- neural_token_info_use
               if (!is.null(experiment_index_all)) {
                 fold_token_info$experiment_index <- experiment_index_all[raw_train]
+              }
+              universal_training_info <- fold_token_info$foundation_universal_training %||% NULL
+              if (!is.null(universal_training_info)) {
+                if (!is.null(universal_training_info$task_mode_by_row)) {
+                  universal_training_info$task_mode_by_row <- universal_training_info$task_mode_by_row[raw_train]
+                }
+                if (!is.null(universal_training_info$likelihood_by_row)) {
+                  universal_training_info$likelihood_by_row <- universal_training_info$likelihood_by_row[raw_train]
+                }
+                if (!is.null(universal_training_info$n_outcomes_by_row)) {
+                  universal_training_info$n_outcomes_by_row <- universal_training_info$n_outcomes_by_row[raw_train]
+                }
+                fold_token_info$foundation_universal_training <- universal_training_info
               }
               fold_env$neural_token_info <- fold_token_info
             } else {
@@ -7801,7 +8198,8 @@ generate_ModelOutcome_neural <- function(){
                     resp_party_new = resp_party_test,
                     resp_cov_new = resp_cov_test,
                     resp_cov_present_new = resp_cov_present_test,
-                    experiment_idx_new = experiment_idx_test
+                    experiment_idx_new = experiment_idx_test,
+                    return_logits = identical(likelihood, "mixed")
                   )
                 } else {
                   X_test <- X_single[test_idx, , drop = FALSE]
@@ -7828,7 +8226,8 @@ generate_ModelOutcome_neural <- function(){
                     resp_party_new = resp_party_test,
                     resp_cov_new = resp_cov_test,
                     resp_cov_present_new = resp_cov_present_test,
-                    experiment_idx_new = experiment_idx_test
+                    experiment_idx_new = experiment_idx_test,
+                    return_logits = identical(likelihood, "mixed")
                   )
                 }
               }, error = function(e) NULL)
@@ -7838,7 +8237,24 @@ generate_ModelOutcome_neural <- function(){
               pred_fold <- fallback
             }
 
-            if (likelihood == "bernoulli") {
+            if (likelihood == "mixed") {
+              train_family_present <- unique(likelihood_code_all[train_idx])
+              test_code <- likelihood_code_all[test_idx]
+              if (!all(test_code %in% train_family_present)) {
+                missing_idx <- which(!test_code %in% train_family_present)
+                if (length(missing_idx) > 0L) {
+                  pred_fold$logits[missing_idx, , drop = FALSE] <- fallback$logits[missing_idx, , drop = FALSE]
+                  pred_fold$sigma[missing_idx] <- fallback$sigma[missing_idx]
+                }
+              }
+              pred_oos$logits[test_idx, ] <- as.matrix(pred_fold$logits)
+              pred_oos$sigma[test_idx] <- as.numeric(pred_fold$sigma)
+              fold_metrics <- compute_metrics(
+                y_all[test_idx],
+                pred_fold,
+                idx_use = test_idx
+              )
+            } else if (likelihood == "bernoulli") {
               pred_oos[test_idx] <- as.numeric(pred_fold)
               fold_metrics <- compute_metrics(y_all[test_idx], pred_fold)
             } else if (likelihood == "categorical") {
@@ -7853,7 +8269,9 @@ generate_ModelOutcome_neural <- function(){
             fold_metrics$eval_note <- "oos"
             fold_metrics$n_test <- length(test_idx)
             fold_metrics$n_train <- length(train_idx)
-            fold_metric_items <- if (likelihood == "bernoulli") {
+            fold_metric_items <- if (likelihood == "mixed") {
+              format_mixed_metric_items(fold_metrics)
+            } else if (likelihood == "bernoulli") {
               Filter(Negate(is.null), list(
                 format_metric("AUC", fold_metrics$auc, 4),
                 format_metric("LogLoss", fold_metrics$log_loss, 4),
@@ -7883,7 +8301,12 @@ generate_ModelOutcome_neural <- function(){
           }
 
           pred_eval <- NULL
-          if (likelihood == "bernoulli") {
+          if (likelihood == "mixed") {
+            pred_eval <- list(
+              logits = pred_oos$logits[eval_idx, , drop = FALSE],
+              sigma = pred_oos$sigma[eval_idx]
+            )
+          } else if (likelihood == "bernoulli") {
             pred_eval <- pred_oos[eval_idx]
           } else if (likelihood == "categorical") {
             pred_eval <- pred_oos[eval_idx, , drop = FALSE]
@@ -7892,7 +8315,7 @@ generate_ModelOutcome_neural <- function(){
                               sigma = pred_oos$sigma[eval_idx])
           }
 
-          overall_metrics <- compute_metrics(y_all[eval_idx], pred_eval)
+          overall_metrics <- compute_metrics(y_all[eval_idx], pred_eval, idx_use = eval_idx)
           overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
           overall_metrics$eval_subset <- subset_note
           overall_metrics$n_folds <- n_folds_use
@@ -7909,25 +8332,43 @@ generate_ModelOutcome_neural <- function(){
                   idx0 <- which(stage_primary)
                   pred_stage <- if (likelihood == "bernoulli") {
                     pred_eval[idx0]
+                  } else if (likelihood == "mixed") {
+                    list(
+                      logits = pred_eval$logits[idx0, , drop = FALSE],
+                      sigma = pred_eval$sigma[idx0]
+                    )
                   } else if (likelihood == "categorical") {
                     pred_eval[idx0, , drop = FALSE]
                   } else {
                     list(mu = pred_eval$mu[idx0],
                          sigma = pred_eval$sigma[idx0])
                   }
-                  by_stage$primary <- compute_metrics(y_all[eval_idx][idx0], pred_stage)
+                  by_stage$primary <- compute_metrics(
+                    y_all[eval_idx][idx0],
+                    pred_stage,
+                    idx_use = eval_idx[idx0]
+                  )
                 }
                 if (any(!stage_primary, na.rm = TRUE)) {
                   idx1 <- which(!stage_primary)
                   pred_stage <- if (likelihood == "bernoulli") {
                     pred_eval[idx1]
+                  } else if (likelihood == "mixed") {
+                    list(
+                      logits = pred_eval$logits[idx1, , drop = FALSE],
+                      sigma = pred_eval$sigma[idx1]
+                    )
                   } else if (likelihood == "categorical") {
                     pred_eval[idx1, , drop = FALSE]
                   } else {
                     list(mu = pred_eval$mu[idx1],
                          sigma = pred_eval$sigma[idx1])
                   }
-                  by_stage$general <- compute_metrics(y_all[eval_idx][idx1], pred_stage)
+                  by_stage$general <- compute_metrics(
+                    y_all[eval_idx][idx1],
+                    pred_stage,
+                    idx_use = eval_idx[idx1]
+                  )
                 }
                 if (length(by_stage) > 0L) {
                   overall_metrics$by_stage <- by_stage
@@ -7937,7 +8378,9 @@ generate_ModelOutcome_neural <- function(){
 
           fit_metrics <- overall_metrics
 
-          metric_items <- if (likelihood == "bernoulli") {
+          metric_items <- if (likelihood == "mixed") {
+            format_mixed_metric_items(fit_metrics)
+          } else if (likelihood == "bernoulli") {
             Filter(Negate(is.null), list(
               format_metric("AUC", fit_metrics$auc, 4),
               format_metric("LogLoss", fit_metrics$log_loss, 4),
@@ -8013,7 +8456,7 @@ generate_ModelOutcome_neural <- function(){
   }
   likelihood_code_jnp <- if (isTRUE(universal_enabled) && !is.null(universal_likelihood_use)) {
     strenv$jnp$array(
-      as.integer(match(universal_likelihood_use, c("bernoulli", "categorical", "normal")) - 1L)
+      as.integer(match(universal_likelihood_use, universal_likelihood_levels) - 1L)
     )$astype(strenv$jnp$int32)
   } else {
     NULL
@@ -8276,7 +8719,7 @@ generate_ModelOutcome_neural <- function(){
     }
     maybe_site("W_cross_out")
 
-    if (likelihood == "normal") {
+    if (likelihood == "normal" || isTRUE(universal_has_normal)) {
       maybe_site("sigma")
     }
     if (n_resp_covariates > 0L) {
@@ -8380,10 +8823,11 @@ generate_ModelOutcome_neural <- function(){
   validation_model_info$experiment_description_present <- experiment_description_present
   validation_model_info$default_experiment_text <- default_experiment_text
   validation_model_info$default_experiment_text_present <- default_experiment_text_present
+  validation_return_logits <- identical(likelihood, "mixed")
   validation_predict_jit <- neural_get_predict_jit(
     model_info = validation_model_info,
     pairwise = pairwise_mode,
-    return_logits = FALSE
+    return_logits = validation_return_logits
   )
 
   svi_validation_predict <- function(param_sites, idx, fallback_params = NULL) {
@@ -8406,6 +8850,17 @@ generate_ModelOutcome_neural <- function(){
     }
 
     coerce_prediction_output_local <- function(pred) {
+      if (identical(likelihood, "mixed")) {
+        logits <- as.matrix(to_r_array_local(pred))
+        sigma_vec <- mixed_sigma_vector_r(
+          to_r_array_local(params$sigma %||% NULL),
+          nrow(logits)
+        )
+        return(list(
+          logits = logits,
+          sigma = sigma_vec
+        ))
+      }
       if (likelihood == "bernoulli") {
         return(as.numeric(to_r_array_local(pred)))
       }
@@ -8592,6 +9047,34 @@ generate_ModelOutcome_neural <- function(){
     if (is.null(metrics)) {
       return(character(0))
     }
+    if (identical(likelihood, "mixed")) {
+      items <- Filter(Negate(is.null), list(
+        format_metric_item("NLL", metrics$nll, 4L)
+      ))
+      by_family <- metrics$by_family %||% list()
+      if (!is.null(by_family$bernoulli)) {
+        items <- c(items, Filter(Negate(is.null), list(
+          format_metric_item("BernAUC", by_family$bernoulli$auc, 4L),
+          format_metric_item("BernLL", by_family$bernoulli$log_loss, 4L),
+          format_metric_item("BernAcc", by_family$bernoulli$accuracy, 3L),
+          format_metric_item("BernBrier", by_family$bernoulli$brier, 4L)
+        )))
+      }
+      if (!is.null(by_family$categorical)) {
+        items <- c(items, Filter(Negate(is.null), list(
+          format_metric_item("CatLL", by_family$categorical$log_loss, 4L),
+          format_metric_item("CatAcc", by_family$categorical$accuracy, 3L)
+        )))
+      }
+      if (!is.null(by_family$normal)) {
+        items <- c(items, Filter(Negate(is.null), list(
+          format_metric_item("NormRMSE", by_family$normal$rmse, 4L),
+          format_metric_item("NormMAE", by_family$normal$mae, 4L),
+          format_metric_item("NormNLL", by_family$normal$nll, 4L)
+        )))
+      }
+      return(items)
+    }
     if (!likelihood %in% c("bernoulli", "categorical", "normal")) {
       return(character(0))
     }
@@ -8694,16 +9177,11 @@ generate_ModelOutcome_neural <- function(){
   svi_budget_info <- NULL
   svi_steps_completed <- NULL
   early_stopping_enabled <- isTRUE(mcmc_control$early_stopping)
-  if (identical(likelihood, "mixed")) {
-    early_stopping_enabled <- FALSE
-  }
   early_stopping_info <- list(
     enabled = early_stopping_enabled,
     active = FALSE,
     stopped_early = FALSE,
-    reason = if (identical(likelihood, "mixed")) {
-      "disabled_for_mixed_family_universal_training"
-    } else if (isTRUE(early_stopping_enabled)) {
+    reason = if (isTRUE(early_stopping_enabled)) {
       "not_initialized"
     } else {
       "disabled"
@@ -9041,13 +9519,33 @@ generate_ModelOutcome_neural <- function(){
         )
       }
     }
+    validation_split_reason <- "validation_split_unavailable"
     build_svi_validation_split <- function() {
+      validation_split_reason <<- "validation_split_unavailable"
       n_total <- length(Y_use)
       if (n_total < 2L) {
         return(NULL)
       }
 
-      if (likelihood == "categorical") {
+      likelihood_code_all <- NULL
+      n_outcomes_all <- NULL
+      split_y <- NULL
+      if (likelihood == "mixed") {
+        y_all <- as.numeric(Y_use)
+        likelihood_code_all <- universal_likelihood_code_use
+        n_outcomes_all <- universal_n_outcomes_use_int
+        ok_rows <- mixed_row_is_valid_r(
+          y = y_all,
+          likelihood_code_obs = likelihood_code_all,
+          n_outcomes_obs = n_outcomes_all
+        )
+        split_y <- mixed_eval_strata_r(
+          y = y_all,
+          likelihood_code_obs = likelihood_code_all,
+          experiment_index = experiment_index_use,
+          n_outcomes_obs = n_outcomes_all
+        )
+      } else if (likelihood == "categorical") {
         y_all <- as.integer(reticulate::py_to_r(strenv$np$array(Y_jnp)))
         ok_rows <- !is.na(y_all)
       } else if (likelihood == "bernoulli") {
@@ -9144,7 +9642,7 @@ generate_ModelOutcome_neural <- function(){
       folds_out <- cs_make_stratified_folds(
         n = length(eval_idx),
         n_folds = as.integer(n_folds_es),
-        y = y_all[eval_idx],
+        y = if (identical(likelihood, "mixed")) split_y[eval_idx] else y_all[eval_idx],
         cluster = cluster_eval,
         seed = as.integer(split_seed)
       )
@@ -9164,6 +9662,14 @@ generate_ModelOutcome_neural <- function(){
       if (length(train_idx) < 1L || length(validation_idx) < 1L) {
         return(NULL)
       }
+      if (identical(likelihood, "mixed")) {
+        train_families <- sort(unique(likelihood_code_all[train_idx]))
+        validation_families <- sort(unique(likelihood_code_all[validation_idx]))
+        if (!all(validation_families %in% train_families)) {
+          validation_split_reason <<- "mixed_family_validation_split_unavailable"
+          return(NULL)
+        }
+      }
       if (length(validation_idx) > 64L) {
         set.seed(as.integer(split_seed) + 1L)
         validation_idx <- sort(sample(validation_idx, size = 64L, replace = FALSE))
@@ -9172,7 +9678,9 @@ generate_ModelOutcome_neural <- function(){
       list(
         train_idx = as.integer(train_idx),
         validation_idx = as.integer(validation_idx),
-        y_all = y_all
+        y_all = y_all,
+        likelihood_code_all = likelihood_code_all,
+        n_outcomes_all = n_outcomes_all
       )
     }
     extract_svi_param_sites <- function(svi_params_current) {
@@ -9217,12 +9725,21 @@ generate_ModelOutcome_neural <- function(){
       if (is.null(pred_eval)) {
         return(NA_real_)
       }
-      metrics <- cs_compute_outcome_metrics(
-        y_eval = validation_split$y_all[validation_split$validation_idx],
-        pred_eval = pred_eval,
-        likelihood = likelihood
-      )
-      metric_name <- if (likelihood == "normal") "nll" else "log_loss"
+      metrics <- if (identical(likelihood, "mixed")) {
+        compute_mixed_outcome_metrics_r(
+          y_eval = validation_split$y_all[validation_split$validation_idx],
+          pred_eval = pred_eval,
+          likelihood_code_obs = validation_split$likelihood_code_all[validation_split$validation_idx],
+          n_outcomes_obs = validation_split$n_outcomes_all[validation_split$validation_idx]
+        )
+      } else {
+        cs_compute_outcome_metrics(
+          y_eval = validation_split$y_all[validation_split$validation_idx],
+          pred_eval = pred_eval,
+          likelihood = likelihood
+        )
+      }
+      metric_name <- if (likelihood %in% c("normal", "mixed")) "nll" else "log_loss"
       metric_value <- metrics[[metric_name]]
       if (is.null(metric_value)) {
         return(NA_real_)
@@ -9413,7 +9930,7 @@ generate_ModelOutcome_neural <- function(){
           reticulate::py_has_attr(svi, "run") &&
           reticulate::py_has_attr(svi, "get_params")) {
         early_stopping_info$active <- TRUE
-        early_stopping_info$metric <- if (likelihood == "normal") "nll" else "log_loss"
+        early_stopping_info$metric <- if (likelihood %in% c("normal", "mixed")) "nll" else "log_loss"
         early_stopping_info$min_delta <- 1e-4
         early_stopping_info$eval_every <- as.integer(max(
           1L,
@@ -9426,7 +9943,7 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_reason <- "completed_budget"
       } else {
         early_stopping_reason <- if (is.null(validation_split)) {
-          "validation_split_unavailable"
+          validation_split_reason %||% "validation_split_unavailable"
         } else {
           "api_unavailable"
         }
@@ -9989,7 +10506,7 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(PosteriorDraws$W_cross_out)) {
     ParamsMean$W_cross_out <- mean_param(PosteriorDraws$W_cross_out)
   }
-  if (likelihood == "normal") {
+  if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     ParamsMean$sigma <- mean_param(PosteriorDraws$sigma)
   }
 
@@ -10362,16 +10879,21 @@ generate_ModelOutcome_neural <- function(){
   }
 
   my_model <- function(...) {
+    raw_output_requested <- isTRUE(list(...)$return_logits)
     if (identical(likelihood, "mixed")) {
-      stop(
-        paste(
-          "Direct prediction from a universal mixed-family foundation fit is not supported.",
-          "Adapt the foundation model to a target study first."
-        ),
-        call. = FALSE
-      )
+      if (!isTRUE(raw_output_requested) || !isTRUE(neural_skip_oos_eval)) {
+        stop(
+          paste(
+            "Direct prediction from a universal mixed-family foundation fit is not supported.",
+            "Adapt the foundation model to a target study first."
+          ),
+          call. = FALSE
+        )
+      }
     }
     args <- list(...)
+    return_logits <- isTRUE(args$return_logits)
+    args$return_logits <- NULL
     if (pairwise_mode) {
       X_left_new <- args$X_left_new
       X_right_new <- args$X_right_new
@@ -10415,7 +10937,13 @@ generate_ModelOutcome_neural <- function(){
                                       party_left_new, party_right_new,
                                       resp_party_new, resp_cov_new,
                                       resp_cov_present_new, resp_cov_order_new,
-                                      experiment_idx_new, factor_order_new)
+                                      experiment_idx_new, factor_order_new,
+                                      return_logits = return_logits)
+      if (isTRUE(return_logits)) {
+        logits <- as.matrix(to_r_array(pred))
+        sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
+        return(list(logits = logits, sigma = sigma_vec))
+      }
       return(coerce_prediction_output(pred))
     }
 
@@ -10462,7 +10990,13 @@ generate_ModelOutcome_neural <- function(){
     pred <- TransformerPredict_single(ParamsMean, X_new, party_new,
                                       resp_party_new, resp_cov_new,
                                       resp_cov_present_new, resp_cov_order_new,
-                                      experiment_idx_new, factor_order_new)
+                                      experiment_idx_new, factor_order_new,
+                                      return_logits = return_logits)
+    if (isTRUE(return_logits)) {
+      logits <- as.matrix(to_r_array(pred))
+      sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
+      return(list(logits = logits, sigma = sigma_vec))
+    }
     coerce_prediction_output(pred)
   }
 
