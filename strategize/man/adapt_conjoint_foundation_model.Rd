@@ -18,6 +18,8 @@ adapt_conjoint_foundation_model(
   p_list = NULL,
   respondent_id = NULL,
   respondent_task_id = NULL,
+  competing_group_variable_candidate = NULL,
+  competing_group_variable_respondent = NULL,
   likelihood = NULL,
   n_outcomes = NULL,
   canonical_factor_id = NULL,
@@ -55,6 +57,12 @@ adapt_conjoint_foundation_model(
 \item{respondent_id}{Optional respondent identifiers.}
 
 \item{respondent_task_id}{Optional respondent-task identifiers.}
+
+\item{competing_group_variable_candidate}{Optional candidate competition-group
+labels for pairwise FM adaptation.}
+
+\item{competing_group_variable_respondent}{Optional respondent
+competition-group labels for pairwise FM adaptation.}
 
 \item{likelihood}{Optional likelihood override.}
 

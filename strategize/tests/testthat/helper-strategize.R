@@ -236,6 +236,33 @@ add_adversarial_structure <- function(base_data, seed = 42) {
   base_data
 }
 
+#' Attach pairwise competition-group metadata to a foundation-style experiment
+#'
+#' @param experiment Experiment list returned by foundation_test_experiment()
+#' @param seed Random seed for reproducible party assignments
+#' @param single_stage Logical; if TRUE, force all pairs into the same-stage regime
+#' @return Experiment list with candidate/respondent competition-group fields added
+add_foundation_pairwise_context <- function(experiment,
+                                            seed = 42,
+                                            single_stage = FALSE) {
+  base_data <- list(
+    Y = experiment$Y,
+    W = as.matrix(experiment$W),
+    pair_id = experiment$pair_id,
+    respondent_id = experiment$respondent_id,
+    respondent_task_id = experiment$respondent_task_id,
+    profile_order = experiment$profile_order
+  )
+  structured <- add_adversarial_structure(base_data, seed = seed)
+  experiment$competing_group_variable_candidate <- structured$competing_group_variable_candidate
+  experiment$competing_group_variable_respondent <- structured$competing_group_variable_respondent
+  if (isTRUE(single_stage)) {
+    experiment$competing_group_variable_candidate <-
+      experiment$competing_group_variable_respondent
+  }
+  experiment
+}
+
 #' Generate probability list from factor matrix
 #'
 #' Creates a list of probability distributions for each factor,

@@ -2,9 +2,20 @@ neural_get_index <- function(model_info,
                              party_label = NULL,
                              levels_field,
                              map_field) {
+  missing_field <- if (identical(levels_field, "party_levels")) {
+    "party_missing_label"
+  } else if (identical(levels_field, "resp_party_levels")) {
+    "resp_party_missing_label"
+  } else {
+    NULL
+  }
   if (is.null(model_info) || is.null(model_info[[levels_field]])) {
     return(ai(0L))
   }
+  missing_idx <- neural_missing_group_index(
+    model_info[[levels_field]],
+    model_info[[missing_field]] %||% neural_missing_group_label("candidate")
+  )
   if (!is.null(model_info[[map_field]]) && !is.null(party_label)) {
     key <- as.character(party_label)
     if (key %in% names(model_info[[map_field]])) {
@@ -12,10 +23,10 @@ neural_get_index <- function(model_info,
     }
   }
   if (is.null(party_label)) {
-    return(ai(0L))
+    return(ai(missing_idx))
   }
   idx <- match(as.character(party_label), model_info[[levels_field]]) - 1L
-  if (is.na(idx)) ai(0L) else ai(idx)
+  if (is.na(idx)) ai(missing_idx) else ai(idx)
 }
 
 neural_get_party_index <- function(model_info, party_label = NULL){
@@ -30,6 +41,108 @@ neural_get_resp_party_index <- function(model_info, party_label = NULL){
                    party_label = party_label,
                    levels_field = "resp_party_levels",
                    map_field = "resp_party_index_map")
+}
+
+neural_pairwise_context_mode <- function(model_info = NULL) {
+  mode <- tolower(as.character(model_info$pairwise_context_mode %||% "stage_free"))
+  if (!mode %in% c("stage_free", "stage_aware")) {
+    return("stage_free")
+  }
+  mode
+}
+
+neural_context_flag <- function(model_info, field, default = FALSE) {
+  value <- tryCatch(model_info[[field]], error = function(e) NULL)
+  if (is.null(value)) {
+    return(isTRUE(default))
+  }
+  isTRUE(value)
+}
+
+neural_candidate_group_context_enabled <- function(model_info = NULL) {
+  neural_context_flag(model_info, "has_candidate_group_context", default = FALSE)
+}
+
+neural_respondent_group_context_enabled <- function(model_info = NULL) {
+  neural_context_flag(model_info, "has_respondent_group_context", default = FALSE)
+}
+
+neural_relation_context_enabled <- function(model_info = NULL) {
+  neural_context_flag(model_info, "has_relation_token_context", default = FALSE)
+}
+
+neural_stage_context_enabled <- function(model_info = NULL) {
+  if (!identical(neural_pairwise_context_mode(model_info), "stage_aware")) {
+    return(FALSE)
+  }
+  neural_context_flag(model_info, "has_stage_context", default = TRUE)
+}
+
+neural_matchup_context_enabled <- function(model_info = NULL) {
+  if (!neural_stage_context_enabled(model_info)) {
+    return(FALSE)
+  }
+  neural_context_flag(model_info, "has_matchup_context", default = TRUE)
+}
+
+neural_missing_group_label <- function(kind = c("candidate", "respondent")) {
+  kind <- match.arg(kind)
+  if (identical(kind, "candidate")) {
+    "__fm_missing_candidate__"
+  } else {
+    "__fm_missing_respondent__"
+  }
+}
+
+neural_prepare_group_levels <- function(values,
+                                        override = NULL,
+                                        missing_label) {
+  if (!is.null(override)) {
+    levels <- as.character(override)
+  } else {
+    values_chr <- as.character(values %||% character(0))
+    levels <- sort(unique(values_chr[!is.na(values_chr) & nzchar(values_chr)]))
+  }
+  levels <- levels[!is.na(levels) & nzchar(levels)]
+  if (!missing_label %in% levels) {
+    levels <- c(levels, missing_label)
+  }
+  levels
+}
+
+neural_missing_group_index <- function(levels, missing_label) {
+  idx <- match(as.character(missing_label), as.character(levels))
+  if (is.na(idx)) {
+    return(0L)
+  }
+  as.integer(idx - 1L)
+}
+
+neural_coerce_group_index_base <- function(values,
+                                           n_rows,
+                                           levels,
+                                           missing_label) {
+  levels <- as.character(levels %||% character(0))
+  missing_idx <- neural_missing_group_index(levels, missing_label)
+  if (length(levels) < 1L) {
+    return(rep(0L, as.integer(n_rows)))
+  }
+  if (is.null(values)) {
+    return(rep(missing_idx, as.integer(n_rows)))
+  }
+  if (is.numeric(values)) {
+    idx <- as.integer(values)
+    if (any(idx >= length(levels), na.rm = TRUE)) {
+      idx <- idx - 1L
+    }
+    idx[is.na(idx) | idx < 0L | idx >= length(levels)] <- missing_idx
+    return(idx)
+  }
+  values_chr <- as.character(values)
+  values_chr[is.na(values_chr) | !nzchar(values_chr)] <- missing_label
+  idx <- match(values_chr, levels) - 1L
+  idx[is.na(idx)] <- missing_idx
+  as.integer(idx)
 }
 
 neural_has_shape <- function(x) {
@@ -71,6 +184,9 @@ neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
 }
 
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
+  if (!neural_stage_context_enabled(model_info)) {
+    return(NULL)
+  }
   mode <- NULL
   if (!is.null(model_info) && !is.null(model_info$stage_mode)) {
     mode <- tolower(as.character(model_info$stage_mode))
@@ -99,6 +215,9 @@ neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NUL
 }
 
 neural_matchup_index <- function(party_left_idx, party_right_idx, model_info){
+  if (!neural_matchup_context_enabled(model_info)) {
+    return(NULL)
+  }
   if (is.null(model_info)) {
     return(NULL)
   }
@@ -621,6 +740,34 @@ neural_make_runtime_token_model_info <- function(model_dims,
     default_experiment_text = default_experiment_text,
     default_experiment_text_present = isTRUE(default_experiment_text_present)
   )
+}
+
+neural_set_pairwise_context_model_info <- function(info,
+                                                   pairwise_context_mode = "stage_free",
+                                                   has_candidate_group_context = FALSE,
+                                                   has_respondent_group_context = FALSE,
+                                                   has_relation_token_context = FALSE,
+                                                   has_stage_context = FALSE,
+                                                   has_matchup_context = FALSE,
+                                                   party_missing_label = neural_missing_group_label("candidate"),
+                                                   resp_party_missing_label = neural_missing_group_label("respondent"),
+                                                   n_resp_party_levels = NULL) {
+  info$pairwise_context_mode <- neural_pairwise_context_mode(
+    list(pairwise_context_mode = pairwise_context_mode)
+  )
+  info$has_candidate_group_context <- isTRUE(has_candidate_group_context)
+  info$has_respondent_group_context <- isTRUE(has_respondent_group_context)
+  info$has_relation_token_context <- isTRUE(has_relation_token_context)
+  info$has_stage_context <- isTRUE(has_stage_context)
+  info$has_matchup_context <- isTRUE(has_matchup_context)
+  info$party_missing_label <- as.character(party_missing_label %||%
+    neural_missing_group_label("candidate"))
+  info$resp_party_missing_label <- as.character(resp_party_missing_label %||%
+    neural_missing_group_label("respondent"))
+  if (!is.null(n_resp_party_levels)) {
+    info$n_resp_party_levels <- as.integer(n_resp_party_levels)
+  }
+  info
 }
 
 neural_resolve_covariate_value_encoding <- function(mode = NULL) {
@@ -1547,19 +1694,47 @@ neural_add_segment_embedding <- function(tokens, segment_idx, model_info, params
   tokens + seg_tok
 }
 
-neural_token_family_levels <- function() {
-  c(
+neural_token_family_levels <- function(include_candidate_group = TRUE,
+                                       include_relation = TRUE,
+                                       include_stage = TRUE,
+                                       include_respondent_group = TRUE,
+                                       include_matchup = TRUE) {
+  levels <- c(
     "factor_candidate",
-    "party",
-    "relation",
     "covariate",
     "experiment",
-    "stage",
-    "resp_party",
-    "matchup",
     "choice",
     "separator"
   )
+  if (isTRUE(include_candidate_group)) {
+    levels <- append(levels, "party", after = 1L)
+  }
+  if (isTRUE(include_relation)) {
+    insert_after <- if (isTRUE(include_candidate_group)) 2L else 1L
+    levels <- append(levels, "relation", after = insert_after)
+  }
+  if (isTRUE(include_stage)) {
+    levels <- append(levels, "stage", after = match("experiment", levels))
+  }
+  if (isTRUE(include_respondent_group)) {
+    insert_after <- if (isTRUE(include_stage)) {
+      match("stage", levels)
+    } else {
+      match("experiment", levels)
+    }
+    levels <- append(levels, "resp_party", after = insert_after)
+  }
+  if (isTRUE(include_matchup)) {
+    insert_after <- if (isTRUE(include_respondent_group)) {
+      match("resp_party", levels)
+    } else if (isTRUE(include_stage)) {
+      match("stage", levels)
+    } else {
+      match("experiment", levels)
+    }
+    levels <- append(levels, "matchup", after = insert_after)
+  }
+  levels
 }
 
 neural_factor_tokenization <- function(model_info = NULL, mode = NULL) {
@@ -2401,11 +2576,14 @@ add_party_rel_tokens <- function(tokens,
                                  params = NULL,
                                  use_role = FALSE,
                                  role_id = NULL,
-                                 require_party = TRUE){
+                                 require_party = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
   tok_ndim <- length(tokens$shape)
+  if (is.null(require_party)) {
+    require_party <- neural_candidate_group_context_enabled(model_info)
+  }
 
   if (isTRUE(require_party) && is.null(params$E_party)) {
     stop("E_party is required for party/rel tokens.")
@@ -4799,8 +4977,7 @@ generate_ModelOutcome_neural <- function(){
   use_cross_attn <- identical(cross_candidate_encoder_mode, "attn")
   use_cross_encoder <- identical(cross_candidate_encoder_mode, "full")
   use_full_attn_residual <- identical(residual_mode, "full_attn")
-  use_matchup_token <- isTRUE(pairwise_mode) &&
-    !identical(cross_candidate_encoder_mode, "none")
+  use_matchup_token <- FALSE
 
   # Main-info structure for downstream compatibility
   for(nrp in 1:2){
@@ -4839,54 +5016,86 @@ generate_ModelOutcome_neural <- function(){
   }
   n_rel_levels <- ai(3L)
 
-  # Party token mapping (candidates)
+  # Candidate/respondent group context
+  party_missing_label <- if (exists("party_missing_label_fixed", inherits = TRUE)) {
+    as.character(get("party_missing_label_fixed", inherits = TRUE))
+  } else {
+    neural_missing_group_label("candidate")
+  }
+  resp_party_missing_label <- if (exists("resp_party_missing_label_fixed", inherits = TRUE)) {
+    as.character(get("resp_party_missing_label_fixed", inherits = TRUE))
+  } else {
+    neural_missing_group_label("respondent")
+  }
+  candidate_group_input <- if (!is.null(competing_group_variable_candidate_)) {
+    as.character(competing_group_variable_candidate_)
+  } else {
+    NULL
+  }
+  respondent_group_input <- if (!is.null(competing_group_variable_respondent_)) {
+    as.character(competing_group_variable_respondent_)
+  } else {
+    NULL
+  }
+  has_candidate_group_context <- !is.null(candidate_group_input) &&
+    any(!is.na(candidate_group_input) & nzchar(candidate_group_input))
+  has_respondent_group_context <- !is.null(respondent_group_input) &&
+    any(!is.na(respondent_group_input) & nzchar(respondent_group_input))
+  has_relation_context <- isTRUE(has_candidate_group_context) &&
+    isTRUE(has_respondent_group_context)
+
+  # Candidate group mapping
   party_levels_override <- NULL
   if (exists("party_levels_fixed", inherits = TRUE)) {
     party_levels_override <- get("party_levels_fixed", inherits = TRUE)
   }
-  party_levels <- if (!is.null(party_levels_override)) {
-    as.character(party_levels_override)
-  } else if (!is.null(competing_group_variable_candidate_)) {
-    sort(unique(as.character(competing_group_variable_candidate_)))
-  } else {
-    "NA"
-  }
+  party_levels <- neural_prepare_group_levels(
+    values = candidate_group_input,
+    override = party_levels_override,
+    missing_label = party_missing_label
+  )
   n_party_levels <- max(1L, length(party_levels))
-  n_matchup_levels <- if (isTRUE(use_matchup_token)) {
-    as.integer(n_party_levels * (n_party_levels + 1L) / 2L)
-  } else {
-    0L
-  }
-  party_index <- if (!is.null(competing_group_variable_candidate_)) {
-    match(as.character(competing_group_variable_candidate_), party_levels) - 1L
-  } else {
-    rep(0L, length(Y_))
-  }
-  party_index[is.na(party_index)] <- 0L
+  party_index <- neural_coerce_group_index_base(
+    values = candidate_group_input,
+    n_rows = length(Y_),
+    levels = party_levels,
+    missing_label = party_missing_label
+  )
+  party_missing_index <- neural_missing_group_index(party_levels, party_missing_label)
 
-  # Respondent party mapping
+  # Respondent group mapping
   resp_party_levels_override <- NULL
   if (exists("resp_party_levels_fixed", inherits = TRUE)) {
     resp_party_levels_override <- get("resp_party_levels_fixed", inherits = TRUE)
   }
-  resp_party_levels <- if (!is.null(resp_party_levels_override)) {
-    as.character(resp_party_levels_override)
-  } else if (!is.null(competing_group_variable_respondent_)) {
-    sort(unique(as.character(competing_group_variable_respondent_)))
-  } else {
-    "NA"
-  }
+  resp_party_levels <- neural_prepare_group_levels(
+    values = respondent_group_input,
+    override = resp_party_levels_override,
+    missing_label = resp_party_missing_label
+  )
   n_resp_party_levels <- max(1L, length(resp_party_levels))
-  resp_party_index <- if (!is.null(competing_group_variable_respondent_)) {
-    match(as.character(competing_group_variable_respondent_), resp_party_levels) - 1L
-  } else {
-    rep(0L, length(Y_))
-  }
-  resp_party_index[is.na(resp_party_index)] <- 0L
+  resp_party_index <- neural_coerce_group_index_base(
+    values = respondent_group_input,
+    n_rows = length(Y_),
+    levels = resp_party_levels,
+    missing_label = resp_party_missing_label
+  )
+  resp_party_missing_index <- neural_missing_group_index(
+    resp_party_levels,
+    resp_party_missing_label
+  )
 
   cand_party_to_resp_idx <- vapply(party_levels, function(party_label) {
+    if (!isTRUE(has_relation_context) ||
+        identical(as.character(party_label), party_missing_label)) {
+      return(-1L)
+    }
     idx <- match(as.character(party_label), resp_party_levels)
-    if (is.na(idx)) -1L else as.integer(idx - 1L)
+    if (is.na(idx)) {
+      resp_party_missing_index
+    } else {
+      as.integer(idx - 1L)
+    }
   }, integer(1))
   cand_party_to_resp_idx_jnp <- strenv$jnp$array(as.integer(cand_party_to_resp_idx))
   cand_party_to_resp_idx_jnp <- strenv$jnp$atleast_1d(cand_party_to_resp_idx_jnp)$astype(strenv$jnp$int32)
@@ -4914,9 +5123,7 @@ generate_ModelOutcome_neural <- function(){
     neural_token_info = neural_token_info_use,
     mcmc_control = mcmc_control
   )
-  token_family_levels <- as.character(
-    neural_token_info_use$token_family_levels %||% neural_token_family_levels()
-  )
+  token_family_levels <- NULL
   factor_tokenization <- neural_token_info_use$factor_tokenization
   factor_order_by_experiment <- lapply(
     neural_token_info_use$factor_order_by_experiment %||% list(),
@@ -5083,7 +5290,22 @@ generate_ModelOutcome_neural <- function(){
     }
   }
 
-  stage_diagnostics <- NULL
+  pairwise_context_mode <- "stage_free"
+  stage_context_enabled <- FALSE
+  stage_diagnostics <- list(
+    pairwise_context_mode = pairwise_context_mode,
+    candidate_group_context = isTRUE(has_candidate_group_context),
+    respondent_group_context = isTRUE(has_respondent_group_context),
+    relation_context = isTRUE(has_relation_context),
+    stage_context_enabled = FALSE,
+    stage_context_reason = if (!isTRUE(pairwise_mode)) {
+      "not_pairwise"
+    } else if (!isTRUE(has_candidate_group_context) || !isTRUE(has_respondent_group_context)) {
+      "missing_group_metadata"
+    } else {
+      "pending"
+    }
+  )
   if (pairwise_mode) {
     stage_is_primary <- party_left == party_right
     n_total <- length(stage_is_primary)
@@ -5101,31 +5323,50 @@ generate_ModelOutcome_neural <- function(){
     stage_table <- table(resp_party_label, stage_label)
     cell_counts <- as.integer(stage_table)
     min_cell_n <- if (length(cell_counts) > 0L) min(cell_counts) else NA_integer_
-    single_stage_only <- isTRUE(pct_primary == 0 || pct_primary == 1)
-    warn_stage_imbalance <- is.finite(pct_primary) &&
+    single_stage_only <- !isTRUE(has_relation_context) || isTRUE(pct_primary == 0 || pct_primary == 1)
+    warn_stage_imbalance <- isTRUE(has_relation_context) &&
+      is.finite(pct_primary) &&
       (pct_primary < warn_stage_imbalance_pct || pct_primary > (1 - warn_stage_imbalance_pct))
-    warn_sparse_cells <- !is.na(min_cell_n) && min_cell_n < warn_min_cell_n
+    warn_sparse_cells <- isTRUE(has_relation_context) &&
+      !is.na(min_cell_n) && min_cell_n < warn_min_cell_n
+    stage_context_enabled <- isTRUE(has_relation_context) &&
+      is.finite(pct_primary) &&
+      n_primary > 0L &&
+      n_general > 0L
+    pairwise_context_mode <- if (isTRUE(stage_context_enabled)) {
+      "stage_aware"
+    } else {
+      "stage_free"
+    }
+    stage_context_reason <- if (!isTRUE(has_candidate_group_context) ||
+                                !isTRUE(has_respondent_group_context)) {
+      "missing_group_metadata"
+    } else if (n_primary < 1L || n_general < 1L) {
+      "single_stage_only"
+    } else {
+      "enabled"
+    }
 
-    if (isTRUE(warn_stage_imbalance)) {
+    if (isTRUE(stage_context_enabled) && isTRUE(warn_stage_imbalance)) {
       warning(
         sprintf("Stage imbalance detected in neural training data (pct_primary=%.3f).", pct_primary),
         call. = FALSE
       )
     }
-    if (isTRUE(warn_sparse_cells)) {
+    if (isTRUE(stage_context_enabled) && isTRUE(warn_sparse_cells)) {
       warning(
         sprintf("Sparse stage/resp-party cells detected (min cell n=%d).", min_cell_n),
         call. = FALSE
       )
     }
-    if (isTRUE(single_stage_only)) {
+    if (isTRUE(has_relation_context) && !isTRUE(stage_context_enabled)) {
       warning(
-        "Stage indicator has no variation; E_stage is not identified for the unused stage.",
+        "Stage indicator has no variation; fitting pairwise FM in stage-free mode.",
         call. = FALSE
       )
     }
 
-    stage_diagnostics <- list(
+    stage_diagnostics <- c(stage_diagnostics, list(
       n_primary = as.integer(n_primary),
       n_general = as.integer(n_general),
       pct_primary = pct_primary,
@@ -5134,8 +5375,34 @@ generate_ModelOutcome_neural <- function(){
       sparse_cells = warn_sparse_cells,
       min_cell_n = min_cell_n,
       warn_stage_imbalance_pct = warn_stage_imbalance_pct,
-      warn_min_cell_n = warn_min_cell_n
-    )
+      warn_min_cell_n = warn_min_cell_n,
+      stage_context_enabled = stage_context_enabled,
+      stage_context_reason = stage_context_reason,
+      pairwise_context_mode = pairwise_context_mode
+    ))
+  }
+  use_matchup_token <- isTRUE(pairwise_mode) &&
+    isTRUE(stage_context_enabled) &&
+    !identical(cross_candidate_encoder_mode, "none")
+  n_matchup_levels <- if (isTRUE(use_matchup_token)) {
+    as.integer(n_party_levels * (n_party_levels + 1L) / 2L)
+  } else {
+    0L
+  }
+  allowed_token_family_levels <- neural_token_family_levels(
+    include_candidate_group = has_candidate_group_context,
+    include_relation = has_relation_context,
+    include_stage = stage_context_enabled,
+    include_respondent_group = has_respondent_group_context,
+    include_matchup = use_matchup_token
+  )
+  token_family_override <- neural_token_info_use$token_family_levels %||% NULL
+  token_family_levels <- if (is.null(token_family_override)) {
+    allowed_token_family_levels
+  } else {
+    override_chr <- as.character(token_family_override)
+    override_chr <- override_chr[override_chr %in% allowed_token_family_levels]
+    c(override_chr, setdiff(allowed_token_family_levels, override_chr))
   }
 
   n_resp_covariates <- if (!is.null(X_use)) ai(ncol(X_use)) else ai(0L)
@@ -5437,50 +5704,59 @@ generate_ModelOutcome_neural <- function(){
       )
     }
 
-    E_party_shape <- reticulate::tuple(ai(n_party_levels), ModelDims)
-    E_party <- p2d(
-      name = "E_party",
-      sample_fxn = function() {
-        strenv$numpyro$sample(
-          "E_party",
-          strenv$numpyro$distributions$Normal(0., tau_context),
-          sample_shape = E_party_shape
-        )
-      },
-      init_fxn = function() {
-        p2d_init_normal("E_party", tau_context, E_party_shape)
-      }
-    )
+    E_party <- NULL
+    if (isTRUE(has_candidate_group_context)) {
+      E_party_shape <- reticulate::tuple(ai(n_party_levels), ModelDims)
+      E_party <- p2d(
+        name = "E_party",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_party",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = E_party_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_party", tau_context, E_party_shape)
+        }
+      )
+    }
 
-    E_rel_shape <- reticulate::tuple(ai(n_rel_levels), ModelDims)
-    E_rel <- p2d(
-      name = "E_rel",
-      sample_fxn = function() {
-        strenv$numpyro$sample(
-          "E_rel",
-          strenv$numpyro$distributions$Normal(0., tau_context),
-          sample_shape = E_rel_shape
-        )
-      },
-      init_fxn = function() {
-        p2d_init_normal("E_rel", tau_context, E_rel_shape)
-      }
-    )
+    E_rel <- NULL
+    if (isTRUE(has_relation_context)) {
+      E_rel_shape <- reticulate::tuple(ai(n_rel_levels), ModelDims)
+      E_rel <- p2d(
+        name = "E_rel",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_rel",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = E_rel_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_rel", tau_context, E_rel_shape)
+        }
+      )
+    }
 
-    E_resp_party_shape <- reticulate::tuple(ai(n_resp_party_levels), ModelDims)
-    E_resp_party <- p2d(
-      name = "E_resp_party",
-      sample_fxn = function() {
-        strenv$numpyro$sample(
-          "E_resp_party",
-          strenv$numpyro$distributions$Normal(0., tau_context),
-          sample_shape = E_resp_party_shape
-        )
-      },
-      init_fxn = function() {
-        p2d_init_normal("E_resp_party", tau_context, E_resp_party_shape)
-      }
-    )
+    E_resp_party <- NULL
+    if (isTRUE(has_respondent_group_context)) {
+      E_resp_party_shape <- reticulate::tuple(ai(n_resp_party_levels), ModelDims)
+      E_resp_party <- p2d(
+        name = "E_resp_party",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "E_resp_party",
+            strenv$numpyro$distributions$Normal(0., tau_context),
+            sample_shape = E_resp_party_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("E_resp_party", tau_context, E_resp_party_shape)
+        }
+      )
+    }
 
     E_token_family_shape <- reticulate::tuple(ai(length(token_family_levels)), ModelDims)
     E_token_family <- p2d(
@@ -5518,7 +5794,7 @@ generate_ModelOutcome_neural <- function(){
 
     E_stage <- NULL
     E_matchup <- NULL
-    if (isTRUE(pairwise)) {
+    if (isTRUE(pairwise) && isTRUE(stage_context_enabled)) {
       E_stage_shape <- reticulate::tuple(ai(n_resp_party_levels), ai(2L), ModelDims)
       E_stage <- p2d(
         name = "E_stage",
@@ -6555,6 +6831,18 @@ generate_ModelOutcome_neural <- function(){
       default_experiment_text = default_experiment_text,
       default_experiment_text_present = default_experiment_text_present
     )
+    model_info_local <- neural_set_pairwise_context_model_info(
+      info = model_info_local,
+      pairwise_context_mode = pairwise_context_mode,
+      has_candidate_group_context = has_candidate_group_context,
+      has_respondent_group_context = has_respondent_group_context,
+      has_relation_token_context = has_relation_context,
+      has_stage_context = stage_context_enabled,
+      has_matchup_context = use_matchup_token,
+      party_missing_label = party_missing_label,
+      resp_party_missing_label = resp_party_missing_label,
+      n_resp_party_levels = n_resp_party_levels
+    )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
                                 return_mask = FALSE) {
@@ -6884,6 +7172,18 @@ generate_ModelOutcome_neural <- function(){
       experiment_description_present = experiment_description_present,
       default_experiment_text = default_experiment_text,
       default_experiment_text_present = default_experiment_text_present
+    )
+    model_info_local <- neural_set_pairwise_context_model_info(
+      info = model_info_local,
+      pairwise_context_mode = pairwise_context_mode,
+      has_candidate_group_context = has_candidate_group_context,
+      has_respondent_group_context = has_respondent_group_context,
+      has_relation_token_context = has_relation_context,
+      has_stage_context = stage_context_enabled,
+      has_matchup_context = use_matchup_token,
+      party_missing_label = party_missing_label,
+      resp_party_missing_label = resp_party_missing_label,
+      n_resp_party_levels = n_resp_party_levels
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
@@ -7729,15 +8029,13 @@ generate_ModelOutcome_neural <- function(){
       invisible(value)
     }
 
-    params_out$E_party <- get_site_value("E_party")
-    params_out$E_resp_party <- get_site_value("E_resp_party")
     params_out$E_choice <- get_site_value("E_choice")
-    if (is.null(params_out$E_party) ||
-        is.null(params_out$E_resp_party) ||
-        is.null(params_out$E_choice)) {
+    if (is.null(params_out$E_choice)) {
       return(NULL)
     }
 
+    maybe_site("E_party")
+    maybe_site("E_resp_party")
     maybe_site("E_sep")
     maybe_site("E_rel")
     maybe_site("E_token_family")
@@ -7859,6 +8157,18 @@ generate_ModelOutcome_neural <- function(){
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens,
     jit_cache_key = sprintf("svi_validation_%d", as.integer(stats::runif(1, 1, 1e9)))
+  )
+  validation_model_info <- neural_set_pairwise_context_model_info(
+    info = validation_model_info,
+    pairwise_context_mode = pairwise_context_mode,
+    has_candidate_group_context = has_candidate_group_context,
+    has_respondent_group_context = has_respondent_group_context,
+    has_relation_token_context = has_relation_context,
+    has_stage_context = stage_context_enabled,
+    has_matchup_context = use_matchup_token,
+    party_missing_label = party_missing_label,
+    resp_party_missing_label = resp_party_missing_label,
+    n_resp_party_levels = n_resp_party_levels
   )
   validation_model_info$factor_name_text <- factor_name_text
   validation_model_info$level_name_text <- level_name_text
@@ -9426,10 +9736,8 @@ generate_ModelOutcome_neural <- function(){
   }
 
   ParamsMean <- list()
-  ParamsMean$E_party <- get_site_mean_or_param("E_party")
-  ParamsMean$E_resp_party <- get_site_mean_or_param("E_resp_party")
   ParamsMean$E_choice <- get_site_mean_or_param("E_choice")
-  if (is.null(ParamsMean$E_party) || is.null(ParamsMean$E_resp_party) || is.null(ParamsMean$E_choice)) {
+  if (is.null(ParamsMean$E_choice)) {
     stop("Neural model is missing required embedding estimates.", call. = FALSE)
   }
 
@@ -9441,6 +9749,8 @@ generate_ModelOutcome_neural <- function(){
     invisible(value)
   }
 
+  maybe_site("E_party")
+  maybe_site("E_resp_party")
   maybe_site("E_sep")
   maybe_site("E_segment")
   maybe_site("E_factor_start")
@@ -9592,6 +9902,18 @@ generate_ModelOutcome_neural <- function(){
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens,
     jit_cache_key = sprintf("fitted_predict_%d", as.integer(stats::runif(1, 1, 1e9)))
+  )
+  predict_model_info <- neural_set_pairwise_context_model_info(
+    info = predict_model_info,
+    pairwise_context_mode = pairwise_context_mode,
+    has_candidate_group_context = has_candidate_group_context,
+    has_respondent_group_context = has_respondent_group_context,
+    has_relation_token_context = has_relation_context,
+    has_stage_context = stage_context_enabled,
+    has_matchup_context = use_matchup_token,
+    party_missing_label = party_missing_label,
+    resp_party_missing_label = resp_party_missing_label,
+    n_resp_party_levels = n_resp_party_levels
   )
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
@@ -9803,26 +10125,19 @@ generate_ModelOutcome_neural <- function(){
     )
   }
 
-  coerce_party_idx_base <- function(party_vec, n_rows, levels, n_levels) {
-    if (is.null(party_vec)) {
-      return(rep(0L, n_rows))
-    }
-    if (is.numeric(party_vec)) {
-      idx <- as.integer(party_vec)
-      if (any(idx >= n_levels)) {
-        idx <- idx - 1L
-      }
-    } else {
-      idx <- match(as.character(party_vec), levels) - 1L
-    }
-    idx[is.na(idx)] <- 0L
-    idx
+  coerce_party_idx_base <- function(party_vec, n_rows, levels, missing_label) {
+    neural_coerce_group_index_base(
+      values = party_vec,
+      n_rows = n_rows,
+      levels = levels,
+      missing_label = missing_label
+    )
   }
   coerce_party_idx <- function(party_vec, n_rows) {
-    coerce_party_idx_base(party_vec, n_rows, party_levels, n_party_levels)
+    coerce_party_idx_base(party_vec, n_rows, party_levels, party_missing_label)
   }
   coerce_resp_party_idx <- function(party_vec, n_rows) {
-    coerce_party_idx_base(party_vec, n_rows, resp_party_levels, n_resp_party_levels)
+    coerce_party_idx_base(party_vec, n_rows, resp_party_levels, resp_party_missing_label)
   }
 
   to_r_array <- function(x) {
@@ -10008,7 +10323,7 @@ generate_ModelOutcome_neural <- function(){
       in_sample_metrics$eval_note <- "in_sample_full_fit"
       in_sample_metrics$eval_subset <- fit_metrics$eval_subset
 
-      if (pairwise_mode) {
+      if (pairwise_mode && isTRUE(has_relation_context)) {
         stage_primary <- party_left == party_right
         if (length(stage_primary) == length(Y_use)) {
           stage_primary <- stage_primary[eval_idx_in]
@@ -10136,14 +10451,14 @@ generate_ModelOutcome_neural <- function(){
   if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
     party_index_map <- setNames(vapply(GroupsPool, function(grp) {
       idx <- match(as.character(grp), party_levels) - 1L
-      if (is.na(idx)) 0L else idx
+      if (is.na(idx)) party_missing_index else idx
     }, integer(1)), GroupsPool)
   }
   resp_party_index_map <- NULL
   if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
     resp_party_index_map <- setNames(vapply(GroupsPool, function(grp) {
       idx <- match(as.character(grp), resp_party_levels) - 1L
-      if (is.na(idx)) 0L else idx
+      if (is.na(idx)) resp_party_missing_index else idx
     }, integer(1)), GroupsPool)
   }
 
@@ -10186,12 +10501,16 @@ generate_ModelOutcome_neural <- function(){
     factor_index_list = factor_index_list,
     implicit = isTRUE(holdout_indicator == 1L),
     pairwise_mode = pairwise_mode,
+    pairwise_context_mode = pairwise_context_mode,
     n_factors = ai(length(factor_levels)),
     n_candidate_tokens = n_candidate_tokens,
     party_levels = party_levels,
     n_party_levels = ai(n_party_levels),
     n_matchup_levels = ai(n_matchup_levels),
     resp_party_levels = resp_party_levels,
+    n_resp_party_levels = ai(n_resp_party_levels),
+    party_missing_label = party_missing_label,
+    resp_party_missing_label = resp_party_missing_label,
     party_index_map = party_index_map,
     resp_party_index_map = resp_party_index_map,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
@@ -10226,6 +10545,11 @@ generate_ModelOutcome_neural <- function(){
     covariate_value_encoding = covariate_value_encoding,
     shared_projection_value_encoder = shared_projection_value_encoder,
     text_semantic_dim = as.integer(text_semantic_dim),
+    has_candidate_group_context = isTRUE(has_candidate_group_context),
+    has_respondent_group_context = isTRUE(has_respondent_group_context),
+    has_relation_token_context = isTRUE(has_relation_context),
+    has_stage_context = isTRUE(stage_context_enabled),
+    has_matchup_context = isTRUE(use_matchup_token),
     has_stage_token = !is.null(ParamsMean$E_stage),
     has_matchup_token = !is.null(ParamsMean$E_matchup),
     has_resp_party_token = !is.null(ParamsMean$E_resp_party),

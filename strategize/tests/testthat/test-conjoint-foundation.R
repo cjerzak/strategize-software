@@ -76,12 +76,18 @@ foundation_test_experiment <- function(seed,
 
 foundation_test_control_with_embeddings <- function() {
   modifyList(
-    cs_foundation_default_control(),
+    strategize:::cs_foundation_default_control(),
     modifyList(
       foundation_test_control(),
       list(text_embedding_fn = foundation_test_text_embedding_fn)
     )
   )
+}
+
+foundation_pairwise_group_key <- function(context_mode = "stage_free",
+                                          likelihood = "bernoulli",
+                                          n_outcomes = 1L) {
+  paste("pairwise", context_mode, likelihood, as.integer(n_outcomes), sep = "::")
 }
 
 test_that("foundation defaults use language-span factor tokenization", {
@@ -181,8 +187,9 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
 
   expect_s3_class(fit, "conjoint_foundation_model")
   expect_length(fit$groups, 1L)
-  group <- fit$groups[["pairwise::bernoulli::1"]]
+  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
   expect_false(is.null(group))
+  expect_identical(group$pairwise_context_mode, "stage_free")
   expect_identical(
     group$x_feature_names,
     c("income", "household size", "GOPScore")
@@ -219,6 +226,13 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   expect_true(isTRUE(group$fit$neural_model_info$has_covariate_name_text))
   expect_true(isTRUE(group$fit$neural_model_info$has_shared_covariate_value_projection))
   expect_true(isTRUE(group$fit$neural_model_info$has_conditioned_covariate_value_encoder))
+  expect_false(isTRUE(group$fit$neural_model_info$has_candidate_group_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_respondent_group_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_relation_token_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_stage_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_matchup_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_stage_token))
+  expect_false(isTRUE(group$fit$neural_model_info$has_matchup_token))
   expect_identical(
     group$fit$neural_model_info$shared_projection_value_encoder,
     "name_dist_moe"
@@ -228,8 +242,11 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
     length(group$x_schema$base_x_names)
   )
   expect_true(all(
-    c("factor_candidate", "covariate", "experiment", "stage",
-      "resp_party", "matchup", "choice", "separator") %in%
+    c("factor_candidate", "covariate", "experiment", "choice", "separator") %in%
+      group$fit$neural_model_info$token_family_levels
+  ))
+  expect_false(any(
+    c("party", "relation", "stage", "resp_party", "matchup") %in%
       group$fit$neural_model_info$token_family_levels
   ))
 
@@ -263,35 +280,14 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   ))
   expect_true(any(pooled$X_present[, "income"] == 1))
 
-  runtime_info <- strategize:::neural_make_runtime_token_model_info(
-    model_dims = group$fit$neural_model_info$model_dims,
-    cand_party_to_resp_idx = group$fit$neural_model_info$cand_party_to_resp_idx,
-    n_party_levels = group$fit$neural_model_info$n_party_levels,
-    factor_name_text = group$fit$neural_model_info$factor_name_text,
-    level_name_text = group$fit$neural_model_info$level_name_text,
-    covariate_name_text = group$fit$neural_model_info$covariate_name_text,
-    covariate_names = group$fit$neural_model_info$covariate_names,
-    resp_cov_mean = group$fit$neural_model_info$resp_cov_mean,
-    resp_cov_scale = group$fit$neural_model_info$resp_cov_scale,
-    resp_cov_default_present = group$fit$neural_model_info$resp_cov_default_present,
-    covariate_order_by_experiment = group$fit$neural_model_info$covariate_order_by_experiment,
-    default_covariate_order = group$fit$neural_model_info$default_covariate_order,
-    max_covariate_tokens = group$fit$neural_model_info$max_covariate_tokens,
-    default_experiment_index = group$fit$neural_model_info$default_experiment_index,
-    token_family_levels = group$fit$neural_model_info$token_family_levels,
-    experiment_token_mode = group$fit$neural_model_info$experiment_token_mode,
-    covariate_value_encoding = group$fit$neural_model_info$covariate_value_encoding,
-    experiment_description_text = group$fit$neural_model_info$experiment_description_text,
-    experiment_description_present = group$fit$neural_model_info$experiment_description_present,
-    default_experiment_text = group$fit$neural_model_info$default_experiment_text,
-    default_experiment_text_present = group$fit$neural_model_info$default_experiment_text_present
-  )
+  runtime_info <- group$fit$neural_model_info
   params <- group$fit$neural_model_info$params
   n_cov <- length(group$x_schema$base_x_names)
+  resp_party_idx <- strategize:::neural_get_resp_party_index(runtime_info)
 
   tok_study_a <- strategize:::add_context_tokens(
     model_info = runtime_info,
-    resp_party_idx = 0L,
+    resp_party_idx = resp_party_idx,
     resp_cov = matrix(0, nrow = 1L, ncol = n_cov),
     resp_cov_present = matrix(0, nrow = 1L, ncol = n_cov),
     experiment_idx = 0L,
@@ -300,7 +296,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   )
   tok_study_b <- strategize:::add_context_tokens(
     model_info = runtime_info,
-    resp_party_idx = 0L,
+    resp_party_idx = resp_party_idx,
     resp_cov = matrix(0, nrow = 1L, ncol = n_cov),
     resp_cov_present = matrix(0, nrow = 1L, ncol = n_cov),
     experiment_idx = 1L,
@@ -313,7 +309,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
 
   tok_cov0 <- strategize:::add_context_tokens(
     model_info = runtime_info,
-    resp_party_idx = 0L,
+    resp_party_idx = resp_party_idx,
     resp_cov = matrix(0, nrow = 1L, ncol = n_cov),
     resp_cov_present = matrix(1, nrow = 1L, ncol = n_cov),
     experiment_idx = 0L,
@@ -322,7 +318,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   )
   tok_cov1 <- strategize:::add_context_tokens(
     model_info = runtime_info,
-    resp_party_idx = 0L,
+    resp_party_idx = resp_party_idx,
     resp_cov = matrix(1, nrow = 1L, ncol = n_cov),
     resp_cov_present = matrix(1, nrow = 1L, ncol = n_cov),
     experiment_idx = 0L,
@@ -332,6 +328,120 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
   tok_cov0_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_cov0))
   tok_cov1_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_cov1))
   expect_gt(max(abs(tok_cov1_r - tok_cov0_r)), 1e-8)
+})
+
+test_that("fit_conjoint_foundation_model separates stage-aware pairwise studies", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  study_a <- add_foundation_pairwise_context(
+    foundation_test_experiment(
+      seed = 7051,
+      experiment_id = "stage_a",
+      factor_names = c("price", "message"),
+      x_names = c("income", "household size")
+    ),
+    seed = 11
+  )
+  study_b <- add_foundation_pairwise_context(
+    foundation_test_experiment(
+      seed = 7052,
+      experiment_id = "stage_b",
+      factor_names = c("price", "message", "messenger"),
+      x_names = c("income", "GOPScore")
+    ),
+    seed = 12
+  )
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(study_a, study_b),
+    foundation_control = foundation_test_control_with_embeddings()
+  )
+
+  group <- fit$groups[[foundation_pairwise_group_key("stage_aware")]]
+  expect_false(is.null(group))
+  expect_identical(group$pairwise_context_mode, "stage_aware")
+  expect_true(isTRUE(group$fit$neural_model_info$has_candidate_group_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_respondent_group_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_relation_token_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_stage_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_matchup_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_stage_token))
+  expect_true(isTRUE(group$fit$neural_model_info$has_matchup_token))
+  expect_true(all(
+    c("party", "relation", "stage", "resp_party", "matchup") %in%
+      group$fit$neural_model_info$token_family_levels
+  ))
+  expect_gt(group$fit$neural_model_info$stage_diagnostics$n_primary, 0L)
+  expect_gt(group$fit$neural_model_info$stage_diagnostics$n_general, 0L)
+  expect_false(isTRUE(group$fit$neural_model_info$stage_diagnostics$single_stage_only))
+})
+
+test_that("pairwise studies with group metadata but one observed stage stay stage-free", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  study <- add_foundation_pairwise_context(
+    foundation_test_experiment(
+      seed = 7053,
+      experiment_id = "single_stage",
+      factor_names = c("price", "message"),
+      x_names = c("income")
+    ),
+    seed = 13,
+    single_stage = TRUE
+  )
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(study),
+    foundation_control = foundation_test_control_with_embeddings()
+  )
+
+  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  expect_false(is.null(group))
+  expect_identical(group$pairwise_context_mode, "stage_free")
+  expect_true(isTRUE(group$fit$neural_model_info$has_candidate_group_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_respondent_group_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_relation_token_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_stage_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_matchup_context))
+  expect_false(isTRUE(group$fit$neural_model_info$has_stage_token))
+  expect_false(isTRUE(group$fit$neural_model_info$has_matchup_token))
+  expect_true(isTRUE(group$fit$neural_model_info$stage_diagnostics$single_stage_only))
+})
+
+test_that("pairwise studies stay stage-aware with partially missing respondent groups", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  study <- add_foundation_pairwise_context(
+    foundation_test_experiment(
+      seed = 7054,
+      experiment_id = "missing_resp_stage",
+      factor_names = c("price", "message"),
+      x_names = c("income")
+    ),
+    seed = 14
+  )
+  study$competing_group_variable_respondent[
+    seq(1L, length(study$competing_group_variable_respondent), by = 7L)
+  ] <- NA_character_
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(study),
+    foundation_control = foundation_test_control_with_embeddings()
+  )
+
+  group <- fit$groups[[foundation_pairwise_group_key("stage_aware")]]
+  expect_false(is.null(group))
+  expect_identical(group$pairwise_context_mode, "stage_aware")
+  expect_true(isTRUE(group$fit$neural_model_info$has_stage_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_matchup_context))
+  expect_true(isTRUE(group$fit$neural_model_info$has_stage_token))
+  expect_true(isTRUE(group$fit$neural_model_info$has_matchup_token))
 })
 
 test_that("fit_conjoint_foundation_model splits incompatible likelihood families", {
@@ -368,7 +478,10 @@ test_that("fit_conjoint_foundation_model splits incompatible likelihood families
   )
 
   expect_s3_class(fit, "conjoint_foundation_model")
-  expect_equal(sort(names(fit$groups)), sort(c("pairwise::bernoulli::1", "single::normal::1")))
+  expect_equal(
+    sort(names(fit$groups)),
+    sort(c(foundation_pairwise_group_key("stage_free"), "single::normal::1"))
+  )
 })
 
 test_that("adapt_conjoint_foundation_model builds shared and local covariate tokens and predictions stay finite", {
@@ -400,7 +513,7 @@ test_that("adapt_conjoint_foundation_model builds shared and local covariate tok
     factor_names = c("price", "message"),
     x_names = c("income", "household size", "local_bonus")
   )
-  group <- foundation_fit$groups[["pairwise::bernoulli::1"]]
+  group <- foundation_fit$groups[[foundation_pairwise_group_key("stage_free")]]
   experiment_norm <- cs_foundation_normalize_experiment(adapt_data, index = 1L)
   exp_map <- cs_foundation_build_local_factor_map(experiment_norm)
   adaptation_control <- modifyList(
@@ -524,7 +637,7 @@ test_that("foundation semantics stay backward compatible when text_embedding_fn 
     foundation_control = foundation_test_control()
   )
 
-  group <- fit$groups[["pairwise::bernoulli::1"]]
+  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
   expect_null(group$text_registry)
   expect_identical(group$token_control$experiment_token_mode, "description")
   expect_identical(group$token_control$covariate_value_encoding, "shared_projection")
@@ -577,7 +690,7 @@ test_that("legacy fine-tuning token controls remain available for ablation", {
     )
   )
 
-  group <- fit$groups[["pairwise::bernoulli::1"]]
+  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
   expect_identical(group$token_control$experiment_token_mode, "legacy_id")
   expect_identical(group$token_control$covariate_value_encoding, "legacy_linear")
   expect_true(isTRUE(group$fit$neural_model_info$has_experiment_id_embedding))
@@ -613,8 +726,9 @@ test_that("foundation bundles preserve covariate token metadata across save/load
   loaded <- load_conjoint_foundation_bundle(tmp, preload_params = FALSE)
 
   expect_s3_class(loaded, "conjoint_foundation_model")
-  orig_group <- foundation_fit$groups[["pairwise::bernoulli::1"]]
-  loaded_group <- loaded$groups[["pairwise::bernoulli::1"]]
+  orig_group <- foundation_fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  loaded_group <- loaded$groups[[foundation_pairwise_group_key("stage_free")]]
+  expect_identical(loaded_group$pairwise_context_mode, orig_group$pairwise_context_mode)
   expect_identical(loaded_group$x_schema$base_x_names, orig_group$x_schema$base_x_names)
   expect_identical(loaded_group$x_schema$semantic_feature_names, orig_group$x_schema$semantic_feature_names)
   expect_identical(loaded_group$x_schema$experiment_token_levels, orig_group$x_schema$experiment_token_levels)

@@ -77,6 +77,12 @@ Optional fields:
   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
   respondent/task identifiers used when available for clustering and
   evaluation logic.}
+  \item{\code{competing_group_variable_candidate},
+  \code{competing_group_variable_respondent}}{Optional row-aligned
+  competition-group labels for pairwise studies. When both are supplied and
+  the candidate labels span both same-group and cross-group pairs, the pooled
+  FM trains in a stage-aware pairwise mode. Otherwise the pairwise FM remains
+  stage-free.}
   \item{\code{likelihood}}{\code{"auto"}, \code{"bernoulli"},
   \code{"categorical"}, or \code{"normal"}.}
   \item{\code{n_outcomes}}{Required only when forcing a categorical
@@ -92,9 +98,12 @@ Optional fields:
 }
 
 Pooled training groups experiments by compatible neural family:
-\code{(mode, likelihood, n_outcomes)}. The returned object may therefore hold
-multiple internal foundation groups when the input studies mix pairwise and
-single designs or mix Bernoulli, categorical, and Gaussian outcomes.
+\code{(mode, likelihood, n_outcomes)} for non-pairwise studies and by
+\code{(mode, pairwise_context_mode, likelihood, n_outcomes)} for pairwise
+studies. The returned object may therefore hold multiple internal foundation
+groups when the input studies mix pairwise and single designs, mix
+stage-aware and stage-free pairwise studies, or mix Bernoulli, categorical,
+and Gaussian outcomes.
 
 Schema sharing rules are conservative:
 \itemize{

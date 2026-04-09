@@ -390,8 +390,75 @@ cs_foundation_make_level_key <- function(experiment_id,
   }
 }
 
-cs_foundation_group_key <- function(mode, likelihood, n_outcomes) {
+cs_foundation_group_key <- function(mode,
+                                    likelihood,
+                                    n_outcomes,
+                                    pairwise_context_mode = NULL) {
+  if (identical(mode, "pairwise")) {
+    context_mode <- tolower(as.character(pairwise_context_mode %||% "stage_free"))
+    if (!context_mode %in% c("stage_free", "stage_aware")) {
+      context_mode <- "stage_free"
+    }
+    return(paste(mode, context_mode, likelihood, as.integer(n_outcomes %||% 1L), sep = "::"))
+  }
   paste(mode, likelihood, as.integer(n_outcomes %||% 1L), sep = "::")
+}
+
+cs_foundation_normalize_group_variable <- function(values, n, arg) {
+  if (is.null(values)) {
+    return(NULL)
+  }
+  if (length(values) != n) {
+    stop(
+      sprintf("%s has length %d but W has %d rows.", arg, length(values), n),
+      call. = FALSE
+    )
+  }
+  out <- trimws(as.character(values))
+  out[!nzchar(out)] <- NA_character_
+  out
+}
+
+cs_foundation_pairwise_context_mode <- function(mode,
+                                                W,
+                                                pair_id,
+                                                profile_order,
+                                                competing_group_variable_candidate,
+                                                competing_group_variable_respondent) {
+  if (!identical(mode, "pairwise")) {
+    return(NULL)
+  }
+  if (is.null(competing_group_variable_candidate) ||
+      is.null(competing_group_variable_respondent)) {
+    return("stage_free")
+  }
+  cand <- as.character(competing_group_variable_candidate)
+  resp <- as.character(competing_group_variable_respondent)
+  cand[!nzchar(trimws(cand))] <- NA_character_
+  resp[!nzchar(trimws(resp))] <- NA_character_
+  if (all(is.na(cand)) || all(is.na(resp))) {
+    return("stage_free")
+  }
+  pair_info <- cs2step_build_pair_mat(
+    pair_id = pair_id,
+    W = W,
+    profile_order = profile_order,
+    competing_group_variable_candidate = cand
+  )
+  if (is.null(pair_info) ||
+      is.null(pair_info$pair_sizes) ||
+      !all(pair_info$pair_sizes == 2L)) {
+    return("stage_free")
+  }
+  pair_mat <- pair_info$pair_mat
+  if (is.null(pair_mat) || nrow(pair_mat) < 1L) {
+    return("stage_free")
+  }
+  stage_is_primary <- cand[pair_mat[, 1L]] == cand[pair_mat[, 2L]]
+  known_stage <- !is.na(stage_is_primary)
+  has_primary <- any(stage_is_primary[known_stage], na.rm = TRUE)
+  has_general <- any(!stage_is_primary[known_stage], na.rm = TRUE)
+  if (isTRUE(has_primary) && isTRUE(has_general)) "stage_aware" else "stage_free"
 }
 
 cs_foundation_normalize_experiment <- function(experiment, index) {
@@ -487,6 +554,24 @@ cs_foundation_normalize_experiment <- function(experiment, index) {
       call. = FALSE
     )
   }
+  competing_group_variable_candidate <- cs_foundation_normalize_group_variable(
+    values = experiment$competing_group_variable_candidate %||% NULL,
+    n = nrow(W_df),
+    arg = sprintf("experiments[['%s']]$competing_group_variable_candidate", experiment_id)
+  )
+  competing_group_variable_respondent <- cs_foundation_normalize_group_variable(
+    values = experiment$competing_group_variable_respondent %||% NULL,
+    n = nrow(W_df),
+    arg = sprintf("experiments[['%s']]$competing_group_variable_respondent", experiment_id)
+  )
+  pairwise_context_mode <- cs_foundation_pairwise_context_mode(
+    mode = mode,
+    W = W_df,
+    pair_id = experiment$pair_id %||% NULL,
+    profile_order = experiment$profile_order %||% NULL,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent
+  )
 
   canonical_factor_id <- cs_foundation_normalize_factor_ids(
     values = experiment$canonical_factor_id %||% NULL,
@@ -520,6 +605,9 @@ cs_foundation_normalize_experiment <- function(experiment, index) {
     profile_order = experiment$profile_order %||% NULL,
     respondent_id = respondent_id,
     respondent_task_id = respondent_task_id,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent,
+    pairwise_context_mode = pairwise_context_mode,
     X = X_use,
     canonical_factor_id = canonical_factor_id,
     canonical_level_id = canonical_level_id
@@ -1127,11 +1215,20 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   profile_all <- vector("list", length(experiments))
   respondent_all <- vector("list", length(experiments))
   task_all <- vector("list", length(experiments))
+  candidate_group_all <- vector("list", length(experiments))
+  respondent_group_all <- vector("list", length(experiments))
   X_all <- vector("list", length(experiments))
   X_present_all <- vector("list", length(experiments))
   experiment_index_all <- vector("list", length(experiments))
   factor_order_by_experiment <- vector("list", length(experiments))
   covariate_order_by_experiment <- vector("list", length(experiments))
+  context_modes <- unique(vapply(experiments, function(exp) {
+    as.character(exp$pairwise_context_mode %||% NA_character_)
+  }, character(1)))
+  context_modes <- context_modes[!is.na(context_modes)]
+  if (length(context_modes) > 1L) {
+    stop("Foundation training data mixed multiple pairwise context modes within one pooled group.", call. = FALSE)
+  }
 
   if (identical(factor_tokenization, "language_span")) {
     if (is.null(text_registry) || as.integer(text_registry$dim %||% 0L) < 1L) {
@@ -1191,6 +1288,8 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     profile_all[[i]] <- exp$profile_order %||% NULL
     respondent_all[[i]] <- if (!is.null(exp$respondent_id)) paste(exp$experiment_id, exp$respondent_id, sep = "::") else NULL
     task_all[[i]] <- if (!is.null(exp$respondent_task_id)) paste(exp$experiment_id, exp$respondent_task_id, sep = "::") else NULL
+    candidate_group_all[[i]] <- exp$competing_group_variable_candidate %||% NULL
+    respondent_group_all[[i]] <- exp$competing_group_variable_respondent %||% NULL
     experiment_index_all[[i]] <- rep.int(as.integer(i - 1L), nrow(exp$W))
   }
 
@@ -1225,6 +1324,31 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     profile_order = if (all(vapply(profile_all, is.null, logical(1)))) NULL else unlist(profile_all, use.names = FALSE),
     respondent_id = if (all(vapply(respondent_all, is.null, logical(1)))) NULL else unlist(respondent_all, use.names = FALSE),
     respondent_task_id = if (all(vapply(task_all, is.null, logical(1)))) NULL else unlist(task_all, use.names = FALSE),
+    competing_group_variable_candidate = if (all(vapply(candidate_group_all, is.null, logical(1)))) {
+      NULL
+    } else {
+      unlist(lapply(seq_along(candidate_group_all), function(i) {
+        vals <- candidate_group_all[[i]]
+        if (is.null(vals)) {
+          rep(NA_character_, nrow(experiments[[i]]$W))
+        } else {
+          as.character(vals)
+        }
+      }), use.names = FALSE)
+    },
+    competing_group_variable_respondent = if (all(vapply(respondent_group_all, is.null, logical(1)))) {
+      NULL
+    } else {
+      unlist(lapply(seq_along(respondent_group_all), function(i) {
+        vals <- respondent_group_all[[i]]
+        if (is.null(vals)) {
+          rep(NA_character_, nrow(experiments[[i]]$W))
+        } else {
+          as.character(vals)
+        }
+      }), use.names = FALSE)
+    },
+    pairwise_context_mode = if (length(context_modes) > 0L) context_modes[[1L]] else NULL,
     names_list = registry$pooled_names_list,
     factor_levels = vapply(registry$pooled_names_list, function(x) length(x[[1]]), integer(1)),
     x_feature_names = x_schema$base_x_names,
@@ -1709,6 +1833,12 @@ cs_foundation_unpack_group <- function(group,
 #'   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
 #'   respondent/task identifiers used when available for clustering and
 #'   evaluation logic.}
+#'   \item{\code{competing_group_variable_candidate},
+#'   \code{competing_group_variable_respondent}}{Optional row-aligned
+#'   competition-group labels for pairwise studies. When both are supplied and
+#'   the candidate labels span both same-group and cross-group pairs, the pooled
+#'   FM trains in a stage-aware pairwise mode. Otherwise the pairwise FM remains
+#'   stage-free.}
 #'   \item{\code{likelihood}}{\code{"auto"}, \code{"bernoulli"},
 #'   \code{"categorical"}, or \code{"normal"}.}
 #'   \item{\code{n_outcomes}}{Required only when forcing a categorical
@@ -1724,9 +1854,12 @@ cs_foundation_unpack_group <- function(group,
 #' }
 #'
 #' Pooled training groups experiments by compatible neural family:
-#' \code{(mode, likelihood, n_outcomes)}. The returned object may therefore hold
-#' multiple internal foundation groups when the input studies mix pairwise and
-#' single designs or mix Bernoulli, categorical, and Gaussian outcomes.
+#' \code{(mode, likelihood, n_outcomes)} for non-pairwise studies and by
+#' \code{(mode, pairwise_context_mode, likelihood, n_outcomes)} for pairwise
+#' studies. The returned object may therefore hold multiple internal foundation
+#' groups when the input studies mix pairwise and single designs, mix
+#' stage-aware and stage-free pairwise studies, or mix Bernoulli, categorical,
+#' and Gaussian outcomes.
 #'
 #' Schema sharing rules are conservative:
 #' \itemize{
@@ -1867,7 +2000,12 @@ fit_conjoint_foundation_model <- function(experiments,
   })
 
   group_keys <- vapply(experiments_norm, function(exp) {
-    cs_foundation_group_key(exp$mode, exp$likelihood, exp$n_outcomes)
+    cs_foundation_group_key(
+      exp$mode,
+      exp$likelihood,
+      exp$n_outcomes,
+      pairwise_context_mode = exp$pairwise_context_mode %||% NULL
+    )
   }, character(1))
   experiment_groups <- split(experiments_norm, group_keys)
 
@@ -1890,6 +2028,8 @@ fit_conjoint_foundation_model <- function(experiments,
       diff = identical(group_meta$mode, "pairwise"),
       pair_id = pooled$pair_id,
       profile_order = pooled$profile_order,
+      competing_group_variable_candidate = pooled$competing_group_variable_candidate,
+      competing_group_variable_respondent = pooled$competing_group_variable_respondent,
       X = pooled$X,
       X_present = pooled$X_present,
       respondent_id = pooled$respondent_id,
@@ -1907,6 +2047,7 @@ fit_conjoint_foundation_model <- function(experiments,
     list(
       group_key = group_key,
       mode = group_meta$mode,
+      pairwise_context_mode = group_meta$pairwise_context_mode %||% NULL,
       likelihood = group_meta$likelihood,
       n_outcomes = as.integer(group_meta$n_outcomes),
       experiment_ids = vapply(exps, `[[`, character(1), "experiment_id"),
@@ -1937,7 +2078,10 @@ fit_conjoint_foundation_model <- function(experiments,
         conda_env_required = conda_env_required,
         text_embedding_fn = control$text_embedding_fn %||% NULL,
         experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
-        grouping_note = "Experiments are pooled within compatible mode/likelihood families."
+        grouping_note = paste(
+          "Experiments are pooled within compatible mode/likelihood families,",
+          "with pairwise FM studies split into stage-aware and stage-free groups."
+        )
       )
     ),
     class = "conjoint_foundation_model"
@@ -1954,14 +2098,31 @@ fit_conjoint_foundation_model <- function(experiments,
   out
 }
 
-cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outcomes) {
-  key <- cs_foundation_group_key(mode, likelihood, n_outcomes)
+cs_foundation_match_group <- function(foundation_model,
+                                      mode,
+                                      likelihood,
+                                      n_outcomes,
+                                      pairwise_context_mode = NULL) {
+  key <- cs_foundation_group_key(
+    mode,
+    likelihood,
+    n_outcomes,
+    pairwise_context_mode = pairwise_context_mode %||% NULL
+  )
   group <- foundation_model$groups[[key]] %||% NULL
+  if (is.null(group) && identical(mode, "pairwise") &&
+      identical(pairwise_context_mode %||% "stage_free", "stage_free")) {
+    legacy_key <- paste(mode, likelihood, as.integer(n_outcomes), sep = "::")
+    group <- foundation_model$groups[[legacy_key]] %||% NULL
+  }
   if (is.null(group)) {
     stop(
       sprintf(
-        "No compatible foundation group found for mode='%s', likelihood='%s', n_outcomes=%d.",
-        mode, likelihood, as.integer(n_outcomes)
+        "No compatible foundation group found for mode='%s', pairwise_context_mode='%s', likelihood='%s', n_outcomes=%d.",
+        mode,
+        as.character(pairwise_context_mode %||% if (identical(mode, "pairwise")) "stage_free" else NA_character_),
+        likelihood,
+        as.integer(n_outcomes)
       ),
       call. = FALSE
     )
@@ -1983,6 +2144,10 @@ cs_foundation_match_group <- function(foundation_model, mode, likelihood, n_outc
 #' @param p_list Optional \code{p_list}.
 #' @param respondent_id Optional respondent identifiers.
 #' @param respondent_task_id Optional respondent-task identifiers.
+#' @param competing_group_variable_candidate Optional candidate competition-group
+#'   labels for pairwise FM adaptation.
+#' @param competing_group_variable_respondent Optional respondent
+#'   competition-group labels for pairwise FM adaptation.
 #' @param likelihood Optional likelihood override.
 #' @param n_outcomes Optional categorical outcome count.
 #' @param canonical_factor_id Optional factor-level sharing ids.
@@ -2140,6 +2305,8 @@ adapt_conjoint_foundation_model <- function(foundation_model,
                                             p_list = NULL,
                                             respondent_id = NULL,
                                             respondent_task_id = NULL,
+                                            competing_group_variable_candidate = NULL,
+                                            competing_group_variable_respondent = NULL,
                                             likelihood = NULL,
                                             n_outcomes = NULL,
                                             canonical_factor_id = NULL,
@@ -2182,6 +2349,8 @@ adapt_conjoint_foundation_model <- function(foundation_model,
       p_list = p_list,
       respondent_id = respondent_id,
       respondent_task_id = respondent_task_id,
+      competing_group_variable_candidate = competing_group_variable_candidate,
+      competing_group_variable_respondent = competing_group_variable_respondent,
       likelihood = likelihood,
       n_outcomes = n_outcomes,
       canonical_factor_id = canonical_factor_id,
@@ -2192,6 +2361,7 @@ adapt_conjoint_foundation_model <- function(foundation_model,
   group <- cs_foundation_match_group(
     foundation_model = foundation_model,
     mode = experiment$mode,
+    pairwise_context_mode = experiment$pairwise_context_mode %||% NULL,
     likelihood = experiment$likelihood,
     n_outcomes = experiment$n_outcomes
   )
@@ -2239,6 +2409,8 @@ adapt_conjoint_foundation_model <- function(foundation_model,
     diff = identical(experiment$mode, "pairwise"),
     pair_id = experiment$pair_id,
     profile_order = experiment$profile_order,
+    competing_group_variable_candidate = experiment$competing_group_variable_candidate,
+    competing_group_variable_respondent = experiment$competing_group_variable_respondent,
     X = X_aug,
     X_present = X_present_aug,
     respondent_id = experiment$respondent_id,

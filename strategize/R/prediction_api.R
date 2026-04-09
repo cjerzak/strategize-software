@@ -61,6 +61,8 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
       X = newdata$X %||% NULL,
       pair_id = newdata$pair_id %||% NULL,
       profile_order = newdata$profile_order %||% NULL,
+      competing_group_variable_candidate = newdata$competing_group_variable_candidate %||% NULL,
+      competing_group_variable_respondent = newdata$competing_group_variable_respondent %||% NULL,
       experiment_id = newdata$experiment_id %||% NULL,
       experiment_description = newdata$experiment_description %||% NULL
     )
@@ -70,6 +72,8 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   newdata <- as.data.frame(newdata)
   pair_id <- NULL
   profile_order <- NULL
+  competing_group_variable_candidate <- NULL
+  competing_group_variable_respondent <- NULL
   experiment_id <- NULL
   experiment_description <- NULL
   if (identical(mode, "pairwise")) {
@@ -86,10 +90,24 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   if ("experiment_description" %in% colnames(newdata)) {
     experiment_description <- newdata[["experiment_description"]]
   }
+  if ("competing_group_variable_candidate" %in% colnames(newdata)) {
+    competing_group_variable_candidate <- newdata[["competing_group_variable_candidate"]]
+  }
+  if ("competing_group_variable_respondent" %in% colnames(newdata)) {
+    competing_group_variable_respondent <- newdata[["competing_group_variable_respondent"]]
+  }
   W <- newdata[, factor_names, drop = FALSE]
   extra_cols <- setdiff(
     colnames(newdata),
-    c(factor_names, "pair_id", "profile_order", "experiment_id", "experiment_description")
+    c(
+      factor_names,
+      "pair_id",
+      "profile_order",
+      "competing_group_variable_candidate",
+      "competing_group_variable_respondent",
+      "experiment_id",
+      "experiment_description"
+    )
   )
   X <- if (length(extra_cols) > 0L) {
     newdata[, extra_cols, drop = FALSE]
@@ -101,6 +119,8 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
     X = X,
     pair_id = pair_id,
     profile_order = profile_order,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent,
     experiment_id = experiment_id,
     experiment_description = experiment_description
   )
@@ -233,6 +253,8 @@ cs2step_eval_outcome_model_neural <- function(Y,
                                              diff,
                                              pair_id = NULL,
                                              profile_order = NULL,
+                                             competing_group_variable_candidate = NULL,
+                                             competing_group_variable_respondent = NULL,
                                              X = NULL,
                                              X_present = NULL,
                                              respondent_id = NULL,
@@ -290,9 +312,9 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$profile_order_ <- profile_order
   eval_env$varcov_cluster_variable <- varcov_cluster_variable
   eval_env$varcov_cluster_variable_ <- varcov_cluster_variable
-  eval_env$competing_group_variable_candidate_ <- NULL
+  eval_env$competing_group_variable_candidate_ <- competing_group_variable_candidate
   eval_env$competing_group_competition_variable_candidate_ <- NULL
-  eval_env$competing_group_variable_respondent_ <- NULL
+  eval_env$competing_group_variable_respondent_ <- competing_group_variable_respondent
   eval_env$neural_mcmc_control <- neural_mcmc_control
   eval_env$nFolds_glm <- if (is.null(nFolds_glm)) NULL else as.integer(nFolds_glm)
   eval_env$X <- if (is.null(X)) NULL else as.matrix(X)
@@ -1040,6 +1062,8 @@ cs2step_neural_apply_experiment_description <- function(model_info,
 
 cs2step_neural_prepare_prediction_data <- function(W_idx,
                                                    model_info,
+                                                   competing_group_variable_candidate = NULL,
+                                                   competing_group_variable_respondent = NULL,
                                                    resp_cov_new = NULL,
                                                    factor_order_new = NULL,
                                                    experiment_id = NULL,
@@ -1048,6 +1072,33 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
                                                    mode = c("pairwise", "single")) {
   mode <- match.arg(mode)
   W_idx <- as.matrix(W_idx)
+  party_missing_label <- model_info$party_missing_label %||%
+    neural_missing_group_label("candidate")
+  resp_party_missing_label <- model_info$resp_party_missing_label %||%
+    neural_missing_group_label("respondent")
+
+  if (!is.null(competing_group_variable_candidate) &&
+      length(competing_group_variable_candidate) != nrow(W_idx)) {
+    stop(
+      sprintf(
+        "competing_group_variable_candidate has %d elements but W has %d rows.",
+        length(competing_group_variable_candidate),
+        nrow(W_idx)
+      ),
+      call. = FALSE
+    )
+  }
+  if (!is.null(competing_group_variable_respondent) &&
+      length(competing_group_variable_respondent) != nrow(W_idx)) {
+    stop(
+      sprintf(
+        "competing_group_variable_respondent has %d elements but W has %d rows.",
+        length(competing_group_variable_respondent),
+        nrow(W_idx)
+      ),
+      call. = FALSE
+    )
+  }
 
   pairwise <- identical(mode, "pairwise")
   if (pairwise) {
@@ -1055,12 +1106,27 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
       pair_id = pair_id,
       W = W_idx,
       profile_order = profile_order,
-      competing_group_variable_candidate = NULL
+      competing_group_variable_candidate = competing_group_variable_candidate
     )
     pair_mat <- pair_info$pair_mat
     X_left_raw <- W_idx[pair_mat[, 1], , drop = FALSE]
     X_right_raw <- W_idx[pair_mat[, 2], , drop = FALSE]
     n_rows <- nrow(X_left_raw)
+    party_left_new <- if (is.null(competing_group_variable_candidate)) {
+      NULL
+    } else {
+      competing_group_variable_candidate[pair_mat[, 1]]
+    }
+    party_right_new <- if (is.null(competing_group_variable_candidate)) {
+      NULL
+    } else {
+      competing_group_variable_candidate[pair_mat[, 2]]
+    }
+    resp_party_new <- if (is.null(competing_group_variable_respondent)) {
+      NULL
+    } else {
+      competing_group_variable_respondent[pair_mat[, 1]]
+    }
     if (!is.null(resp_cov_new)) {
       if (is.data.frame(resp_cov_new) || is.matrix(resp_cov_new)) {
         if (nrow(resp_cov_new) == nrow(W_idx)) {
@@ -1084,9 +1150,24 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     X_right <- strenv$jnp$array(
       cs2step_neural_to_index_matrix(X_right_raw, model_info$factor_levels)
     )$astype(strenv$jnp$int32)
-    party_left <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
-    party_right <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
-    resp_party <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+    party_left <- strenv$jnp$array(neural_coerce_group_index_base(
+      values = party_left_new,
+      n_rows = n_rows,
+      levels = model_info$party_levels,
+      missing_label = party_missing_label
+    ))$astype(strenv$jnp$int32)
+    party_right <- strenv$jnp$array(neural_coerce_group_index_base(
+      values = party_right_new,
+      n_rows = n_rows,
+      levels = model_info$party_levels,
+      missing_label = party_missing_label
+    ))$astype(strenv$jnp$int32)
+    resp_party <- strenv$jnp$array(neural_coerce_group_index_base(
+      values = resp_party_new,
+      n_rows = n_rows,
+      levels = model_info$resp_party_levels,
+      missing_label = resp_party_missing_label
+    ))$astype(strenv$jnp$int32)
     experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, n_rows)
     experiment_idx_jnp <- if (is.null(experiment_idx)) {
       NULL
@@ -1132,8 +1213,18 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
   X_single <- strenv$jnp$array(
     cs2step_neural_to_index_matrix(W_idx, model_info$factor_levels)
   )$astype(strenv$jnp$int32)
-  party_single <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
-  resp_party <- strenv$jnp$array(rep(0L, n_rows))$astype(strenv$jnp$int32)
+  party_single <- strenv$jnp$array(neural_coerce_group_index_base(
+    values = competing_group_variable_candidate,
+    n_rows = n_rows,
+    levels = model_info$party_levels,
+    missing_label = party_missing_label
+  ))$astype(strenv$jnp$int32)
+  resp_party <- strenv$jnp$array(neural_coerce_group_index_base(
+    values = competing_group_variable_respondent,
+    n_rows = n_rows,
+    levels = model_info$resp_party_levels,
+    missing_label = resp_party_missing_label
+  ))$astype(strenv$jnp$int32)
   experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, n_rows)
   experiment_idx_jnp <- if (is.null(experiment_idx)) {
     NULL
@@ -1186,6 +1277,8 @@ cs2step_neural_prepare_params <- function(object,
   if (is.null(model_info)) {
     stop("Neural predictor is missing model metadata.", call. = FALSE)
   }
+  model_info <- cs2step_neural_upgrade_model_info(model_info)
+  object$fit$neural_model_info <- model_info
   if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
       !isTRUE(model_info$has_covariate_span_tokens)) {
     stop(
@@ -1299,6 +1392,8 @@ cs2step_neural_predict_prepared <- function(params, model_info, prep, return_log
 cs2step_neural_predict_internal <- function(object,
                                            W_new,
                                            X_new = NULL,
+                                           competing_group_variable_candidate = NULL,
+                                           competing_group_variable_respondent = NULL,
                                            experiment_id = NULL,
                                            experiment_description = NULL,
                                            pair_id = NULL,
@@ -1325,6 +1420,28 @@ cs2step_neural_predict_internal <- function(object,
   }
   W_new <- cs2step_align_W(W_new, enc$factor_names)
   W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
+  if (!is.null(competing_group_variable_candidate) &&
+      length(competing_group_variable_candidate) != nrow(W_idx)) {
+    stop(
+      sprintf(
+        "competing_group_variable_candidate has %d elements but W has %d rows.",
+        length(competing_group_variable_candidate),
+        nrow(W_idx)
+      ),
+      call. = FALSE
+    )
+  }
+  if (!is.null(competing_group_variable_respondent) &&
+      length(competing_group_variable_respondent) != nrow(W_idx)) {
+    stop(
+      sprintf(
+        "competing_group_variable_respondent has %d elements but W has %d rows.",
+        length(competing_group_variable_respondent),
+        nrow(W_idx)
+      ),
+      call. = FALSE
+    )
+  }
 
   use_internal <- is.function(object$fit$my_model) && is.null(experiment_description)
   prep <- NULL
@@ -1335,11 +1452,26 @@ cs2step_neural_predict_internal <- function(object,
       pair_id = pair_id,
       W = W_idx,
       profile_order = profile_order,
-      competing_group_variable_candidate = NULL
+      competing_group_variable_candidate = competing_group_variable_candidate
     )
     pair_mat <- pair_info$pair_mat
     X_left <- W_idx[pair_mat[, 1], , drop = FALSE]
     X_right <- W_idx[pair_mat[, 2], , drop = FALSE]
+    party_left_new <- if (is.null(competing_group_variable_candidate)) {
+      NULL
+    } else {
+      competing_group_variable_candidate[pair_mat[, 1]]
+    }
+    party_right_new <- if (is.null(competing_group_variable_candidate)) {
+      NULL
+    } else {
+      competing_group_variable_candidate[pair_mat[, 2]]
+    }
+    resp_party_new <- if (is.null(competing_group_variable_respondent)) {
+      NULL
+    } else {
+      competing_group_variable_respondent[pair_mat[, 1]]
+    }
     if (!is.null(X_new)) {
       if (is.data.frame(X_new) || is.matrix(X_new)) {
         if (nrow(X_new) == nrow(W_idx)) {
@@ -1375,6 +1507,9 @@ cs2step_neural_predict_internal <- function(object,
       p <- object$fit$my_model(
         X_left_new = X_left,
         X_right_new = X_right,
+        party_left_new = party_left_new,
+        party_right_new = party_right_new,
+        resp_party_new = resp_party_new,
         resp_cov_new = resp_cov_prepped$values,
         resp_cov_present_new = resp_cov_prepped$present,
         resp_cov_order_new = resp_cov_prepped$order,
@@ -1393,6 +1528,8 @@ cs2step_neural_predict_internal <- function(object,
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
         model_info = model_info,
+        competing_group_variable_candidate = competing_group_variable_candidate,
+        competing_group_variable_respondent = competing_group_variable_respondent,
         resp_cov_new = X_new,
         factor_order_new = factor_order_new,
         experiment_id = experiment_id,
@@ -1427,6 +1564,8 @@ cs2step_neural_predict_internal <- function(object,
     if (isTRUE(use_internal)) {
       p <- object$fit$my_model(
         X_new = W_idx,
+        party_new = competing_group_variable_candidate,
+        resp_party_new = competing_group_variable_respondent,
         resp_cov_new = resp_cov_prepped$values,
         resp_cov_present_new = resp_cov_prepped$present,
         resp_cov_order_new = resp_cov_prepped$order,
@@ -1445,6 +1584,8 @@ cs2step_neural_predict_internal <- function(object,
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
         model_info = model_info,
+        competing_group_variable_candidate = competing_group_variable_candidate,
+        competing_group_variable_respondent = competing_group_variable_respondent,
         resp_cov_new = X_new,
         factor_order_new = factor_order_new,
         experiment_id = experiment_id,
@@ -1500,6 +1641,8 @@ cs2step_neural_predict_internal <- function(object,
     prep <- cs2step_neural_prepare_prediction_data(
       W_idx = W_idx,
       model_info = model_info,
+      competing_group_variable_candidate = competing_group_variable_candidate,
+      competing_group_variable_respondent = competing_group_variable_respondent,
       resp_cov_new = X_new,
       factor_order_new = factor_order_new,
       experiment_id = experiment_id,
@@ -1591,6 +1734,8 @@ predict.strategic_predictor <- function(object,
   X_new <- unpacked$X
   pair_id <- unpacked$pair_id
   profile_order <- unpacked$profile_order
+  competing_group_variable_candidate <- unpacked$competing_group_variable_candidate
+  competing_group_variable_respondent <- unpacked$competing_group_variable_respondent
   experiment_id <- unpacked$experiment_id
   experiment_description <- unpacked$experiment_description
 
@@ -1611,6 +1756,8 @@ predict.strategic_predictor <- function(object,
     object = object,
     W_new = W_new,
     X_new = X_new,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent,
     experiment_id = experiment_id,
     experiment_description = experiment_description,
     pair_id = pair_id,
@@ -1650,6 +1797,17 @@ predict_pair <- function(fit,
   }
   if (!identical(fit$mode, "pairwise")) {
     stop("predict_pair() requires a pairwise strategic_predictor (mode='pairwise').", call. = FALSE)
+  }
+  if (identical(fit$model_type, "neural") &&
+      identical(neural_pairwise_context_mode(fit$fit$neural_model_info), "stage_aware")) {
+    stop(
+      paste(
+        "predict_pair() only supports stage-free pairwise predictors.",
+        "Use predict(newdata = list(W = ..., pair_id = ..., profile_order = ...,",
+        "competing_group_variable_candidate = ..., competing_group_variable_respondent = ...)) instead."
+      ),
+      call. = FALSE
+    )
   }
   W_left <- as.data.frame(W_left)
   W_right <- as.data.frame(W_right)
@@ -1824,7 +1982,7 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   }
 
   int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
-                  "n_matchup_levels", "n_resp_covariates", "model_dims", "model_depth",
+                  "n_matchup_levels", "n_resp_party_levels", "n_resp_covariates", "model_dims", "model_depth",
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
                   "default_experiment_index", "text_semantic_dim", "max_factor_tokens",
                   "max_covariate_tokens")
@@ -1834,6 +1992,41 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     }
   }
 
+  out
+}
+
+cs2step_neural_upgrade_model_info <- function(model_info) {
+  if (is.null(model_info)) {
+    return(NULL)
+  }
+  out <- model_info
+  if (is.null(out$pairwise_context_mode)) {
+    out$pairwise_context_mode <- "stage_free"
+  }
+  if (is.null(out$has_candidate_group_context)) {
+    out$has_candidate_group_context <- FALSE
+  }
+  if (is.null(out$has_respondent_group_context)) {
+    out$has_respondent_group_context <- FALSE
+  }
+  if (is.null(out$has_relation_token_context)) {
+    out$has_relation_token_context <- FALSE
+  }
+  if (is.null(out$has_stage_context)) {
+    out$has_stage_context <- FALSE
+  }
+  if (is.null(out$has_matchup_context)) {
+    out$has_matchup_context <- FALSE
+  }
+  if (is.null(out$party_missing_label)) {
+    out$party_missing_label <- neural_missing_group_label("candidate")
+  }
+  if (is.null(out$resp_party_missing_label)) {
+    out$resp_party_missing_label <- neural_missing_group_label("respondent")
+  }
+  if (is.null(out$n_resp_party_levels) && !is.null(out$resp_party_levels)) {
+    out$n_resp_party_levels <- as.integer(length(out$resp_party_levels))
+  }
   out
 }
 
@@ -1921,18 +2114,20 @@ cs2step_unpack_predictor <- function(bundle,
     stop("Loading neural predictors requires the 'reticulate' package.", call. = FALSE)
   }
   if (identical(
-    neural_covariate_value_encoding(bundle$fit$neural_model_info),
+    neural_covariate_value_encoding(cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)),
     "shared_projection"
-  ) && !isTRUE(bundle$fit$neural_model_info$has_covariate_span_tokens)) {
+  ) && !isTRUE(cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)$has_covariate_span_tokens)) {
     stop(
       "This shared_projection bundle uses the pre-span covariate encoder. Refit the model under the updated architecture.",
       call. = FALSE
     )
   }
   neural_validate_full_attn_compatibility(
-    model_info = bundle$fit$neural_model_info,
+    model_info = cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info),
     context = "Neural predictor bundle"
   )
+
+  bundle$fit$neural_model_info <- cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)
 
   fit <- list(
     my_model = NULL,

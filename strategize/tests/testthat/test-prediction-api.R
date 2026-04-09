@@ -1,3 +1,39 @@
+prediction_test_foundation_control <- function() {
+  modifyList(
+    strategize:::cs_foundation_default_control(),
+    list(
+      neural_mcmc_control = list(
+        ModelDims = 16L,
+        ModelDepth = 1L,
+        subsample_method = "batch_vi",
+        uncertainty_scope = "output",
+        optimizer = "adam",
+        svi_steps = 8L,
+        svi_num_draws = 2L,
+        batch_size = 16L,
+        early_stopping = FALSE
+      )
+    )
+  )
+}
+
+prediction_test_experiment <- function(seed, experiment_id) {
+  data <- generate_test_data(n = 40, n_factors = 2, n_levels = 2, seed = seed)
+  W_df <- as.data.frame(data$W, stringsAsFactors = FALSE)
+  colnames(W_df) <- c("price", "message")
+  list(
+    experiment_id = experiment_id,
+    experiment_description = paste("Experiment", experiment_id),
+    Y = data$Y,
+    W = W_df,
+    X = data.frame(income = seq_len(nrow(W_df)) / nrow(W_df)),
+    pair_id = data$pair_id,
+    profile_order = data$profile_order,
+    respondent_id = data$respondent_id,
+    respondent_task_id = data$respondent_task_id
+  )
+}
+
 test_that("strategic_prediction() fits GLM predictor (pairwise) and predicts probabilities", {
   data <- generate_test_data(n = 400, n_factors = 3, n_levels = 2, seed = 101)
 
@@ -133,6 +169,90 @@ test_that("as_function() returns a scoring closure", {
   testthat::expect_equal(p3, p4)
 })
 
+test_that("cs2step_unpack_newdata keeps pairwise group metadata separate from X", {
+  newdata <- data.frame(
+    price = c("A", "B"),
+    message = c("A", "B"),
+    pair_id = c(1L, 1L),
+    profile_order = c(1L, 2L),
+    competing_group_variable_candidate = c("PartyA", "PartyB"),
+    competing_group_variable_respondent = c("PartyA", "PartyA"),
+    income = c(0.1, 0.2),
+    stringsAsFactors = FALSE
+  )
+
+  unpacked <- strategize:::cs2step_unpack_newdata(
+    newdata = newdata,
+    factor_names = c("price", "message"),
+    mode = "pairwise"
+  )
+
+  testthat::expect_identical(
+    unpacked$competing_group_variable_candidate,
+    c("PartyA", "PartyB")
+  )
+  testthat::expect_identical(
+    unpacked$competing_group_variable_respondent,
+    c("PartyA", "PartyA")
+  )
+  testthat::expect_identical(colnames(unpacked$X), "income")
+})
+
+test_that("stage-aware neural predictors require long-format predict()", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  train_data <- add_foundation_pairwise_context(
+    prediction_test_experiment(seed = 901, experiment_id = "fm_train"),
+    seed = 22
+  )
+  foundation_fit <- fit_conjoint_foundation_model(
+    experiments = list(train_data),
+    foundation_control = prediction_test_foundation_control()
+  )
+  group <- foundation_fit$groups[[paste("pairwise", "stage_aware", "bernoulli", 1L, sep = "::")]]
+  predictor <- strategize:::cs_foundation_build_predictor(
+    fit = group$fit,
+    mode = group$mode,
+    names_list = group$encoder$names_list,
+    factor_levels = group$encoder$factor_levels,
+    metadata = list(
+      conda_env = "strategize_env",
+      conda_env_required = TRUE
+    )
+  )
+  W_scoring <- train_data$W
+  colnames(W_scoring) <- group$encoder$factor_names
+
+  testthat::expect_identical(
+    predictor$fit$neural_model_info$pairwise_context_mode,
+    "stage_aware"
+  )
+
+  preds <- predict(
+    predictor,
+    newdata = list(
+      W = W_scoring,
+      X = train_data$X,
+      pair_id = train_data$pair_id,
+      profile_order = train_data$profile_order,
+      competing_group_variable_candidate = train_data$competing_group_variable_candidate,
+      competing_group_variable_respondent = train_data$competing_group_variable_respondent
+    )
+  )
+  testthat::expect_true(all(is.finite(preds)))
+
+  testthat::expect_error(
+    predict_pair(
+      predictor,
+      W_left = W_scoring[train_data$profile_order == 1L, , drop = FALSE],
+      W_right = W_scoring[train_data$profile_order == 2L, , drop = FALSE]
+    ),
+    "stage-free pairwise predictors"
+  )
+})
+
 test_that("neural backend errors with build_backend() hint when unavailable", {
   if (!requireNamespace("reticulate", quietly = TRUE)) {
     testthat::skip("reticulate not available")
@@ -162,4 +282,3 @@ test_that("neural backend errors with build_backend() hint when unavailable", {
     "build_backend"
   )
 })
-
