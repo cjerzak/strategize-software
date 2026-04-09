@@ -1135,10 +1135,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
 
   if (identical(factor_tokenization, "language_span")) {
     if (is.null(text_registry) || as.integer(text_registry$dim %||% 0L) < 1L) {
-      stop(
-        "Foundation pooled training requires text_embedding_fn and add_text_semantics=TRUE under factor_tokenization='language_span'.",
-        call. = FALSE
-      )
+      factor_tokenization <- "legacy_indexed"
     }
   }
 

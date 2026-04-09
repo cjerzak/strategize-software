@@ -2303,11 +2303,16 @@ neural_build_covariate_span_tokens <- function(model_info,
     }
   }
   if (is.null(value_tok)) {
-    value_proj <- strenv$jnp$reshape(
-      params$W_covariate_value_shared,
-      list(1L, 1L, dims)
-    )
-    value_tok <- strenv$jnp$expand_dims(gathered_z, axis = 2L) * value_proj
+    if (!is.null(params$W_covariate_value_shared)) {
+      value_proj <- strenv$jnp$reshape(
+        params$W_covariate_value_shared,
+        list(1L, 1L, dims)
+      )
+      value_tok <- strenv$jnp$expand_dims(gathered_z, axis = 2L) * value_proj
+    } else {
+      value_tok <- strenv$jnp$expand_dims(gathered_z, axis = 2L) *
+        strenv$jnp$ones(list(1L, 1L, dims), dtype = strenv$dtj)
+    }
   }
   value_tok <- (value_tok + role_value) * span_mask_expanded
 

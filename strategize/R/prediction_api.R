@@ -1362,6 +1362,15 @@ cs2step_neural_predict_internal <- function(object,
       nrow(X_left),
       experiment_idx = experiment_idx
     )
+    factor_order_internal <- if (isTRUE(use_internal)) {
+      cs2step_neural_prepare_factor_order(
+        factor_order_new = factor_order_new,
+        model_info = model_info,
+        n_rows = nrow(X_left)
+      )
+    } else {
+      factor_order_new
+    }
     if (isTRUE(use_internal)) {
       p <- object$fit$my_model(
         X_left_new = X_left,
@@ -1370,7 +1379,7 @@ cs2step_neural_predict_internal <- function(object,
         resp_cov_present_new = resp_cov_prepped$present,
         resp_cov_order_new = resp_cov_prepped$order,
         experiment_idx_new = experiment_idx,
-        factor_order_new = factor_order_new
+        factor_order_new = factor_order_internal
       )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
@@ -1406,6 +1415,15 @@ cs2step_neural_predict_internal <- function(object,
       nrow(W_idx),
       experiment_idx = experiment_idx
     )
+    factor_order_internal <- if (isTRUE(use_internal)) {
+      cs2step_neural_prepare_factor_order(
+        factor_order_new = factor_order_new,
+        model_info = model_info,
+        n_rows = nrow(W_idx)
+      )
+    } else {
+      factor_order_new
+    }
     if (isTRUE(use_internal)) {
       p <- object$fit$my_model(
         X_new = W_idx,
@@ -1413,7 +1431,7 @@ cs2step_neural_predict_internal <- function(object,
         resp_cov_present_new = resp_cov_prepped$present,
         resp_cov_order_new = resp_cov_prepped$order,
         experiment_idx_new = experiment_idx,
-        factor_order_new = factor_order_new
+        factor_order_new = factor_order_internal
       )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
