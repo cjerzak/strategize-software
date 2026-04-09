@@ -2449,9 +2449,11 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
       feature_tok <- strenv$jnp$reshape(params$E_feature_id, list(1L, D_local, model_dims))
       tokens <- tokens + feature_tok
     }
-    party_tok <- strenv$jnp$take(params$E_party, party_idx, axis = 0L)
-    party_tok <- strenv$jnp$reshape(party_tok, list(N_batch, 1L, model_dims))
-    tokens <- strenv$jnp$concatenate(list(tokens, party_tok), axis = 1L)
+    if (!is.null(params$E_party)) {
+      party_tok <- strenv$jnp$take(params$E_party, party_idx, axis = 0L)
+      party_tok <- strenv$jnp$reshape(party_tok, list(N_batch, 1L, model_dims))
+      tokens <- strenv$jnp$concatenate(list(tokens, party_tok), axis = 1L)
+    }
     if (!is.null(params$E_rel) && !is.null(model_info$cand_party_to_resp_idx)) {
       cand_map <- strenv$jnp$atleast_1d(model_info$cand_party_to_resp_idx)
       cand_resp_idx <- strenv$jnp$take(cand_map, party_idx, axis = 0L)

@@ -540,24 +540,53 @@ cs_foundation_select_group <- function(foundation_model,
                                        mode = NULL,
                                        likelihood = NULL,
                                        n_outcomes = NULL) {
+  attach_resolution <- function(group, requested_key = NULL, canonical_key = NULL) {
+    group$requested_group_key <- as.character(
+      requested_key %||% group$group_key %||% canonical_key
+    )
+    group$resolved_group_key <- as.character(
+      canonical_key %||% group$group_key %||% requested_key
+    )
+    group
+  }
   group_keys <- names(foundation_model$groups %||% list())
   if (length(group_keys) < 1L) {
     stop("Foundation model does not contain any groups.", call. = FALSE)
   }
   if (!is.null(group_key)) {
-    group_key <- as.character(group_key)
-    group <- foundation_model$groups[[group_key]] %||% NULL
+    requested_key <- as.character(group_key)
+    canonical_key <- requested_key
+    group <- foundation_model$groups[[canonical_key]] %||% NULL
+    if (is.null(group)) {
+      key_parts <- strsplit(requested_key, "::", fixed = TRUE)[[1L]]
+      if (length(key_parts) == 3L && identical(key_parts[[1L]], "pairwise")) {
+        n_outcomes_key <- suppressWarnings(as.integer(key_parts[[3L]]))
+        if (!is.na(n_outcomes_key)) {
+          canonical_key <- cs_foundation_group_key(
+            mode = "pairwise",
+            likelihood = tolower(as.character(key_parts[[2L]])),
+            n_outcomes = n_outcomes_key,
+            pairwise_context_mode = "stage_free"
+          )
+          group <- foundation_model$groups[[canonical_key]] %||% NULL
+        }
+      }
+    }
     if (is.null(group)) {
       stop(
         sprintf(
           "Unknown foundation group_key '%s'. Available group keys: %s",
-          group_key,
+          requested_key,
           paste(group_keys, collapse = ", ")
         ),
         call. = FALSE
       )
     }
-    return(group)
+    return(attach_resolution(
+      group,
+      requested_key = requested_key,
+      canonical_key = canonical_key
+    ))
   }
 
   group_info <- data.frame(
@@ -578,7 +607,10 @@ cs_foundation_select_group <- function(foundation_model,
     group_info <- group_info[group_info$n_outcomes == as.integer(n_outcomes), , drop = FALSE]
   }
   if (nrow(group_info) == 1L) {
-    return(foundation_model$groups[[group_info$group_key[[1L]]]])
+    return(attach_resolution(
+      foundation_model$groups[[group_info$group_key[[1L]]]],
+      canonical_key = group_info$group_key[[1L]]
+    ))
   }
   if (nrow(group_info) < 1L) {
     stop(
@@ -881,7 +913,8 @@ extract_embeddings.conjoint_foundation_model <- function(object,
     profile_order = request$profile_order,
     source_class = "conjoint_foundation_model",
     extra_metadata = list(
-      foundation_group_key = group$group_key,
+      foundation_group_key = group$requested_group_key %||% group$group_key,
+      foundation_group_key_canonical = group$resolved_group_key %||% group$group_key,
       foundation_experiment_ids = group$experiment_ids,
       unmatched_factors = mapped$unmatched_factors,
       unmatched_levels = mapped$unmatched_levels

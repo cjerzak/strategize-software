@@ -357,6 +357,10 @@ test_that("extract_embeddings works on raw foundation groups with factor metadat
   expect_equal(nrow(emb$left), length(unique(study_a$pair_id)))
   expect_identical(emb$metadata$source_class, "conjoint_foundation_model")
   expect_identical(emb$metadata$foundation_group_key, "pairwise::bernoulli::1")
+  expect_identical(
+    emb$metadata$foundation_group_key_canonical,
+    "pairwise::stage_free::bernoulli::1"
+  )
   expect_identical(emb$metadata$unmatched_factors, character(0))
   expect_identical(emb$metadata$unmatched_levels, character(0))
 })

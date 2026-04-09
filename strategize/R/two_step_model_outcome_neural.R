@@ -1367,6 +1367,13 @@ neural_extract_candidate_tokens <- function(transformer_out,
   strenv$jnp$take(tokens_use, cand_idx, axis = 1L)
 }
 
+neural_candidate_token_count_from_mask <- function(token_mask) {
+  if (is.null(token_mask)) {
+    return(NULL)
+  }
+  tryCatch(ai(token_mask$shape[[2]]), error = function(e) NULL)
+}
+
 neural_extract_choice_representation <- function(transformer_out) {
   readout_tokens <- neural_transformer_readout_tokens(transformer_out)
   choice_out <- strenv$jnp$take(readout_tokens, strenv$jnp$arange(1L), axis = 1L)
@@ -3681,7 +3688,11 @@ neural_encode_candidate_core_prepared <- function(params,
   if (!isTRUE(return_tokens)) {
     return(phi)
   }
-  cand_out <- neural_extract_candidate_tokens(transformer_out, model_info)
+  cand_out <- neural_extract_candidate_tokens(
+    transformer_out,
+    model_info,
+    n_candidate_tokens = neural_candidate_token_count_from_mask(cand_mask)
+  )
   list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = cand_mask)
 }
 
@@ -4333,7 +4344,11 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
   )
   if (isTRUE(return_tokens)) {
-    cand_tokens <- neural_extract_candidate_tokens(transformer_out, model_info)
+    cand_tokens <- neural_extract_candidate_tokens(
+      transformer_out,
+      model_info,
+      n_candidate_tokens = neural_candidate_token_count_from_mask(left_mask)
+    )
     out$cand_left_out <- strenv$jnp$take(cand_tokens, idx_left, axis = 0L)
     out$cand_right_out <- strenv$jnp$take(cand_tokens, idx_right, axis = 0L)
     out$cand_left_mask <- left_mask
@@ -5188,11 +5203,16 @@ generate_ModelOutcome_neural <- function(){
     NA_integer_
   }
   text_semantic_dim <- as.integer(neural_token_info_use$text_dim %||% 0L)
-  n_candidate_tokens <- if (identical(factor_tokenization, "language_span")) {
-    ai(max_factor_tokens + 2L)
+  n_candidate_factor_tokens <- if (identical(factor_tokenization, "language_span")) {
+    ai(max_factor_tokens)
   } else {
-    ai(length(factor_levels) + 2L)
+    ai(length(factor_levels))
   }
+  n_candidate_tokens <- ai(
+    n_candidate_factor_tokens +
+      as.integer(isTRUE(has_candidate_group_context)) +
+      as.integer(isTRUE(has_relation_context))
+  )
 
   # Helper to sanitize integer indices (adds explicit missing/OOV level per factor)
   to_index_matrix <- function(x_mat){
@@ -6977,7 +6997,7 @@ generate_ModelOutcome_neural <- function(){
       cand_out <- neural_extract_candidate_tokens(
         transformer_out,
         transformer_model_info,
-        n_candidate_tokens = n_candidate_tokens
+        n_candidate_tokens = neural_candidate_token_count_from_mask(cand_mask)
       )
       list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = cand_mask)
     }
