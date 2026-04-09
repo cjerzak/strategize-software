@@ -90,6 +90,10 @@ foundation_pairwise_group_key <- function(context_mode = "stage_free",
   paste("pairwise", context_mode, likelihood, as.integer(n_outcomes), sep = "::")
 }
 
+foundation_universal_group_key <- function() {
+  "universal::mixed::v1"
+}
+
 test_that("foundation defaults use language-span factor tokenization", {
   control <- strategize:::cs_foundation_default_control()
   expect_identical(control$factor_tokenization, "language_span")
@@ -187,7 +191,7 @@ test_that("fit_conjoint_foundation_model pools compatible pairwise studies with 
 
   expect_s3_class(fit, "conjoint_foundation_model")
   expect_length(fit$groups, 1L)
-  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  group <- fit$groups[[foundation_universal_group_key()]]
   expect_false(is.null(group))
   expect_identical(group$pairwise_context_mode, "stage_free")
   expect_identical(
@@ -359,7 +363,7 @@ test_that("fit_conjoint_foundation_model separates stage-aware pairwise studies"
     foundation_control = foundation_test_control_with_embeddings()
   )
 
-  group <- fit$groups[[foundation_pairwise_group_key("stage_aware")]]
+  group <- fit$groups[[foundation_universal_group_key()]]
   expect_false(is.null(group))
   expect_identical(group$pairwise_context_mode, "stage_aware")
   expect_true(isTRUE(group$fit$neural_model_info$has_candidate_group_context))
@@ -399,7 +403,7 @@ test_that("pairwise studies with group metadata but one observed stage stay stag
     foundation_control = foundation_test_control_with_embeddings()
   )
 
-  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  group <- fit$groups[[foundation_universal_group_key()]]
   expect_false(is.null(group))
   expect_identical(group$pairwise_context_mode, "stage_free")
   expect_true(isTRUE(group$fit$neural_model_info$has_candidate_group_context))
@@ -435,7 +439,7 @@ test_that("pairwise studies stay stage-aware with partially missing respondent g
     foundation_control = foundation_test_control_with_embeddings()
   )
 
-  group <- fit$groups[[foundation_pairwise_group_key("stage_aware")]]
+  group <- fit$groups[[foundation_universal_group_key()]]
   expect_false(is.null(group))
   expect_identical(group$pairwise_context_mode, "stage_aware")
   expect_true(isTRUE(group$fit$neural_model_info$has_stage_context))
@@ -478,10 +482,9 @@ test_that("fit_conjoint_foundation_model splits incompatible likelihood families
   )
 
   expect_s3_class(fit, "conjoint_foundation_model")
-  expect_equal(
-    sort(names(fit$groups)),
-    sort(c(foundation_pairwise_group_key("stage_free"), "single::normal::1"))
-  )
+  expect_identical(names(fit$groups), foundation_universal_group_key())
+  expect_identical(sort(fit$groups[[foundation_universal_group_key()]]$supported_modes), c("pairwise", "single"))
+  expect_identical(sort(fit$groups[[foundation_universal_group_key()]]$supported_likelihoods), c("bernoulli", "normal"))
 })
 
 test_that("adapt_conjoint_foundation_model builds shared and local covariate tokens and predictions stay finite", {
@@ -513,7 +516,7 @@ test_that("adapt_conjoint_foundation_model builds shared and local covariate tok
     factor_names = c("price", "message"),
     x_names = c("income", "household size", "local_bonus")
   )
-  group <- foundation_fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  group <- foundation_fit$groups[[foundation_universal_group_key()]]
   experiment_norm <- cs_foundation_normalize_experiment(adapt_data, index = 1L)
   exp_map <- cs_foundation_build_local_factor_map(experiment_norm)
   adaptation_control <- modifyList(
@@ -637,7 +640,7 @@ test_that("foundation semantics stay backward compatible when text_embedding_fn 
     foundation_control = foundation_test_control()
   )
 
-  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  group <- fit$groups[[foundation_universal_group_key()]]
   expect_null(group$text_registry)
   expect_identical(group$token_control$experiment_token_mode, "description")
   expect_identical(group$token_control$covariate_value_encoding, "shared_projection")
@@ -690,7 +693,7 @@ test_that("legacy fine-tuning token controls remain available for ablation", {
     )
   )
 
-  group <- fit$groups[[foundation_pairwise_group_key("stage_free")]]
+  group <- fit$groups[[foundation_universal_group_key()]]
   expect_identical(group$token_control$experiment_token_mode, "legacy_id")
   expect_identical(group$token_control$covariate_value_encoding, "legacy_linear")
   expect_true(isTRUE(group$fit$neural_model_info$has_experiment_id_embedding))
@@ -726,8 +729,8 @@ test_that("foundation bundles preserve covariate token metadata across save/load
   loaded <- load_conjoint_foundation_bundle(tmp, preload_params = FALSE)
 
   expect_s3_class(loaded, "conjoint_foundation_model")
-  orig_group <- foundation_fit$groups[[foundation_pairwise_group_key("stage_free")]]
-  loaded_group <- loaded$groups[[foundation_pairwise_group_key("stage_free")]]
+  orig_group <- foundation_fit$groups[[foundation_universal_group_key()]]
+  loaded_group <- loaded$groups[[foundation_universal_group_key()]]
   expect_identical(loaded_group$pairwise_context_mode, orig_group$pairwise_context_mode)
   expect_identical(loaded_group$x_schema$base_x_names, orig_group$x_schema$base_x_names)
   expect_identical(loaded_group$x_schema$semantic_feature_names, orig_group$x_schema$semantic_feature_names)

@@ -1798,17 +1798,6 @@ predict_pair <- function(fit,
   if (!identical(fit$mode, "pairwise")) {
     stop("predict_pair() requires a pairwise strategic_predictor (mode='pairwise').", call. = FALSE)
   }
-  if (identical(fit$model_type, "neural") &&
-      identical(neural_pairwise_context_mode(fit$fit$neural_model_info), "stage_aware")) {
-    stop(
-      paste(
-        "predict_pair() only supports stage-free pairwise predictors.",
-        "Use predict(newdata = list(W = ..., pair_id = ..., profile_order = ...,",
-        "competing_group_variable_candidate = ..., competing_group_variable_respondent = ...)) instead."
-      ),
-      call. = FALSE
-    )
-  }
   W_left <- as.data.frame(W_left)
   W_right <- as.data.frame(W_right)
   if (nrow(W_left) != nrow(W_right)) {

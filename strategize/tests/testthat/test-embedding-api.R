@@ -211,13 +211,17 @@ embedding_test_multigroup_single_foundation_fit <- local({
           likelihood = "normal"
         )
       ),
-      foundation_control = embedding_test_foundation_control(with_embeddings = FALSE)
+      foundation_control = embedding_test_foundation_control(with_embeddings = TRUE)
     ))
 
     cache <<- foundation_fit
     foundation_fit
   }
 })
+
+embedding_test_universal_group_key <- function() {
+  "universal::mixed::v1"
+}
 
 test_that("extract_embeddings returns single-mode neural embeddings", {
   fit_obj <- embedding_test_predictor_fit(mode = "single", seed = 9301)
@@ -359,26 +363,38 @@ test_that("extract_embeddings works on raw foundation groups with factor metadat
   expect_identical(emb$metadata$foundation_group_key, "pairwise::bernoulli::1")
   expect_identical(
     emb$metadata$foundation_group_key_canonical,
-    "pairwise::stage_free::bernoulli::1"
+    embedding_test_universal_group_key()
   )
   expect_identical(emb$metadata$unmatched_factors, character(0))
   expect_identical(emb$metadata$unmatched_levels, character(0))
 })
 
-test_that("extract_embeddings errors when foundation group selection is ambiguous", {
-  foundation_fit <- embedding_test_multigroup_single_foundation_fit()
-  experiment <- embedding_test_single_experiment(
-    seed = 9201,
-    experiment_id = "single_binary",
-    likelihood = "bernoulli"
+test_that("extract_embeddings auto-selects the universal group without ambiguity", {
+  foundation_fit <- embedding_test_pairwise_foundation_fit()
+  study_a <- embedding_test_pairwise_experiment(
+    seed = 9101,
+    experiment_id = "study_a",
+    factor_names = c("price", "message"),
+    x_names = c("income", "household size")
+  )
+  newdata <- data.frame(
+    study_a$W,
+    study_a$X,
+    pair_id = study_a$pair_id,
+    profile_order = study_a$profile_order,
+    experiment_id = study_a$experiment_id,
+    check.names = FALSE
   )
 
-  expect_error(
-    extract_embeddings(
-      foundation_fit,
-      newdata = experiment$W
-    ),
-    "ambiguous"
+  emb <- extract_embeddings(
+    foundation_fit,
+    newdata = newdata,
+    p_list = suppressMessages(create_p_list(study_a$W, uniform = TRUE))
+  )
+  expect_s3_class(emb, "strategic_embeddings")
+  expect_identical(
+    emb$metadata$foundation_group_key_canonical,
+    embedding_test_universal_group_key()
   )
 })
 

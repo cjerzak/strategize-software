@@ -404,6 +404,29 @@ cs_foundation_group_key <- function(mode,
   paste(mode, likelihood, as.integer(n_outcomes %||% 1L), sep = "::")
 }
 
+cs_foundation_universal_group_key <- function() {
+  "universal::mixed::v1"
+}
+
+cs_foundation_group_aliases <- function(mode,
+                                        likelihood,
+                                        n_outcomes,
+                                        pairwise_context_mode = NULL) {
+  aliases <- cs_foundation_group_key(
+    mode = mode,
+    likelihood = likelihood,
+    n_outcomes = n_outcomes,
+    pairwise_context_mode = pairwise_context_mode %||% NULL
+  )
+  if (identical(mode, "pairwise")) {
+    aliases <- c(
+      aliases,
+      paste(mode, likelihood, as.integer(n_outcomes %||% 1L), sep = "::")
+    )
+  }
+  unique(aliases)
+}
+
 cs_foundation_normalize_group_variable <- function(values, n, arg) {
   if (is.null(values)) {
     return(NULL)
@@ -1220,15 +1243,24 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   X_all <- vector("list", length(experiments))
   X_present_all <- vector("list", length(experiments))
   experiment_index_all <- vector("list", length(experiments))
+  task_mode_all <- vector("list", length(experiments))
+  likelihood_all <- vector("list", length(experiments))
+  n_outcomes_all <- vector("list", length(experiments))
   factor_order_by_experiment <- vector("list", length(experiments))
   covariate_order_by_experiment <- vector("list", length(experiments))
   context_modes <- unique(vapply(experiments, function(exp) {
-    as.character(exp$pairwise_context_mode %||% NA_character_)
+    if (!identical(exp$mode, "pairwise")) {
+      return(NA_character_)
+    }
+    as.character(exp$pairwise_context_mode %||% "stage_free")
   }, character(1)))
   context_modes <- context_modes[!is.na(context_modes)]
-  if (length(context_modes) > 1L) {
-    stop("Foundation training data mixed multiple pairwise context modes within one pooled group.", call. = FALSE)
-  }
+  supported_modes <- unique(vapply(experiments, `[[`, character(1), "mode"))
+  supported_likelihoods <- unique(vapply(experiments, `[[`, character(1), "likelihood"))
+  max_n_outcomes <- max(1L, vapply(experiments, function(exp) {
+    as.integer(exp$n_outcomes %||% 1L)
+  }, integer(1)))
+  single_null_candidate_label <- "__fm_single_null__"
 
   if (identical(factor_tokenization, "language_span")) {
     if (is.null(text_registry) || as.integer(text_registry$dim %||% 0L) < 1L) {
@@ -1280,17 +1312,93 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       )
     }
 
-    X_all[[i]] <- covariate_block$values
-    X_present_all[[i]] <- covariate_block$present
-    W_all[[i]] <- pooled_W
-    Y_all[[i]] <- exp$Y
-    pair_all[[i]] <- if (!is.null(exp$pair_id)) paste(exp$experiment_id, exp$pair_id, sep = "::") else NULL
-    profile_all[[i]] <- exp$profile_order %||% NULL
-    respondent_all[[i]] <- if (!is.null(exp$respondent_id)) paste(exp$experiment_id, exp$respondent_id, sep = "::") else NULL
-    task_all[[i]] <- if (!is.null(exp$respondent_task_id)) paste(exp$experiment_id, exp$respondent_task_id, sep = "::") else NULL
-    candidate_group_all[[i]] <- exp$competing_group_variable_candidate %||% NULL
-    respondent_group_all[[i]] <- exp$competing_group_variable_respondent %||% NULL
-    experiment_index_all[[i]] <- rep.int(as.integer(i - 1L), nrow(exp$W))
+    n_rows <- nrow(exp$W)
+    task_mode_label <- as.character(exp$mode %||% "single")
+    likelihood_label <- as.character(exp$likelihood %||% "bernoulli")
+    n_outcomes_label <- as.integer(exp$n_outcomes %||% 1L)
+
+    if (identical(task_mode_label, "pairwise")) {
+      X_all[[i]] <- covariate_block$values
+      X_present_all[[i]] <- covariate_block$present
+      W_all[[i]] <- pooled_W
+      Y_all[[i]] <- exp$Y
+      pair_all[[i]] <- if (!is.null(exp$pair_id)) {
+        paste(exp$experiment_id, exp$pair_id, sep = "::")
+      } else {
+        NULL
+      }
+      profile_all[[i]] <- exp$profile_order %||% NULL
+      respondent_all[[i]] <- if (!is.null(exp$respondent_id)) {
+        paste(exp$experiment_id, exp$respondent_id, sep = "::")
+      } else {
+        NULL
+      }
+      task_all[[i]] <- if (!is.null(exp$respondent_task_id)) {
+        paste(exp$experiment_id, exp$respondent_task_id, sep = "::")
+      } else {
+        NULL
+      }
+      candidate_group_all[[i]] <- exp$competing_group_variable_candidate %||% NULL
+      respondent_group_all[[i]] <- exp$competing_group_variable_respondent %||% NULL
+      experiment_index_all[[i]] <- rep.int(as.integer(i - 1L), n_rows)
+      task_mode_all[[i]] <- rep.int(task_mode_label, n_rows)
+      likelihood_all[[i]] <- rep.int(likelihood_label, n_rows)
+      n_outcomes_all[[i]] <- rep.int(n_outcomes_label, n_rows)
+    } else {
+      null_W <- pooled_W[rep.int(1L, n_rows), , drop = FALSE]
+      for (slot_name in slot_names) {
+        null_W[[slot_name]] <- NA_character_
+      }
+      W_all[[i]] <- rbind(pooled_W, null_W)
+      Y_all[[i]] <- c(exp$Y, exp$Y)
+      pair_ids <- paste(exp$experiment_id, sprintf("single_%06d", seq_len(n_rows)), sep = "::")
+      pair_all[[i]] <- c(pair_ids, pair_ids)
+      profile_all[[i]] <- c(rep.int(1L, n_rows), rep.int(2L, n_rows))
+      respondent_all[[i]] <- if (!is.null(exp$respondent_id)) {
+        resp_ids <- paste(exp$experiment_id, exp$respondent_id, sep = "::")
+        c(resp_ids, resp_ids)
+      } else {
+        NULL
+      }
+      task_all[[i]] <- if (!is.null(exp$respondent_task_id)) {
+        task_ids <- paste(exp$experiment_id, exp$respondent_task_id, sep = "::")
+        c(task_ids, task_ids)
+      } else {
+        NULL
+      }
+      candidate_group_all[[i]] <- c(
+        rep(NA_character_, n_rows),
+        rep(single_null_candidate_label, n_rows)
+      )
+      respondent_group_all[[i]] <- rep(NA_character_, 2L * n_rows)
+      if (length(x_schema$base_x_names) > 0L) {
+        X_all[[i]] <- rbind(
+          covariate_block$values,
+          matrix(
+            0,
+            nrow = n_rows,
+            ncol = ncol(covariate_block$values),
+            dimnames = list(NULL, colnames(covariate_block$values))
+          )
+        )
+        X_present_all[[i]] <- rbind(
+          covariate_block$present,
+          matrix(
+            0,
+            nrow = n_rows,
+            ncol = ncol(covariate_block$present),
+            dimnames = list(NULL, colnames(covariate_block$present))
+          )
+        )
+      } else {
+        X_all[[i]] <- NULL
+        X_present_all[[i]] <- NULL
+      }
+      experiment_index_all[[i]] <- rep.int(as.integer(i - 1L), 2L * n_rows)
+      task_mode_all[[i]] <- rep.int(task_mode_label, 2L * n_rows)
+      likelihood_all[[i]] <- rep.int(likelihood_label, 2L * n_rows)
+      n_outcomes_all[[i]] <- rep.int(n_outcomes_label, 2L * n_rows)
+    }
   }
 
   token_info <- cs_foundation_build_token_info(
@@ -1314,6 +1422,17 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     token_info = token_info,
     context = "Foundation pooled training"
   )
+  token_info$foundation_universal_training <- list(
+    enabled = TRUE,
+    task_mode_by_row = unlist(task_mode_all, use.names = FALSE),
+    likelihood_by_row = unlist(likelihood_all, use.names = FALSE),
+    n_outcomes_by_row = as.integer(unlist(n_outcomes_all, use.names = FALSE)),
+    global_out_dim = as.integer(max_n_outcomes),
+    supported_modes = supported_modes,
+    supported_likelihoods = supported_likelihoods,
+    supported_pairwise_context_modes = if (length(context_modes) > 0L) context_modes else "stage_free",
+    synthetic_single_null_candidate_label = single_null_candidate_label
+  )
 
   list(
     Y = unlist(Y_all, use.names = FALSE),
@@ -1330,7 +1449,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       unlist(lapply(seq_along(candidate_group_all), function(i) {
         vals <- candidate_group_all[[i]]
         if (is.null(vals)) {
-          rep(NA_character_, nrow(experiments[[i]]$W))
+          rep(NA_character_, nrow(W_all[[i]]))
         } else {
           as.character(vals)
         }
@@ -1342,13 +1461,18 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       unlist(lapply(seq_along(respondent_group_all), function(i) {
         vals <- respondent_group_all[[i]]
         if (is.null(vals)) {
-          rep(NA_character_, nrow(experiments[[i]]$W))
+          rep(NA_character_, nrow(W_all[[i]]))
         } else {
           as.character(vals)
         }
       }), use.names = FALSE)
     },
-    pairwise_context_mode = if (length(context_modes) > 0L) context_modes[[1L]] else NULL,
+    pairwise_context_mode = if (length(context_modes) > 0L &&
+                                any(context_modes == "stage_aware")) {
+      "stage_aware"
+    } else {
+      "stage_free"
+    },
     names_list = registry$pooled_names_list,
     factor_levels = vapply(registry$pooled_names_list, function(x) length(x[[1]]), integer(1)),
     x_feature_names = x_schema$base_x_names,
@@ -1369,7 +1493,11 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       max_covariate_tokens = neural_resolve_max_covariate_tokens(
         control$max_covariate_tokens %||% NULL
       )
-    )
+    ),
+    supported_modes = supported_modes,
+    supported_likelihoods = supported_likelihoods,
+    supported_pairwise_context_modes = if (length(context_modes) > 0L) context_modes else "stage_free",
+    max_n_outcomes = as.integer(max_n_outcomes)
   )
 }
 
@@ -1598,6 +1726,7 @@ cs_foundation_build_init_site_values <- function(group,
 
   direct_names <- setdiff(names(params), c(
     grep("^E_factor_[0-9]+$", names(params), value = TRUE),
+    "W_out", "b_out", "sigma",
     "E_feature_id", "E_segment", "E_covariate_id",
     "E_covariate_present", "V_covariate_value", "M_cross"
   ))
@@ -1686,6 +1815,39 @@ cs_foundation_build_init_site_values <- function(group,
       init_values = init_values,
       name = "M_cross_raw",
       value = cs2step_neural_to_r_array(params$M_cross)
+    )
+  }
+
+  output_dim <- if (identical(experiment$likelihood, "categorical")) {
+    as.integer(experiment$n_outcomes)
+  } else {
+    1L
+  }
+  if (!is.null(params$W_out)) {
+    w_out_src <- cs2step_neural_to_r_array(params$W_out)
+    if (is.matrix(w_out_src) && ncol(w_out_src) >= 1L) {
+      init_values <- cs_foundation_add_init_value(
+        init_values = init_values,
+        name = "W_out",
+        value = w_out_src[, seq_len(min(output_dim, ncol(w_out_src))), drop = FALSE]
+      )
+    }
+  }
+  if (!is.null(params$b_out)) {
+    b_out_src <- as.numeric(cs2step_neural_to_r_array(params$b_out))
+    if (length(b_out_src) >= 1L) {
+      init_values <- cs_foundation_add_init_value(
+        init_values = init_values,
+        name = "b_out",
+        value = b_out_src[seq_len(min(output_dim, length(b_out_src)))]
+      )
+    }
+  }
+  if (identical(experiment$likelihood, "normal") && !is.null(params$sigma)) {
+    init_values <- cs_foundation_add_init_value(
+      init_values = init_values,
+      name = "sigma",
+      value = as.numeric(cs2step_neural_to_r_array(params$sigma))
     )
   }
 
@@ -1998,74 +2160,73 @@ fit_conjoint_foundation_model <- function(experiments,
   experiments_norm <- lapply(seq_along(experiments), function(i) {
     cs_foundation_normalize_experiment(experiments[[i]], index = i)
   })
-
-  group_keys <- vapply(experiments_norm, function(exp) {
-    cs_foundation_group_key(
-      exp$mode,
-      exp$likelihood,
-      exp$n_outcomes,
+  registry <- cs_foundation_build_group_registry(experiments_norm)
+  pooled <- cs_foundation_build_group_training_data(experiments_norm, registry, control)
+  enc <- cs_encode_W_indices(
+    W = pooled$W,
+    names_list = pooled$names_list,
+    unknown = "holdout",
+    align = "by_name"
+  )
+  fit <- cs2step_eval_outcome_model_neural(
+    Y = pooled$Y,
+    W_idx = enc$W_idx,
+    names_list = pooled$names_list,
+    factor_levels = pooled$factor_levels,
+    diff = TRUE,
+    pair_id = pooled$pair_id,
+    profile_order = pooled$profile_order,
+    competing_group_variable_candidate = pooled$competing_group_variable_candidate,
+    competing_group_variable_respondent = pooled$competing_group_variable_respondent,
+    X = pooled$X,
+    X_present = pooled$X_present,
+    respondent_id = pooled$respondent_id,
+    respondent_task_id = pooled$respondent_task_id,
+    neural_token_info = pooled$token_info,
+    conda_env = conda_env,
+    conda_env_required = conda_env_required,
+    neural_mcmc_control = control$neural_mcmc_control %||% NULL
+  )
+  universal_key <- cs_foundation_universal_group_key()
+  supported_modes <- pooled$supported_modes %||% unique(vapply(experiments_norm, `[[`, character(1), "mode"))
+  supported_likelihoods <- pooled$supported_likelihoods %||% unique(vapply(experiments_norm, `[[`, character(1), "likelihood"))
+  supported_pairwise_context_modes <- pooled$supported_pairwise_context_modes %||% "stage_free"
+  max_n_outcomes <- as.integer(pooled$max_n_outcomes %||% max(1L, vapply(experiments_norm, function(exp) {
+    as.integer(exp$n_outcomes %||% 1L)
+  }, integer(1))))
+  legacy_aliases <- unique(unlist(lapply(experiments_norm, function(exp) {
+    cs_foundation_group_aliases(
+      mode = exp$mode,
+      likelihood = exp$likelihood,
+      n_outcomes = exp$n_outcomes,
       pairwise_context_mode = exp$pairwise_context_mode %||% NULL
     )
-  }, character(1))
-  experiment_groups <- split(experiments_norm, group_keys)
-
-  groups_out <- lapply(names(experiment_groups), function(group_key) {
-    exps <- experiment_groups[[group_key]]
-    group_meta <- exps[[1]]
-    registry <- cs_foundation_build_group_registry(exps)
-    pooled <- cs_foundation_build_group_training_data(exps, registry, control)
-    enc <- cs_encode_W_indices(
-      W = pooled$W,
-      names_list = pooled$names_list,
-      unknown = "holdout",
-      align = "by_name"
-    )
-    fit <- cs2step_eval_outcome_model_neural(
-      Y = pooled$Y,
-      W_idx = enc$W_idx,
+  }), use.names = FALSE))
+  groups_out <- list()
+  groups_out[[universal_key]] <- list(
+    group_key = universal_key,
+    mode = "universal",
+    pairwise_context_mode = pooled$pairwise_context_mode %||% "stage_free",
+    likelihood = if (length(supported_likelihoods) == 1L) supported_likelihoods[[1L]] else "mixed",
+    n_outcomes = max_n_outcomes,
+    supported_modes = supported_modes,
+    supported_likelihoods = supported_likelihoods,
+    supported_pairwise_context_modes = supported_pairwise_context_modes,
+    legacy_group_keys = legacy_aliases,
+    experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
+    encoder = list(
+      factor_names = names(pooled$names_list),
       names_list = pooled$names_list,
       factor_levels = pooled$factor_levels,
-      diff = identical(group_meta$mode, "pairwise"),
-      pair_id = pooled$pair_id,
-      profile_order = pooled$profile_order,
-      competing_group_variable_candidate = pooled$competing_group_variable_candidate,
-      competing_group_variable_respondent = pooled$competing_group_variable_respondent,
-      X = pooled$X,
-      X_present = pooled$X_present,
-      respondent_id = pooled$respondent_id,
-      respondent_task_id = pooled$respondent_task_id,
-      neural_token_info = pooled$token_info,
-      likelihood_override = group_meta$likelihood,
-      n_outcomes_override = if (identical(group_meta$likelihood, "categorical")) group_meta$n_outcomes else NULL,
-      conda_env = conda_env,
-      conda_env_required = conda_env_required,
-      neural_mcmc_control = control$neural_mcmc_control %||% NULL
-    )
-    names_list_group <- pooled$names_list
-    factor_levels_group <- pooled$factor_levels
-
-    list(
-      group_key = group_key,
-      mode = group_meta$mode,
-      pairwise_context_mode = group_meta$pairwise_context_mode %||% NULL,
-      likelihood = group_meta$likelihood,
-      n_outcomes = as.integer(group_meta$n_outcomes),
-      experiment_ids = vapply(exps, `[[`, character(1), "experiment_id"),
-      encoder = list(
-        factor_names = names(names_list_group),
-        names_list = names_list_group,
-        factor_levels = factor_levels_group,
-        unknown_policy = "holdout"
-      ),
-      schema_registry = registry,
-      x_feature_names = pooled$x_feature_names,
-      x_schema = pooled$x_schema,
-      text_registry = pooled$text_registry,
-      token_control = pooled$token_control,
-      fit = fit
-    )
-  })
-  names(groups_out) <- names(experiment_groups)
+      unknown_policy = "holdout"
+    ),
+    schema_registry = registry,
+    x_feature_names = pooled$x_feature_names,
+    x_schema = pooled$x_schema,
+    text_registry = pooled$text_registry,
+    token_control = pooled$token_control,
+    fit = fit
+  )
 
   out <- structure(
     list(
@@ -2079,8 +2240,8 @@ fit_conjoint_foundation_model <- function(experiments,
         text_embedding_fn = control$text_embedding_fn %||% NULL,
         experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
         grouping_note = paste(
-          "Experiments are pooled within compatible mode/likelihood families,",
-          "with pairwise FM studies split into stage-aware and stage-free groups."
+          "Experiments are pooled into one universal FM foundation group.",
+          "Legacy family keys resolve to the universal group as aliases."
         )
       )
     ),
@@ -2103,6 +2264,59 @@ cs_foundation_match_group <- function(foundation_model,
                                       likelihood,
                                       n_outcomes,
                                       pairwise_context_mode = NULL) {
+  universal_key <- cs_foundation_universal_group_key()
+  universal_group <- foundation_model$groups[[universal_key]] %||% NULL
+  if (!is.null(universal_group)) {
+    supported_modes <- universal_group$supported_modes %||% universal_group$mode %||% character(0)
+    supported_likelihoods <- universal_group$supported_likelihoods %||% universal_group$likelihood %||% character(0)
+    supported_pairwise_context_modes <- universal_group$supported_pairwise_context_modes %||%
+      universal_group$pairwise_context_mode %||% "stage_free"
+    if (!mode %in% supported_modes) {
+      stop(
+        sprintf(
+          "Universal foundation group does not support mode='%s'. Supported modes: %s",
+          mode,
+          paste(supported_modes, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    if (!likelihood %in% supported_likelihoods) {
+      stop(
+        sprintf(
+          "Universal foundation group does not support likelihood='%s'. Supported likelihoods: %s",
+          likelihood,
+          paste(supported_likelihoods, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    if (identical(likelihood, "categorical") &&
+        as.integer(n_outcomes) > as.integer(universal_group$n_outcomes %||% 1L)) {
+      stop(
+        sprintf(
+          "Universal foundation group supports at most %d categorical outcomes, but target requested %d.",
+          as.integer(universal_group$n_outcomes %||% 1L),
+          as.integer(n_outcomes)
+        ),
+        call. = FALSE
+      )
+    }
+    if (identical(mode, "pairwise")) {
+      context_use <- as.character(pairwise_context_mode %||% "stage_free")
+      if (!context_use %in% supported_pairwise_context_modes) {
+        stop(
+          sprintf(
+            "Universal foundation group does not support pairwise_context_mode='%s'. Supported values: %s",
+            context_use,
+            paste(supported_pairwise_context_modes, collapse = ", ")
+          ),
+          call. = FALSE
+        )
+      }
+    }
+    return(universal_group)
+  }
   key <- cs_foundation_group_key(
     mode,
     likelihood,

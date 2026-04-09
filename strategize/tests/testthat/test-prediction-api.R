@@ -198,7 +198,7 @@ test_that("cs2step_unpack_newdata keeps pairwise group metadata separate from X"
   testthat::expect_identical(colnames(unpacked$X), "income")
 })
 
-test_that("stage-aware neural predictors require long-format predict()", {
+test_that("stage-aware neural predictors support predict_pair()", {
   skip_on_cran()
   skip_if_no_jax()
   withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
@@ -211,10 +211,10 @@ test_that("stage-aware neural predictors require long-format predict()", {
     experiments = list(train_data),
     foundation_control = prediction_test_foundation_control()
   )
-  group <- foundation_fit$groups[[paste("pairwise", "stage_aware", "bernoulli", 1L, sep = "::")]]
+  group <- foundation_fit$groups[["universal::mixed::v1"]]
   predictor <- strategize:::cs_foundation_build_predictor(
     fit = group$fit,
-    mode = group$mode,
+    mode = "pairwise",
     names_list = group$encoder$names_list,
     factor_levels = group$encoder$factor_levels,
     metadata = list(
@@ -243,14 +243,13 @@ test_that("stage-aware neural predictors require long-format predict()", {
   )
   testthat::expect_true(all(is.finite(preds)))
 
-  testthat::expect_error(
-    predict_pair(
-      predictor,
-      W_left = W_scoring[train_data$profile_order == 1L, , drop = FALSE],
-      W_right = W_scoring[train_data$profile_order == 2L, , drop = FALSE]
-    ),
-    "stage-free pairwise predictors"
+  preds_pair <- predict_pair(
+    predictor,
+    W_left = W_scoring[train_data$profile_order == 1L, , drop = FALSE],
+    W_right = W_scoring[train_data$profile_order == 2L, , drop = FALSE]
   )
+  testthat::expect_true(all(is.finite(preds_pair)))
+  testthat::expect_true(all(preds_pair >= 0 & preds_pair <= 1))
 })
 
 test_that("neural backend errors with build_backend() hint when unavailable", {

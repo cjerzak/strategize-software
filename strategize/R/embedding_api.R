@@ -553,6 +553,31 @@ cs_foundation_select_group <- function(foundation_model,
   if (length(group_keys) < 1L) {
     stop("Foundation model does not contain any groups.", call. = FALSE)
   }
+  universal_key <- cs_foundation_universal_group_key()
+  universal_group <- foundation_model$groups[[universal_key]] %||% NULL
+  universal_matches <- function(group, mode = NULL, likelihood = NULL, n_outcomes = NULL) {
+    supported_modes <- as.character(group$supported_modes %||% character(0))
+    supported_likelihoods <- as.character(group$supported_likelihoods %||% character(0))
+    max_n_outcomes <- as.integer(group$n_outcomes %||% 1L)
+    if (!is.null(mode) && length(supported_modes) > 0L && !as.character(mode) %in% supported_modes) {
+      return(FALSE)
+    }
+    if (!is.null(likelihood)) {
+      likelihood_use <- tolower(as.character(likelihood))
+      if (length(supported_likelihoods) > 0L && !likelihood_use %in% tolower(supported_likelihoods)) {
+        return(FALSE)
+      }
+      if (!is.null(n_outcomes)) {
+        if (identical(likelihood_use, "categorical")) {
+          return(as.integer(n_outcomes) <= max_n_outcomes)
+        }
+        return(as.integer(n_outcomes) == 1L)
+      }
+    } else if (!is.null(n_outcomes) && as.integer(n_outcomes) > max_n_outcomes) {
+      return(FALSE)
+    }
+    TRUE
+  }
   if (!is.null(group_key)) {
     requested_key <- as.character(group_key)
     canonical_key <- requested_key
@@ -572,6 +597,15 @@ cs_foundation_select_group <- function(foundation_model,
         }
       }
     }
+    if (is.null(group) &&
+        !is.null(universal_group) &&
+        requested_key %in% c(
+          universal_key,
+          universal_group$legacy_group_keys %||% character(0)
+        )) {
+      canonical_key <- universal_key
+      group <- universal_group
+    }
     if (is.null(group)) {
       stop(
         sprintf(
@@ -586,6 +620,13 @@ cs_foundation_select_group <- function(foundation_model,
       group,
       requested_key = requested_key,
       canonical_key = canonical_key
+      ))
+  }
+  if (!is.null(universal_group) &&
+      universal_matches(universal_group, mode = mode, likelihood = likelihood, n_outcomes = n_outcomes)) {
+    return(attach_resolution(
+      universal_group,
+      canonical_key = universal_key
     ))
   }
 
@@ -862,7 +903,7 @@ extract_embeddings.conjoint_foundation_model <- function(object,
   request <- cs_foundation_normalize_request(
     W = unpacked$W,
     X = unpacked$X,
-    mode = group$mode,
+    mode = mode_use,
     pair_id = unpacked$pair_id,
     profile_order = unpacked$profile_order,
     experiment_id = experiment_id_use,
@@ -889,7 +930,7 @@ extract_embeddings.conjoint_foundation_model <- function(object,
   tmp_predictor <- structure(
     list(
       model_type = "neural",
-      mode = group$mode,
+      mode = mode_use,
       encoder = group$encoder,
       fit = group$fit,
       metadata = list(
