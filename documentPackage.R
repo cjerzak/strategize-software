@@ -135,6 +135,6 @@
   # Install from local source
   install.packages(package_path, repos = NULL, type = "source", force = FALSE)
   # install.packages( "~/Documents/strategize-software/strategize",repos = NULL, type = "source",force = F);
-  # strategize::build_backend()
   # devtools::install_github("cjerzak/strategize-software/strategize", dependencies = TRUE) # install from github
+  # strategize::build_backend()
 }
