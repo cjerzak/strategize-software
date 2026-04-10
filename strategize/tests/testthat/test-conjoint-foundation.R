@@ -583,6 +583,37 @@ test_that("mixed-family universal fits use NLL early stopping", {
   expect_true(is.finite(es$best_metric))
 })
 
+test_that("foundation early stopping forwards validation size controls", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_EVAL_SEED = "123"
+  ))
+
+  control <- foundation_test_control()
+  control$neural_mcmc_control$eval_enabled <- FALSE
+  control$neural_mcmc_control$early_stopping <- TRUE
+  control$neural_mcmc_control$early_stopping_validation_frac <- 1
+  control$neural_mcmc_control$early_stopping_validation_max_n <- 4L
+
+  fit <- fit_conjoint_foundation_model(
+    experiments = list(
+      foundation_test_single_experiment(8031, "single_binary_es_cap", likelihood = "bernoulli"),
+      foundation_test_single_experiment(8032, "single_normal_es_cap", likelihood = "normal")
+    ),
+    foundation_control = control
+  )
+
+  group <- fit$groups[[foundation_universal_group_key()]]
+  es <- group$fit$neural_model_info$early_stopping
+  expect_identical(es$validation_frac, 1)
+  expect_identical(as.integer(es$validation_max_n), 4L)
+  expect_lte(as.integer(es$validation_target_n), 4L)
+  expect_identical(as.integer(es$validation_target_n), as.integer(es$n_validation))
+  expect_lte(as.integer(es$n_validation), 4L)
+})
+
 test_that("adapt_conjoint_foundation_model builds shared and local covariate tokens and predictions stay finite", {
   skip_on_cran()
   skip_if_no_jax()

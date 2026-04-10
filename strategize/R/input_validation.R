@@ -71,7 +71,14 @@ NULL
 #'   \code{ceiling(svi_steps / early_stopping_n_checks)}. Use
 #'   \code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
 #'   control how many consecutive non-improving validation checks are tolerated
-#'   before stopping.
+#'   before stopping. Set
+#'   \code{neural_mcmc_control$early_stopping_validation_frac} (default \code{0.05})
+#'   to retain approximately that fraction of evaluable observations in the
+#'   held-out validation split, and optionally
+#'   \code{neural_mcmc_control$early_stopping_validation_max_n} (default
+#'   \code{2048}) to cap the retained validation size after fraction-based
+#'   sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
+#'   cap.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -798,6 +805,35 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         patience != round(patience)) {
       stop(
         "'neural_mcmc_control$early_stopping_patience' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  validation_frac <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["early_stopping_validation_frac"]]
+  } else {
+    NULL
+  }
+  if (!is.null(validation_frac)) {
+    if (!is.numeric(validation_frac) || length(validation_frac) != 1L ||
+        !is.finite(validation_frac) || validation_frac <= 0 || validation_frac > 1) {
+      stop(
+        "'neural_mcmc_control$early_stopping_validation_frac' must be a single number in (0, 1].",
+        call. = FALSE
+      )
+    }
+  }
+  validation_max_n <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["early_stopping_validation_max_n"]]
+  } else {
+    NULL
+  }
+  if (!is.null(validation_max_n)) {
+    if (!is.numeric(validation_max_n) || length(validation_max_n) != 1L ||
+        !is.finite(validation_max_n) || validation_max_n < 1 ||
+        validation_max_n != round(validation_max_n)) {
+      stop(
+        "'neural_mcmc_control$early_stopping_validation_max_n' must be NULL or an integer >= 1.",
         call. = FALSE
       )
     }

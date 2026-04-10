@@ -183,6 +183,53 @@ neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
   sprintf("%s [%.*f]", title_base, digits, tail_mean)
 }
 
+neural_resolve_early_stopping_validation_target_n <- function(n_eval,
+                                                              n_validation_available,
+                                                              validation_frac = 0.05,
+                                                              validation_max_n = 2048L,
+                                                              validation_min_n = 32L) {
+  n_eval <- suppressWarnings(as.integer(n_eval))
+  n_validation_available <- suppressWarnings(as.integer(n_validation_available))
+  validation_frac <- as.numeric(validation_frac)
+  validation_min_n <- suppressWarnings(as.integer(validation_min_n))
+  validation_max_n_use <- if (is.null(validation_max_n)) {
+    NULL
+  } else {
+    suppressWarnings(as.integer(validation_max_n))
+  }
+
+  if (length(n_eval) != 1L || is.na(n_eval) || n_eval < 1L ||
+      length(n_validation_available) != 1L || is.na(n_validation_available) ||
+      n_validation_available < 1L) {
+    return(NA_integer_)
+  }
+  if (length(validation_frac) != 1L || is.na(validation_frac) ||
+      !is.finite(validation_frac) || validation_frac <= 0) {
+    validation_frac <- 0.05
+  }
+  validation_frac <- min(validation_frac, 1)
+  if (length(validation_min_n) != 1L || is.na(validation_min_n) ||
+      validation_min_n < 1L) {
+    validation_min_n <- 1L
+  }
+
+  target_n <- as.integer(max(1L, ceiling(n_eval * validation_frac)))
+  if (n_validation_available >= validation_min_n) {
+    target_n <- max(target_n, validation_min_n)
+  }
+  target_n <- min(target_n, n_validation_available)
+
+  if (!is.null(validation_max_n_use)) {
+    if (length(validation_max_n_use) != 1L || is.na(validation_max_n_use) ||
+        validation_max_n_use < 1L) {
+      validation_max_n_use <- 2048L
+    }
+    target_n <- min(target_n, validation_max_n_use)
+  }
+
+  as.integer(max(1L, target_n))
+}
+
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
   if (!neural_stage_context_enabled(model_info)) {
     return(NULL)
@@ -4693,6 +4740,8 @@ generate_ModelOutcome_neural <- function(){
     early_stopping = TRUE,
     early_stopping_n_checks = 10L,
     early_stopping_patience = 3L,
+    early_stopping_validation_frac = 0.05,
+    early_stopping_validation_max_n = 2048L,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -4894,6 +4943,10 @@ generate_ModelOutcome_neural <- function(){
   }
   if (!is.null(mcmc_overrides) && length(mcmc_overrides) > 0) {
     mcmc_control <- modifyList(mcmc_control, mcmc_overrides)
+    if ("early_stopping_validation_max_n" %in% names(mcmc_overrides) &&
+        is.null(mcmc_overrides$early_stopping_validation_max_n)) {
+      mcmc_control$early_stopping_validation_max_n <- NULL
+    }
   }
   user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
   user_supplied_svi_num_draws <- !is.null(mcmc_overrides) &&
@@ -9199,6 +9252,9 @@ generate_ModelOutcome_neural <- function(){
     final_metric = NA_real_,
     n_train = NA_integer_,
     n_validation = NA_integer_,
+    validation_frac = NA_real_,
+    validation_max_n = NULL,
+    validation_target_n = NA_integer_,
     validation_loss_history = numeric(0)
   )
   if (isTRUE(use_svi)) {
@@ -9670,14 +9726,25 @@ generate_ModelOutcome_neural <- function(){
           return(NULL)
         }
       }
-      if (length(validation_idx) > 64L) {
+      validation_target_n <- neural_resolve_early_stopping_validation_target_n(
+        n_eval = length(eval_idx),
+        n_validation_available = length(validation_idx),
+        validation_frac = early_stopping_validation_frac,
+        validation_max_n = early_stopping_validation_max_n,
+        validation_min_n = 32L
+      )
+      if (!is.finite(validation_target_n) || validation_target_n < 1L) {
+        return(NULL)
+      }
+      if (length(validation_idx) > validation_target_n) {
         set.seed(as.integer(split_seed) + 1L)
-        validation_idx <- sort(sample(validation_idx, size = 64L, replace = FALSE))
+        validation_idx <- sort(sample(validation_idx, size = validation_target_n, replace = FALSE))
       }
 
       list(
         train_idx = as.integer(train_idx),
         validation_idx = as.integer(validation_idx),
+        validation_target_n = as.integer(validation_target_n),
         y_all = y_all,
         likelihood_code_all = likelihood_code_all,
         n_outcomes_all = n_outcomes_all
@@ -9916,6 +9983,38 @@ generate_ModelOutcome_neural <- function(){
     }
     early_stopping_info$n_checks <- early_stopping_n_checks
     early_stopping_info$patience <- early_stopping_patience
+    early_stopping_validation_frac <- if (!is.null(mcmc_control$early_stopping_validation_frac)) {
+      as.numeric(mcmc_control$early_stopping_validation_frac)
+    } else {
+      0.05
+    }
+    if (length(early_stopping_validation_frac) != 1L ||
+        is.na(early_stopping_validation_frac) ||
+        !is.finite(early_stopping_validation_frac) ||
+        early_stopping_validation_frac <= 0) {
+      early_stopping_validation_frac <- 0.05
+    }
+    early_stopping_validation_frac <- min(early_stopping_validation_frac, 1)
+    early_stopping_validation_max_n <- if ("early_stopping_validation_max_n" %in% names(mcmc_control)) {
+      mcmc_control$early_stopping_validation_max_n
+    } else {
+      2048L
+    }
+    if (!is.null(early_stopping_validation_max_n)) {
+      early_stopping_validation_max_n <- as.integer(early_stopping_validation_max_n)
+      if (length(early_stopping_validation_max_n) != 1L ||
+          is.na(early_stopping_validation_max_n) ||
+          !is.finite(early_stopping_validation_max_n) ||
+          early_stopping_validation_max_n < 1L) {
+        early_stopping_validation_max_n <- 2048L
+      }
+    }
+    early_stopping_info$validation_frac <- as.numeric(early_stopping_validation_frac)
+    early_stopping_info$validation_max_n <- if (is.null(early_stopping_validation_max_n)) {
+      NULL
+    } else {
+      as.integer(early_stopping_validation_max_n)
+    }
     early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
       "validation_split_unavailable"
     } else {
@@ -9938,6 +10037,7 @@ generate_ModelOutcome_neural <- function(){
         ))
         early_stopping_info$n_train <- length(validation_split$train_idx)
         early_stopping_info$n_validation <- length(validation_split$validation_idx)
+        early_stopping_info$validation_target_n <- as.integer(validation_split$validation_target_n)
         svi_train_model_args <- build_svi_subset_model_args(validation_split$train_idx)
         early_stopping_running <- TRUE
         early_stopping_reason <- "completed_budget"
@@ -9949,10 +10049,12 @@ generate_ModelOutcome_neural <- function(){
         }
         early_stopping_info$n_train <- length(Y_use)
         early_stopping_info$n_validation <- 0L
+        early_stopping_info$validation_target_n <- NA_integer_
       }
     } else {
       early_stopping_info$n_train <- length(Y_use)
       early_stopping_info$n_validation <- 0L
+      early_stopping_info$validation_target_n <- NA_integer_
     }
 
     if (isTRUE(early_stopping_running)) {

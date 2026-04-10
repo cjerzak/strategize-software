@@ -469,7 +469,8 @@ run_output_only_attn_vi_fit <- function(seed,
                                         svi_steps = 25L,
                                         residual_mode = "standard",
                                         eval_enabled = FALSE,
-                                        optimizer = NULL) {
+                                        optimizer = NULL,
+                                        neural_mcmc_control_overrides = NULL) {
   skip_on_cran()
   skip_if_no_jax()
 
@@ -501,6 +502,16 @@ run_output_only_attn_vi_fit <- function(seed,
   )
   if (!is.null(optimizer)) {
     params$neural_mcmc_control$optimizer <- optimizer
+  }
+  if (!is.null(neural_mcmc_control_overrides)) {
+    params$neural_mcmc_control <- modifyList(
+      params$neural_mcmc_control,
+      neural_mcmc_control_overrides
+    )
+    if ("early_stopping_validation_max_n" %in% names(neural_mcmc_control_overrides) &&
+        is.null(neural_mcmc_control_overrides$early_stopping_validation_max_n)) {
+      params$neural_mcmc_control$early_stopping_validation_max_n <- NULL
+    }
   }
 
   p_list <- generate_test_p_list(data$W)
@@ -1825,6 +1836,56 @@ test_that("output-only neural early stopping advances SVI through chunked run ca
     as.integer(model_info$early_stopping$stop_step),
     as.integer(model_info$svi_steps_completed)
   )
+})
+
+test_that("early stopping validation target helper applies fraction and optional cap", {
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_target_n(
+      n_eval = 5000L,
+      n_validation_available = 1000L
+    ),
+    250L
+  )
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_target_n(
+      n_eval = 50000L,
+      n_validation_available = 10000L,
+      validation_frac = 0.05,
+      validation_max_n = 2048L
+    ),
+    2048L
+  )
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_target_n(
+      n_eval = 50000L,
+      n_validation_available = 10000L,
+      validation_frac = 0.05,
+      validation_max_n = NULL
+    ),
+    2500L
+  )
+})
+
+test_that("output-only neural early stopping exposes resolved validation size controls", {
+  fit <- run_output_only_attn_vi_fit(
+    seed = 20260410,
+    early_stopping = TRUE,
+    svi_steps = 25L,
+    neural_mcmc_control_overrides = list(
+      early_stopping_validation_frac = 1,
+      early_stopping_validation_max_n = 4L
+    )
+  )
+  model_info <- get_neural_model_info(fit)
+
+  expect_identical(model_info$early_stopping$validation_frac, 1)
+  expect_identical(as.integer(model_info$early_stopping$validation_max_n), 4L)
+  expect_lte(as.integer(model_info$early_stopping$validation_target_n), 4L)
+  expect_identical(
+    as.integer(model_info$early_stopping$validation_target_n),
+    as.integer(model_info$early_stopping$n_validation)
+  )
+  expect_lte(as.integer(model_info$early_stopping$n_validation), 4L)
 })
 
 test_that("output-only neural early stopping validates ordered factor and covariate spans", {

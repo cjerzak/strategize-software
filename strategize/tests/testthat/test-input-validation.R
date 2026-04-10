@@ -588,6 +588,68 @@ test_that("validate_strategize_inputs rejects invalid early_stopping values", {
   )
 })
 
+test_that("validate_strategize_inputs accepts early stopping validation size controls", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_true(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(
+        early_stopping_validation_frac = 0.25,
+        early_stopping_validation_max_n = 128L
+      )
+    )
+  )
+  expect_true(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(
+        early_stopping_validation_frac = 1,
+        early_stopping_validation_max_n = NULL
+      )
+    )
+  )
+})
+
+test_that("validate_strategize_inputs rejects invalid early stopping validation controls", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(early_stopping_validation_frac = 0)
+    ),
+    "early_stopping_validation_frac"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(early_stopping_validation_frac = 1.5)
+    ),
+    "early_stopping_validation_frac"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(early_stopping_validation_max_n = 0)
+    ),
+    "early_stopping_validation_max_n"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(early_stopping_validation_max_n = 3.5)
+    ),
+    "early_stopping_validation_max_n"
+  )
+})
+
 # =============================================================================
 # CV Validation
 # =============================================================================

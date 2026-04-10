@@ -237,7 +237,14 @@ stopping; the cadence is derived as
 \code{ceiling(svi_steps / early_stopping_n_checks)}. Use
 \code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
 control how many consecutive non-improving validation checks are tolerated
-before stopping.}
+before stopping. Set
+\code{neural_mcmc_control$early_stopping_validation_frac} (default \code{0.05})
+to retain approximately that fraction of evaluable observations in the
+held-out validation split, and optionally
+\code{neural_mcmc_control$early_stopping_validation_max_n} (default
+\code{2048}) to cap the retained validation size after fraction-based
+sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
+cap.}
 
 \item{penalty_type}{A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities
