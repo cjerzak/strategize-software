@@ -11,6 +11,7 @@ Depends: R (>= 4.1)
 License: GPL-3
 Encoding: UTF-8
 Imports:
+    digest,
     stats,
     compositions,
     FactorHet,

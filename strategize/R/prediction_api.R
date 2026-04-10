@@ -1052,11 +1052,6 @@ cs2step_neural_apply_experiment_description <- function(model_info,
   )
   model_info$default_experiment_text_present <- TRUE
   model_info$default_experiment_index <- NULL
-  model_info$jit_cache_key <- sprintf(
-    "%s::experiment_text_%d",
-    model_info$jit_cache_key %||% "predict",
-    as.integer(stats::runif(1, 1, 1e9))
-  )
   model_info
 }
 
@@ -1878,6 +1873,7 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     return(NULL)
   }
   out <- model_info
+  out$jit_cache_key <- NULL
 
   if (!is.null(out$params)) {
     out$params <- if (isTRUE(drop_params)) {
@@ -2023,6 +2019,7 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
     return(NULL)
   }
   out <- model_info
+  out$jit_cache_key <- NULL
   if (is.null(out$pairwise_context_mode)) {
     out$pairwise_context_mode <- "stage_free"
   }

@@ -1238,9 +1238,25 @@ neural_resolve_token_runtime_config <- function(neural_token_info = NULL,
 neural_prediction_jit_cache <- new.env(parent = emptyenv())
 
 neural_model_jit_cache_key <- function(model_info) {
-  existing_key <- tryCatch(model_info$jit_cache_key, error = function(e) NULL)
-  if (!is.null(existing_key) && length(existing_key) == 1L && nzchar(existing_key)) {
-    return(as.character(existing_key))
+  if (is.null(model_info)) {
+    return("stable:v1:null")
+  }
+
+  snapshot <- tryCatch({
+    snapshot_out <- cs2step_neural_pack_model_info(
+      cs2step_neural_upgrade_model_info(model_info),
+      drop_params = TRUE
+    )
+    snapshot_out$fit_metrics <- NULL
+    snapshot_out$jit_cache_key <- NULL
+    snapshot_out
+  }, error = function(e) NULL)
+
+  if (!is.null(snapshot)) {
+    return(paste0(
+      "stable:v1:",
+      digest::digest(snapshot, algo = "xxhash64", serialize = TRUE)
+    ))
   }
 
   map_token <- "none"
@@ -1274,7 +1290,7 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
     map_token
   )
-  paste(fields, collapse = "::")
+  paste0("stable:v1:fallback::", paste(fields, collapse = "::"))
 }
 
 neural_rms_norm <- function(x, g, model_dims, eps = 1e-6) {
@@ -9034,8 +9050,7 @@ generate_ModelOutcome_neural <- function(){
     factor_order_by_experiment = factor_order_by_experiment,
     default_factor_order = default_factor_order,
     factor_tokenization = factor_tokenization,
-    max_factor_tokens = max_factor_tokens,
-    jit_cache_key = sprintf("svi_validation_%d", as.integer(stats::runif(1, 1, 1e9)))
+    max_factor_tokens = max_factor_tokens
   )
   validation_model_info <- neural_set_pairwise_context_model_info(
     info = validation_model_info,
@@ -10906,8 +10921,7 @@ generate_ModelOutcome_neural <- function(){
     factor_order_by_experiment = factor_order_by_experiment,
     default_factor_order = default_factor_order,
     factor_tokenization = factor_tokenization,
-    max_factor_tokens = max_factor_tokens,
-    jit_cache_key = sprintf("fitted_predict_%d", as.integer(stats::runif(1, 1, 1e9)))
+    max_factor_tokens = max_factor_tokens
   )
   predict_model_info <- neural_set_pairwise_context_model_info(
     info = predict_model_info,
@@ -11522,7 +11536,6 @@ generate_ModelOutcome_neural <- function(){
   }
 
   neural_model_info <- list(
-    jit_cache_key = sprintf("neural_model_%d", as.integer(stats::runif(1, 1, 1e9))),
     params = ParamsMean,
     param_names = param_names,
     param_shapes = param_shapes,

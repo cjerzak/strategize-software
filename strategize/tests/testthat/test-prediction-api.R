@@ -34,6 +34,36 @@ prediction_test_experiment <- function(seed, experiment_id) {
   )
 }
 
+prediction_test_cache_model_info <- function() {
+  list(
+    model_depth = 1L,
+    model_dims = 8L,
+    n_heads = 1L,
+    head_dim = 8L,
+    residual_mode = "standard",
+    cross_candidate_encoder_mode = "none",
+    likelihood = "bernoulli",
+    experiment_token_mode = "description",
+    factor_tokenization = "index",
+    max_factor_tokens = 2L,
+    covariate_value_encoding = "legacy_linear",
+    shared_projection_value_encoder = "none",
+    max_covariate_tokens = 0L,
+    n_candidate_tokens = 2L,
+    n_party_levels = 2L,
+    cand_party_to_resp_idx = c(0L, 1L),
+    text_semantic_dim = 2L
+  )
+}
+
+prediction_test_text_embedding <- function(text) {
+  text <- as.character(text)
+  t(vapply(text, function(x) {
+    bytes <- utf8ToInt(x)
+    c(sum(bytes), length(bytes))
+  }, numeric(2)))
+}
+
 test_that("strategic_prediction() fits GLM predictor (pairwise) and predicts probabilities", {
   data <- generate_test_data(n = 400, n_factors = 3, n_levels = 2, seed = 101)
 
@@ -196,6 +226,132 @@ test_that("cs2step_unpack_newdata keeps pairwise group metadata separate from X"
     c("PartyA", "PartyA")
   )
   testthat::expect_identical(colnames(unpacked$X), "income")
+})
+
+test_that("neural_model_jit_cache_key ignores legacy jit_cache_key noise", {
+  model_a <- prediction_test_cache_model_info()
+  model_b <- prediction_test_cache_model_info()
+  model_a$jit_cache_key <- "legacy_random_a"
+  model_b$jit_cache_key <- "legacy_random_b"
+
+  testthat::expect_identical(
+    strategize:::neural_model_jit_cache_key(model_a),
+    strategize:::neural_model_jit_cache_key(model_b)
+  )
+})
+
+test_that("experiment description content changes deterministic neural jit keys", {
+  base_model <- prediction_test_cache_model_info()
+  same_a <- strategize:::cs2step_neural_apply_experiment_description(
+    model_info = base_model,
+    experiment_description = "alpha experiment",
+    n_rows = 1L,
+    text_embedding_fn = prediction_test_text_embedding
+  )
+  same_b <- strategize:::cs2step_neural_apply_experiment_description(
+    model_info = base_model,
+    experiment_description = "alpha experiment",
+    n_rows = 1L,
+    text_embedding_fn = prediction_test_text_embedding
+  )
+  other <- strategize:::cs2step_neural_apply_experiment_description(
+    model_info = base_model,
+    experiment_description = "beta experiment",
+    n_rows = 1L,
+    text_embedding_fn = prediction_test_text_embedding
+  )
+
+  testthat::expect_identical(
+    strategize:::neural_model_jit_cache_key(same_a),
+    strategize:::neural_model_jit_cache_key(same_b)
+  )
+  testthat::expect_false(identical(
+    strategize:::neural_model_jit_cache_key(same_a),
+    strategize:::neural_model_jit_cache_key(other)
+  ))
+})
+
+test_that("upgrade path strips legacy jit cache keys", {
+  upgraded <- strategize:::cs2step_neural_upgrade_model_info(list(
+    jit_cache_key = "legacy_random_value"
+  ))
+
+  testthat::expect_null(upgraded$jit_cache_key)
+})
+
+test_that("neural jit wrapper cache reuses identical experiment descriptions", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  if (!"jnp" %in% ls(envir = strategize:::strenv)) {
+    strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  }
+
+  cache_env <- strategize:::neural_prediction_jit_cache
+  base_model <- prediction_test_cache_model_info()
+  model_same <- strategize:::cs2step_neural_apply_experiment_description(
+    model_info = base_model,
+    experiment_description = "alpha experiment",
+    n_rows = 1L,
+    text_embedding_fn = prediction_test_text_embedding
+  )
+  model_other <- strategize:::cs2step_neural_apply_experiment_description(
+    model_info = base_model,
+    experiment_description = "beta experiment",
+    n_rows = 1L,
+    text_embedding_fn = prediction_test_text_embedding
+  )
+
+  same_entry <- paste(
+    "predict",
+    strategize:::neural_model_jit_cache_key(model_same),
+    "single",
+    "response",
+    sep = "::"
+  )
+  other_entry <- paste(
+    "predict",
+    strategize:::neural_model_jit_cache_key(model_other),
+    "single",
+    "response",
+    sep = "::"
+  )
+  existed_same <- exists(same_entry, envir = cache_env, inherits = FALSE)
+  existed_other <- exists(other_entry, envir = cache_env, inherits = FALSE)
+  on.exit({
+    if (!existed_same && exists(same_entry, envir = cache_env, inherits = FALSE)) {
+      rm(list = same_entry, envir = cache_env)
+    }
+    if (!existed_other && exists(other_entry, envir = cache_env, inherits = FALSE)) {
+      rm(list = other_entry, envir = cache_env)
+    }
+  }, add = TRUE)
+
+  strategize:::neural_get_predict_jit(
+    model_info = model_same,
+    pairwise = FALSE,
+    return_logits = FALSE
+  )
+  entries_after_first <- ls(envir = cache_env, all.names = TRUE)
+
+  strategize:::neural_get_predict_jit(
+    model_info = model_same,
+    pairwise = FALSE,
+    return_logits = FALSE
+  )
+  entries_after_second <- ls(envir = cache_env, all.names = TRUE)
+
+  strategize:::neural_get_predict_jit(
+    model_info = model_other,
+    pairwise = FALSE,
+    return_logits = FALSE
+  )
+  entries_after_third <- ls(envir = cache_env, all.names = TRUE)
+
+  testthat::expect_true(same_entry %in% entries_after_first)
+  testthat::expect_identical(entries_after_second, entries_after_first)
+  testthat::expect_true(other_entry %in% entries_after_third)
+  testthat::expect_false(identical(same_entry, other_entry))
 })
 
 test_that("stage-aware neural predictors support predict_pair()", {
