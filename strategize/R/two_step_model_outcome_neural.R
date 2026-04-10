@@ -253,6 +253,29 @@ neural_resolve_early_stopping_validation_target_n <- function(n_eval,
   as.integer(max(1L, target_n))
 }
 
+neural_resolve_early_stopping_validation_batch_size <- function(validation_target_n,
+                                                                validation_batch_size = 128L) {
+  validation_target_n <- suppressWarnings(as.integer(validation_target_n))
+  if (length(validation_target_n) != 1L ||
+      is.na(validation_target_n) ||
+      validation_target_n < 1L) {
+    return(NA_integer_)
+  }
+
+  if (is.null(validation_batch_size)) {
+    return(as.integer(validation_target_n))
+  }
+
+  validation_batch_size <- suppressWarnings(as.integer(validation_batch_size))
+  if (length(validation_batch_size) != 1L ||
+      is.na(validation_batch_size) ||
+      validation_batch_size < 1L) {
+    validation_batch_size <- 128L
+  }
+
+  as.integer(max(1L, min(validation_target_n, validation_batch_size)))
+}
+
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
   if (!neural_stage_context_enabled(model_info)) {
     return(NULL)
@@ -4933,6 +4956,7 @@ generate_ModelOutcome_neural <- function(){
     early_stopping_patience = 3L,
     early_stopping_validation_frac = 0.05,
     early_stopping_validation_max_n = 2048L,
+    early_stopping_validation_batch_size = 128L,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -5137,6 +5161,10 @@ generate_ModelOutcome_neural <- function(){
     if ("early_stopping_validation_max_n" %in% names(mcmc_overrides) &&
         is.null(mcmc_overrides$early_stopping_validation_max_n)) {
       mcmc_control$early_stopping_validation_max_n <- NULL
+    }
+    if ("early_stopping_validation_batch_size" %in% names(mcmc_overrides) &&
+        is.null(mcmc_overrides$early_stopping_validation_batch_size)) {
+      mcmc_control$early_stopping_validation_batch_size <- NULL
     }
   }
   user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
@@ -9090,7 +9118,7 @@ generate_ModelOutcome_neural <- function(){
     return_logits = validation_return_logits
   )
 
-  svi_validation_predict <- function(param_sites, idx, fallback_params = NULL) {
+  svi_validation_predict_chunk <- function(param_sites, idx, fallback_params = NULL) {
     params <- build_params_from_sites_for_svi_validation(
       param_sites,
       fallback_params = fallback_params
@@ -9223,6 +9251,28 @@ generate_ModelOutcome_neural <- function(){
       params, Xb, pb, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order
     )
     coerce_prediction_output_local(pred)
+  }
+  combine_svi_validation_predictions <- function(pred_chunks) {
+    pred_chunks <- Filter(Negate(is.null), pred_chunks)
+    if (length(pred_chunks) < 1L) {
+      return(NULL)
+    }
+    if (identical(likelihood, "mixed")) {
+      return(list(
+        logits = do.call(rbind, lapply(pred_chunks, function(pred) as.matrix(pred$logits))),
+        sigma = unlist(lapply(pred_chunks, function(pred) as.numeric(pred$sigma)), use.names = FALSE)
+      ))
+    }
+    if (identical(likelihood, "categorical")) {
+      return(do.call(rbind, lapply(pred_chunks, as.matrix)))
+    }
+    if (identical(likelihood, "normal")) {
+      return(list(
+        mu = unlist(lapply(pred_chunks, function(pred) as.numeric(pred$mu)), use.names = FALSE),
+        sigma = unlist(lapply(pred_chunks, function(pred) as.numeric(pred$sigma)), use.names = FALSE)
+      ))
+    }
+    unlist(lapply(pred_chunks, as.numeric), use.names = FALSE)
   }
   locscale_reparam <- NULL
   if (!is.null(strenv$numpyro$infer) &&
@@ -9461,6 +9511,7 @@ generate_ModelOutcome_neural <- function(){
     n_validation = NA_integer_,
     validation_frac = NA_real_,
     validation_max_n = NULL,
+    validation_batch_size = NA_integer_,
     validation_target_n = NA_integer_,
     validation_loss_history = numeric(0)
   )
@@ -9947,10 +9998,20 @@ generate_ModelOutcome_neural <- function(){
         set.seed(as.integer(split_seed) + 1L)
         validation_idx <- sort(sample(validation_idx, size = validation_target_n, replace = FALSE))
       }
+      validation_batch_size <- neural_resolve_early_stopping_validation_batch_size(
+        validation_target_n = length(validation_idx),
+        validation_batch_size = early_stopping_validation_batch_size
+      )
+      validation_batches <- split(
+        validation_idx,
+        ceiling(seq_along(validation_idx) / validation_batch_size)
+      )
 
       list(
         train_idx = as.integer(train_idx),
         validation_idx = as.integer(validation_idx),
+        validation_batches = unname(lapply(validation_batches, as.integer)),
+        validation_batch_size = as.integer(validation_batch_size),
         validation_target_n = as.integer(validation_target_n),
         y_all = y_all,
         likelihood_code_all = likelihood_code_all,
@@ -9991,11 +10052,16 @@ generate_ModelOutcome_neural <- function(){
         return(NA_real_)
       }
       param_sites <- extract_svi_param_sites(svi_params_current)
-      pred_eval <- svi_validation_predict(
-        param_sites,
-        validation_split$validation_idx,
-        fallback_params = svi_params_current
-      )
+      validation_batches <- validation_split$validation_batches %||% list(validation_split$validation_idx)
+      pred_chunks <- vector("list", length(validation_batches))
+      for (batch_idx in seq_along(validation_batches)) {
+        pred_chunks[[batch_idx]] <- svi_validation_predict_chunk(
+          param_sites,
+          validation_batches[[batch_idx]],
+          fallback_params = svi_params_current
+        )
+      }
+      pred_eval <- combine_svi_validation_predictions(pred_chunks)
       if (is.null(pred_eval)) {
         return(NA_real_)
       }
@@ -10030,15 +10096,6 @@ generate_ModelOutcome_neural <- function(){
           NULL
         }
       }, error = function(e) NULL)
-      params <- tryCatch({
-        if (reticulate::py_has_attr(run_result, "params")) {
-          run_result$params
-        } else if (!is.null(run_result$params)) {
-          run_result$params
-        } else {
-          NULL
-        }
-      }, error = function(e) NULL)
       state <- if (!is.null(run_result$state)) {
         run_result$state
       } else if (length(run_result) > 0L) {
@@ -10046,116 +10103,7 @@ generate_ModelOutcome_neural <- function(){
       } else {
         run_result
       }
-      list(state = state, losses = losses, params = params)
-    }
-    flatten_svi_numeric_tree <- function(tree) {
-      if (is.null(tree)) {
-        return(numeric(0))
-      }
-      leaves <- tryCatch(strenv$jax$tree_util$tree_leaves(tree), error = function(e) NULL)
-      if (is.null(leaves) || length(leaves) < 1L) {
-        return(numeric(0))
-      }
-      out <- numeric(0)
-      for (leaf in leaves) {
-        arr <- tryCatch(as.numeric(strenv$np$array(leaf)), error = function(e) numeric(0))
-        if (length(arr) > 0L) {
-          out <- c(out, arr)
-        }
-      }
-      out[is.finite(out)]
-    }
-    svi_tree_rms <- function(tree) {
-      vals <- flatten_svi_numeric_tree(tree)
-      if (length(vals) < 1L) {
-        return(NA_real_)
-      }
-      sqrt(mean(vals ^ 2))
-    }
-    svi_tree_l2 <- function(tree) {
-      vals <- flatten_svi_numeric_tree(tree)
-      if (length(vals) < 1L) {
-        return(NA_real_)
-      }
-      sqrt(sum(vals ^ 2))
-    }
-    svi_param_delta_rms <- function(previous_tree, current_tree) {
-      if (is.null(previous_tree) || is.null(current_tree)) {
-        return(NA_real_)
-      }
-      previous_leaves <- tryCatch(strenv$jax$tree_util$tree_leaves(previous_tree), error = function(e) NULL)
-      current_leaves <- tryCatch(strenv$jax$tree_util$tree_leaves(current_tree), error = function(e) NULL)
-      if (is.null(previous_leaves) || is.null(current_leaves) ||
-          length(previous_leaves) != length(current_leaves)) {
-        return(NA_real_)
-      }
-      deltas <- numeric(0)
-      for (leaf_idx in seq_along(previous_leaves)) {
-        prev_vals <- tryCatch(
-          as.numeric(strenv$np$array(previous_leaves[[leaf_idx]])),
-          error = function(e) numeric(0)
-        )
-        curr_vals <- tryCatch(
-          as.numeric(strenv$np$array(current_leaves[[leaf_idx]])),
-          error = function(e) numeric(0)
-        )
-        if (length(prev_vals) != length(curr_vals) || length(prev_vals) < 1L) {
-          return(NA_real_)
-        }
-        keep <- is.finite(prev_vals) & is.finite(curr_vals)
-        if (!any(keep)) {
-          next
-        }
-        deltas <- c(deltas, curr_vals[keep] - prev_vals[keep])
-      }
-      if (length(deltas) < 1L) {
-        return(NA_real_)
-      }
-      sqrt(mean(deltas ^ 2))
-    }
-    extract_svi_optimizer_moment_diagnostics <- function(svi_state_current,
-                                                         optimizer_tag_current) {
-      diagnostics <- list(
-        muon_mu_l2 = NA_real_,
-        adam_mu_l2 = NA_real_,
-        adam_nu_rms = NA_real_
-      )
-      if (!identical(optimizer_tag_current, "muon") || is.null(svi_state_current)) {
-        return(diagnostics)
-      }
-      optim_state <- tryCatch(svi_state_current$optim_state, error = function(e) NULL)
-      if (is.null(optim_state) || length(optim_state) < 2L) {
-        return(diagnostics)
-      }
-      inner_state <- tryCatch(optim_state[[2]], error = function(e) NULL)
-      if (is.null(inner_state) || length(inner_state) < 2L) {
-        return(diagnostics)
-      }
-      partition_state <- tryCatch(inner_state[[2]], error = function(e) NULL)
-      inner_states <- tryCatch(partition_state$inner_states, error = function(e) NULL)
-      if (is.null(inner_states)) {
-        return(diagnostics)
-      }
-
-      muon_state <- tryCatch(inner_states$muon$inner_state[[1]], error = function(e) NULL)
-      adam_state <- tryCatch(inner_states$adam$inner_state[[1]], error = function(e) NULL)
-
-      diagnostics$muon_mu_l2 <- if (!is.null(muon_state)) {
-        svi_tree_l2(muon_state$mu)
-      } else {
-        NA_real_
-      }
-      diagnostics$adam_mu_l2 <- if (!is.null(adam_state)) {
-        svi_tree_l2(adam_state$mu)
-      } else {
-        NA_real_
-      }
-      diagnostics$adam_nu_rms <- if (!is.null(adam_state)) {
-        svi_tree_rms(adam_state$nu)
-      } else {
-        NA_real_
-      }
-      diagnostics
+      list(state = state, losses = losses)
     }
     format_svi_diag_value <- function(value, digits = 8L) {
       if (length(value) != 1L || !is.finite(value)) {
@@ -10222,6 +10170,20 @@ generate_ModelOutcome_neural <- function(){
     } else {
       as.integer(early_stopping_validation_max_n)
     }
+    early_stopping_validation_batch_size <- if ("early_stopping_validation_batch_size" %in% names(mcmc_control)) {
+      mcmc_control$early_stopping_validation_batch_size
+    } else {
+      128L
+    }
+    if (!is.null(early_stopping_validation_batch_size)) {
+      early_stopping_validation_batch_size <- as.integer(early_stopping_validation_batch_size)
+      if (length(early_stopping_validation_batch_size) != 1L ||
+          is.na(early_stopping_validation_batch_size) ||
+          !is.finite(early_stopping_validation_batch_size) ||
+          early_stopping_validation_batch_size < 1L) {
+        early_stopping_validation_batch_size <- 128L
+      }
+    }
     early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
       "validation_split_unavailable"
     } else {
@@ -10244,6 +10206,7 @@ generate_ModelOutcome_neural <- function(){
         ))
         early_stopping_info$n_train <- length(validation_split$train_idx)
         early_stopping_info$n_validation <- length(validation_split$validation_idx)
+        early_stopping_info$validation_batch_size <- as.integer(validation_split$validation_batch_size)
         early_stopping_info$validation_target_n <- as.integer(validation_split$validation_target_n)
         svi_train_model_args <- build_svi_subset_model_args(validation_split$train_idx)
         early_stopping_running <- TRUE
@@ -10256,11 +10219,13 @@ generate_ModelOutcome_neural <- function(){
         }
         early_stopping_info$n_train <- length(Y_use)
         early_stopping_info$n_validation <- 0L
+        early_stopping_info$validation_batch_size <- NA_integer_
         early_stopping_info$validation_target_n <- NA_integer_
       }
     } else {
       early_stopping_info$n_train <- length(Y_use)
       early_stopping_info$n_validation <- 0L
+      early_stopping_info$validation_batch_size <- NA_integer_
       early_stopping_info$validation_target_n <- NA_integer_
     }
 
@@ -10275,7 +10240,6 @@ generate_ModelOutcome_neural <- function(){
       svi_loss_chunks <- list()
       steps_remaining <- as.integer(svi_steps)
       steps_completed <- 0L
-      previous_params_for_diag <- NULL
 
       while (steps_remaining > 0L) {
         chunk_steps <- min(chunk_size, steps_remaining)
@@ -10305,10 +10269,6 @@ generate_ModelOutcome_neural <- function(){
         steps_completed <- steps_completed + as.integer(chunk_steps)
         steps_remaining <- steps_remaining - as.integer(chunk_steps)
         svi_steps_completed <- as.integer(steps_completed)
-        current_params_for_diag <- run_parts$params
-        if (is.null(current_params_for_diag)) {
-          current_params_for_diag <- tryCatch(svi$get_params(svi_state), error = function(e) NULL)
-        }
 
         validation_metric_error <- NULL
         metric_value <- tryCatch(
@@ -10376,16 +10336,10 @@ generate_ModelOutcome_neural <- function(){
           NA_real_
         }
         elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
-        optimizer_diag <- extract_svi_optimizer_moment_diagnostics(
-          svi_state_current = svi_state,
-          optimizer_tag_current = optimizer_tag
-        )
         message(sprintf(
           paste0(
             "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; ",
-            "train_elbo=%s; param_rms=%s; param_delta_rms=%s; ",
-            "muon_mu_l2=%s; adam_mu_l2=%s; adam_nu_rms=%s; ",
-            "best=%.6f at step %d; delta_prev=%s; elapsed=%ss."
+            "train_elbo=%s; best=%.6f at step %d; delta_prev=%s; elapsed=%ss."
           ),
           as.integer(early_stopping_info$stop_check),
           total_checks_planned,
@@ -10394,20 +10348,11 @@ generate_ModelOutcome_neural <- function(){
           early_stopping_info$metric,
           metric_value,
           format_svi_diag_value(train_elbo_value, digits = 2L),
-          format_svi_diag_value(svi_tree_rms(current_params_for_diag), digits = 8L),
-          format_svi_diag_value(
-            svi_param_delta_rms(previous_params_for_diag, current_params_for_diag),
-            digits = 8L
-          ),
-          format_svi_diag_value(optimizer_diag$muon_mu_l2, digits = 8L),
-          format_svi_diag_value(optimizer_diag$adam_mu_l2, digits = 8L),
-          format_svi_diag_value(optimizer_diag$adam_nu_rms, digits = 8L),
           best_metric_for_message,
           best_step_for_message,
           delta_prev_text,
           format_svi_diag_value(elapsed_seconds, digits = 3L)
         ))
-        previous_params_for_diag <- current_params_for_diag
 
         if (no_improve_checks >= early_stopping_info$patience &&
             steps_completed < as.integer(svi_steps)) {

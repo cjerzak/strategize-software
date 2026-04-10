@@ -1922,6 +1922,36 @@ test_that("early stopping validation target helper applies fraction and optional
   )
 })
 
+test_that("early stopping validation batch helper bounds prediction chunk size", {
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_batch_size(
+      validation_target_n = 250L
+    ),
+    128L
+  )
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_batch_size(
+      validation_target_n = 250L,
+      validation_batch_size = 64L
+    ),
+    64L
+  )
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_batch_size(
+      validation_target_n = 32L,
+      validation_batch_size = 128L
+    ),
+    32L
+  )
+  expect_identical(
+    strategize:::neural_resolve_early_stopping_validation_batch_size(
+      validation_target_n = 32L,
+      validation_batch_size = NULL
+    ),
+    32L
+  )
+})
+
 test_that("output-only neural early stopping exposes resolved validation size controls", {
   fit <- run_output_only_attn_vi_fit(
     seed = 20260410,
@@ -1929,13 +1959,15 @@ test_that("output-only neural early stopping exposes resolved validation size co
     svi_steps = 25L,
     neural_mcmc_control_overrides = list(
       early_stopping_validation_frac = 1,
-      early_stopping_validation_max_n = 4L
+      early_stopping_validation_max_n = 4L,
+      early_stopping_validation_batch_size = 3L
     )
   )
   model_info <- get_neural_model_info(fit)
 
   expect_identical(model_info$early_stopping$validation_frac, 1)
   expect_identical(as.integer(model_info$early_stopping$validation_max_n), 4L)
+  expect_identical(as.integer(model_info$early_stopping$validation_batch_size), 3L)
   expect_lte(as.integer(model_info$early_stopping$validation_target_n), 4L)
   expect_identical(
     as.integer(model_info$early_stopping$validation_target_n),
@@ -2130,13 +2162,13 @@ test_that("average-case normal neural logging reports per-check validation nll s
   expect_true(all(is.finite(c(check_idx, early_idx, summary_idx))))
   expect_match(
     messages[[check_idx]],
-    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); param_rms=(NA|-?[0-9]+\\.[0-9]{8}); param_delta_rms=(NA|-?[0-9]+\\.[0-9]{8}); muon_mu_l2=NA; adam_mu_l2=NA; adam_nu_rms=NA; best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
   )
   expect_lt(check_idx, early_idx)
   expect_lt(early_idx, summary_idx)
 })
 
-test_that("output-only attn VI logging reports Muon optimizer diagnostics when Muon stays active", {
+test_that("output-only attn VI logging reports compact early-stop summaries when Muon stays active", {
   skip_on_cran()
   skip_if_no_jax()
   strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
@@ -2159,17 +2191,12 @@ test_that("output-only attn VI logging reports Muon optimizer diagnostics when M
   expect_gt(length(early_stop_lines), 0L)
   expect_match(
     early_stop_lines[[1]],
-    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); param_rms=(NA|-?[0-9]+\\.[0-9]{8}); param_delta_rms=NA; muon_mu_l2=(NA|-?[0-9]+\\.[0-9]{8}); adam_mu_l2=(NA|-?[0-9]+\\.[0-9]{8}); adam_nu_rms=(NA|-?[0-9]+\\.[0-9]{8}); .*elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; elapsed=[0-9]+\\.[0-9]{3}s\\.$"
   )
-  expect_true(any(grepl("muon_mu_l2=-?[0-9]+\\.[0-9]{8}", early_stop_lines)))
-  expect_true(any(grepl("adam_mu_l2=-?[0-9]+\\.[0-9]{8}", early_stop_lines)))
-  expect_true(any(grepl("adam_nu_rms=-?[0-9]+\\.[0-9]{8}", early_stop_lines)))
-  if (length(early_stop_lines) > 1L) {
-    expect_true(any(grepl("param_delta_rms=-?[0-9]+\\.[0-9]{8}", early_stop_lines[-1L])))
-  }
+  expect_false(any(grepl("param_rms=|param_delta_rms=|muon_mu_l2=|adam_mu_l2=|adam_nu_rms=", early_stop_lines)))
 })
 
-test_that("output-only attn VI logging keeps Muon diagnostic fields as NA for non-Muon optimizers", {
+test_that("output-only attn VI logging uses the same compact summary for non-Muon optimizers", {
   captured <- capture_messages(
     suppressWarnings(run_output_only_attn_vi_fit(
       seed = 20260409,
@@ -2183,11 +2210,9 @@ test_that("output-only attn VI logging keeps Muon diagnostic fields as NA for no
   expect_gt(length(early_stop_lines), 0L)
   expect_match(
     early_stop_lines[[1]],
-    "param_rms=(NA|-?[0-9]+\\.[0-9]{8}); param_delta_rms=NA; muon_mu_l2=NA; adam_mu_l2=NA; adam_nu_rms=NA; .*elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; elapsed=[0-9]+\\.[0-9]{3}s\\.$"
   )
-  if (length(early_stop_lines) > 1L) {
-    expect_true(any(grepl("param_delta_rms=-?[0-9]+\\.[0-9]{8}", early_stop_lines[-1L])))
-  }
+  expect_false(any(grepl("param_rms=|param_delta_rms=|muon_mu_l2=|adam_mu_l2=|adam_nu_rms=", early_stop_lines)))
 })
 
 test_that("output-only full-attn attn VI routes training through shared candidate extraction", {
