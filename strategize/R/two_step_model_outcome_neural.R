@@ -146,10 +146,33 @@ neural_coerce_group_index_base <- function(values,
 }
 
 neural_has_shape <- function(x) {
-  tryCatch({
-    x$shape
-    TRUE
-  }, error = function(e) FALSE)
+  if (is.null(x)) {
+    return(FALSE)
+  }
+  has_shape <- tryCatch(!is.null(x$shape), error = function(e) FALSE)
+  if (isTRUE(has_shape)) {
+    return(TRUE)
+  }
+  if (!requireNamespace("reticulate", quietly = TRUE)) {
+    return(FALSE)
+  }
+  tryCatch(reticulate::is_py_object(x), error = function(e) FALSE)
+}
+
+neural_batch_vector_jnp <- function(x, dtype = NULL) {
+  arr <- strenv$jnp$atleast_1d(strenv$jnp$array(x))
+  if (!is.null(dtype)) {
+    arr <- strenv$jnp$astype(arr, dtype)
+  }
+  arr
+}
+
+neural_batch_matrix_jnp <- function(x, dtype = NULL) {
+  arr <- strenv$jnp$atleast_2d(strenv$jnp$array(x))
+  if (!is.null(dtype)) {
+    arr <- strenv$jnp$astype(arr, dtype)
+  }
+  arr
 }
 
 neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
@@ -1372,6 +1395,72 @@ neural_validate_full_attn_compatibility <- function(model_info,
   }
 
   invisible(NULL)
+}
+
+neural_required_cross_attn_param_names <- function() {
+  c(
+    "RMS_merge_cross",
+    "RMS_q_cross",
+    "RMS_k_cross",
+    "W_q_cross",
+    "W_k_cross",
+    "W_v_cross",
+    "W_o_cross"
+  )
+}
+
+neural_missing_required_param_names <- function(required_names,
+                                                model_info,
+                                                params = NULL) {
+  missing_names <- character(0)
+  for (name in required_names) {
+    has_name <- FALSE
+    if (!is.null(params)) {
+      has_name <- !is.null(params[[name]])
+    }
+    if (!isTRUE(has_name) && !is.null(model_info$params)) {
+      has_name <- !is.null(model_info$params[[name]])
+    }
+    if (!isTRUE(has_name) && !is.null(model_info$param_names)) {
+      has_name <- name %in% model_info$param_names
+    }
+    if (!isTRUE(has_name)) {
+      missing_names <- c(missing_names, name)
+    }
+  }
+  unique(missing_names)
+}
+
+neural_validate_cross_attn_compatibility <- function(model_info,
+                                                     params = NULL,
+                                                     context = "Neural model") {
+  if (is.null(model_info)) {
+    return(invisible(NULL))
+  }
+  if (!identical(neural_cross_encoder_mode(model_info), "attn")) {
+    return(invisible(NULL))
+  }
+
+  missing_names <- neural_missing_required_param_names(
+    required_names = neural_required_cross_attn_param_names(),
+    model_info = model_info,
+    params = params
+  )
+  if (length(missing_names) < 1L) {
+    return(invisible(NULL))
+  }
+
+  stop(
+    sprintf(
+      paste0(
+        "%s uses legacy cross-candidate attention parameters without required ",
+        "sites: %s. Refit and re-export under the updated architecture."
+      ),
+      context,
+      paste(missing_names, collapse = ", ")
+    ),
+    call. = FALSE
+  )
 }
 
 neural_transformer_state_tokens <- function(transformer_out) {
@@ -3688,6 +3777,30 @@ neural_encode_candidate_core_prepared <- function(params,
                                                   stage_idx = NULL,
                                                   matchup_idx = NULL,
                                                   return_tokens = FALSE) {
+  X_idx <- neural_batch_matrix_jnp(X_idx, dtype = strenv$jnp$int32)
+  party_idx <- neural_batch_vector_jnp(party_idx, dtype = strenv$jnp$int32)
+  resp_party_idx <- neural_batch_vector_jnp(resp_party_idx, dtype = strenv$jnp$int32)
+  if (!is.null(resp_cov)) {
+    resp_cov <- neural_batch_matrix_jnp(resp_cov, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_cov_present)) {
+    resp_cov_present <- neural_batch_matrix_jnp(resp_cov_present, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_cov_order)) {
+    resp_cov_order <- neural_batch_matrix_jnp(resp_cov_order, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(experiment_idx)) {
+    experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(factor_order)) {
+    factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(stage_idx)) {
+    stage_idx <- neural_batch_vector_jnp(stage_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(matchup_idx)) {
+    matchup_idx <- neural_batch_vector_jnp(matchup_idx, dtype = strenv$jnp$int32)
+  }
   n_batch <- ai(X_idx$shape[[1]])
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
   choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
@@ -3757,6 +3870,30 @@ neural_predict_pair_cross_core_prepared <- function(params,
                                                     factor_order = NULL,
                                                     stage_idx,
                                                     matchup_idx = NULL) {
+  Xl <- neural_batch_matrix_jnp(Xl, dtype = strenv$jnp$int32)
+  Xr <- neural_batch_matrix_jnp(Xr, dtype = strenv$jnp$int32)
+  pl <- neural_batch_vector_jnp(pl, dtype = strenv$jnp$int32)
+  pr <- neural_batch_vector_jnp(pr, dtype = strenv$jnp$int32)
+  resp_p <- neural_batch_vector_jnp(resp_p, dtype = strenv$jnp$int32)
+  if (!is.null(resp_c)) {
+    resp_c <- neural_batch_matrix_jnp(resp_c, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_c_present)) {
+    resp_c_present <- neural_batch_matrix_jnp(resp_c_present, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_c_order)) {
+    resp_c_order <- neural_batch_matrix_jnp(resp_c_order, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(experiment_idx)) {
+    experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(factor_order)) {
+    factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
+  }
+  stage_idx <- neural_batch_vector_jnp(stage_idx, dtype = strenv$jnp$int32)
+  if (!is.null(matchup_idx)) {
+    matchup_idx <- neural_batch_vector_jnp(matchup_idx, dtype = strenv$jnp$int32)
+  }
   n_batch <- ai(Xl$shape[[1]])
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
   choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
@@ -3844,6 +3981,26 @@ neural_predict_pair_core_prepared <- function(params,
                                               experiment_idx = NULL,
                                               factor_order = NULL,
                                               return_logits = FALSE) {
+  Xl <- neural_batch_matrix_jnp(Xl, dtype = strenv$jnp$int32)
+  Xr <- neural_batch_matrix_jnp(Xr, dtype = strenv$jnp$int32)
+  pl <- neural_batch_vector_jnp(pl, dtype = strenv$jnp$int32)
+  pr <- neural_batch_vector_jnp(pr, dtype = strenv$jnp$int32)
+  resp_p <- neural_batch_vector_jnp(resp_p, dtype = strenv$jnp$int32)
+  if (!is.null(resp_c)) {
+    resp_c <- neural_batch_matrix_jnp(resp_c, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_c_present)) {
+    resp_c_present <- neural_batch_matrix_jnp(resp_c_present, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_c_order)) {
+    resp_c_order <- neural_batch_matrix_jnp(resp_c_order, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(experiment_idx)) {
+    experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(factor_order)) {
+    factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
+  }
   mode <- neural_cross_encoder_mode(model_info)
   use_cross_encoder <- identical(mode, "full")
   use_cross_term <- identical(mode, "term")
@@ -4017,6 +4174,24 @@ neural_predict_single_core_prepared <- function(params,
                                                 experiment_idx = NULL,
                                                 factor_order = NULL,
                                                 return_logits = FALSE) {
+  Xb <- neural_batch_matrix_jnp(Xb, dtype = strenv$jnp$int32)
+  party_idx <- neural_batch_vector_jnp(party_idx, dtype = strenv$jnp$int32)
+  resp_p <- neural_batch_vector_jnp(resp_p, dtype = strenv$jnp$int32)
+  if (!is.null(resp_c)) {
+    resp_c <- neural_batch_matrix_jnp(resp_c, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_c_present)) {
+    resp_c_present <- neural_batch_matrix_jnp(resp_c_present, dtype = strenv$dtj)
+  }
+  if (!is.null(resp_c_order)) {
+    resp_c_order <- neural_batch_matrix_jnp(resp_c_order, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(experiment_idx)) {
+    experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(factor_order)) {
+    factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
+  }
   choice_out <- neural_encode_candidate_core_prepared(
     params = params,
     model_info = model_info,
@@ -8627,11 +8802,28 @@ generate_ModelOutcome_neural <- function(){
       return(NULL)
     }
 
+    prefer_fallback_param_store <- function(name) {
+      if (!isTRUE(output_only_mode)) {
+        return(FALSE)
+      }
+      dynamic_names <- c(
+        "W_out", "W_out_decentered", "W_out_base", "W_out_z",
+        "b_out", "b_out_decentered", "b_out_base", "b_out_z",
+        "tau_w_out", "tau_b",
+        "sigma",
+        "W_cross_out",
+        "M_cross", "M_cross_raw", "tau_cross"
+      )
+      !name %in% dynamic_names
+    }
+
     get_site_value <- function(name) {
-      value <- if (!is.null(param_sites)) {
-        tryCatch(param_sites[[name]], error = function(e) NULL)
-      } else {
-        NULL
+      value <- NULL
+      if (isTRUE(prefer_fallback_param_store(name)) && !is.null(fallback_params)) {
+        value <- tryCatch(fallback_params[[name]], error = function(e) NULL)
+      }
+      if (is.null(value) && !is.null(param_sites)) {
+        value <- tryCatch(param_sites[[name]], error = function(e) NULL)
       }
       if (is.null(value) && !is.null(fallback_params)) {
         value <- tryCatch(fallback_params[[name]], error = function(e) NULL)

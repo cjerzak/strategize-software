@@ -1290,6 +1290,10 @@ cs2step_neural_prepare_params <- function(object,
     model_info = model_info,
     context = "Neural predictor"
   )
+  neural_validate_cross_attn_compatibility(
+    model_info = model_info,
+    context = "Neural predictor"
+  )
 
   if (!is.null(object$fit$params)) {
     params <- object$fit$params
@@ -1304,12 +1308,27 @@ cs2step_neural_prepare_params <- function(object,
       params = params,
       context = "Neural predictor"
     )
+    neural_validate_cross_attn_compatibility(
+      model_info = model_info,
+      params = params,
+      context = "Neural predictor"
+    )
     return(list(params = params, model_info = model_info))
   }
 
   cache_id <- object$metadata$cache_id %||% NULL
   cached_params <- cs2step_neural_cache_get(cache_id)
   if (!is.null(cached_params)) {
+    neural_validate_full_attn_compatibility(
+      model_info = model_info,
+      params = cached_params,
+      context = "Neural predictor"
+    )
+    neural_validate_cross_attn_compatibility(
+      model_info = model_info,
+      params = cached_params,
+      context = "Neural predictor"
+    )
     return(list(params = cached_params, model_info = model_info))
   }
 
@@ -1328,12 +1347,27 @@ cs2step_neural_prepare_params <- function(object,
         params = params,
         context = "Neural predictor"
       )
+      neural_validate_cross_attn_compatibility(
+        model_info = model_info,
+        params = params,
+        context = "Neural predictor"
+      )
       return(list(params = params, model_info = model_info))
     }
     stop("Neural predictor is missing fitted parameters.", call. = FALSE)
   }
   theta_jnp <- strenv$jnp$array(as.numeric(theta_mean))$astype(strenv$dtj)
   params <- neural_params_from_theta(theta_jnp, model_info)
+  neural_validate_full_attn_compatibility(
+    model_info = model_info,
+    params = params,
+    context = "Neural predictor"
+  )
+  neural_validate_cross_attn_compatibility(
+    model_info = model_info,
+    params = params,
+    context = "Neural predictor"
+  )
   cs2step_neural_cache_set(cache_id, params)
   list(params = params, model_info = model_info)
 }
@@ -2102,21 +2136,25 @@ cs2step_unpack_predictor <- function(bundle,
   if (!cs2step_has_reticulate()) {
     stop("Loading neural predictors requires the 'reticulate' package.", call. = FALSE)
   }
+  upgraded_model_info <- cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)
   if (identical(
-    neural_covariate_value_encoding(cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)),
+    neural_covariate_value_encoding(upgraded_model_info),
     "shared_projection"
-  ) && !isTRUE(cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)$has_covariate_span_tokens)) {
+  ) && !isTRUE(upgraded_model_info$has_covariate_span_tokens)) {
     stop(
       "This shared_projection bundle uses the pre-span covariate encoder. Refit the model under the updated architecture.",
       call. = FALSE
     )
   }
   neural_validate_full_attn_compatibility(
-    model_info = cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info),
+    model_info = upgraded_model_info,
     context = "Neural predictor bundle"
   )
-
-  bundle$fit$neural_model_info <- cs2step_neural_upgrade_model_info(bundle$fit$neural_model_info)
+  neural_validate_cross_attn_compatibility(
+    model_info = upgraded_model_info,
+    context = "Neural predictor bundle"
+  )
+  bundle$fit$neural_model_info <- upgraded_model_info
 
   fit <- list(
     my_model = NULL,

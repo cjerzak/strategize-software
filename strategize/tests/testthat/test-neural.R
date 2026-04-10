@@ -1544,6 +1544,62 @@ test_that("neural outcome bundles save and reload cleanly", {
   expect_true(all(p >= 0 & p <= 1))
 })
 
+test_that("legacy attn bundles fail clearly when required cross-attn params are missing", {
+  fit <- get_neural_fit_attn()
+  res <- fit$res
+  model_info <- get_neural_model_info(res)
+
+  expect_true(!is.null(model_info))
+  expect_identical(model_info$cross_candidate_encoder_mode, "attn")
+
+  theta_mean <- tryCatch(
+    as.numeric(reticulate::py_to_r(res$est_coefficients_jnp)),
+    error = function(e) {
+      tryCatch(
+        as.numeric(res$est_coefficients_jnp),
+        error = function(e2) {
+          as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(res$est_coefficients_jnp)))
+        }
+      )
+    }
+  )
+  expect_true(is.numeric(theta_mean))
+
+  vcov_vec <- res$vcov_outcome_model
+  theta_var <- if (!is.null(vcov_vec) && length(vcov_vec) > 1L) {
+    as.numeric(vcov_vec[-1])
+  } else {
+    NULL
+  }
+
+  tmp <- tempfile(fileext = ".rds")
+  save_neural_outcome_bundle(
+    file = tmp,
+    theta_mean = theta_mean,
+    theta_var = theta_var,
+    neural_model_info = model_info,
+    p_list = fit$p_list,
+    mode = "pairwise",
+    overwrite = TRUE
+  )
+
+  fit_loaded <- load_neural_outcome_bundle(tmp, preload_params = FALSE)
+  expect_true(inherits(fit_loaded, "strategic_predictor"))
+
+  bundle <- readRDS(tmp)
+  bundle$fit$neural_model_info$param_names <- setdiff(
+    bundle$fit$neural_model_info$param_names,
+    "W_q_cross"
+  )
+  bundle$neural_model_info <- bundle$fit$neural_model_info
+  saveRDS(bundle, tmp)
+
+  expect_error(
+    load_neural_outcome_bundle(tmp, preload_params = FALSE),
+    "W_q_cross"
+  )
+})
+
 test_that("full attention bundles reload, but legacy full attention bundles fail clearly", {
   fit <- get_neural_fit_full_attn_res()
   res <- fit$res
