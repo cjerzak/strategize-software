@@ -10243,6 +10243,7 @@ generate_ModelOutcome_neural <- function(){
 
       while (steps_remaining > 0L) {
         chunk_steps <- min(chunk_size, steps_remaining)
+        chunk_started_at <- proc.time()[["elapsed"]]
         run_result <- do.call(
           svi$run,
           c(
@@ -10255,6 +10256,7 @@ generate_ModelOutcome_neural <- function(){
             svi_train_model_args
           )
         )
+        chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         run_parts <- parse_svi_run_result(run_result)
         if (is.null(run_parts$state)) {
           early_stopping_reason <- "update_failed"
@@ -10335,11 +10337,16 @@ generate_ModelOutcome_neural <- function(){
         } else {
           NA_real_
         }
+        iter_per_s_value <- if (is.finite(chunk_run_seconds) && chunk_run_seconds > 0) {
+          as.numeric(chunk_steps) / chunk_run_seconds
+        } else {
+          NA_real_
+        }
         elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
         message(sprintf(
           paste0(
             "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; ",
-            "train_elbo=%s; best=%.6f at step %d; delta_prev=%s; elapsed=%ss."
+            "train_elbo=%s; best=%.6f at step %d; delta_prev=%s; iter_per_s=%s; elapsed=%ss."
           ),
           as.integer(early_stopping_info$stop_check),
           total_checks_planned,
@@ -10351,6 +10358,7 @@ generate_ModelOutcome_neural <- function(){
           best_metric_for_message,
           best_step_for_message,
           delta_prev_text,
+          format_svi_diag_value(iter_per_s_value, digits = 3L),
           format_svi_diag_value(elapsed_seconds, digits = 3L)
         ))
 
