@@ -10111,6 +10111,17 @@ generate_ModelOutcome_neural <- function(){
       }
       sprintf(paste0("%.", as.integer(digits), "f"), as.numeric(value))
     }
+    current_process_rss_mb <- function() {
+      if (!requireNamespace("ps", quietly = TRUE)) {
+        return(NA_real_)
+      }
+      mem_info <- tryCatch(ps::ps_memory_info(), error = function(e) NULL)
+      rss_bytes <- tryCatch(as.numeric(mem_info[["rss"]]), error = function(e) NA_real_)
+      if (length(rss_bytes) != 1L || !is.finite(rss_bytes) || rss_bytes < 0) {
+        return(NA_real_)
+      }
+      rss_bytes / (1024^2)
+    }
 
     validation_split <- NULL
     early_stopping_running <- FALSE
@@ -10342,11 +10353,13 @@ generate_ModelOutcome_neural <- function(){
         } else {
           NA_real_
         }
+        rss_mb_value <- current_process_rss_mb()
         elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
         message(sprintf(
           paste0(
             "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; ",
-            "train_elbo=%s; best=%.6f at step %d; delta_prev=%s; iter_per_s=%s; elapsed=%ss."
+            "train_elbo=%s; best=%.6f at step %d; delta_prev=%s; iter_per_s=%s; ",
+            "rss_mb=%s; elapsed=%ss."
           ),
           as.integer(early_stopping_info$stop_check),
           total_checks_planned,
@@ -10359,6 +10372,7 @@ generate_ModelOutcome_neural <- function(){
           best_step_for_message,
           delta_prev_text,
           format_svi_diag_value(iter_per_s_value, digits = 3L),
+          format_svi_diag_value(rss_mb_value, digits = 1L),
           format_svi_diag_value(elapsed_seconds, digits = 3L)
         ))
 

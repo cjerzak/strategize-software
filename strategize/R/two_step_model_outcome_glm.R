@@ -400,16 +400,46 @@ generate_ModelOutcome <- function(){
             # table(paste0(respondent_id,respondent_task_id))
 
             # devtools::install_github('mgoplerud/FactorHet'); install.packages("tgp"); install.packages("mclust")
-            my_model <- FactorHet::FactorHet_mbo(
-              formula = OutcomeFormula_mainOnly,
-              group = as.formula("~ respondent_id"),
-              task =  as.formula("~ respondent_task_id"),
-              choice_order = as.formula("~ profile_order"),
-              moderator = ModeratorFormula,
-              design = design_fh,
-              mbo_control = FactorHet::FactorHet_mbo_control(iters = 3),
-              control = FactorHet::FactorHet_control(beta_method = "cpp"),
-              K = K)
+            my_model <- tryCatch(
+              FactorHet::FactorHet_mbo(
+                formula = OutcomeFormula_mainOnly,
+                group = as.formula("~ respondent_id"),
+                task =  as.formula("~ respondent_task_id"),
+                choice_order = as.formula("~ profile_order"),
+                moderator = ModeratorFormula,
+                design = design_fh,
+                mbo_control = FactorHet::FactorHet_mbo_control(iters = 3),
+                control = FactorHet::FactorHet_control(beta_method = "cpp"),
+                K = K
+              ),
+              error = function(e) {
+                msg <- conditionMessage(e)
+                backend_failure <- grepl(
+                  "lhs|lazy-load database|generateDesign|ParamHelpers|mlrMBO",
+                  msg,
+                  ignore.case = TRUE
+                )
+                if (isTRUE(backend_failure)) {
+                  stop(
+                    paste0(
+                      "K > 1 outcome-model fitting requires a working ",
+                      "FactorHet/mlrMBO/lhs backend. The installed backend ",
+                      "appears unavailable or corrupted; reinstall `lhs` and, ",
+                      "if needed, `ParamHelpers`, `mlrMBO`, and `FactorHet`. ",
+                      "Original error: ", msg
+                    ),
+                    call. = FALSE
+                  )
+                }
+                stop(
+                  paste0(
+                    "FactorHet::FactorHet_mbo failed in the K > 1 branch. ",
+                    "Original error: ", msg
+                  ),
+                  call. = FALSE
+                )
+              }
+            )
             my_mean_full <- my_model$parameters$beta
             my_mean_full <- rbind(my_mean_full, matrix(0,nrow = nrow( interaction_info),ncol=K))
 

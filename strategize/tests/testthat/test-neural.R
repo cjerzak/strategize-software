@@ -2162,7 +2162,7 @@ test_that("average-case normal neural logging reports per-check validation nll s
   expect_true(all(is.finite(c(check_idx, early_idx, summary_idx))))
   expect_match(
     messages[[check_idx]],
-    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); iter_per_s=(NA|[0-9]+\\.[0-9]{3}); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
   )
   expect_lt(check_idx, early_idx)
   expect_lt(early_idx, summary_idx)
@@ -2191,7 +2191,7 @@ test_that("output-only attn VI logging reports compact early-stop summaries when
   expect_gt(length(early_stop_lines), 0L)
   expect_match(
     early_stop_lines[[1]],
-    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
   )
   expect_false(any(grepl("param_rms=|param_delta_rms=|muon_mu_l2=|adam_mu_l2=|adam_nu_rms=", early_stop_lines)))
 })
@@ -2210,7 +2210,7 @@ test_that("output-only attn VI logging uses the same compact summary for non-Muo
   expect_gt(length(early_stop_lines), 0L)
   expect_match(
     early_stop_lines[[1]],
-    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
   )
   expect_false(any(grepl("param_rms=|param_delta_rms=|muon_mu_l2=|adam_mu_l2=|adam_nu_rms=", early_stop_lines)))
 })

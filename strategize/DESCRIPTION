@@ -22,6 +22,7 @@ Imports:
     gtools,
     Matrix,
     matrixStats,
+    ps,
     reticulate,
     rlang,
     rrapply,

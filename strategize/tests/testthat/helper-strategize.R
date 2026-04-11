@@ -53,6 +53,37 @@ skip_if_no_tgp <- function() {
   }
 }
 
+#' Skip tests if the full FactorHet/mlrMBO/lhs stack is unavailable
+skip_if_no_factorhet_stack <- function() {
+  required_pkgs <- c("tgp", "FactorHet", "mlrMBO", "ParamHelpers", "lhs")
+  missing_pkgs <- required_pkgs[!vapply(required_pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing_pkgs) > 0L) {
+    skip(sprintf(
+      "K > 1 backend stack unavailable: missing %s",
+      paste(missing_pkgs, collapse = ", ")
+    ))
+  }
+
+  lhs_ok <- tryCatch({
+    lhs::randomLHS(4L, 1L)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!isTRUE(lhs_ok)) {
+    skip("K > 1 backend stack unavailable: lhs::randomLHS failed")
+  }
+
+  design_ok <- tryCatch({
+    par.set <- ParamHelpers::makeParamSet(
+      ParamHelpers::makeNumericParam("l", lower = -5, upper = 0)
+    )
+    ParamHelpers::generateDesign(4L, par.set, lhs::randomLHS)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!isTRUE(design_ok)) {
+    skip("K > 1 backend stack unavailable: ParamHelpers/lhs design generation failed")
+  }
+}
+
 # =============================================================================
 # Test Data Generators
 # =============================================================================
