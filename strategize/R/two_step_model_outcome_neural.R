@@ -4948,7 +4948,7 @@ generate_ModelOutcome_neural <- function(){
     svi_steps = "optimal",
     svi_lr = 0.01,
     svi_num_particles = 1L,
-    svi_num_draws = 200L,
+    svi_num_draws = 50L,
     vi_guide = "auto_normal",
     optimizer = "muon",
     early_stopping = TRUE,
@@ -7479,12 +7479,42 @@ generate_ModelOutcome_neural <- function(){
     strenv$jnp$zeros(list(n_rows, ai(0L)), dtype = ddtype_)
   }
 
+  normalize_model_obs_idx <- function(obs_idx) {
+    if (is.null(obs_idx)) {
+      return(NULL)
+    }
+    if (reticulate::is_py_object(obs_idx)) {
+      return(strenv$jnp$array(obs_idx)$astype(strenv$jnp$int32))
+    }
+    strenv$jnp$array(as.integer(obs_idx) - 1L)$astype(strenv$jnp$int32)
+  }
+  subset_model_rows <- function(x, obs_idx) {
+    if (is.null(x) || is.null(obs_idx)) {
+      return(x)
+    }
+    strenv$jnp$take(x, obs_idx, axis = 0L)
+  }
   BayesianPairTransformerModel <- function(X_left, X_right, party_left, party_right,
                                            resp_party, resp_cov, resp_cov_present = NULL,
                                            experiment_index = NULL,
                                            likelihood_code = NULL,
                                            n_outcomes_obs = NULL,
-                                           Y_obs) {
+                                           Y_obs,
+                                           obs_idx = NULL) {
+    obs_idx <- normalize_model_obs_idx(obs_idx)
+    if (!is.null(obs_idx)) {
+      X_left <- subset_model_rows(X_left, obs_idx)
+      X_right <- subset_model_rows(X_right, obs_idx)
+      party_left <- subset_model_rows(party_left, obs_idx)
+      party_right <- subset_model_rows(party_right, obs_idx)
+      resp_party <- subset_model_rows(resp_party, obs_idx)
+      resp_cov <- subset_model_rows(resp_cov, obs_idx)
+      resp_cov_present <- subset_model_rows(resp_cov_present, obs_idx)
+      experiment_index <- subset_model_rows(experiment_index, obs_idx)
+      likelihood_code <- subset_model_rows(likelihood_code, obs_idx)
+      n_outcomes_obs <- subset_model_rows(n_outcomes_obs, obs_idx)
+      Y_obs <- subset_model_rows(Y_obs, obs_idx)
+    }
     N_local <- ai(X_left$shape[[1]])
     D_local <- ai(X_left$shape[[2]])
     resp_cov_present <- normalize_resp_cov_present_for_model(
@@ -7834,7 +7864,20 @@ generate_ModelOutcome_neural <- function(){
                                              experiment_index = NULL,
                                              likelihood_code = NULL,
                                              n_outcomes_obs = NULL,
-                                             Y_obs) {
+                                             Y_obs,
+                                             obs_idx = NULL) {
+    obs_idx <- normalize_model_obs_idx(obs_idx)
+    if (!is.null(obs_idx)) {
+      X <- subset_model_rows(X, obs_idx)
+      party <- subset_model_rows(party, obs_idx)
+      resp_party <- subset_model_rows(resp_party, obs_idx)
+      resp_cov <- subset_model_rows(resp_cov, obs_idx)
+      resp_cov_present <- subset_model_rows(resp_cov_present, obs_idx)
+      experiment_index <- subset_model_rows(experiment_index, obs_idx)
+      likelihood_code <- subset_model_rows(likelihood_code, obs_idx)
+      n_outcomes_obs <- subset_model_rows(n_outcomes_obs, obs_idx)
+      Y_obs <- subset_model_rows(Y_obs, obs_idx)
+    }
     N_local <- ai(X$shape[[1]])
     D_local <- ai(X$shape[[2]])
     resp_cov_present <- normalize_resp_cov_present_for_model(
@@ -9800,39 +9843,6 @@ generate_ModelOutcome_neural <- function(){
       )
     }
     rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
-    jnp_take_rows <- function(x, idx) {
-      idx_jnp <- strenv$jnp$array(as.integer(idx - 1L))$astype(strenv$jnp$int32)
-      strenv$jnp$take(x, idx_jnp, axis = 0L)
-    }
-    build_svi_subset_model_args <- function(idx) {
-      if (pairwise_mode) {
-        list(
-          X_left = jnp_take_rows(X_left_jnp, idx),
-          X_right = jnp_take_rows(X_right_jnp, idx),
-          party_left = jnp_take_rows(party_left_jnp, idx),
-          party_right = jnp_take_rows(party_right_jnp, idx),
-          resp_party = jnp_take_rows(resp_party_jnp, idx),
-          resp_cov = jnp_take_rows(resp_cov_jnp, idx),
-          resp_cov_present = jnp_take_rows(resp_cov_present_jnp, idx),
-          experiment_index = if (is.null(experiment_index_jnp)) NULL else jnp_take_rows(experiment_index_jnp, idx),
-          likelihood_code = if (is.null(likelihood_code_jnp)) NULL else jnp_take_rows(likelihood_code_jnp, idx),
-          n_outcomes_obs = if (is.null(n_outcomes_obs_jnp)) NULL else jnp_take_rows(n_outcomes_obs_jnp, idx),
-          Y_obs = jnp_take_rows(Y_jnp, idx)
-        )
-      } else {
-        list(
-          X = jnp_take_rows(X_single_jnp, idx),
-          party = jnp_take_rows(party_single_jnp, idx),
-          resp_party = jnp_take_rows(resp_party_jnp, idx),
-          resp_cov = jnp_take_rows(resp_cov_jnp, idx),
-          resp_cov_present = jnp_take_rows(resp_cov_present_jnp, idx),
-          experiment_index = if (is.null(experiment_index_jnp)) NULL else jnp_take_rows(experiment_index_jnp, idx),
-          likelihood_code = if (is.null(likelihood_code_jnp)) NULL else jnp_take_rows(likelihood_code_jnp, idx),
-          n_outcomes_obs = if (is.null(n_outcomes_obs_jnp)) NULL else jnp_take_rows(n_outcomes_obs_jnp, idx),
-          Y_obs = jnp_take_rows(Y_jnp, idx)
-        )
-      }
-    }
     validation_split_reason <- "validation_split_unavailable"
     build_svi_validation_split <- function() {
       validation_split_reason <<- "validation_split_unavailable"
@@ -10009,6 +10019,7 @@ generate_ModelOutcome_neural <- function(){
 
       list(
         train_idx = as.integer(train_idx),
+        train_idx_jnp = normalize_model_obs_idx(train_idx),
         validation_idx = as.integer(validation_idx),
         validation_batches = unname(lapply(validation_batches, as.integer)),
         validation_batch_size = as.integer(validation_batch_size),
@@ -10219,7 +10230,10 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$n_validation <- length(validation_split$validation_idx)
         early_stopping_info$validation_batch_size <- as.integer(validation_split$validation_batch_size)
         early_stopping_info$validation_target_n <- as.integer(validation_split$validation_target_n)
-        svi_train_model_args <- build_svi_subset_model_args(validation_split$train_idx)
+        svi_train_model_args <- c(
+          svi_model_args,
+          list(obs_idx = validation_split$train_idx_jnp)
+        )
         early_stopping_running <- TRUE
         early_stopping_reason <- "completed_budget"
       } else {
@@ -10455,21 +10469,18 @@ generate_ModelOutcome_neural <- function(){
       n_draws <- 1L
     }
     sample_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
-    posterior_sample_args <- c(
-      list(
-        sample_key,
-        params,
-        sample_shape = reticulate::tuple(ai(n_draws))
-      ),
-      svi_model_args
-    )
-    posterior_samples <- do.call(guide$sample_posterior, posterior_sample_args)
     if (isTRUE(run_mcmc_after_svi)) {
-      SVIInitValues <- lapply(posterior_samples, function(x) {
-        strenv$jnp$mean(x, axis = 0L)
-      })
-      names(SVIInitValues) <- names(posterior_samples)
+      SVIInitValues <- extract_svi_param_sites(params)
     } else {
+      posterior_sample_args <- c(
+        list(
+          sample_key,
+          params,
+          sample_shape = reticulate::tuple(ai(n_draws))
+        ),
+        svi_model_args
+      )
+      posterior_samples <- do.call(guide$sample_posterior, posterior_sample_args)
       PosteriorDraws <- lapply(posterior_samples, function(x) {
         strenv$jnp$expand_dims(x, 0L)
       })

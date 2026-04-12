@@ -290,14 +290,9 @@ neural_resolve_svi_budget <- function(svi_steps_input,
     }
   }
 
+  # Retained for API compatibility, but draw inflation is intentionally disabled:
+  # output-only normal batch_vi should not silently allocate larger posterior draws.
   applied_draw_floor <- FALSE
-  if (!isTRUE(user_supplied_svi_num_draws) && isTRUE(output_single_normal_batch_vi)) {
-    floor_draws <- suppressWarnings(as.integer(output_single_normal_batch_vi_draw_floor))
-    if (length(floor_draws) == 1L && !is.na(floor_draws) && floor_draws >= 1L) {
-      applied_draw_floor <- resolved_draws < floor_draws
-      resolved_draws <- max(resolved_draws, floor_draws)
-    }
-  }
 
   list(
     svi_steps = as.integer(resolved_steps),

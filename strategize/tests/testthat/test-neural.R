@@ -2258,7 +2258,7 @@ test_that("SVI ELBO plot title reports the rounded last-20 finite mean", {
   )
 })
 
-test_that("output-only single-model normal batch_vi applies the production SVI floor by default", {
+test_that("output-only single-model normal batch_vi keeps the production step floor without inflating draws", {
   budget <- strategize:::neural_resolve_svi_budget(
     svi_steps_input = "optimal",
     svi_num_draws_input = 100L,
@@ -2290,9 +2290,9 @@ test_that("output-only single-model normal batch_vi applies the production SVI f
   expect_true(isTRUE(budget$used_default_svi_num_draws))
   expect_true(isTRUE(budget$output_single_normal_batch_vi))
   expect_true(isTRUE(budget$applied_output_single_normal_batch_vi_floor))
-  expect_true(isTRUE(budget$applied_output_single_normal_batch_vi_draw_floor))
+  expect_false(isTRUE(budget$applied_output_single_normal_batch_vi_draw_floor))
   expect_identical(as.integer(budget$svi_steps), 2000L)
-  expect_identical(as.integer(budget$svi_num_draws), 200L)
+  expect_identical(as.integer(budget$svi_num_draws), 100L)
 })
 
 test_that("explicit SVI overrides are honored even when below the production floor", {
