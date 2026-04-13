@@ -3,7 +3,7 @@
 #' @param conda_env Conda env name used for the Python runtime.
 #' @param family Embedding-family selector. Currently only \code{"qwen3"} is supported.
 #' @param runtime Runtime preference. Use \code{"auto"} to resolve per host, or
-#'   choose one of \code{"mlx"}, \code{"rocm"}, or \code{"cpu"} explicitly.
+#'   choose one of \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or \code{"cpu"} explicitly.
 #' @param profile Embedding profile. Currently only \code{"portable"} is supported.
 #' @param conda Conda binary to use. Defaults to \code{"auto"}.
 #'
@@ -33,7 +33,7 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_env",
 #' @param conda_env Conda env name used for the Python runtime.
 #' @param family Embedding-family selector. Currently only \code{"qwen3"} is supported.
 #' @param runtime Runtime preference. Use \code{"auto"} to resolve per host, or
-#'   choose one of \code{"mlx"}, \code{"rocm"}, or \code{"cpu"} explicitly.
+#'   choose one of \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or \code{"cpu"} explicitly.
 #' @param profile Embedding profile. Currently only \code{"portable"} is supported.
 #' @param cache_dir Optional directory for cached text embeddings.
 #' @param required Logical; if \code{TRUE}, ensure the selected runtime is usable
@@ -116,7 +116,7 @@ cs2step_text_embedding_family <- function(family) {
 
 cs2step_text_embedding_runtime <- function(runtime) {
   runtime <- tolower(as.character(runtime %||% "auto"))
-  valid <- c("auto", "mlx", "rocm", "cpu")
+  valid <- c("auto", "mlx", "cuda", "rocm", "cpu")
   if (!runtime %in% valid) {
     stop(
       sprintf("Unsupported text embedding runtime '%s'. Valid values: %s.",
@@ -263,8 +263,64 @@ cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "aut
   )
 }
 
+cs2step_command_probe <- function(command, args = character()) {
+  output <- tryCatch(
+    suppressWarnings(system2(command, args = args, stdout = TRUE, stderr = TRUE)),
+    error = function(e) structure(conditionMessage(e), status = 127L)
+  )
+  status <- attr(output, "status")
+  if (is.null(status)) {
+    status <- 0L
+  }
+  list(status = as.integer(status), output = as.character(output))
+}
+
 cs2step_run_command_available <- function(cmd) {
   nzchar(Sys.which(cmd))
+}
+
+cs2step_collect_nvidia_tools <- function() {
+  list(
+    nvidia_smi = cs2step_run_command_available("nvidia-smi"),
+    nvcc = cs2step_run_command_available("nvcc")
+  )
+}
+
+cs2step_probe_nvidia_driver <- function() {
+  if (!isTRUE(cs2step_run_command_available("nvidia-smi"))) {
+    return(list(available = FALSE, driver_version = "", driver_major = NA_integer_, device_name = ""))
+  }
+  probe <- cs2step_command_probe(
+    "nvidia-smi",
+    c("--query-gpu=driver_version,name", "--format=csv,noheader")
+  )
+  line <- probe$output[[1]] %||% ""
+  if (!nzchar(line)) {
+    return(list(available = FALSE, driver_version = "", driver_major = NA_integer_, device_name = ""))
+  }
+  parts <- strsplit(line, ",", fixed = TRUE)[[1]]
+  driver_version <- trimws(parts[[1]] %||% "")
+  driver_major <- suppressWarnings(as.integer(sub("^([0-9]+).*", "\\1", driver_version)))
+  device_name <- if (length(parts) >= 2L) trimws(paste(parts[-1], collapse = ",")) else ""
+  list(
+    available = identical(probe$status, 0L) && nzchar(driver_version),
+    driver_version = driver_version,
+    driver_major = driver_major,
+    device_name = device_name
+  )
+}
+
+cs2step_cuda_torch_wheel <- function(driver_major) {
+  if (is.na(driver_major)) {
+    return(NULL)
+  }
+  if (driver_major >= 580L) {
+    return(list(label = "cu130", index_url = "https://download.pytorch.org/whl/cu130"))
+  }
+  if (driver_major >= 525L) {
+    return(list(label = "cu128", index_url = "https://download.pytorch.org/whl/cu128"))
+  }
+  NULL
 }
 
 cs2step_collect_rocm_tools <- function() {
@@ -313,10 +369,56 @@ cs2step_probe_rocm_runtime <- function(python) {
   )
 }
 
+cs2step_probe_cuda_runtime <- function(python) {
+  if (!nzchar(python %||% "") || !file.exists(python)) {
+    return(list(validated = FALSE, cuda_available = FALSE, cuda_version = "", hip_version = "", device_name = ""))
+  }
+  code <- paste(
+    "try:",
+    "    import torch",
+    "    ver = getattr(torch, 'version', None)",
+    "    cuda = getattr(ver, 'cuda', None)",
+    "    hip = getattr(ver, 'hip', None)",
+    "    avail = bool(torch.cuda.is_available())",
+    "    print('TORCH_OK')",
+    "    print('CUDA_AVAILABLE::' + ('1' if avail else '0'))",
+    "    print('CUDA_VERSION::' + (str(cuda) if cuda is not None else ''))",
+    "    print('HIP_VERSION::' + (str(hip) if hip is not None else ''))",
+    "    if avail:",
+    "        try:",
+    "            print('DEVICE_NAME::' + str(torch.cuda.get_device_name(0)))",
+    "        except Exception as exc:",
+    "            print('DEVICE_NAME::' + exc.__class__.__name__)",
+    "except Exception as exc:",
+    "    print('TORCH_FAIL::' + exc.__class__.__name__ + '::' + str(exc))",
+    sep = "\n"
+  )
+  probe <- cs2step_python_probe(python, code)
+  lines <- probe$output %||% character(0)
+  torch_ok <- any(startsWith(lines, "TORCH_OK"))
+  cuda_available <- any(lines == "CUDA_AVAILABLE::1")
+  cuda_line <- lines[startsWith(lines, "CUDA_VERSION::")]
+  hip_line <- lines[startsWith(lines, "HIP_VERSION::")]
+  device_line <- lines[startsWith(lines, "DEVICE_NAME::")]
+  cuda_version <- if (length(cuda_line)) sub("^CUDA_VERSION::", "", cuda_line[[1]]) else ""
+  hip_version <- if (length(hip_line)) sub("^HIP_VERSION::", "", hip_line[[1]]) else ""
+  device_name <- if (length(device_line)) sub("^DEVICE_NAME::", "", device_line[[1]]) else ""
+  list(
+    validated = isTRUE(torch_ok) && isTRUE(cuda_available) && nzchar(cuda_version) && !nzchar(hip_version),
+    cuda_available = cuda_available,
+    cuda_version = cuda_version,
+    hip_version = hip_version,
+    device_name = device_name
+  )
+}
+
 cs2step_collect_text_embedding_host_info <- function(conda_env = "strategize_env", conda = "auto") {
   env_state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda)
   os_name <- as.character(Sys.info()[["sysname"]] %||% .Platform$OS.type)
   machine <- as.character(Sys.info()[["machine"]] %||% R.version$arch)
+  nvidia_tools <- cs2step_collect_nvidia_tools()
+  nvidia_driver <- cs2step_probe_nvidia_driver()
+  cuda_runtime <- cs2step_probe_cuda_runtime(env_state$python)
   rocm_tools <- cs2step_collect_rocm_tools()
   rocm_runtime <- cs2step_probe_rocm_runtime(env_state$python)
   list(
@@ -332,6 +434,9 @@ cs2step_collect_text_embedding_host_info <- function(conda_env = "strategize_env
     core_module_details = env_state$core_module_details,
     mlx_host_capable = identical(os_name, "Darwin") &&
       grepl("arm|aarch64", machine, ignore.case = TRUE),
+    nvidia_tools = nvidia_tools,
+    nvidia_driver = nvidia_driver,
+    cuda_runtime = cuda_runtime,
     rocm_tools = rocm_tools,
     rocm_runtime = rocm_runtime
   )
@@ -395,7 +500,29 @@ cs2step_evaluate_text_embedding_candidate <- function(candidate, host) {
     }
   } else if (identical(candidate$backend, "sentence_transformers")) {
     installable <- identical(candidate$device, "cpu")
-    if (identical(candidate$device, "rocm")) {
+    if (identical(candidate$device, "cuda")) {
+      if (!identical(host$os, "Linux")) {
+        status <- "unavailable"
+        issues <- c(issues, "CUDA text embeddings are currently supported only on Linux hosts.")
+      } else if (!isTRUE(any(unlist(host$nvidia_tools)))) {
+        status <- "unavailable"
+        issues <- c(issues, "Nvidia tooling is not present on this host.")
+      } else if (!isTRUE(host$nvidia_driver$available)) {
+        status <- "unavailable"
+        issues <- c(issues, "Nvidia tooling is present but the GPU driver could not be resolved.")
+      } else if (is.null(cs2step_cuda_torch_wheel(host$nvidia_driver$driver_major))) {
+        status <- "unavailable"
+        issues <- c(
+          issues,
+          sprintf(
+            "Nvidia driver '%s' is too old for the supported CUDA torch wheels.",
+            host$nvidia_driver$driver_version %||% "unknown"
+          )
+        )
+      } else {
+        installable <- TRUE
+      }
+    } else if (identical(candidate$device, "rocm")) {
       if (!isTRUE(any(unlist(host$rocm_tools)))) {
         status <- "unavailable"
         issues <- c(issues, "ROCm tooling is not present on this host.")
@@ -431,6 +558,13 @@ cs2step_evaluate_text_embedding_candidate <- function(candidate, host) {
     }
   }
 
+  if (identical(candidate$device, "cuda") &&
+      !identical(status, "unavailable") &&
+      !isTRUE(host$cuda_runtime$validated)) {
+    status <- "needs_install"
+    issues <- c(issues, "Nvidia tooling is present but Python torch CUDA validation did not succeed.")
+  }
+
   candidate$status <- status
   candidate$installable <- installable
   candidate$issues <- unique(issues)
@@ -451,6 +585,17 @@ cs2step_resolve_text_embedding_candidates <- function(host) {
       raw_dim = 4096L,
       required_modules = c("mlx_embeddings", "mlx.core", "numpy"),
       host_constraints = list(os = "Darwin", machine = "arm64")
+    ),
+    cuda = cs2step_text_embedding_candidate(
+      label = "sentence_transformers_cuda",
+      backend = "sentence_transformers",
+      device = "cuda",
+      model_id = "Qwen/Qwen3-Embedding-0.6B",
+      conda_env = host$conda_env,
+      conda = host$conda,
+      canonical_dim = 1024L,
+      raw_dim = 1024L,
+      required_modules = c("sentence_transformers", "transformers", "torch", "numpy")
     ),
     rocm = cs2step_text_embedding_candidate(
       label = "sentence_transformers_rocm",
@@ -493,11 +638,20 @@ cs2step_select_text_embedding_candidate <- function(candidates,
     if (isTRUE(host$mlx_host_capable)) {
       selected <- candidates$mlx
     } else if (identical(host$os, "Linux") &&
+               candidates$cuda$status %in% c("ready", "needs_install")) {
+      selected <- candidates$cuda
+    } else if (identical(host$os, "Linux") &&
                isTRUE(any(unlist(host$rocm_tools))) &&
                isTRUE(host$rocm_runtime$validated)) {
       selected <- candidates$rocm
     } else {
       selected <- candidates$cpu
+      if (identical(host$os, "Linux") && isTRUE(any(unlist(host$nvidia_tools)))) {
+        issues <- c(
+          issues,
+          "Nvidia tooling is present but CUDA text embeddings are not usable; falling back to the next runtime."
+        )
+      }
       if (identical(host$os, "Linux") && isTRUE(any(unlist(host$rocm_tools))) &&
           !isTRUE(host$rocm_runtime$validated)) {
         issues <- c(
@@ -508,6 +662,8 @@ cs2step_select_text_embedding_candidate <- function(candidates,
     }
   } else if (identical(runtime, "mlx")) {
     selected <- candidates$mlx
+  } else if (identical(runtime, "cuda")) {
+    selected <- candidates$cuda
   } else if (identical(runtime, "rocm")) {
     selected <- candidates$rocm
   } else {
@@ -544,6 +700,70 @@ cs2step_inspect_text_embedding_candidates <- function(host,
   )
 }
 
+cs2step_conda_run <- function(conda, conda_env, args) {
+  conda_bin <- cs2step_resolve_conda_binary(conda)
+  if (!nzchar(conda_bin %||% "")) {
+    stop("Unable to resolve a conda binary for text embedding runtime installation.", call. = FALSE)
+  }
+  probe <- cs2step_command_probe(
+    conda_bin,
+    c("run", "-n", conda_env, args)
+  )
+  if (!identical(probe$status, 0L)) {
+    stop(
+      sprintf(
+        "Command failed while preparing text embedding runtime in '%s':\n%s",
+        conda_env,
+        paste(probe$output, collapse = "\n")
+      ),
+      call. = FALSE
+    )
+  }
+  invisible(probe$output)
+}
+
+cs2step_pip_install_in_conda <- function(conda,
+                                         conda_env,
+                                         packages,
+                                         index_url = NULL,
+                                         force_reinstall = FALSE) {
+  args <- c("python", "-m", "pip", "install", "--upgrade")
+  if (isTRUE(force_reinstall)) {
+    args <- c(args, "--force-reinstall")
+  }
+  if (!is.null(index_url) && nzchar(index_url)) {
+    args <- c(args, "--index-url", index_url)
+  }
+  args <- c(args, as.character(packages))
+  cs2step_conda_run(conda = conda, conda_env = conda_env, args = args)
+}
+
+cs2step_install_cuda_sentence_transformers <- function(spec) {
+  driver <- cs2step_probe_nvidia_driver()
+  wheel <- cs2step_cuda_torch_wheel(driver$driver_major)
+  if (is.null(wheel)) {
+    stop(
+      sprintf(
+        "No supported CUDA torch wheel is available for Nvidia driver '%s'.",
+        driver$driver_version %||% "unknown"
+      ),
+      call. = FALSE
+    )
+  }
+  cs2step_pip_install_in_conda(
+    conda = spec$conda,
+    conda_env = spec$conda_env,
+    packages = "torch",
+    index_url = wheel$index_url,
+    force_reinstall = TRUE
+  )
+  cs2step_pip_install_in_conda(
+    conda = spec$conda,
+    conda_env = spec$conda_env,
+    packages = c("sentence-transformers", "transformers")
+  )
+}
+
 cs2step_ensure_text_embedding_runtime <- function(spec) {
   spec <- cs2step_normalize_text_embedding_spec(spec)
   env_state <- cs2step_backend_env_state(conda_env = spec$conda_env, conda = spec$conda)
@@ -559,12 +779,23 @@ cs2step_ensure_text_embedding_runtime <- function(spec) {
       pip = TRUE
     )
   } else if (identical(spec$backend, "sentence_transformers")) {
-    reticulate::py_install(
-      packages = c("sentence-transformers", "transformers"),
-      envname = spec$conda_env,
-      conda = spec$conda,
-      pip = TRUE
-    )
+    if (identical(spec$device, "cuda")) {
+      cs2step_install_cuda_sentence_transformers(spec)
+    } else if (identical(spec$device, "cpu")) {
+      reticulate::py_install(
+        packages = c("torch", "sentence-transformers", "transformers"),
+        envname = spec$conda_env,
+        conda = spec$conda,
+        pip = TRUE
+      )
+    } else {
+      reticulate::py_install(
+        packages = c("sentence-transformers", "transformers"),
+        envname = spec$conda_env,
+        conda = spec$conda,
+        pip = TRUE
+      )
+    }
   }
   invisible(TRUE)
 }
@@ -667,7 +898,7 @@ cs2step_build_text_embedding_fn <- function(spec, cache_dir = NULL) {
       state$processor <- model_bundle[[2]]
     } else {
       state$sentence_transformers <- reticulate::import("sentence_transformers", delay_load = FALSE)
-      device_use <- if (identical(spec$device, "rocm")) "cuda" else "cpu"
+      device_use <- if (spec$device %in% c("cuda", "rocm")) "cuda" else "cpu"
       state$model <- state$sentence_transformers$SentenceTransformer(
         spec$model_id,
         device = device_use

@@ -66,6 +66,9 @@ test_that("build_backend installs CPU JAX when nvidia-smi is unavailable", {
   testthat::local_mocked_bindings(
     cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
     cs2step_backend_env_state = states,
+    cs2step_probe_nvidia_driver = function() {
+      list(available = FALSE, driver_version = "unknown", driver_major = NA_integer_, device_name = "")
+    },
     .package = "strategize"
   )
 
@@ -82,11 +85,7 @@ test_that("build_backend installs CPU JAX when nvidia-smi is unavailable", {
     .package = "reticulate"
   )
 
-  testthat::local_mocked_bindings(
-    system = function(...) stop("nvidia-smi not available"),
-    Sys.info = function() c(sysname = "Linux"),
-    .package = "base"
-  )
+  testthat::local_mocked_bindings(Sys.info = function() c(sysname = "Linux"), .package = "base")
 
   withr::local_envvar(HOME = tempdir())
 
@@ -142,6 +141,9 @@ test_that("build_backend falls back to PATH conda and selects CUDA 13", {
   testthat::local_mocked_bindings(
     cs2step_resolve_conda_binary = function(conda = "auto") "auto",
     cs2step_backend_env_state = states,
+    cs2step_probe_nvidia_driver = function() {
+      list(available = TRUE, driver_version = "580.12", driver_major = 580L, device_name = "NVIDIA GPU")
+    },
     .package = "strategize"
   )
 
@@ -162,7 +164,6 @@ test_that("build_backend falls back to PATH conda and selects CUDA 13", {
   )
 
   testthat::local_mocked_bindings(
-    system = function(...) "580.12",
     Sys.info = function() c(sysname = "Linux"),
     Sys.which = function(x) "/usr/bin/conda",
     .package = "base"
@@ -210,6 +211,9 @@ test_that("build_backend selects CUDA 12 for mid-range drivers", {
   testthat::local_mocked_bindings(
     cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
     cs2step_backend_env_state = states,
+    cs2step_probe_nvidia_driver = function() {
+      list(available = TRUE, driver_version = "530.40", driver_major = 530L, device_name = "NVIDIA GPU")
+    },
     .package = "strategize"
   )
 
@@ -226,11 +230,7 @@ test_that("build_backend selects CUDA 12 for mid-range drivers", {
     .package = "reticulate"
   )
 
-  testthat::local_mocked_bindings(
-    system = function(...) "530.40",
-    Sys.info = function() c(sysname = "Linux"),
-    .package = "base"
-  )
+  testthat::local_mocked_bindings(Sys.info = function() c(sysname = "Linux"), .package = "base")
 
   withr::local_envvar(HOME = tempdir())
 

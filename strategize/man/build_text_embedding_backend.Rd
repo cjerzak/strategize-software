@@ -26,7 +26,7 @@ inspect_text_embedding_backend(
 
 \item{family}{Embedding-family selector. Currently only \code{"qwen3"} is supported.}
 
-\item{runtime}{Runtime preference. Use \code{"auto"} to resolve per host, or choose one of \code{"mlx"}, \code{"rocm"}, or \code{"cpu"} explicitly.}
+\item{runtime}{Runtime preference. Use \code{"auto"} to resolve per host, or choose one of \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or \code{"cpu"} explicitly.}
 
 \item{profile}{Embedding profile. Currently only \code{"portable"} is supported.}
 
@@ -48,6 +48,7 @@ Resolve a text embedding backend that is compatible with the current machine whi
 The current implementation keeps the Qwen embedding family but selects a different runtime per host:
 \itemize{
 \item Apple Silicon defaults to MLX with \code{mlx-community/Qwen3-Embedding-8B-mxfp8}.
+\item Linux prefers a CUDA-capable \code{sentence-transformers} path on validated Nvidia hosts.
 \item Linux prefers a ROCm-capable \code{sentence-transformers} path when the Python runtime validates it.
 \item Other hosts fall back to a CPU \code{sentence-transformers} path.
 }

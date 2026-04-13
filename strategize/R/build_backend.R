@@ -127,22 +127,22 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
       return(pip_install("jax")) 
     }
     
-    # Read driver version as integer major (e.g., 580)
-    drv <- try(suppressWarnings(system("nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1", intern=TRUE)), TRUE)
-    drv_major <- suppressWarnings(as.integer(sub("^([0-9]+).*", "\\1", drv[1])))
+    driver <- cs2step_probe_nvidia_driver()
+    drv <- driver$driver_version %||% "unknown"
+    drv_major <- driver$driver_major %||% NA_integer_
     
     # Prefer CUDA 13 if the driver is new enough; otherwise CUDA 12; else CPU fallback
     if (!is.na(drv_major) && drv_major >= 580) {
-      msg("Driver %s detected (>=580): installing JAX CUDA 13 wheels.", drv[1])
+      msg("Driver %s detected (>=580): installing JAX CUDA 13 wheels.", drv)
       tryCatch(pip_install('jax[cuda13]'), error = function(e) {
         msg("CUDA 13 wheels failed (%s); falling back to CUDA 12.", e$message)
         pip_install('jax[cuda12]')
       })
     } else if (!is.na(drv_major) && drv_major >= 525) {
-      msg("Driver %s detected (>=525,<580): installing JAX CUDA 12 wheels.", drv[1])
+      msg("Driver %s detected (>=525,<580): installing JAX CUDA 12 wheels.", drv)
       pip_install('jax[cuda12]')
     } else {
-      msg("Driver %s too old for CUDA wheels; installing CPU-only JAX.", drv[1])
+      msg("Driver %s too old for CUDA wheels; installing CPU-only JAX.", drv)
       pip_install('jax')
     }
   }
