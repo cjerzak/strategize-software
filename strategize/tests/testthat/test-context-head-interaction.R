@@ -2,6 +2,100 @@
 # Pairwise Utility Consistency Tests
 # =============================================================================
 
+context_head_language_span_fixture <- function(cross_mode = "attn",
+                                               residual_mode = "standard") {
+  strenv <- strategize:::strenv
+  jnp <- strenv$jnp
+  dtj <- strenv$dtj
+  token_levels <- strategize:::neural_token_family_levels()
+
+  factor_text <- matrix(c(1, 0), nrow = 1L, byrow = TRUE)
+  rownames(factor_text) <- "alpha"
+  level_text <- list(
+    alpha = matrix(
+      c(10, 0,
+        20, 0,
+        0, 0),
+      nrow = 3L,
+      byrow = TRUE
+    )
+  )
+
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    factor_name_text = factor_text,
+    level_name_text = level_text,
+    default_factor_order = c(0L),
+    factor_tokenization = "language_span",
+    max_factor_tokens = 8L,
+    token_family_levels = token_levels
+  )
+  transformer_info <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 2L,
+    n_heads = 1L,
+    head_dim = 2L,
+    residual_mode = residual_mode
+  )
+  model_info[names(transformer_info)] <- transformer_info
+  model_info$n_factors <- 1L
+  model_info$factor_index_list <- list(jnp$array(as.integer(c(0L, 1L))))
+  model_info$implicit <- FALSE
+  model_info$likelihood <- "bernoulli"
+  model_info$resp_cov_mean <- NULL
+  model_info$n_resp_covariates <- 0L
+  model_info$resp_party_levels <- c("A", "B")
+  model_info$cand_party_to_resp_idx <- jnp$array(as.integer(c(0L)))
+  model_info$cross_candidate_encoder_mode <- cross_mode
+  model_info$n_candidate_tokens <- 8L
+
+  params <- list(
+    E_choice = jnp$array(c(1, 2), dtype = dtj),
+    E_factor_start = jnp$array(c(0, 0), dtype = dtj),
+    E_factor_end = jnp$array(c(0, 0), dtype = dtj),
+    E_factor_role = jnp$zeros(list(4L, 2L), dtype = dtj),
+    E_token_family = jnp$zeros(list(length(token_levels), 2L), dtype = dtj),
+    E_sep = jnp$zeros(list(2L), dtype = dtj),
+    E_segment = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_factor_name_text = jnp$eye(2L, dtype = dtj),
+    W_level_name_text = jnp$eye(2L, dtype = dtj),
+    E_party = NULL,
+    E_rel = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_q_l1 = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_k_l1 = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_v_l1 = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_o_l1 = jnp$zeros(list(2L, 2L), dtype = dtj),
+    RMS_attn_l1 = jnp$ones(list(2L), dtype = dtj),
+    RMS_ff_l1 = jnp$ones(list(2L), dtype = dtj),
+    RMS_q_l1 = jnp$ones(list(2L), dtype = dtj),
+    RMS_k_l1 = jnp$ones(list(2L), dtype = dtj),
+    RMS_final = if (identical(residual_mode, "full_attn")) {
+      jnp$ones(list(2L), dtype = dtj)
+    } else {
+      NULL
+    },
+    W_ff1_l1 = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_ff2_l1 = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_out = jnp$ones(list(2L, 1L), dtype = dtj),
+    b_out = jnp$zeros(list(1L), dtype = dtj)
+  )
+  if (identical(residual_mode, "full_attn")) {
+    params$pseudo_query_attn_l1 <- jnp$zeros(list(2L), dtype = dtj)
+    params$pseudo_query_ff_l1 <- jnp$zeros(list(2L), dtype = dtj)
+    params$pseudo_query_final <- jnp$zeros(list(2L), dtype = dtj)
+  }
+
+  list(
+    model_info = model_info,
+    params = params,
+    pi_left = jnp$array(c(1, 0), dtype = dtj),
+    pi_right = jnp$array(c(0, 1), dtype = dtj)
+  )
+}
+
 test_that("pairwise logits are utility differences and swap invariant", {
   skip_on_cran()
   skip_if_no_jax()
@@ -748,4 +842,171 @@ test_that("full attention residual attn pair encoding uses readout candidate tok
   expect_equal(out_right, readout_right, tolerance = 1e-6)
   expect_gt(max(abs(readout_left - state_left)), 1e-3)
   expect_gt(max(abs(readout_right - state_right)), 1e-6)
+})
+
+test_that("attn mode packs language-span candidates before extraction", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  strategize:::initialize_jax()
+  fx <- context_head_language_span_fixture(cross_mode = "attn")
+
+  out <- strategize:::neural_encode_pair_soft_batched(
+    pi_left = fx$pi_left,
+    pi_right = fx$pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    model_info = fx$model_info,
+    resp_party_idx = NULL,
+    stage_idx = NULL,
+    matchup_idx = NULL,
+    resp_cov_vec = NULL,
+    params = fx$params,
+    return_tokens = TRUE
+  )
+
+  expect_equal(as.integer(out$cand_left_out$shape[[2]]), 4L)
+  expect_equal(as.integer(out$cand_right_out$shape[[2]]), 4L)
+  expect_equal(as.integer(out$cand_left_mask$shape[[2]]), 4L)
+  expect_equal(as.integer(out$cand_right_mask$shape[[2]]), 4L)
+})
+
+test_that("full attention residual attn extracts packed language-span readout candidates", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  jnp <- strenv$jnp
+  np <- strenv$np
+  fx <- context_head_language_span_fixture(
+    cross_mode = "attn",
+    residual_mode = "full_attn"
+  )
+
+  out <- strategize:::neural_encode_pair_soft_batched(
+    pi_left = fx$pi_left,
+    pi_right = fx$pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    model_info = fx$model_info,
+    resp_party_idx = NULL,
+    stage_idx = NULL,
+    matchup_idx = NULL,
+    resp_cov_vec = NULL,
+    params = fx$params,
+    return_tokens = TRUE
+  )
+
+  choice_tok <- strategize:::neural_build_choice_token(fx$model_info, fx$params)
+  choice_mask <- jnp$ones(list(1L, 1L), dtype = strenv$dtj)
+  left_info <- strategize:::neural_build_candidate_tokens_soft(
+    fx$pi_left,
+    party_idx = 0L,
+    role_id = 0L,
+    model_info = fx$model_info,
+    params = fx$params,
+    resp_party_idx = NULL,
+    return_mask = TRUE
+  )
+  right_info <- strategize:::neural_build_candidate_tokens_soft(
+    fx$pi_right,
+    party_idx = 0L,
+    role_id = 0L,
+    model_info = fx$model_info,
+    params = fx$params,
+    resp_party_idx = NULL,
+    return_mask = TRUE
+  )
+  left_seq <- strategize:::neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    cand_tokens = left_info$tokens,
+    cand_mask = left_info$mask,
+    model_info = fx$model_info,
+    preserve_candidate_tail = TRUE
+  )
+  right_seq <- strategize:::neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    cand_tokens = right_info$tokens,
+    cand_mask = right_info$mask,
+    model_info = fx$model_info,
+    preserve_candidate_tail = TRUE
+  )
+  transformer_out <- strategize:::neural_run_transformer(
+    jnp$concatenate(list(left_seq$tokens, right_seq$tokens), axis = 0L),
+    fx$model_info,
+    fx$params,
+    token_mask = jnp$concatenate(list(left_seq$mask, right_seq$mask), axis = 0L),
+    return_details = TRUE
+  )
+
+  state_tokens <- strategize:::neural_transformer_state_tokens(transformer_out)
+  readout_tokens <- strategize:::neural_transformer_readout_tokens(transformer_out)
+  cand_width <- as.integer(left_seq$cand_mask$shape[[2]])
+  cand_idx <- jnp$arange(
+    as.integer(state_tokens$shape[[2]] - cand_width),
+    as.integer(state_tokens$shape[[2]])
+  )
+  state_candidates <- jnp$take(state_tokens, cand_idx, axis = 1L)
+  readout_candidates <- jnp$take(readout_tokens, cand_idx, axis = 1L)
+
+  out_left <- as.numeric(reticulate::py_to_r(np$array(out$cand_left_out)))
+  out_right <- as.numeric(reticulate::py_to_r(np$array(out$cand_right_out)))
+  state_left <- as.numeric(reticulate::py_to_r(np$array(jnp$take(state_candidates, jnp$arange(1L), axis = 0L))))
+  state_right <- as.numeric(reticulate::py_to_r(np$array(jnp$take(state_candidates, jnp$arange(1L, 2L), axis = 0L))))
+  readout_left <- as.numeric(reticulate::py_to_r(np$array(jnp$take(readout_candidates, jnp$arange(1L), axis = 0L))))
+  readout_right <- as.numeric(reticulate::py_to_r(np$array(jnp$take(readout_candidates, jnp$arange(1L, 2L), axis = 0L))))
+
+  expect_equal(out_left, readout_left, tolerance = 1e-6)
+  expect_equal(out_right, readout_right, tolerance = 1e-6)
+  expect_gt(max(abs(readout_left - state_left)), 1e-6)
+  expect_gt(max(abs(readout_right - state_right)), 1e-6)
+})
+
+test_that("pairwise full mode handles packed language-span candidate blocks", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  fx <- context_head_language_span_fixture(cross_mode = "full")
+
+  logits_full <- strategize:::neural_predict_pair_soft(
+    pi_left = fx$pi_left,
+    pi_right = fx$pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    resp_party_idx = NULL,
+    model_info = fx$model_info,
+    resp_cov_vec = NULL,
+    params = fx$params,
+    return_logits = TRUE
+  )
+
+  model_info_none <- fx$model_info
+  model_info_none$cross_candidate_encoder_mode <- "none"
+  logits_none <- strategize:::neural_predict_pair_soft(
+    pi_left = fx$pi_left,
+    pi_right = fx$pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    resp_party_idx = NULL,
+    model_info = model_info_none,
+    resp_cov_vec = NULL,
+    params = fx$params,
+    return_logits = TRUE
+  )
+
+  expect_equal(
+    as.numeric(strenv$np$array(logits_full)),
+    sum(as.numeric(strenv$np$array(fx$params$E_choice))),
+    tolerance = 1e-6
+  )
+  expect_equal(
+    as.numeric(strenv$np$array(logits_none)),
+    0,
+    tolerance = 1e-6
+  )
 })

@@ -1549,6 +1549,227 @@ neural_candidate_token_count_from_mask <- function(token_mask) {
   tryCatch(ai(token_mask$shape[[2]]), error = function(e) NULL)
 }
 
+neural_max_order_length <- function(order_list = NULL, default_order = NULL) {
+  lengths_use <- integer(0)
+  if (!is.null(default_order)) {
+    lengths_use <- c(lengths_use, length(default_order %||% integer(0)))
+  }
+  if (length(order_list %||% list()) > 0L) {
+    lengths_use <- c(
+      lengths_use,
+      vapply(order_list, function(x) length(x %||% integer(0)), integer(1))
+    )
+  }
+  if (length(lengths_use) < 1L) {
+    return(0L)
+  }
+  as.integer(max(lengths_use, 0L, na.rm = TRUE))
+}
+
+neural_active_candidate_token_budget <- function(model_info) {
+  aux_tokens <- as.integer(neural_candidate_group_context_enabled(model_info)) +
+    as.integer(neural_relation_context_enabled(model_info))
+  if (identical(neural_factor_tokenization(model_info), "language_span")) {
+    n_spans <- neural_max_order_length(
+      order_list = model_info$factor_order_by_experiment %||% NULL,
+      default_order = model_info$default_factor_order %||% NULL
+    )
+    if (length(n_spans) != 1L || is.na(n_spans) || n_spans < 1L) {
+      n_spans <- tryCatch(ai(model_info$n_factors), error = function(e) 0L)
+    }
+    return(as.integer(neural_factor_span_width() * n_spans + aux_tokens))
+  }
+  n_candidate_tokens <- tryCatch(ai(model_info$n_candidate_tokens), error = function(e) NULL)
+  if (length(n_candidate_tokens) != 1L || is.null(n_candidate_tokens) || is.na(n_candidate_tokens)) {
+    return(as.integer(aux_tokens))
+  }
+  as.integer(n_candidate_tokens)
+}
+
+neural_active_context_token_budget <- function(model_info) {
+  base_tokens <- as.integer(isTRUE(model_info$has_experiment_token)) +
+    as.integer(isTRUE(model_info$has_stage_token)) +
+    as.integer(neural_respondent_group_context_enabled(model_info)) +
+    as.integer(isTRUE(model_info$has_matchup_token))
+  covariate_tokens <- 0L
+  if (isTRUE(model_info$has_covariate_span_tokens)) {
+    n_spans <- neural_max_order_length(
+      order_list = model_info$covariate_order_by_experiment %||% NULL,
+      default_order = model_info$default_covariate_order %||% NULL
+    )
+    if (length(n_spans) != 1L || is.na(n_spans) || n_spans < 1L) {
+      n_spans <- tryCatch(ai(model_info$n_resp_covariates), error = function(e) 0L)
+      if (length(n_spans) != 1L || is.null(n_spans) || is.na(n_spans) || n_spans < 1L) {
+        n_spans <- length(model_info$covariate_names %||% character(0))
+      }
+    }
+    covariate_tokens <- as.integer(neural_covariate_span_width() * n_spans)
+  } else if (isTRUE(model_info$has_covariate_tokens)) {
+    covariate_tokens <- as.integer(length(model_info$covariate_names %||% character(0)))
+  }
+  as.integer(base_tokens + covariate_tokens)
+}
+
+neural_pack_token_block <- function(tokens,
+                                    token_mask,
+                                    trim_tokens = NULL) {
+  if (is.null(tokens) || is.null(token_mask)) {
+    return(list(tokens = tokens, mask = token_mask))
+  }
+  width <- tryCatch(ai(token_mask$shape[[2]]), error = function(e) NULL)
+  if (is.null(width) || is.na(width) || width < 1L) {
+    return(list(tokens = tokens, mask = token_mask))
+  }
+  trim_use <- if (is.null(trim_tokens)) {
+    ai(width)
+  } else {
+    min(ai(trim_tokens), ai(width))
+  }
+  if (is.na(trim_use) || trim_use < 0L) {
+    trim_use <- ai(width)
+  }
+
+  base_idx <- strenv$jnp$reshape(
+    strenv$jnp$arange(ai(width), dtype = strenv$jnp$int32),
+    list(1L, ai(width))
+  )
+  sort_keys <- strenv$jnp$where(
+    token_mask > 0,
+    base_idx,
+    base_idx + ai(width)
+  )
+  order <- strenv$jnp$argsort(sort_keys, axis = 1L)
+  dims <- ai(tokens$shape[[3]])
+  gather_idx <- strenv$jnp[["repeat"]](
+    strenv$jnp$expand_dims(order, axis = 2L),
+    repeats = ai(dims),
+    axis = 2L
+  )
+  packed_tokens <- strenv$jnp$take_along_axis(tokens, gather_idx, axis = 1L)
+  packed_mask <- strenv$jnp$take_along_axis(token_mask, order, axis = 1L)
+  if (trim_use < width) {
+    keep_idx <- strenv$jnp$arange(ai(trim_use))
+    packed_tokens <- strenv$jnp$take(packed_tokens, keep_idx, axis = 1L)
+    packed_mask <- strenv$jnp$take(packed_mask, keep_idx, axis = 1L)
+  }
+  list(tokens = packed_tokens, mask = packed_mask)
+}
+
+neural_pack_candidate_sequence <- function(choice_tok,
+                                           choice_mask,
+                                           ctx_tokens = NULL,
+                                           ctx_mask = NULL,
+                                           cand_tokens,
+                                           cand_mask,
+                                           model_info,
+                                           preserve_candidate_tail = FALSE) {
+  ctx_trim <- neural_active_context_token_budget(model_info)
+  cand_trim <- neural_active_candidate_token_budget(model_info)
+  ctx_width <- if (is.null(ctx_mask)) {
+    0L
+  } else {
+    tryCatch(ai(ctx_mask$shape[[2]]), error = function(e) 0L)
+  }
+  cand_width <- tryCatch(ai(cand_mask$shape[[2]]), error = function(e) 0L)
+  if (length(ctx_trim) != 1L || is.na(ctx_trim) || ctx_trim < 0L) {
+    ctx_trim <- ctx_width
+  }
+  if (length(cand_trim) != 1L || is.na(cand_trim) || cand_trim < 1L) {
+    cand_trim <- cand_width
+  }
+  if (isTRUE(preserve_candidate_tail)) {
+    ctx_packed <- if (is.null(ctx_tokens)) {
+      list(tokens = NULL, mask = NULL)
+    } else {
+      neural_pack_token_block(ctx_tokens, ctx_mask, trim_tokens = ctx_trim)
+    }
+    cand_packed <- neural_pack_token_block(cand_tokens, cand_mask, trim_tokens = cand_trim)
+    token_parts <- list(choice_tok)
+    mask_parts <- list(choice_mask)
+    if (!is.null(ctx_packed$tokens)) {
+      token_parts <- c(token_parts, list(ctx_packed$tokens))
+      mask_parts <- c(mask_parts, list(ctx_packed$mask))
+    }
+    token_parts <- c(token_parts, list(cand_packed$tokens))
+    mask_parts <- c(mask_parts, list(cand_packed$mask))
+    return(list(
+      tokens = strenv$jnp$concatenate(token_parts, axis = 1L),
+      mask = strenv$jnp$concatenate(mask_parts, axis = 1L),
+      cand_mask = cand_packed$mask
+    ))
+  }
+
+  tail_tokens <- if (is.null(ctx_tokens)) {
+    cand_tokens
+  } else {
+    strenv$jnp$concatenate(list(ctx_tokens, cand_tokens), axis = 1L)
+  }
+  tail_mask <- if (is.null(ctx_mask)) {
+    cand_mask
+  } else {
+    strenv$jnp$concatenate(list(ctx_mask, cand_mask), axis = 1L)
+  }
+  tail_trim <- as.integer(ctx_trim + cand_trim)
+  tail_packed <- neural_pack_token_block(
+    tail_tokens,
+    tail_mask,
+    trim_tokens = tail_trim
+  )
+  list(
+    tokens = strenv$jnp$concatenate(list(choice_tok, tail_packed$tokens), axis = 1L),
+    mask = strenv$jnp$concatenate(list(choice_mask, tail_packed$mask), axis = 1L),
+    cand_mask = cand_mask
+  )
+}
+
+neural_pack_full_cross_sequence <- function(choice_tok,
+                                            choice_mask,
+                                            sep_tok,
+                                            sep_mask,
+                                            left_tokens,
+                                            left_mask,
+                                            right_tokens,
+                                            right_mask,
+                                            model_info,
+                                            ctx_tokens = NULL,
+                                            ctx_mask = NULL) {
+  ctx_trim <- neural_active_context_token_budget(model_info)
+  cand_trim <- neural_active_candidate_token_budget(model_info)
+  ctx_width <- if (is.null(ctx_mask)) {
+    0L
+  } else {
+    tryCatch(ai(ctx_mask$shape[[2]]), error = function(e) 0L)
+  }
+  left_width <- tryCatch(ai(left_mask$shape[[2]]), error = function(e) 0L)
+  if (length(ctx_trim) != 1L || is.na(ctx_trim) || ctx_trim < 0L) {
+    ctx_trim <- ctx_width
+  }
+  if (length(cand_trim) != 1L || is.na(cand_trim) || cand_trim < 1L) {
+    cand_trim <- left_width
+  }
+  ctx_packed <- if (is.null(ctx_tokens)) {
+    list(tokens = NULL, mask = NULL)
+  } else {
+    neural_pack_token_block(ctx_tokens, ctx_mask, trim_tokens = ctx_trim)
+  }
+  left_packed <- neural_pack_token_block(left_tokens, left_mask, trim_tokens = cand_trim)
+  right_packed <- neural_pack_token_block(right_tokens, right_mask, trim_tokens = cand_trim)
+  token_parts <- list(choice_tok)
+  mask_parts <- list(choice_mask)
+  if (!is.null(ctx_packed$tokens)) {
+    token_parts <- c(token_parts, list(ctx_packed$tokens))
+    mask_parts <- c(mask_parts, list(ctx_packed$mask))
+  }
+  token_parts <- c(token_parts, list(sep_tok, left_packed$tokens, sep_tok, right_packed$tokens))
+  mask_parts <- c(mask_parts, list(sep_mask, left_packed$mask, sep_mask, right_packed$mask))
+  list(
+    tokens = strenv$jnp$concatenate(token_parts, axis = 1L),
+    mask = strenv$jnp$concatenate(mask_parts, axis = 1L),
+    left_mask = left_packed$mask,
+    right_mask = right_packed$mask
+  )
+}
+
 neural_extract_choice_representation <- function(transformer_out) {
   readout_tokens <- neural_transformer_readout_tokens(transformer_out)
   choice_out <- strenv$jnp$take(readout_tokens, strenv$jnp$arange(1L), axis = 1L)
@@ -3869,13 +4090,18 @@ neural_encode_candidate_core_prepared <- function(params,
   )
   cand_tokens <- cand_info$tokens
   cand_mask <- cand_info$mask
-  if (is.null(ctx_tokens)) {
-    tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
-    token_mask <- strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
-  } else {
-    tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
-    token_mask <- strenv$jnp$concatenate(list(choice_mask, ctx_mask, cand_mask), axis = 1L)
-  }
+  seq_info <- neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    ctx_tokens = ctx_tokens,
+    ctx_mask = ctx_mask,
+    cand_tokens = cand_tokens,
+    cand_mask = cand_mask,
+    model_info = model_info,
+    preserve_candidate_tail = isTRUE(return_tokens)
+  )
+  tokens <- seq_info$tokens
+  token_mask <- seq_info$mask
   transformer_out <- neural_run_transformer(
     tokens,
     model_info,
@@ -3890,9 +4116,9 @@ neural_encode_candidate_core_prepared <- function(params,
   cand_out <- neural_extract_candidate_tokens(
     transformer_out,
     model_info,
-    n_candidate_tokens = neural_candidate_token_count_from_mask(cand_mask)
+    n_candidate_tokens = neural_candidate_token_count_from_mask(seq_info$cand_mask)
   )
-  list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = cand_mask)
+  list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = seq_info$cand_mask)
 }
 
 neural_predict_pair_cross_core_prepared <- function(params,
@@ -3984,18 +4210,21 @@ neural_predict_pair_cross_core_prepared <- function(params,
   )
   sep_tok <- neural_build_sep_token(model_info, n_batch = n_batch, params = params)
   sep_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
-  left_mask <- left_info$mask
-  right_mask <- right_info$mask
-  token_parts <- list(choice_tok)
-  mask_parts <- list(choice_mask)
-  if (!is.null(ctx_tokens)) {
-    token_parts <- c(token_parts, list(ctx_tokens))
-    mask_parts <- c(mask_parts, list(ctx_mask))
-  }
-  token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
-  mask_parts <- c(mask_parts, list(sep_mask, left_mask, sep_mask, right_mask))
-  tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-  token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+  seq_info <- neural_pack_full_cross_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    sep_tok = sep_tok,
+    sep_mask = sep_mask,
+    left_tokens = left_tokens,
+    left_mask = left_info$mask,
+    right_tokens = right_tokens,
+    right_mask = right_info$mask,
+    model_info = model_info,
+    ctx_tokens = ctx_tokens,
+    ctx_mask = ctx_mask
+  )
+  tokens <- seq_info$tokens
+  token_mask <- seq_info$mask
   transformer_out <- neural_run_transformer(
     tokens,
     model_info,
@@ -4524,13 +4753,18 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
                                                   return_mask = TRUE)
   cand_tokens <- cand_info$tokens
   cand_mask <- cand_info$mask
-  if (!is.null(resp_tokens)) {
-    tokens <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, cand_tokens), axis = 1L)
-    token_mask <- strenv$jnp$concatenate(list(choice_mask, resp_mask, cand_mask), axis = 1L)
-  } else {
-    tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
-    token_mask <- strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
-  }
+  seq_info <- neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    ctx_tokens = resp_tokens,
+    ctx_mask = resp_mask,
+    cand_tokens = cand_tokens,
+    cand_mask = cand_mask,
+    model_info = model_info,
+    preserve_candidate_tail = FALSE
+  )
+  tokens <- seq_info$tokens
+  token_mask <- seq_info$mask
   transformer_out <- neural_run_transformer(
     tokens,
     model_info,
@@ -4577,17 +4811,30 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
   right_tokens <- right_info$tokens
   left_mask <- left_info$mask
   right_mask <- right_info$mask
-  if (!is.null(resp_tokens)) {
-    tokens_left <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, left_tokens), axis = 1L)
-    tokens_right <- strenv$jnp$concatenate(list(choice_tok, resp_tokens, right_tokens), axis = 1L)
-    token_mask_left <- strenv$jnp$concatenate(list(choice_mask, resp_mask, left_mask), axis = 1L)
-    token_mask_right <- strenv$jnp$concatenate(list(choice_mask, resp_mask, right_mask), axis = 1L)
-  } else {
-    tokens_left <- strenv$jnp$concatenate(list(choice_tok, left_tokens), axis = 1L)
-    tokens_right <- strenv$jnp$concatenate(list(choice_tok, right_tokens), axis = 1L)
-    token_mask_left <- strenv$jnp$concatenate(list(choice_mask, left_mask), axis = 1L)
-    token_mask_right <- strenv$jnp$concatenate(list(choice_mask, right_mask), axis = 1L)
-  }
+  left_seq <- neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    ctx_tokens = resp_tokens,
+    ctx_mask = resp_mask,
+    cand_tokens = left_tokens,
+    cand_mask = left_mask,
+    model_info = model_info,
+    preserve_candidate_tail = isTRUE(return_tokens)
+  )
+  right_seq <- neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    ctx_tokens = resp_tokens,
+    ctx_mask = resp_mask,
+    cand_tokens = right_tokens,
+    cand_mask = right_mask,
+    model_info = model_info,
+    preserve_candidate_tail = isTRUE(return_tokens)
+  )
+  tokens_left <- left_seq$tokens
+  tokens_right <- right_seq$tokens
+  token_mask_left <- left_seq$mask
+  token_mask_right <- right_seq$mask
   tokens <- strenv$jnp$concatenate(list(tokens_left, tokens_right), axis = 0L)
   token_mask <- strenv$jnp$concatenate(list(token_mask_left, token_mask_right), axis = 0L)
   transformer_out <- neural_run_transformer(
@@ -4608,12 +4855,12 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     cand_tokens <- neural_extract_candidate_tokens(
       transformer_out,
       model_info,
-      n_candidate_tokens = neural_candidate_token_count_from_mask(left_mask)
+      n_candidate_tokens = neural_candidate_token_count_from_mask(left_seq$cand_mask)
     )
     out$cand_left_out <- strenv$jnp$take(cand_tokens, idx_left, axis = 0L)
     out$cand_right_out <- strenv$jnp$take(cand_tokens, idx_right, axis = 0L)
-    out$cand_left_mask <- left_mask
-    out$cand_right_mask <- right_mask
+    out$cand_left_mask <- left_seq$cand_mask
+    out$cand_right_mask <- right_seq$cand_mask
   }
   out
 }
@@ -4685,24 +4932,22 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
       params = params
     )
     sep_tok <- neural_build_sep_token(model_info, params = params)
-    token_parts <- list(choice_tok)
-    mask_parts <- list(choice_mask)
-    if (!is.null(ctx_tokens)) {
-      token_parts <- c(token_parts, list(ctx_tokens))
-      mask_parts <- c(mask_parts, list(ctx_mask))
-    }
-    token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
-    mask_parts <- c(
-      mask_parts,
-      list(
-        strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj),
-        left_info$mask,
-        strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj),
-        right_info$mask
-      )
+    sep_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
+    seq_info <- neural_pack_full_cross_sequence(
+      choice_tok = choice_tok,
+      choice_mask = choice_mask,
+      sep_tok = sep_tok,
+      sep_mask = sep_mask,
+      left_tokens = left_tokens,
+      left_mask = left_info$mask,
+      right_tokens = right_tokens,
+      right_mask = right_info$mask,
+      model_info = model_info,
+      ctx_tokens = ctx_tokens,
+      ctx_mask = ctx_mask
     )
-    tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-    token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+    tokens <- seq_info$tokens
+    token_mask <- seq_info$mask
     transformer_out <- neural_run_transformer(
       tokens,
       model_info,
@@ -7658,24 +7903,22 @@ generate_ModelOutcome_neural <- function(){
       left_tokens <- add_segment_embedding(left_info$tokens, 0L)
       right_tokens <- add_segment_embedding(right_info$tokens, 1L)
       sep_tok <- build_sep_token(N_batch)
-      token_parts <- list(choice_tok)
-      mask_parts <- list(choice_mask)
-      if (!is.null(ctx_tokens)) {
-        token_parts <- c(token_parts, list(ctx_tokens))
-        mask_parts <- c(mask_parts, list(ctx_mask))
-      }
-      token_parts <- c(token_parts, list(sep_tok, left_tokens, sep_tok, right_tokens))
-      mask_parts <- c(
-        mask_parts,
-        list(
-          strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_),
-          left_info$mask,
-          strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_),
-          right_info$mask
-        )
+      sep_mask <- strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_)
+      seq_info <- neural_pack_full_cross_sequence(
+        choice_tok = choice_tok,
+        choice_mask = choice_mask,
+        sep_tok = sep_tok,
+        sep_mask = sep_mask,
+        left_tokens = left_tokens,
+        left_mask = left_info$mask,
+        right_tokens = right_tokens,
+        right_mask = right_info$mask,
+        model_info = model_info_local,
+        ctx_tokens = ctx_tokens,
+        ctx_mask = ctx_mask
       )
-      tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-      token_mask <- strenv$jnp$concatenate(mask_parts, axis = 1L)
+      tokens <- seq_info$tokens
+      token_mask <- seq_info$mask
       transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       cls_out <- neural_extract_choice_representation(transformer_out)
       neural_linear_head(cls_out, W_out, b_out)
@@ -7702,13 +7945,18 @@ generate_ModelOutcome_neural <- function(){
       cand_info <- embed_candidate(Xa, pa, resp_p, experiment_idx, return_mask = TRUE)
       cand_tokens <- cand_info$tokens
       cand_mask <- cand_info$mask
-      if (!is.null(ctx_tokens)) {
-        tokens <- strenv$jnp$concatenate(list(choice_tok, ctx_tokens, cand_tokens), axis = 1L)
-        token_mask <- strenv$jnp$concatenate(list(choice_mask, ctx_mask, cand_mask), axis = 1L)
-      } else {
-        tokens <- strenv$jnp$concatenate(list(choice_tok, cand_tokens), axis = 1L)
-        token_mask <- strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
-      }
+      seq_info <- neural_pack_candidate_sequence(
+        choice_tok = choice_tok,
+        choice_mask = choice_mask,
+        ctx_tokens = ctx_tokens,
+        ctx_mask = ctx_mask,
+        cand_tokens = cand_tokens,
+        cand_mask = cand_mask,
+        model_info = model_info_local,
+        preserve_candidate_tail = isTRUE(return_tokens)
+      )
+      tokens <- seq_info$tokens
+      token_mask <- seq_info$mask
       transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       phi <- neural_extract_choice_representation(transformer_out)
       if (!isTRUE(return_tokens)) {
@@ -7717,9 +7965,9 @@ generate_ModelOutcome_neural <- function(){
       cand_out <- neural_extract_candidate_tokens(
         transformer_out,
         transformer_model_info,
-        n_candidate_tokens = neural_candidate_token_count_from_mask(cand_mask)
+        n_candidate_tokens = neural_candidate_token_count_from_mask(seq_info$cand_mask)
       )
-      list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = cand_mask)
+      list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = seq_info$cand_mask)
     }
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
