@@ -29,11 +29,9 @@
 #' @md
 
 build_backend <- function(conda_env = "strategize_env", conda = "auto") {
-  env_exists <- function(conda_bin) {
-    tryCatch({
-      envs <- reticulate::conda_list(conda = conda_bin)
-      conda_env %in% envs$name
-    }, error = function(e) FALSE)
+  env_registered <- function(conda_bin) {
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+    isTRUE(state$registered)
   }
 
   create_env <- function(conda_bin) {
@@ -41,30 +39,73 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
     invisible(TRUE)
   }
 
-  ok <- tryCatch({
-    create_env(conda)
-    TRUE
-  }, error = function(e) {
-    message(sprintf("conda_create failed using '%s': %s", conda, e$message))
-    FALSE
-  })
+  remove_env <- function(conda_bin) {
+    tryCatch(
+      reticulate::conda_remove(envname = conda_env, conda = conda_bin),
+      error = function(e) {
+        if (nzchar(conda_bin %||% "")) {
+          suppressWarnings(system2(
+            conda_bin,
+            c("env", "remove", "-n", conda_env, "-y"),
+            stdout = TRUE,
+            stderr = TRUE
+          ))
+        }
+        invisible(FALSE)
+      }
+    )
+    invisible(TRUE)
+  }
 
-  if (!ok || !env_exists(conda)) {
+  conda_bin <- cs2step_resolve_conda_binary(conda) %||% conda
+  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  if (isTRUE(state$core_modules_ready)) {
+    try({
+      actdir <- file.path(dirname(dirname(state$python)), "etc", "conda", "activate.d")
+      dir.create(actdir, recursive = TRUE, showWarnings = FALSE)
+      writeLines("unset LD_LIBRARY_PATH", file.path(actdir, "00-unset-ld.sh"))
+    }, silent = TRUE)
+    message(sprintf("Environment '%s' is ready.", conda_env))
+    return(invisible(NULL))
+  }
+
+  if (isTRUE(state$registered) && !isTRUE(state$python_exists)) {
+    message(sprintf(
+      "Conda environment '%s' is registered but its Python interpreter is missing; recreating it.",
+      conda_env
+    ))
+    remove_env(conda_bin)
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  }
+
+  ok <- TRUE
+  if (!isTRUE(state$registered)) {
+    ok <- tryCatch({
+      create_env(conda_bin)
+      TRUE
+    }, error = function(e) {
+      message(sprintf("conda_create failed using '%s': %s", conda_bin, e$message))
+      FALSE
+    })
+  }
+
+  if (!ok || !env_registered(conda_bin)) {
     conda_fallback <- Sys.which("conda")
-    if (nzchar(conda_fallback) && conda_fallback != conda) {
+    if (nzchar(conda_fallback) && conda_fallback != conda_bin) {
       message(sprintf("Retrying conda_create with: %s", conda_fallback))
       tryCatch({
         create_env(conda_fallback)
       }, error = function(e) {
         message(sprintf("conda_create failed using '%s': %s", conda_fallback, e$message))
       })
-      if (env_exists(conda_fallback)) {
-        conda <- conda_fallback
+      if (env_registered(conda_fallback)) {
+        conda_bin <- conda_fallback
       }
     }
   }
 
-  if (!env_exists(conda)) {
+  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  if (!isTRUE(state$registered)) {
     stop(
       sprintf("Failed to create conda environment '%s'.\n", conda_env),
       "Try passing conda = '/path/to/conda' or setting RETICULATE_CONDA.\n",
@@ -76,7 +117,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   msg <- function(...) message(sprintf(...))
   
   pip_install <- function(pkgs, ...) {
-    reticulate::py_install(packages = pkgs, envname = conda_env, conda = conda, pip = TRUE, ...)
+    reticulate::py_install(packages = pkgs, envname = conda_env, conda = conda_bin, pip = TRUE, ...)
     TRUE
   }
   
@@ -106,19 +147,33 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
     }
   }
   
+  missing_core <- names(state$core_module_status)[!state$core_module_status]
+  if (length(missing_core) > 0L || !isTRUE(state$python_exists)) {
+    # Install JAX first so later dependencies do not pin a CPU-only variant.
+    install_jax_gpu()
+    other_pkgs <- setdiff(cs2step_backend_core_modules(), "jax")
+    pip_install(other_pkgs)
+  }
+
+  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  if (!isTRUE(state$core_modules_ready)) {
+    missing_now <- names(state$core_module_status)[!state$core_module_status]
+    stop(
+      sprintf(
+        "Conda environment '%s' is still missing required backend modules: %s",
+        conda_env,
+        paste(missing_now, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+
   # (Optional) neutralize LD_LIBRARY_PATH inside this env to prevent overrides
   try({
-    actdir <- file.path(Sys.getenv("HOME"), "miniconda3/envs", conda_env, "etc", "conda", "activate.d")
+    actdir <- file.path(dirname(dirname(state$python)), "etc", "conda", "activate.d")
     dir.create(actdir, recursive = TRUE, showWarnings = FALSE)
     writeLines("unset LD_LIBRARY_PATH", file.path(actdir, "00-unset-ld.sh"))
   }, silent = TRUE)
-  
-  # Install JAX first (so later deps don't pull a CPU variant)
-  install_jax_gpu()
-  
-  # --- (B) Now install the rest (pip’s default upgrade strategy is "only-if-needed") ---
-  other_pkgs <- c("numpy", "equinox", "numpyro", "optax", "mlx-embeddings")
-  pip_install(other_pkgs)
   
   msg("Environment '%s' is ready.", conda_env)
 }

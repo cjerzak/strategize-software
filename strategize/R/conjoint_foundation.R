@@ -2233,17 +2233,21 @@ fit_conjoint_foundation_model <- function(experiments,
       schema_version = 1L,
       model_type = "conjoint_foundation",
       groups = groups_out,
-      metadata = list(
+      metadata = {
+        text_meta <- cs2step_capture_text_embedding_metadata(control$text_embedding_fn %||% NULL)
+        list(
         created_at = Sys.time(),
         conda_env = conda_env,
         conda_env_required = conda_env_required,
-        text_embedding_fn = control$text_embedding_fn %||% NULL,
+        text_embedding_fn = text_meta$text_embedding_fn,
+        text_embedding_backend = text_meta$text_embedding_backend,
         experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
         grouping_note = paste(
           "Experiments are pooled into one universal FM foundation group.",
           "Legacy family keys resolve to the universal group as aliases."
         )
       )
+      }
     ),
     class = "conjoint_foundation_model"
   )
@@ -2642,17 +2646,26 @@ adapt_conjoint_foundation_model <- function(foundation_model,
     mode = experiment$mode,
     names_list = local_names_list,
     factor_levels = experiment$factor_levels,
-    metadata = list(
+    metadata = {
+      text_fn <- adaptation_control$text_embedding_fn %||%
+        foundation_model$metadata$text_embedding_fn %||% NULL
+      text_meta <- cs2step_capture_text_embedding_metadata(
+        text_embedding_fn = text_fn,
+        text_embedding_backend = adaptation_control$text_embedding_backend %||%
+          foundation_model$metadata$text_embedding_backend %||% NULL
+      )
+      list(
       call = match.call(),
       conda_env = conda_env,
       conda_env_required = conda_env_required,
-      text_embedding_fn = adaptation_control$text_embedding_fn %||%
-        foundation_model$metadata$text_embedding_fn %||% NULL,
+      text_embedding_fn = text_meta$text_embedding_fn,
+      text_embedding_backend = text_meta$text_embedding_backend,
       foundation_group_key = group$group_key,
       foundation_experiment_ids = group$experiment_ids,
       adaptation_experiment_id = experiment$experiment_id,
       adaptation_experiment_description = experiment$experiment_description %||% NULL
     )
+    }
   )
   if (!is.null(cache_path)) {
     save_strategic_predictor(
@@ -2746,6 +2759,11 @@ load_conjoint_foundation_bundle <- function(file,
   if (!is.list(bundle) || is.null(bundle$groups)) {
     stop("Unrecognized conjoint foundation bundle format.", call. = FALSE)
   }
+  bundle$metadata <- cs2step_restore_text_embedding_metadata(
+    bundle$metadata %||% list(),
+    conda_env = conda_env,
+    required = FALSE
+  )
   bundle$groups <- lapply(bundle$groups, cs_foundation_unpack_group,
                           conda_env = conda_env,
                           conda_env_required = conda_env_required,

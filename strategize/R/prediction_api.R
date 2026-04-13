@@ -2055,12 +2055,20 @@ cs2step_pack_predictor <- function(object, include_metrics = TRUE) {
     stop("Can only save objects of class 'strategic_predictor'.", call. = FALSE)
   }
 
+  metadata <- object$metadata %||% list()
+  text_meta <- cs2step_capture_text_embedding_metadata(
+    text_embedding_fn = metadata$text_embedding_fn %||% NULL,
+    text_embedding_backend = metadata$text_embedding_backend %||% NULL
+  )
+  metadata$text_embedding_fn <- text_meta$text_embedding_fn
+  metadata$text_embedding_backend <- text_meta$text_embedding_backend
+
   packed <- list(
     schema_version = 1L,
     model_type = object$model_type,
     mode = object$mode,
     encoder = object$encoder,
-    metadata = object$metadata
+    metadata = metadata
   )
 
   if (identical(object$model_type, "glm")) {
@@ -2179,6 +2187,11 @@ cs2step_unpack_predictor <- function(bundle,
   } else {
     conda_env_required
   }
+  metadata <- cs2step_restore_text_embedding_metadata(
+    metadata,
+    conda_env = metadata$conda_env,
+    required = FALSE
+  )
 
   out <- structure(
     list(
