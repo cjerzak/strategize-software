@@ -120,16 +120,14 @@ GPL-3.
 
 ## References
 
-Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2025. "Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning." *arXiv preprint* arXiv:2504.19043. https://arxiv.org/abs/2504.19043.
+Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2026. "MiniMax Learning of Interpretable Factored Stochastic Policies from Conjoint Data, with Uncertainty Quantification." *International Conference on Machine Learning (ICML)*. https://arxiv.org/abs/2504.19043.
 
 ```bibtex
-@misc{jerzak2025selectingoptimalcandidateprofiles,
-      title={Selecting Optimal Candidate Profiles in Adversarial Environments Using Conjoint Analysis and Machine Learning},
-      author={Connor T. Jerzak and Priyanshi Chandra and Rishi Hazra},
-      year={2025},
-      eprint={2504.19043},
-      archivePrefix={arXiv},
-      primaryClass={stat.ME},
-      url={https://arxiv.org/abs/2504.19043},
+@inproceedings{jerzak2026minimax,
+  author    = {Jerzak, Connor T. and Chandra, Priyanshi and Hazra, Rishi},
+  title     = {MiniMax Learning of Interpretable Factored Stochastic Policies from Conjoint Data, with Uncertainty Quantification},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {2026}
 }
+
 ```
