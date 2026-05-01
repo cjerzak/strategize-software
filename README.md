@@ -129,5 +129,4 @@ Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2026. "MiniMax Learning o
   booktitle = {International Conference on Machine Learning (ICML)},
   year      = {2026}
 }
-
 ```
