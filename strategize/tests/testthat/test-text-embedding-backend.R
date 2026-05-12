@@ -1,4 +1,5 @@
 make_text_embedding_host <- function(...) {
+  core_modules <- strategize:::cs2step_backend_core_modules()
   defaults <- list(
     os = "Linux",
     machine = "x86_64",
@@ -8,8 +9,8 @@ make_text_embedding_host <- function(...) {
     python = tempfile("python"),
     python_exists = TRUE,
     core_modules_ready = TRUE,
-    core_module_status = setNames(rep(TRUE, 5L), strategize:::cs2step_backend_core_modules()),
-    core_module_details = setNames(rep("", 5L), strategize:::cs2step_backend_core_modules()),
+    core_module_status = setNames(rep(TRUE, length(core_modules)), core_modules),
+    core_module_details = setNames(rep("", length(core_modules)), core_modules),
     mlx_host_capable = FALSE,
     nvidia_tools = list(nvidia_smi = FALSE, nvcc = FALSE),
     nvidia_driver = list(available = FALSE, driver_version = "", driver_major = NA_integer_, device_name = ""),
