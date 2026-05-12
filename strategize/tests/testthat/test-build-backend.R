@@ -15,8 +15,8 @@ test_that("build_backend is idempotent when the core env is already healthy", {
         registered = TRUE,
         python = py_path,
         python_exists = TRUE,
-        core_module_status = setNames(rep(TRUE, 5L), strategize:::cs2step_backend_core_modules()),
-        core_module_details = setNames(rep("", 5L), strategize:::cs2step_backend_core_modules()),
+        core_module_status = setNames(rep(TRUE, length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
+        core_module_details = setNames(rep("", length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
         core_modules_ready = TRUE
       )
     },
@@ -57,8 +57,8 @@ test_that("build_backend installs CPU JAX when nvidia-smi is unavailable", {
       registered = registered,
       python = if (registered) py_path else "",
       python_exists = registered,
-      core_module_status = setNames(rep(ready, 5L), strategize:::cs2step_backend_core_modules()),
-      core_module_details = setNames(rep("", 5L), strategize:::cs2step_backend_core_modules()),
+      core_module_status = setNames(rep(ready, length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
+      core_module_details = setNames(rep("", length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
       core_modules_ready = ready
     )
   }
@@ -93,7 +93,8 @@ test_that("build_backend installs CPU JAX when nvidia-smi is unavailable", {
 
   installed <- unlist(lapply(install_calls, `[[`, "packages"))
   expect_true("jax" %in% installed)
-  expect_true(all(c("numpy", "equinox", "numpyro", "optax") %in% installed))
+  expect_true(all(c("numpy", "equinox", "numpyro", "optax", "orbax-checkpoint") %in% installed))
+  expect_false("orbax.checkpoint" %in% installed)
   expect_false("mlx-embeddings" %in% installed)
 })
 
@@ -114,8 +115,8 @@ test_that("build_backend falls back to PATH conda and selects CUDA 13", {
         registered = FALSE,
         python = "",
         python_exists = FALSE,
-        core_module_status = setNames(rep(FALSE, 5L), strategize:::cs2step_backend_core_modules()),
-        core_module_details = setNames(rep("", 5L), strategize:::cs2step_backend_core_modules()),
+        core_module_status = setNames(rep(FALSE, length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
+        core_module_details = setNames(rep("", length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
         core_modules_ready = FALSE
       ))
     }
@@ -132,8 +133,8 @@ test_that("build_backend falls back to PATH conda and selects CUDA 13", {
       registered = registered,
       python = if (registered) py_path else "",
       python_exists = registered,
-      core_module_status = setNames(rep(ready, 5L), strategize:::cs2step_backend_core_modules()),
-      core_module_details = setNames(rep("", 5L), strategize:::cs2step_backend_core_modules()),
+      core_module_status = setNames(rep(ready, length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
+      core_module_details = setNames(rep("", length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
       core_modules_ready = ready
     )
   }
@@ -202,8 +203,8 @@ test_that("build_backend selects CUDA 12 for mid-range drivers", {
       registered = registered,
       python = if (registered) py_path else "",
       python_exists = registered,
-      core_module_status = setNames(rep(ready, 5L), strategize:::cs2step_backend_core_modules()),
-      core_module_details = setNames(rep("", 5L), strategize:::cs2step_backend_core_modules()),
+      core_module_status = setNames(rep(ready, length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
+      core_module_details = setNames(rep("", length(strategize:::cs2step_backend_core_modules())), strategize:::cs2step_backend_core_modules()),
       core_modules_ready = ready
     )
   }

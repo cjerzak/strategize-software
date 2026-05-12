@@ -48,7 +48,7 @@ This vignette focuses on the core single-study workflow:
 - fitting an adversarial optimization with `strategize(adversarial = TRUE)`
 - inspecting the returned distributions and outcome summaries
 
-For prediction-only modeling, see `?strategic_prediction`. For multi-study pooled neural training, see `vignette("FoundationModels")`.
+For prediction-only modeling, see `?strategic_prediction`. For foundation-model runtime use of trained `preference.fm` checkpoints, see `vignette("FoundationModels")`.
 
 ## Installation and Backend Setup
 
@@ -255,10 +255,10 @@ res_clust$Q_se
 
 # Other Public Workflows
 
-The package now exposes two additional public workflows that are separate from the main optimization path:
+The package now exposes additional public workflows that are separate from the main optimization path:
 
 - `strategic_prediction()` fits the package outcome model without running intervention optimization.
-- `fit_conjoint_foundation_model()` and `adapt_conjoint_foundation_model()` support pooled neural training across many studies and adaptation to a target study.
+- `load_conjoint_foundation_bundle()`, `adapt_conjoint_foundation_model()`, and `extract_embeddings()` consume trained foundation-model checkpoints from `preference.fm`.
 
 Those workflows are documented separately so this tutorial can stay focused on the core single-study optimization path.
 

@@ -22,13 +22,13 @@ You can find a list of conda Python paths via: \code{Sys.which("python")}
 }
 \description{
 Creates the conda environment used by the package's JAX-backed optimization
-workflow and neural APIs. Users may also create and manage a compatible
-environment themselves.
+workflow, neural APIs, and foundation checkpoint loading. Users may also
+create and manage a compatible environment themselves.
 }
 \examples{
 \dontrun{
 # Create a conda environment named "strategize_env"
-# and install the required Python packages (jax, numpy, etc.)
+# and install the required Python packages (jax, numpy, orbax-checkpoint, etc.)
 build_backend(conda_env = "strategize_env", conda = "auto")
 
 # If you want to specify a particular conda path:

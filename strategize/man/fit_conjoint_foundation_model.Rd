@@ -2,7 +2,7 @@
 % Please edit documentation in R/conjoint_foundation.R
 \name{fit_conjoint_foundation_model}
 \alias{fit_conjoint_foundation_model}
-\title{Fit a pooled conjoint foundation model}
+\title{Pooled conjoint foundation-model training moved to preference.fm}
 \usage{
 fit_conjoint_foundation_model(
   experiments,
@@ -30,18 +30,20 @@ keys are \code{add_experiment_indicators}, \code{add_text_semantics},
 
 \item{cache_overwrite}{Logical; overwrite any existing cache at \code{cache_path}.}
 
-\item{cache_compress}{Compression passed to \code{saveRDS()}.}
+\item{cache_compress}{Retained for API compatibility.}
 }
 \value{
 An object of class \code{conjoint_foundation_model}.
 }
 \description{
-Fit a pooled conjoint foundation model
+Pooled conjoint foundation-model training moved to preference.fm
 }
 \details{
-Run \code{\link{build_backend}()} once before calling this function. The
-neural foundation workflow relies on the same JAX backend as the package's
-neural outcome model.
+This exported name is retained for migration guidance. Pooled training is
+now owned by \pkg{preference.fm}. Use
+\code{preference.fm::fit_conjoint_foundation_model()} to train pooled
+models, then return to \pkg{strategize} for loading, adaptation, embedding
+extraction, and prediction.
 
 Each element of \code{experiments} is a per-study specification with the
 following contract.

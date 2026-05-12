@@ -1,8 +1,8 @@
 #' Build the computational environment for `strategize`
 #'
 #' Creates the conda environment used by the package's JAX-backed optimization
-#' workflow and neural APIs. Users may also create and manage a compatible
-#' environment themselves.
+#' workflow, neural APIs, and foundation checkpoint loading. Users may also
+#' create and manage a compatible environment themselves.
 #'
 #' @param conda_env Name of the conda environment in which to place the backends.
 #'   Defaults to \code{"strategize_env"}.
@@ -18,7 +18,7 @@
 #' @examples
 #' \dontrun{
 #' # Create a conda environment named "strategize_env"
-#' # and install the required Python packages (jax, numpy, etc.)
+#' # and install the required Python packages (jax, numpy, orbax-checkpoint, etc.)
 #' build_backend(conda_env = "strategize_env", conda = "auto")
 #'
 #' # If you want to specify a particular conda path:
@@ -151,7 +151,8 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   if (length(missing_core) > 0L || !isTRUE(state$python_exists)) {
     # Install JAX first so later dependencies do not pin a CPU-only variant.
     install_jax_gpu()
-    other_pkgs <- setdiff(cs2step_backend_core_modules(), "jax")
+    pip_specs <- cs2step_backend_core_pip_packages()
+    other_pkgs <- unname(pip_specs[setdiff(names(pip_specs), "jax")])
     pip_install(other_pkgs)
   }
 

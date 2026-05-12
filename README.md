@@ -10,7 +10,7 @@ Today the package supports:
 - adversarial optimization for two-player settings
 - prediction-only outcome modeling with `strategic_prediction()`
 - cached predictor and neural bundle I/O with `save_strategic_predictor()`, `load_strategic_predictor()`, `save_neural_outcome_bundle()`, and `load_neural_outcome_bundle()`
-- multi-study pooled neural training with `fit_conjoint_foundation_model()` and `adapt_conjoint_foundation_model()`
+- foundation-model runtime support: load trained `preference.fm` checkpoints, adapt them to target studies, extract embeddings, and run predictors
 
 # Installation
 
@@ -29,7 +29,7 @@ The optimization workflow in `strategize()` and `cv_strategize()`, along with th
 strategize::build_backend(conda_env = "strategize_env")
 ```
 
-This creates a conda environment with JAX, numpy, optax, equinox, numpyro, and the other Python-side dependencies used by the package.
+This creates a conda environment with JAX, numpy, optax, equinox, numpyro, Orbax checkpoint support, and the other Python-side dependencies used by the package.
 
 # Minimal Example
 
@@ -104,7 +104,7 @@ Predictors can be cached and reused with `save_strategic_predictor()` and `load_
 
 ## Foundation-model workflow
 
-For pooled neural training across many studies, fit a shared representation with `fit_conjoint_foundation_model()` and adapt it to a target study with `adapt_conjoint_foundation_model()`.
+Pooled foundation-model training now lives in the separate `preference.fm` package. Use `preference.fm::fit_conjoint_foundation_model()` and `preference.fm::save_conjoint_foundation_bundle()` to train and write checkpoint directories. Use `strategize::load_conjoint_foundation_bundle()`, `adapt_conjoint_foundation_model()`, and `extract_embeddings()` to consume trained artifacts.
 
 # Documentation
 

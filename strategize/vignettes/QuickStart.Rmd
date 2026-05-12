@@ -170,8 +170,9 @@ result <- strategize(Y = Y, W = W, lambda = 0.1, nSGD = 500,
 - **Adversarial mode**: Set `adversarial = TRUE` for two-player games
 - **Prediction-only API**: Use `strategic_prediction()` when you want the fitted
   outcome model without the optimization step
-- **Foundation models**: For pooled neural training across many conjoint studies,
-  see `vignette("FoundationModels")`
+- **Foundation models**: Train pooled models with `preference.fm`; use
+  `strategize` to load, adapt, extract embeddings, and predict from trained
+  checkpoints. See `vignette("FoundationModels")`
 - **Full tutorial**: See `vignette("MainVignette")`
 - **Troubleshooting**: See `vignette("Troubleshooting")`
 

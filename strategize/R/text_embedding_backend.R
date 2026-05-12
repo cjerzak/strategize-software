@@ -220,7 +220,18 @@ cs2step_python_module_probe <- function(python, modules) {
 }
 
 cs2step_backend_core_modules <- function() {
-  c("jax", "numpyro", "optax", "equinox", "numpy")
+  c("jax", "numpyro", "optax", "equinox", "numpy", "orbax.checkpoint")
+}
+
+cs2step_backend_core_pip_packages <- function() {
+  c(
+    jax = "jax",
+    numpyro = "numpyro",
+    optax = "optax",
+    equinox = "equinox",
+    numpy = "numpy",
+    "orbax.checkpoint" = "orbax-checkpoint"
+  )
 }
 
 cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "auto") {

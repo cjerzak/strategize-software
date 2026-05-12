@@ -12,7 +12,9 @@ load_conjoint_foundation_bundle(
 )
 }
 \arguments{
-\item{file}{Path to a bundle created by \code{save_conjoint_foundation_bundle()}.}
+\item{file}{Path to a checkpoint directory created by
+\code{preference.fm::save_conjoint_foundation_bundle()} or to a legacy
+\code{.rds} bundle.}
 
 \item{conda_env}{Conda env name for the neural backend.}
 
@@ -27,14 +29,14 @@ A \code{conjoint_foundation_model}.
 Load a conjoint foundation bundle
 }
 \details{
-Loading reconstructs the packed foundation object and, when
-\code{preload_params = TRUE}, immediately materializes the neural parameter
-arrays for each internal foundation group. Leave \code{preload_params} as
-\code{FALSE} when you only need metadata or plan to adapt later.
+Loading reconstructs a \code{conjoint_foundation_model} without importing or
+depending on \pkg{preference.fm}. New checkpoint directories restore direct
+neural parameter PyTrees from Orbax. Legacy \code{.rds} foundation bundles
+remain readable for older artifacts.
 }
 \examples{
 \dontrun{
-foundation_fit <- load_conjoint_foundation_bundle("foundation_bundle.rds")
+foundation_fit <- load_conjoint_foundation_bundle("foundation_bundle")
 }
 
 }

@@ -11,6 +11,10 @@ initialize_jax <- function(conda_env = "strategize_env",
   strenv$py_gc  <- reticulate::import("gc")
   strenv$numpyro  <- reticulate::import("numpyro")
   strenv$optax  <- reticulate::import("optax")
+  strenv$orbax_checkpoint <- tryCatch(
+    reticulate::import("orbax.checkpoint"),
+    error = function(e) NULL
+  )
   
   # setup numerical precisions
   strenv$jaxFloatType <- strenv$jnp$float32

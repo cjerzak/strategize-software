@@ -155,6 +155,7 @@ embedding_test_pairwise_foundation_fit <- local({
   cache <- NULL
 
   function() {
+    skip("Pooled foundation-model training moved to preference.fm.")
     if (!is.null(cache)) {
       return(cache)
     }
@@ -190,6 +191,7 @@ embedding_test_multigroup_single_foundation_fit <- local({
   cache <- NULL
 
   function() {
+    skip("Pooled foundation-model training moved to preference.fm.")
     if (!is.null(cache)) {
       return(cache)
     }

@@ -50,6 +50,9 @@ adapt_conjoint_foundation_model(
 
 \item{experiment_id}{Optional experiment identifier for the adaptation study.}
 
+\item{experiment_description}{Optional text description for the adaptation
+study, used when text-aware experiment tokens are enabled.}
+
 \item{names_list}{Optional factor level names.}
 
 \item{p_list}{Optional \code{p_list}.}

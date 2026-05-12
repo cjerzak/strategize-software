@@ -77,7 +77,7 @@ required_patterns <- list(
   "README.md" = list(
     list(label = "canonical backend setup", pattern = 'build_backend\\(conda_env\\s*=\\s*"strategize_env"\\)'),
     list(label = "prediction-only API mention", pattern = "strategic_prediction\\("),
-    list(label = "foundation training mention", pattern = "fit_conjoint_foundation_model\\("),
+    list(label = "foundation training split mention", pattern = "preference\\.fm::fit_conjoint_foundation_model\\("),
     list(label = "foundation adaptation mention", pattern = "adapt_conjoint_foundation_model\\(")
   ),
   "QuickStart.Rmd" = list(
@@ -89,7 +89,8 @@ required_patterns <- list(
     list(label = "average-case outcome field", pattern = "res_avecase\\$Q_point\\b"),
     list(label = "average-case SE field", pattern = "res_avecase\\$Q_se\\b"),
     list(label = "average-case pi SE field", pattern = "res_avecase\\$pi_star_se\\b"),
-    list(label = "canonical backend env", pattern = 'conda_env\\s*=\\s*"strategize_env"')
+    list(label = "canonical backend env", pattern = 'conda_env\\s*=\\s*"strategize_env"'),
+    list(label = "foundation split mention", pattern = "preference\\.fm")
   ),
   "build_backend.R" = list(
     list(label = "strategize_env example", pattern = 'build_backend\\(conda_env\\s*=\\s*"strategize_env"')

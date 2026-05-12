@@ -17,7 +17,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-This guide covers common issues when using the `strategize` package and their solutions. The JAX-backed `strategize_env` environment is used by `strategize()`, `cv_strategize()`, and the package's neural APIs.
+This guide covers common issues when using the `strategize` package and their solutions. The JAX-backed `strategize_env` environment is used by `strategize()`, `cv_strategize()`, the package's neural APIs, and foundation-model checkpoint loading.
 
 ## Setup Issues
 
@@ -46,7 +46,7 @@ reticulate::install_miniconda()
 
 ### "JAX import error" or "Module not found"
 
-**Symptom:** Python import errors for JAX or related packages when the package initializes its computational backend.
+**Symptom:** Python import errors for JAX, Orbax, or related packages when the package initializes its computational backend.
 
 **Solutions:**
 
@@ -60,6 +60,8 @@ build_backend(conda_env = "strategize_env")
 reticulate::use_condaenv("strategize_env")
 reticulate::py_module_available("jax")
 # Should return TRUE
+reticulate::py_module_available("orbax.checkpoint")
+# Should return TRUE for foundation checkpoint loading
 
 # strategize-specific check
 strategize::check_jax_available("strategize_env", required = FALSE)

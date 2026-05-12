@@ -4,23 +4,19 @@
 \alias{conjoint-foundation}
 \title{Conjoint Foundation Models}
 \description{
-Train a pooled neural representation across multiple conjoint experiments,
-then adapt that representation to a single study through the existing
-Bayesian neural outcome model.
+Load and adapt pooled conjoint foundation-model artifacts produced by
+\pkg{preference.fm}.
 }
 \details{
-Foundation-model training in \pkg{strategize} follows a two-stage workflow:
+Foundation-model work now follows a split workflow:
 
 \enumerate{
-  \item Run \code{\link{build_backend}()} once so the JAX-backed neural
-  backend is available.
-  \item Prepare a list of experiment specifications and pass them to
-  \code{\link{fit_conjoint_foundation_model}()}.
-  \item Adapt the resulting shared representation to a target study with
-  \code{\link{adapt_conjoint_foundation_model}()}.
-  \item Optionally persist the fitted foundation object with
-  \code{\link{save_conjoint_foundation_bundle}()} and reload it later with
-  \code{\link{load_conjoint_foundation_bundle}()}.
+  \item Train pooled foundation models with
+  \code{preference.fm::fit_conjoint_foundation_model()}.
+  \item Save them as checkpoint directories with
+  \code{preference.fm::save_conjoint_foundation_bundle()}.
+  \item Load, adapt, extract embeddings, and run predictors with
+  \pkg{strategize}.
 }
 
 Pooled training does not force every experiment into one universal output
@@ -37,7 +33,9 @@ language-native factor-name and level-label tokens, and covariate spans use
 covariate-name tokens plus value tokens conditioned on local covariate
 distributions. Canonical ids still determine schema sharing across studies.
 
-See \code{\link{fit_conjoint_foundation_model}()} for the full experiment
-specification and \code{\link{adapt_conjoint_foundation_model}()} for the
-target-study adaptation contract.
+\code{\link{fit_conjoint_foundation_model}()} and
+\code{\link{save_conjoint_foundation_bundle}()} are retained as migration
+stubs that point to \pkg{preference.fm}. Use
+\code{\link{adapt_conjoint_foundation_model}()} for the target-study
+adaptation contract.
 }

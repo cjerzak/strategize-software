@@ -1,23 +1,19 @@
 #' Conjoint Foundation Models
 #'
 #' @description
-#' Train a pooled neural representation across multiple conjoint experiments,
-#' then adapt that representation to a single study through the existing
-#' Bayesian neural outcome model.
+#' Load and adapt pooled conjoint foundation-model artifacts produced by
+#' \pkg{preference.fm}.
 #'
 #' @details
-#' Foundation-model training in \pkg{strategize} follows a two-stage workflow:
+#' Foundation-model work now follows a split workflow:
 #'
 #' \enumerate{
-#'   \item Run \code{\link{build_backend}()} once so the JAX-backed neural
-#'   backend is available.
-#'   \item Prepare a list of experiment specifications and pass them to
-#'   \code{\link{fit_conjoint_foundation_model}()}.
-#'   \item Adapt the resulting shared representation to a target study with
-#'   \code{\link{adapt_conjoint_foundation_model}()}.
-#'   \item Optionally persist the fitted foundation object with
-#'   \code{\link{save_conjoint_foundation_bundle}()} and reload it later with
-#'   \code{\link{load_conjoint_foundation_bundle}()}.
+#'   \item Train pooled foundation models with
+#'   \code{preference.fm::fit_conjoint_foundation_model()}.
+#'   \item Save them as checkpoint directories with
+#'   \code{preference.fm::save_conjoint_foundation_bundle()}.
+#'   \item Load, adapt, extract embeddings, and run predictors with
+#'   \pkg{strategize}.
 #' }
 #'
 #' Pooled training does not force every experiment into one universal output
@@ -34,9 +30,11 @@
 #' covariate-name tokens plus value tokens conditioned on local covariate
 #' distributions. Canonical ids still determine schema sharing across studies.
 #'
-#' See \code{\link{fit_conjoint_foundation_model}()} for the full experiment
-#' specification and \code{\link{adapt_conjoint_foundation_model}()} for the
-#' target-study adaptation contract.
+#' \code{\link{fit_conjoint_foundation_model}()} and
+#' \code{\link{save_conjoint_foundation_bundle}()} are retained as migration
+#' stubs that point to \pkg{preference.fm}. Use
+#' \code{\link{adapt_conjoint_foundation_model}()} for the target-study
+#' adaptation contract.
 #'
 #' @name conjoint-foundation
 NULL
@@ -1942,7 +1940,7 @@ cs_foundation_unpack_group <- function(group,
   group
 }
 
-#' Fit a pooled conjoint foundation model
+#' Pooled conjoint foundation-model training moved to preference.fm
 #'
 #' @param experiments List of experiment specifications. Each element must be a
 #'   named list with at least \code{experiment_id}, \code{Y}, and \code{W}.
@@ -1953,13 +1951,15 @@ cs_foundation_unpack_group <- function(group,
 #' @param conda_env_required Require the conda env to exist.
 #' @param cache_path Optional path to a cached foundation bundle.
 #' @param cache_overwrite Logical; overwrite any existing cache at \code{cache_path}.
-#' @param cache_compress Compression passed to \code{saveRDS()}.
+#' @param cache_compress Retained for API compatibility.
 #' @return An object of class \code{conjoint_foundation_model}.
 #'
 #' @details
-#' Run \code{\link{build_backend}()} once before calling this function. The
-#' neural foundation workflow relies on the same JAX backend as the package's
-#' neural outcome model.
+#' This exported name is retained for migration guidance. Pooled training is
+#' now owned by \pkg{preference.fm}. Use
+#' \code{preference.fm::fit_conjoint_foundation_model()} to train pooled
+#' models, then return to \pkg{strategize} for loading, adaptation, embedding
+#' extraction, and prediction.
 #'
 #' Each element of \code{experiments} is a per-study specification with the
 #' following contract.
@@ -2138,129 +2138,14 @@ fit_conjoint_foundation_model <- function(experiments,
                                           cache_path = NULL,
                                           cache_overwrite = FALSE,
                                           cache_compress = TRUE) {
-  if (!is.null(cache_path)) {
-    cache_path <- as.character(cache_path)
-    if (length(cache_path) != 1L || !nzchar(cache_path)) {
-      stop("'cache_path' must be a non-empty character path.", call. = FALSE)
-    }
-    if (!isTRUE(cache_overwrite) && file.exists(cache_path)) {
-      return(load_conjoint_foundation_bundle(
-        file = cache_path,
-        conda_env = conda_env,
-        conda_env_required = conda_env_required,
-        preload_params = FALSE
-      ))
-    }
-  }
-  if (!is.list(experiments) || length(experiments) < 1L) {
-    stop("'experiments' must be a non-empty list.", call. = FALSE)
-  }
-
-  control <- modifyList(cs_foundation_default_control(), foundation_control %||% list())
-  experiments_norm <- lapply(seq_along(experiments), function(i) {
-    cs_foundation_normalize_experiment(experiments[[i]], index = i)
-  })
-  registry <- cs_foundation_build_group_registry(experiments_norm)
-  pooled <- cs_foundation_build_group_training_data(experiments_norm, registry, control)
-  enc <- cs_encode_W_indices(
-    W = pooled$W,
-    names_list = pooled$names_list,
-    unknown = "holdout",
-    align = "by_name"
+  stop(
+    "Pooled conjoint foundation-model training has moved to preference.fm.\n",
+    "Use preference.fm::fit_conjoint_foundation_model() to train pooled models, ",
+    "then use strategize::load_conjoint_foundation_bundle(), ",
+    "strategize::adapt_conjoint_foundation_model(), or ",
+    "strategize::extract_embeddings() with the trained checkpoint.",
+    call. = FALSE
   )
-  fit <- cs2step_eval_outcome_model_neural(
-    Y = pooled$Y,
-    W_idx = enc$W_idx,
-    names_list = pooled$names_list,
-    factor_levels = pooled$factor_levels,
-    diff = TRUE,
-    pair_id = pooled$pair_id,
-    profile_order = pooled$profile_order,
-    competing_group_variable_candidate = pooled$competing_group_variable_candidate,
-    competing_group_variable_respondent = pooled$competing_group_variable_respondent,
-    X = pooled$X,
-    X_present = pooled$X_present,
-    respondent_id = pooled$respondent_id,
-    respondent_task_id = pooled$respondent_task_id,
-    neural_token_info = pooled$token_info,
-    conda_env = conda_env,
-    conda_env_required = conda_env_required,
-    neural_mcmc_control = control$neural_mcmc_control %||% NULL
-  )
-  universal_key <- cs_foundation_universal_group_key()
-  supported_modes <- pooled$supported_modes %||% unique(vapply(experiments_norm, `[[`, character(1), "mode"))
-  supported_likelihoods <- pooled$supported_likelihoods %||% unique(vapply(experiments_norm, `[[`, character(1), "likelihood"))
-  supported_pairwise_context_modes <- pooled$supported_pairwise_context_modes %||% "stage_free"
-  max_n_outcomes <- as.integer(pooled$max_n_outcomes %||% max(1L, vapply(experiments_norm, function(exp) {
-    as.integer(exp$n_outcomes %||% 1L)
-  }, integer(1))))
-  legacy_aliases <- unique(unlist(lapply(experiments_norm, function(exp) {
-    cs_foundation_group_aliases(
-      mode = exp$mode,
-      likelihood = exp$likelihood,
-      n_outcomes = exp$n_outcomes,
-      pairwise_context_mode = exp$pairwise_context_mode %||% NULL
-    )
-  }), use.names = FALSE))
-  groups_out <- list()
-  groups_out[[universal_key]] <- list(
-    group_key = universal_key,
-    mode = "universal",
-    pairwise_context_mode = pooled$pairwise_context_mode %||% "stage_free",
-    likelihood = if (length(supported_likelihoods) == 1L) supported_likelihoods[[1L]] else "mixed",
-    n_outcomes = max_n_outcomes,
-    supported_modes = supported_modes,
-    supported_likelihoods = supported_likelihoods,
-    supported_pairwise_context_modes = supported_pairwise_context_modes,
-    legacy_group_keys = legacy_aliases,
-    experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
-    encoder = list(
-      factor_names = names(pooled$names_list),
-      names_list = pooled$names_list,
-      factor_levels = pooled$factor_levels,
-      unknown_policy = "holdout"
-    ),
-    schema_registry = registry,
-    x_feature_names = pooled$x_feature_names,
-    x_schema = pooled$x_schema,
-    text_registry = pooled$text_registry,
-    token_control = pooled$token_control,
-    fit = fit
-  )
-
-  out <- structure(
-    list(
-      schema_version = 1L,
-      model_type = "conjoint_foundation",
-      groups = groups_out,
-      metadata = {
-        text_meta <- cs2step_capture_text_embedding_metadata(control$text_embedding_fn %||% NULL)
-        list(
-        created_at = Sys.time(),
-        conda_env = conda_env,
-        conda_env_required = conda_env_required,
-        text_embedding_fn = text_meta$text_embedding_fn,
-        text_embedding_backend = text_meta$text_embedding_backend,
-        experiment_ids = vapply(experiments_norm, `[[`, character(1), "experiment_id"),
-        grouping_note = paste(
-          "Experiments are pooled into one universal FM foundation group.",
-          "Legacy family keys resolve to the universal group as aliases."
-        )
-      )
-      }
-    ),
-    class = "conjoint_foundation_model"
-  )
-
-  if (!is.null(cache_path)) {
-    save_conjoint_foundation_bundle(
-      file = cache_path,
-      foundation_model = out,
-      overwrite = TRUE,
-      compress = cache_compress
-    )
-  }
-  out
 }
 
 cs_foundation_match_group <- function(foundation_model,
@@ -2358,6 +2243,8 @@ cs_foundation_match_group <- function(foundation_model,
 #' @param pair_id Optional pair identifiers.
 #' @param profile_order Optional within-pair ordering.
 #' @param experiment_id Optional experiment identifier for the adaptation study.
+#' @param experiment_description Optional text description for the adaptation
+#'   study, used when text-aware experiment tokens are enabled.
 #' @param names_list Optional factor level names.
 #' @param p_list Optional \code{p_list}.
 #' @param respondent_id Optional respondent identifiers.
@@ -2678,25 +2565,26 @@ adapt_conjoint_foundation_model <- function(foundation_model,
   out
 }
 
-#' Save a conjoint foundation bundle
+#' Conjoint foundation bundle writing moved to preference.fm
 #'
 #' @param file Path to save the bundle.
 #' @param foundation_model A fitted \code{conjoint_foundation_model}.
 #' @param overwrite Logical; overwrite any existing file.
-#' @param compress Compression passed to \code{saveRDS()}.
+#' @param compress Retained for API compatibility.
 #' @return The bundle path (invisibly).
 #'
 #' @details
-#' Foundation bundles store the packed neural metadata and posterior summaries
-#' for each internal foundation group, together with the pooled schema registry,
-#' token metadata for pooled covariate order, experiment-token levels,
-#' factor/level/covariate text registries, and adaptation metadata. They do not
-#' store active JIT functions or a live Python session.
+#' This exported name is retained for migration guidance. New foundation
+#' artifacts are checkpoint directories written by
+#' \code{preference.fm::save_conjoint_foundation_bundle()}.
 #'
 #' @examples
 #' \dontrun{
-#' tmp <- tempfile(fileext = ".rds")
-#' save_conjoint_foundation_bundle(tmp, foundation_model = foundation_fit, overwrite = TRUE)
+#' preference.fm::save_conjoint_foundation_bundle(
+#'   tempfile(),
+#'   foundation_model = foundation_fit,
+#'   overwrite = TRUE
+#' )
 #' }
 #'
 #' @seealso \code{\link{load_conjoint_foundation_bundle}()}
@@ -2705,41 +2593,32 @@ save_conjoint_foundation_bundle <- function(file,
                                             foundation_model,
                                             overwrite = FALSE,
                                             compress = TRUE) {
-  if (!inherits(foundation_model, "conjoint_foundation_model")) {
-    stop("'foundation_model' must be a conjoint_foundation_model.", call. = FALSE)
-  }
-  file <- as.character(file)
-  if (length(file) != 1L || !nzchar(file)) {
-    stop("'file' must be a non-empty path.", call. = FALSE)
-  }
-  if (file.exists(file) && !isTRUE(overwrite)) {
-    stop("Bundle file already exists; set overwrite = TRUE to replace it.", call. = FALSE)
-  }
-  bundle <- foundation_model
-  bundle$groups <- lapply(bundle$groups, cs_foundation_pack_group)
-  class(bundle) <- c("conjoint_foundation_bundle", "list")
-  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(bundle, file = file, compress = compress)
-  invisible(file)
+  stop(
+    "Writing conjoint foundation bundles has moved to preference.fm and now uses ",
+    "checkpoint directories. Use preference.fm::save_conjoint_foundation_bundle().",
+    call. = FALSE
+  )
 }
 
 #' Load a conjoint foundation bundle
 #'
-#' @param file Path to a bundle created by \code{save_conjoint_foundation_bundle()}.
+#' @param file Path to a checkpoint directory created by
+#'   \code{preference.fm::save_conjoint_foundation_bundle()} or to a legacy
+#'   \code{.rds} bundle.
 #' @param conda_env Conda env name for the neural backend.
 #' @param conda_env_required Require the conda env to exist.
 #' @param preload_params Logical; reconstruct neural params immediately.
 #' @return A \code{conjoint_foundation_model}.
 #'
 #' @details
-#' Loading reconstructs the packed foundation object and, when
-#' \code{preload_params = TRUE}, immediately materializes the neural parameter
-#' arrays for each internal foundation group. Leave \code{preload_params} as
-#' \code{FALSE} when you only need metadata or plan to adapt later.
+#' Loading reconstructs a \code{conjoint_foundation_model} without importing or
+#' depending on \pkg{preference.fm}. New checkpoint directories restore direct
+#' neural parameter PyTrees from Orbax. Legacy \code{.rds} foundation bundles
+#' remain readable for older artifacts.
 #'
 #' @examples
 #' \dontrun{
-#' foundation_fit <- load_conjoint_foundation_bundle("foundation_bundle.rds")
+#' foundation_fit <- load_conjoint_foundation_bundle("foundation_bundle")
 #' }
 #'
 #' @seealso \code{\link{save_conjoint_foundation_bundle}()}
@@ -2754,6 +2633,17 @@ load_conjoint_foundation_bundle <- function(file,
   }
   if (!file.exists(file)) {
     stop("Bundle file does not exist.", call. = FALSE)
+  }
+  if (cs_foundation_is_checkpoint_dir(file)) {
+    return(cs_foundation_load_checkpoint_dir(
+      path = file,
+      conda_env = conda_env,
+      conda_env_required = conda_env_required,
+      preload_params = preload_params
+    ))
+  }
+  if (dir.exists(file)) {
+    stop("Directory is not a recognized conjoint foundation checkpoint.", call. = FALSE)
   }
   bundle <- readRDS(file)
   if (!is.list(bundle) || is.null(bundle$groups)) {

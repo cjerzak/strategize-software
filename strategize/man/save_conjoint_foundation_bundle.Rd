@@ -2,7 +2,7 @@
 % Please edit documentation in R/conjoint_foundation.R
 \name{save_conjoint_foundation_bundle}
 \alias{save_conjoint_foundation_bundle}
-\title{Save a conjoint foundation bundle}
+\title{Conjoint foundation bundle writing moved to preference.fm}
 \usage{
 save_conjoint_foundation_bundle(
   file,
@@ -18,25 +18,26 @@ save_conjoint_foundation_bundle(
 
 \item{overwrite}{Logical; overwrite any existing file.}
 
-\item{compress}{Compression passed to \code{saveRDS()}.}
+\item{compress}{Retained for API compatibility.}
 }
 \value{
 The bundle path (invisibly).
 }
 \description{
-Save a conjoint foundation bundle
+Conjoint foundation bundle writing moved to preference.fm
 }
 \details{
-Foundation bundles store the packed neural metadata and posterior summaries
-for each internal foundation group, together with the pooled schema registry,
-token metadata for pooled covariate order, experiment-token levels,
-factor/level/covariate text registries, and adaptation metadata. They do not
-store active JIT functions or a live Python session.
+This exported name is retained for migration guidance. New foundation
+artifacts are checkpoint directories written by
+\code{preference.fm::save_conjoint_foundation_bundle()}.
 }
 \examples{
 \dontrun{
-tmp <- tempfile(fileext = ".rds")
-save_conjoint_foundation_bundle(tmp, foundation_model = foundation_fit, overwrite = TRUE)
+preference.fm::save_conjoint_foundation_bundle(
+  tempfile(),
+  foundation_model = foundation_fit,
+  overwrite = TRUE
+)
 }
 
 }
