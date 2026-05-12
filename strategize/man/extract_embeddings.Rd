@@ -7,7 +7,12 @@
 \usage{
 extract_embeddings(object, ...)
 
-\method{extract_embeddings}{strategic_predictor}(object, newdata, ...)
+\method{extract_embeddings}{strategic_predictor}(
+  object,
+  newdata,
+  level = c("candidate", "respondent_context", "all"),
+  ...
+)
 
 \method{extract_embeddings}{conjoint_foundation_model}(
   object,
@@ -16,6 +21,7 @@ extract_embeddings(object, ...)
   mode = c("auto", "pairwise", "single"),
   likelihood = NULL,
   n_outcomes = NULL,
+  level = c("candidate", "respondent_context", "all"),
   experiment_id = NULL,
   names_list = NULL,
   p_list = NULL,
@@ -37,10 +43,11 @@ extract_embeddings(object, ...)
 contract as \code{\link[stats]{predict}()}. For
 \code{conjoint_foundation_model}, use either a list containing \code{W} and
 optional \code{X}, \code{pair_id}, \code{profile_order}, and
-\code{experiment_id}, or a data frame/matrix. When supplying a raw data frame to
-the foundation method, extra numeric \code{X} columns can only be separated
-from factor columns when \code{names_list} (or \code{p_list}) identifies the
-factor columns.}
+\code{competing_group_variable_candidate},
+\code{competing_group_variable_respondent}, and \code{experiment_id}, or a
+data frame/matrix. When supplying a raw data frame to the foundation method,
+extra numeric \code{X} columns can only be separated from factor columns when
+\code{names_list} (or \code{p_list}) identifies the factor columns.}
 
 \item{group_key}{Optional internal foundation group key to extract from.}
 
@@ -51,6 +58,10 @@ selection.}
 
 \item{n_outcomes}{Optional outcome-count filter used for foundation-group
 selection.}
+
+\item{level}{Embedding level to return. \code{"candidate"} preserves the
+historical candidate/profile output, \code{"respondent_context"} returns one
+respondent-context matrix, and \code{"all"} returns both.}
 
 \item{experiment_id}{Optional experiment identifier used for experiment-token
 lookup.}
@@ -79,8 +90,8 @@ reconstructed.}
 \value{
 An object of class \code{strategic_embeddings}.
 
-For single-mode models, the return value contains \code{$embeddings}, an
-\eqn{n \times d} numeric matrix.
+For \code{level = "candidate"}, single-mode models contain
+\code{$embeddings}, an \eqn{n \times d} numeric matrix.
 
 For pairwise models:
 \itemize{
@@ -90,12 +101,18 @@ For pairwise models:
   pair-level final readout used immediately before the output head.
 }
 
+For \code{level = "respondent_context"}, the return value contains
+\code{$respondent_context}, an \eqn{n \times d} or pair-level
+\eqn{n_{pairs} \times d} matrix. For \code{level = "all"}, the candidate
+fields and \code{$respondent_context} are returned together.
+
 All outputs also include \code{$metadata}, including the source class, mode,
-cross-candidate encoder mode, and embedding width.
+requested level, cross-candidate encoder mode, embedding width, and context
+component availability.
 }
 \description{
 Extract the final hidden representation immediately before the neural output
-head.
+head, or the model's respondent-context representation.
 }
 \details{
 \code{strategic_predictor} extraction works on fitted neural predictors,
@@ -107,6 +124,10 @@ foundation group. When extracting from a raw foundation object, local studies
 must be mappable into the pooled schema, typically via matching
 \code{experiment_id}, canonical ids, or direct use of pooled slot names and
 level keys.
+
+Respondent-context embeddings are derived from the model's context-side tokens:
+respondent group, respondent covariates, experiment tokens, and pairwise
+stage/matchup tokens when those components are available.
 
 This function does not extend \code{predict()} or \code{predict_pair()}; it is
 a dedicated embedding API.

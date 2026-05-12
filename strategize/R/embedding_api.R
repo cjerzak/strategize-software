@@ -8,6 +8,10 @@ extract_embeddings <- function(object, ...) {
   UseMethod("extract_embeddings")
 }
 
+cs2step_embedding_level <- function(level = c("candidate", "respondent_context", "all")) {
+  match.arg(level)
+}
+
 cs2step_embeddings_as_matrix <- function(x) {
   out <- cs2step_neural_to_r_array(x)
   out <- as.matrix(out)
@@ -17,11 +21,13 @@ cs2step_embeddings_as_matrix <- function(x) {
 
 cs2step_build_embeddings_result <- function(mode,
                                             source_class,
+                                            level = "candidate",
                                             cross_candidate_encoder = "none",
                                             embeddings = NULL,
                                             left = NULL,
                                             right = NULL,
                                             joint = NULL,
+                                            respondent_context = NULL,
                                             metadata = NULL) {
   out <- list(mode = mode)
   dims <- integer(0)
@@ -42,14 +48,32 @@ cs2step_build_embeddings_result <- function(mode,
     out$joint <- joint
     dims <- c(dims, joint = as.integer(ncol(joint)))
   }
+  if (!is.null(respondent_context)) {
+    out$respondent_context <- respondent_context
+    dims <- c(dims, respondent_context = as.integer(ncol(respondent_context)))
+  }
   meta_default <- list(
     source_class = as.character(source_class),
     mode = as.character(mode),
+    level = as.character(level),
     cross_candidate_encoder = as.character(cross_candidate_encoder),
     embedding_dim = dims
   )
   out$metadata <- modifyList(meta_default, metadata %||% list())
   structure(out, class = "strategic_embeddings")
+}
+
+cs2step_embedding_context_availability <- function(model_info, params = NULL) {
+  list(
+    experiment = !is.null(params$E_experiment) ||
+      !is.null(model_info$experiment_description_text) ||
+      !is.null(model_info$default_experiment_text),
+    respondent_group = !is.null(params$E_resp_party),
+    respondent_covariates = !is.null(params$E_covariate_start) ||
+      !is.null(params$E_covariate_id),
+    stage = !is.null(params$E_stage),
+    matchup = !is.null(params$E_matchup)
+  )
 }
 
 cs2step_neural_extract_single_prepared <- function(params,
@@ -68,6 +92,68 @@ cs2step_neural_extract_single_prepared <- function(params,
     factor_order = prep$factor_order %||% NULL,
     return_tokens = FALSE
   )
+}
+
+cs2step_neural_extract_context_prepared <- function(params,
+                                                    model_info,
+                                                    prep) {
+  if (isTRUE(prep$pairwise)) {
+    n_batch <- ai(prep$X_left$shape[[1]])
+    stage_idx <- neural_stage_index(prep$party_left, prep$party_right, model_info)
+    matchup_idx <- NULL
+    if (!is.null(params$E_matchup)) {
+      matchup_idx <- neural_matchup_index(prep$party_left, prep$party_right, model_info)
+    }
+  } else {
+    n_batch <- ai(prep$X_single$shape[[1]])
+    stage_idx <- NULL
+    matchup_idx <- NULL
+  }
+
+  ctx_info <- neural_build_context_tokens_batch(
+    model_info = model_info,
+    resp_party_idx = prep$resp_party,
+    stage_idx = stage_idx,
+    matchup_idx = matchup_idx,
+    resp_cov = prep$resp_cov,
+    resp_cov_present = prep$resp_cov_present %||% NULL,
+    resp_cov_order = prep$resp_cov_order %||% NULL,
+    experiment_idx = prep$experiment_idx %||% NULL,
+    params = params,
+    return_mask = TRUE
+  )
+  ctx_tokens <- ctx_info$tokens %||% NULL
+  ctx_mask <- ctx_info$mask %||% NULL
+  if (is.null(ctx_tokens)) {
+    return(strenv$jnp$zeros(
+      list(n_batch, ai(model_info$model_dims)),
+      dtype = strenv$dtj
+    ))
+  }
+
+  ctx_packed <- neural_pack_token_block(
+    tokens = ctx_tokens,
+    token_mask = ctx_mask,
+    trim_tokens = neural_active_context_token_budget(model_info)
+  )
+  choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
+  choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+  tokens <- strenv$jnp$concatenate(
+    list(choice_tok, ctx_packed$tokens),
+    axis = 1L
+  )
+  token_mask <- strenv$jnp$concatenate(
+    list(choice_mask, ctx_packed$mask),
+    axis = 1L
+  )
+  transformer_out <- neural_run_transformer(
+    tokens,
+    model_info,
+    params,
+    token_mask = token_mask,
+    return_details = TRUE
+  )
+  neural_extract_choice_representation(transformer_out)
 }
 
 cs2step_neural_extract_pair_prepared <- function(params,
@@ -270,31 +356,50 @@ cs2step_neural_extract_pair_prepared <- function(params,
 
 cs2step_neural_extract_prepared <- function(params,
                                             model_info,
-                                            prep) {
-  if (isTRUE(prep$pairwise)) {
-    return(cs2step_neural_extract_pair_prepared(
+                                            prep,
+                                            level = "candidate") {
+  level <- cs2step_embedding_level(level)
+  out <- list()
+  if (level %in% c("candidate", "all")) {
+    candidate_out <- if (isTRUE(prep$pairwise)) {
+      cs2step_neural_extract_pair_prepared(
+        params = params,
+        model_info = model_info,
+        prep = prep
+      )
+    } else {
+      list(embeddings = cs2step_neural_extract_single_prepared(
+        params = params,
+        model_info = model_info,
+        prep = prep
+      ))
+    }
+    out <- c(out, candidate_out)
+  }
+  if (level %in% c("respondent_context", "all")) {
+    out$respondent_context <- cs2step_neural_extract_context_prepared(
       params = params,
       model_info = model_info,
       prep = prep
-    ))
+    )
   }
-  list(embeddings = cs2step_neural_extract_single_prepared(
-    params = params,
-    model_info = model_info,
-    prep = prep
-  ))
+  out
 }
 
 cs2step_neural_extract_internal <- function(object,
                                             W_new,
                                             X_new = NULL,
+                                            competing_group_variable_candidate = NULL,
+                                            competing_group_variable_respondent = NULL,
                                             factor_order_new = NULL,
                                             experiment_id = NULL,
                                             experiment_description = NULL,
                                             pair_id = NULL,
                                             profile_order = NULL,
+                                            level = c("candidate", "respondent_context", "all"),
                                             source_class = class(object)[[1]],
                                             extra_metadata = NULL) {
+  level <- cs2step_embedding_level(level)
   if (!inherits(object, "strategic_predictor")) {
     stop("Internal neural extraction requires a strategic_predictor.", call. = FALSE)
   }
@@ -324,7 +429,7 @@ cs2step_neural_extract_internal <- function(object,
       pair_id = pair_id,
       W = W_idx,
       profile_order = profile_order,
-      competing_group_variable_candidate = NULL
+      competing_group_variable_candidate = competing_group_variable_candidate
     )
     experiment_description <- experiment_description[pair_info$pair_mat[, 1], drop = TRUE]
   }
@@ -341,6 +446,8 @@ cs2step_neural_extract_internal <- function(object,
   prep <- cs2step_neural_prepare_prediction_data(
     W_idx = W_idx,
     model_info = model_info,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent,
     resp_cov_new = X_new,
     factor_order_new = factor_order_new %||%
       if (identical(neural_factor_tokenization(model_info), "language_span")) {
@@ -356,39 +463,71 @@ cs2step_neural_extract_internal <- function(object,
   extracted <- cs2step_neural_extract_prepared(
     params = prep_params$params,
     model_info = model_info,
-    prep = prep
+    prep = prep,
+    level = level
   )
   cross_mode <- if (isTRUE(prep$pairwise)) {
     neural_cross_encoder_mode(model_info)
   } else {
     "none"
   }
+  metadata <- modifyList(
+    list(
+      context_components = cs2step_embedding_context_availability(
+        model_info = model_info,
+        params = prep_params$params
+      )
+    ),
+    extra_metadata %||% list()
+  )
 
   if (!isTRUE(prep$pairwise)) {
     return(cs2step_build_embeddings_result(
       mode = "single",
       source_class = source_class,
+      level = level,
       cross_candidate_encoder = cross_mode,
-      embeddings = cs2step_embeddings_as_matrix(extracted$embeddings),
-      metadata = extra_metadata
+      embeddings = if (!is.null(extracted$embeddings)) {
+        cs2step_embeddings_as_matrix(extracted$embeddings)
+      } else {
+        NULL
+      },
+      respondent_context = if (!is.null(extracted$respondent_context)) {
+        cs2step_embeddings_as_matrix(extracted$respondent_context)
+      } else {
+        NULL
+      },
+      metadata = metadata
     ))
   }
   if (!is.null(extracted$joint)) {
     return(cs2step_build_embeddings_result(
       mode = "pairwise",
       source_class = source_class,
+      level = level,
       cross_candidate_encoder = cross_mode,
       joint = cs2step_embeddings_as_matrix(extracted$joint),
-      metadata = extra_metadata
+      respondent_context = if (!is.null(extracted$respondent_context)) {
+        cs2step_embeddings_as_matrix(extracted$respondent_context)
+      } else {
+        NULL
+      },
+      metadata = metadata
     ))
   }
   cs2step_build_embeddings_result(
     mode = "pairwise",
     source_class = source_class,
+    level = level,
     cross_candidate_encoder = cross_mode,
-    left = cs2step_embeddings_as_matrix(extracted$left),
-    right = cs2step_embeddings_as_matrix(extracted$right),
-    metadata = extra_metadata
+    left = if (!is.null(extracted$left)) cs2step_embeddings_as_matrix(extracted$left) else NULL,
+    right = if (!is.null(extracted$right)) cs2step_embeddings_as_matrix(extracted$right) else NULL,
+    respondent_context = if (!is.null(extracted$respondent_context)) {
+      cs2step_embeddings_as_matrix(extracted$respondent_context)
+    } else {
+      NULL
+    },
+    metadata = metadata
   )
 }
 
@@ -397,6 +536,7 @@ cs2step_neural_extract_internal <- function(object,
 #' @export
 extract_embeddings.strategic_predictor <- function(object,
                                                    newdata,
+                                                   level = c("candidate", "respondent_context", "all"),
                                                    ...) {
   if (!inherits(object, "strategic_predictor")) {
     stop("extract_embeddings.strategic_predictor() requires a strategic_predictor object.",
@@ -407,10 +547,13 @@ extract_embeddings.strategic_predictor <- function(object,
     object = object,
     W_new = unpacked$W,
     X_new = unpacked$X,
+    competing_group_variable_candidate = unpacked$competing_group_variable_candidate,
+    competing_group_variable_respondent = unpacked$competing_group_variable_respondent,
     experiment_id = unpacked$experiment_id,
     experiment_description = unpacked$experiment_description,
     pair_id = unpacked$pair_id,
     profile_order = unpacked$profile_order,
+    level = level,
     source_class = "strategic_predictor"
   )
 }
@@ -430,6 +573,8 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
       X = newdata$X %||% NULL,
       pair_id = newdata$pair_id %||% NULL,
       profile_order = newdata$profile_order %||% NULL,
+      competing_group_variable_candidate = newdata$competing_group_variable_candidate %||% NULL,
+      competing_group_variable_respondent = newdata$competing_group_variable_respondent %||% NULL,
       experiment_id = newdata$experiment_id %||% NULL,
       experiment_description = newdata$experiment_description %||% NULL
     ))
@@ -438,13 +583,30 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
   newdata <- as.data.frame(newdata)
   pair_id <- if ("pair_id" %in% colnames(newdata)) newdata[["pair_id"]] else NULL
   profile_order <- if ("profile_order" %in% colnames(newdata)) newdata[["profile_order"]] else NULL
+  competing_group_variable_candidate <- if ("competing_group_variable_candidate" %in% colnames(newdata)) {
+    newdata[["competing_group_variable_candidate"]]
+  } else {
+    NULL
+  }
+  competing_group_variable_respondent <- if ("competing_group_variable_respondent" %in% colnames(newdata)) {
+    newdata[["competing_group_variable_respondent"]]
+  } else {
+    NULL
+  }
   experiment_id <- if ("experiment_id" %in% colnames(newdata)) newdata[["experiment_id"]] else NULL
   experiment_description <- if ("experiment_description" %in% colnames(newdata)) {
     newdata[["experiment_description"]]
   } else {
     NULL
   }
-  special_cols <- c("pair_id", "profile_order", "experiment_id", "experiment_description")
+  special_cols <- c(
+    "pair_id",
+    "profile_order",
+    "competing_group_variable_candidate",
+    "competing_group_variable_respondent",
+    "experiment_id",
+    "experiment_description"
+  )
   if (!is.null(factor_names)) {
     missing_cols <- setdiff(factor_names, colnames(newdata))
     if (length(missing_cols) > 0L) {
@@ -471,6 +633,8 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
     X = X,
     pair_id = pair_id,
     profile_order = profile_order,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent,
     experiment_id = experiment_id,
     experiment_description = experiment_description
   )
@@ -481,6 +645,8 @@ cs_foundation_normalize_request <- function(W,
                                             mode = c("auto", "pairwise", "single"),
                                             pair_id = NULL,
                                             profile_order = NULL,
+                                            competing_group_variable_candidate = NULL,
+                                            competing_group_variable_respondent = NULL,
                                             experiment_id = "embedding_request",
                                             names_list = NULL,
                                             p_list = NULL,
@@ -499,6 +665,28 @@ cs_foundation_normalize_request <- function(W,
   mode_use <- cs_foundation_mode(match.arg(mode), pair_id)
   if (identical(mode_use, "pairwise")) {
     cs2step_validate_pairwise_ids(pair_id, nrow(W_df))
+  }
+  if (!is.null(competing_group_variable_candidate) &&
+      length(competing_group_variable_candidate) != nrow(W_df)) {
+    stop(
+      sprintf(
+        "competing_group_variable_candidate has %d elements but W has %d rows.",
+        length(competing_group_variable_candidate),
+        nrow(W_df)
+      ),
+      call. = FALSE
+    )
+  }
+  if (!is.null(competing_group_variable_respondent) &&
+      length(competing_group_variable_respondent) != nrow(W_df)) {
+    stop(
+      sprintf(
+        "competing_group_variable_respondent has %d elements but W has %d rows.",
+        length(competing_group_variable_respondent),
+        nrow(W_df)
+      ),
+      call. = FALSE
+    )
   }
   names_list_use <- cs_foundation_normalize_names_list_local(
     names_list = names_list,
@@ -530,6 +718,8 @@ cs_foundation_normalize_request <- function(W,
     mode = mode_use,
     pair_id = pair_id,
     profile_order = profile_order,
+    competing_group_variable_candidate = competing_group_variable_candidate,
+    competing_group_variable_respondent = competing_group_variable_respondent,
     canonical_factor_id = canonical_factor_id,
     canonical_level_id = canonical_level_id
   )
@@ -859,6 +1049,7 @@ extract_embeddings.conjoint_foundation_model <- function(object,
                                                          mode = c("auto", "pairwise", "single"),
                                                          likelihood = NULL,
                                                          n_outcomes = NULL,
+                                                         level = c("candidate", "respondent_context", "all"),
                                                          experiment_id = NULL,
                                                          names_list = NULL,
                                                          p_list = NULL,
@@ -906,6 +1097,8 @@ extract_embeddings.conjoint_foundation_model <- function(object,
     mode = mode_use,
     pair_id = unpacked$pair_id,
     profile_order = unpacked$profile_order,
+    competing_group_variable_candidate = unpacked$competing_group_variable_candidate,
+    competing_group_variable_respondent = unpacked$competing_group_variable_respondent,
     experiment_id = experiment_id_use,
     names_list = names_list,
     p_list = p_list,
@@ -947,11 +1140,14 @@ extract_embeddings.conjoint_foundation_model <- function(object,
     object = tmp_predictor,
     W_new = mapped$W_group,
     X_new = X_group,
+    competing_group_variable_candidate = request$competing_group_variable_candidate,
+    competing_group_variable_respondent = request$competing_group_variable_respondent,
     factor_order_new = mapped$factor_order,
     experiment_id = request$experiment_id,
     experiment_description = unpacked$experiment_description %||% NULL,
     pair_id = request$pair_id,
     profile_order = request$profile_order,
+    level = level,
     source_class = "conjoint_foundation_model",
     extra_metadata = list(
       foundation_group_key = group$requested_group_key %||% group$group_key,
