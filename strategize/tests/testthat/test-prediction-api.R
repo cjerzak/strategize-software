@@ -354,58 +354,39 @@ test_that("neural jit wrapper cache reuses identical experiment descriptions", {
   testthat::expect_false(identical(same_entry, other_entry))
 })
 
-test_that("stage-aware neural predictors support predict_pair()", {
-  skip_on_cran()
-  skip_if_no_jax()
-  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+test_that("stage-aware neural predictors require long-format predict()", {
+  predictor <- structure(
+    list(
+      model_type = "neural",
+      mode = "pairwise",
+      encoder = list(
+        factor_names = c("price", "message"),
+        names_list = list(price = c("A", "B"), message = c("A", "B")),
+        factor_levels = c(price = 2L, message = 2L)
+      ),
+      fit = list(
+        neural_model_info = list(pairwise_context_mode = "stage_aware")
+      ),
+      metadata = list()
+    ),
+    class = "strategic_predictor"
+  )
+  W_left <- data.frame(price = "A", message = "A")
+  W_right <- data.frame(price = "B", message = "B")
 
-  train_data <- add_foundation_pairwise_context(
-    prediction_test_experiment(seed = 901, experiment_id = "fm_train"),
-    seed = 22
-  )
-  foundation_fit <- fit_conjoint_foundation_model(
-    experiments = list(train_data),
-    foundation_control = prediction_test_foundation_control()
-  )
-  group <- foundation_fit$groups[["universal::mixed::v1"]]
-  predictor <- strategize:::cs_foundation_build_predictor(
-    fit = group$fit,
-    mode = "pairwise",
-    names_list = group$encoder$names_list,
-    factor_levels = group$encoder$factor_levels,
-    metadata = list(
-      conda_env = "strategize_env",
-      conda_env_required = TRUE
-    )
-  )
-  W_scoring <- train_data$W
-  colnames(W_scoring) <- group$encoder$factor_names
-
-  testthat::expect_identical(
-    predictor$fit$neural_model_info$pairwise_context_mode,
-    "stage_aware"
+  testthat::expect_error(
+    predict_pair(predictor, W_left = W_left, W_right = W_right),
+    "long-format newdata"
   )
 
-  preds <- predict(
-    predictor,
-    newdata = list(
-      W = W_scoring,
-      X = train_data$X,
-      pair_id = train_data$pair_id,
-      profile_order = train_data$profile_order,
-      competing_group_variable_candidate = train_data$competing_group_variable_candidate,
-      competing_group_variable_respondent = train_data$competing_group_variable_respondent
-    )
+  predictor$fit$neural_model_info <- list(
+    has_stage_context = TRUE,
+    has_matchup_token = TRUE
   )
-  testthat::expect_true(all(is.finite(preds)))
-
-  preds_pair <- predict_pair(
-    predictor,
-    W_left = W_scoring[train_data$profile_order == 1L, , drop = FALSE],
-    W_right = W_scoring[train_data$profile_order == 2L, , drop = FALSE]
+  testthat::expect_error(
+    predict_pair(predictor, W_left = W_left, W_right = W_right),
+    "competing_group_variable_candidate"
   )
-  testthat::expect_true(all(is.finite(preds_pair)))
-  testthat::expect_true(all(preds_pair >= 0 & preds_pair <= 1))
 })
 
 test_that("neural backend errors with build_backend() hint when unavailable", {

@@ -1799,9 +1799,28 @@ predict.strategic_predictor <- function(object,
   )
 }
 
+cs2step_predict_pair_stage_aware <- function(fit) {
+  model_info <- fit$fit$neural_model_info %||% NULL
+  if (is.null(model_info) || !is.list(model_info)) {
+    return(FALSE)
+  }
+  context_mode <- model_info$pairwise_context_mode %||% NULL
+  if (!is.null(context_mode) &&
+      any(as.character(context_mode) == "stage_aware", na.rm = TRUE)) {
+    return(TRUE)
+  }
+  isTRUE(model_info$has_stage_context) ||
+    isTRUE(model_info$has_matchup_context) ||
+    isTRUE(model_info$has_stage_token) ||
+    isTRUE(model_info$has_matchup_token)
+}
+
 #' Predict on wide-format pairwise data
 #'
-#' @param fit A fitted \code{strategic_predictor} with \code{mode="pairwise"}.
+#' @param fit A fitted stage-free \code{strategic_predictor} with
+#'   \code{mode="pairwise"}. Stage-aware pairwise predictors require
+#'   long-format \code{\link[stats]{predict}()} input because candidate and
+#'   respondent group metadata are row-aligned.
 #' @param W_left Data frame/matrix of left profiles.
 #' @param W_right Data frame/matrix of right profiles.
 #' @param type \code{"response"} or \code{"link"}.
@@ -1826,6 +1845,17 @@ predict_pair <- function(fit,
   }
   if (!identical(fit$mode, "pairwise")) {
     stop("predict_pair() requires a pairwise strategic_predictor (mode='pairwise').", call. = FALSE)
+  }
+  if (isTRUE(cs2step_predict_pair_stage_aware(fit))) {
+    stop(
+      paste(
+        "predict_pair() does not support stage-aware pairwise predictors.",
+        "Use predict() with long-format newdata containing W, pair_id,",
+        "profile_order, competing_group_variable_candidate, and",
+        "competing_group_variable_respondent."
+      ),
+      call. = FALSE
+    )
   }
   W_left <- as.data.frame(W_left)
   W_right <- as.data.frame(W_right)

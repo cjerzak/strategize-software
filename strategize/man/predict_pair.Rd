@@ -17,7 +17,10 @@ predict_pair(
 )
 }
 \arguments{
-\item{fit}{A fitted \code{strategic_predictor} with \code{mode="pairwise"}.}
+\item{fit}{A fitted stage-free \code{strategic_predictor} with
+\code{mode="pairwise"}. Stage-aware pairwise predictors require
+long-format \code{\link[stats]{predict}()} input because candidate and
+respondent group metadata are row-aligned.}
 
 \item{W_left}{Data frame/matrix of left profiles.}
 
