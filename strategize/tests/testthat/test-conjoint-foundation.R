@@ -57,7 +57,7 @@ test_that("checkpoint directory loader restores direct params without preference
 
   group_key <- strategize:::cs_foundation_universal_group_key()
   tmp <- tempfile()
-  dir.create(file.path(tmp, "arrays"), recursive = TRUE)
+  dir.create(tmp, recursive = TRUE)
   bundle <- structure(
     list(
       schema_version = 1L,
