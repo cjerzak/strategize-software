@@ -206,6 +206,278 @@ neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
   sprintf("%s [%.*f]", title_base, digits, tail_mean)
 }
 
+neural_diagnostic_numeric <- function(x) {
+  if (is.null(x)) {
+    return(numeric(0))
+  }
+  out <- tryCatch(
+    as.numeric(cs2step_neural_to_r_array(x)),
+    error = function(e) {
+      tryCatch(as.numeric(x), error = function(e2) numeric(0))
+    }
+  )
+  out
+}
+
+neural_build_parameter_diagnostics <- function(params) {
+  empty <- list(
+    parameter_status = "unavailable",
+    n_parameters = NA_integer_,
+    n_finite = NA_integer_,
+    n_nonfinite = NA_integer_,
+    global_l2_norm = NA_real_,
+    global_max_abs = NA_real_,
+    parameter_summaries = data.frame(),
+    global_histogram = list(breaks = numeric(0), counts = integer(0))
+  )
+  if (is.null(params) || !is.list(params) || length(params) < 1L) {
+    return(empty)
+  }
+
+  param_names <- names(params)
+  if (is.null(param_names)) {
+    param_names <- paste0("param_", seq_along(params))
+  }
+  values <- lapply(params, neural_diagnostic_numeric)
+  summaries <- lapply(seq_along(values), function(i) {
+    v <- values[[i]]
+    finite_v <- v[is.finite(v)]
+    data.frame(
+      name = param_names[[i]],
+      size = length(v),
+      n_finite = length(finite_v),
+      n_nonfinite = sum(!is.finite(v)),
+      min = if (length(finite_v)) min(finite_v) else NA_real_,
+      max = if (length(finite_v)) max(finite_v) else NA_real_,
+      mean = if (length(finite_v)) mean(finite_v) else NA_real_,
+      sd = if (length(finite_v) > 1L) stats::sd(finite_v) else NA_real_,
+      l2_norm = if (length(finite_v)) sqrt(sum(finite_v ^ 2)) else NA_real_,
+      max_abs = if (length(finite_v)) max(abs(finite_v)) else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  })
+  summary_df <- do.call(rbind, summaries)
+  all_values <- unlist(values, use.names = FALSE)
+  finite_values <- all_values[is.finite(all_values)]
+  hist_info <- if (length(finite_values) > 1L) {
+    hist_out <- tryCatch(
+      graphics::hist(finite_values, breaks = "FD", plot = FALSE),
+      error = function(e) NULL
+    )
+    if (is.null(hist_out) || length(hist_out$counts) > 24L) {
+      hist_out <- tryCatch(
+        graphics::hist(finite_values, breaks = 12L, plot = FALSE),
+        error = function(e) NULL
+      )
+    }
+    if (is.null(hist_out)) {
+      list(breaks = numeric(0), counts = integer(0))
+    } else {
+      list(
+        breaks = as.numeric(hist_out$breaks),
+        counts = as.integer(hist_out$counts)
+      )
+    }
+  } else {
+    list(breaks = finite_values, counts = as.integer(length(finite_values)))
+  }
+
+  list(
+    parameter_status = "ok",
+    n_parameters = length(all_values),
+    n_finite = length(finite_values),
+    n_nonfinite = sum(!is.finite(all_values)),
+    global_l2_norm = if (length(finite_values)) sqrt(sum(finite_values ^ 2)) else NA_real_,
+    global_max_abs = if (length(finite_values)) max(abs(finite_values)) else NA_real_,
+    parameter_summaries = summary_df,
+    global_histogram = hist_info
+  )
+}
+
+neural_extract_lr_trace <- function(lr_schedule, steps_completed, fallback_lr = NA_real_) {
+  steps_completed <- suppressWarnings(as.integer(steps_completed))
+  if (length(steps_completed) != 1L || is.na(steps_completed) || steps_completed < 1L) {
+    return(list(lr_trace = numeric(0), lr_trace_status = "ok"))
+  }
+  fallback_lr <- suppressWarnings(as.numeric(fallback_lr))
+  if (length(fallback_lr) != 1L || !is.finite(fallback_lr)) {
+    fallback_lr <- NA_real_
+  }
+  if (is.null(lr_schedule) || is.numeric(lr_schedule)) {
+    lr_value <- suppressWarnings(as.numeric(lr_schedule %||% fallback_lr))
+    if (length(lr_value) != 1L || !is.finite(lr_value)) {
+      return(list(
+        lr_trace = rep(NA_real_, steps_completed),
+        lr_trace_status = "unavailable"
+      ))
+    }
+    return(list(lr_trace = rep(lr_value, steps_completed), lr_trace_status = "ok"))
+  }
+
+  trace <- tryCatch(
+    vapply(seq_len(steps_completed) - 1L, function(step) {
+      value <- lr_schedule(ai(step))
+      as.numeric(strenv$np$array(value))
+    }, numeric(1)),
+    error = function(e) NULL
+  )
+  if (is.null(trace) || length(trace) != steps_completed) {
+    return(list(
+      lr_trace = rep(NA_real_, steps_completed),
+      lr_trace_status = "unavailable"
+    ))
+  }
+  trace[!is.finite(trace)] <- NA_real_
+  list(lr_trace = as.numeric(trace), lr_trace_status = "ok")
+}
+
+neural_detect_plateau <- function(loss_curve) {
+  loss_curve <- as.numeric(loss_curve %||% numeric(0))
+  finite_loss <- loss_curve[is.finite(loss_curve)]
+  if (length(finite_loss) < 20L) {
+    return(FALSE)
+  }
+  window <- max(5L, floor(length(finite_loss) * 0.2))
+  if (length(finite_loss) < (2L * window)) {
+    return(FALSE)
+  }
+  prev <- finite_loss[(length(finite_loss) - 2L * window + 1L):(length(finite_loss) - window)]
+  last <- tail(finite_loss, window)
+  prev_mean <- mean(prev)
+  last_mean <- mean(last)
+  if (!is.finite(prev_mean) || !is.finite(last_mean)) {
+    return(FALSE)
+  }
+  abs(last_mean - prev_mean) <= 1e-4 * max(1, abs(prev_mean))
+}
+
+neural_metric_value <- function(metrics, names) {
+  if (is.null(metrics) || !is.list(metrics)) {
+    return(NA_real_)
+  }
+  for (name in names) {
+    value <- suppressWarnings(as.numeric(metrics[[name]] %||% NA_real_))
+    if (length(value) == 1L && is.finite(value)) {
+      return(value)
+    }
+  }
+  NA_real_
+}
+
+neural_detect_overfit <- function(fit_metrics) {
+  if (is.null(fit_metrics) || is.null(fit_metrics$in_sample_metrics)) {
+    return(FALSE)
+  }
+  in_sample <- fit_metrics$in_sample_metrics
+  oos_loss <- neural_metric_value(fit_metrics, c("log_loss", "nll"))
+  in_loss <- neural_metric_value(in_sample, c("log_loss", "nll"))
+  if (is.finite(oos_loss) && is.finite(in_loss) && (oos_loss - in_loss) >= 0.05) {
+    return(TRUE)
+  }
+  oos_auc <- neural_metric_value(fit_metrics, "auc")
+  in_auc <- neural_metric_value(in_sample, "auc")
+  if (is.finite(oos_auc) && is.finite(in_auc) && (in_auc - oos_auc) >= 0.05) {
+    return(TRUE)
+  }
+  FALSE
+}
+
+neural_build_convergence_diagnostics <- function(parameter_diagnostics = NULL,
+                                                 svi_loss_curve = NULL,
+                                                 early_stopping = NULL,
+                                                 fit_metrics = NULL,
+                                                 steps_completed = NULL,
+                                                 steps_planned = NULL,
+                                                 use_svi = TRUE) {
+  steps_completed <- suppressWarnings(as.integer(steps_completed %||% NA_integer_))
+  steps_planned <- suppressWarnings(as.integer(steps_planned %||% NA_integer_))
+  losses <- as.numeric(svi_loss_curve %||% numeric(0))
+  has_losses <- length(losses) > 0L
+  finite_losses <- losses[is.finite(losses)]
+  loss_nonfinite <- if (has_losses) any(!is.finite(losses)) else NA
+  all_losses_nonfinite <- isTRUE(has_losses && length(finite_losses) < 1L)
+  final_loss <- if (length(finite_losses)) tail(finite_losses, 1L) else NA_real_
+  param_nonfinite <- suppressWarnings(as.integer(parameter_diagnostics$n_nonfinite %||% NA_integer_))
+  params_failed <- !is.na(param_nonfinite) && param_nonfinite > 0L
+  es_reason <- as.character(early_stopping$reason %||% NA_character_)
+  validation_failed <- es_reason %in% c("validation_error", "metric_failed")
+  update_failed <- es_reason %in% c("update_failed")
+  n_failed_folds <- suppressWarnings(as.integer(fit_metrics$n_failed_folds %||% NA_integer_))
+  n_folds <- suppressWarnings(as.integer(fit_metrics$n_folds %||% NA_integer_))
+  n_eval_success <- suppressWarnings(as.integer(fit_metrics$n_eval_success %||% NA_integer_))
+  n_eval_failed <- suppressWarnings(as.integer(fit_metrics$n_eval_failed %||% NA_integer_))
+  all_folds_failed <- (
+    !is.na(n_failed_folds) && !is.na(n_folds) && n_folds > 0L && n_failed_folds >= n_folds
+  ) || (
+    !is.na(n_eval_success) && !is.na(n_eval_failed) && n_eval_success < 1L && n_eval_failed > 0L
+  )
+  any_failed_folds <- !is.na(n_failed_folds) && n_failed_folds > 0L
+  plateaued <- neural_detect_plateau(losses)
+  overfit_suspected <- neural_detect_overfit(fit_metrics)
+  best_metric <- suppressWarnings(as.numeric(early_stopping$best_metric %||% NA_real_))
+  final_metric <- suppressWarnings(as.numeric(early_stopping$final_metric %||% NA_real_))
+  if (!is.finite(final_metric)) {
+    final_metric <- neural_metric_value(fit_metrics, c("log_loss", "nll", "rmse", "mae", "brier"))
+  }
+
+  failed_reason <- NA_character_
+  if (isTRUE(params_failed)) {
+    failed_reason <- "nonfinite_parameters"
+  } else if (isTRUE(all_losses_nonfinite)) {
+    failed_reason <- "loss_nonfinite_all"
+  } else if (isTRUE(update_failed)) {
+    failed_reason <- "backend_update_failed"
+  } else if (isTRUE(validation_failed)) {
+    failed_reason <- paste0("validation_", es_reason)
+  } else if (isTRUE(all_folds_failed)) {
+    failed_reason <- "prediction_failed_all_folds"
+  }
+
+  enough_for_converged <- isTRUE(use_svi) &&
+    !is.na(steps_completed) &&
+    !is.na(steps_planned) &&
+    (
+      is.finite(best_metric) ||
+        (steps_completed >= steps_planned && is.finite(final_loss))
+    )
+  verdict <- "unknown"
+  converged <- NA
+  if (!is.na(failed_reason)) {
+    verdict <- "failed"
+    converged <- FALSE
+  } else if (isTRUE(loss_nonfinite) || isTRUE(any_failed_folds) ||
+             isTRUE(plateaued) || isTRUE(overfit_suspected)) {
+    verdict <- "warning"
+    converged <- FALSE
+  } else if (isTRUE(enough_for_converged) && !isTRUE(params_failed) &&
+             !isTRUE(loss_nonfinite) && !isTRUE(any_failed_folds)) {
+    verdict <- "converged"
+    converged <- TRUE
+  }
+
+  notes <- character(0)
+  if (isTRUE(loss_nonfinite)) notes <- c(notes, "Some SVI losses were nonfinite.")
+  if (isTRUE(any_failed_folds)) notes <- c(notes, "One or more OOS folds failed.")
+  if (isTRUE(plateaued)) notes <- c(notes, "SVI loss plateau detected.")
+  if (isTRUE(overfit_suspected)) notes <- c(notes, "OOS metrics are worse than in-sample metrics.")
+  if (!is.na(failed_reason)) notes <- c(notes, sprintf("Failure reason: %s.", failed_reason))
+
+  list(
+    verdict = verdict,
+    converged = converged,
+    failed_reason = failed_reason,
+    loss_nonfinite = if (is.na(loss_nonfinite)) NA else isTRUE(loss_nonfinite),
+    plateaued = isTRUE(plateaued),
+    overfit_suspected = isTRUE(overfit_suspected),
+    steps_completed = if (is.na(steps_completed)) NA_integer_ else steps_completed,
+    steps_planned = if (is.na(steps_planned)) NA_integer_ else steps_planned,
+    best_metric = if (length(best_metric) == 1L && is.finite(best_metric)) best_metric else NA_real_,
+    final_metric = if (length(final_metric) == 1L && is.finite(final_metric)) final_metric else NA_real_,
+    final_loss = if (is.finite(final_loss)) final_loss else NA_real_,
+    notes = notes
+  )
+}
+
 neural_resolve_early_stopping_validation_target_n <- function(n_eval,
                                                               n_validation_available,
                                                               validation_frac = 0.05,
@@ -8534,6 +8806,72 @@ generate_ModelOutcome_neural <- function(){
             items
           }
 
+          make_na_metrics <- function(likelihood_value) {
+            if (identical(likelihood_value, "mixed")) {
+              return(list(
+                likelihood = "mixed",
+                n_eval = 0L,
+                n_obs = 0L,
+                nll = NA_real_,
+                by_family = list()
+              ))
+            }
+            if (identical(likelihood_value, "bernoulli")) {
+              return(list(
+                likelihood = likelihood_value,
+                n_eval = 0L,
+                auc = NA_real_,
+                log_loss = NA_real_,
+                accuracy = NA_real_,
+                brier = NA_real_
+              ))
+            }
+            if (identical(likelihood_value, "categorical")) {
+              return(list(
+                likelihood = likelihood_value,
+                n_eval = 0L,
+                log_loss = NA_real_,
+                accuracy = NA_real_
+              ))
+            }
+            list(
+              likelihood = likelihood_value,
+              n_eval = 0L,
+              rmse = NA_real_,
+              mae = NA_real_,
+              nll = NA_real_
+            )
+          }
+
+          make_failed_fold_metrics <- function(fold, test_idx, train_idx, reason) {
+            out <- make_na_metrics(likelihood)
+            out$fold <- as.integer(fold)
+            out$eval_note <- "oos"
+            out$n_test <- length(test_idx)
+            out$n_train <- length(train_idx)
+            out$prediction_status <- "failed"
+            out$failure_reason <- as.character(reason %||% "prediction_failed")
+            out$n_eval_success <- 0L
+            out$n_eval_failed <- length(test_idx)
+            out
+          }
+
+          subset_oos_prediction <- function(idx) {
+            if (likelihood == "mixed") {
+              list(
+                logits = pred_oos$logits[idx, , drop = FALSE],
+                sigma = pred_oos$sigma[idx]
+              )
+            } else if (likelihood == "bernoulli") {
+              pred_oos[idx]
+            } else if (likelihood == "categorical") {
+              pred_oos[idx, , drop = FALSE]
+            } else {
+              list(mu = pred_oos$mu[idx],
+                   sigma = pred_oos$sigma[idx])
+            }
+          }
+
           pred_oos <- NULL
           if (likelihood == "mixed") {
             pred_oos <- list(
@@ -8550,15 +8888,23 @@ generate_ModelOutcome_neural <- function(){
           }
 
           by_fold <- vector("list", n_folds_use)
+          successful_eval_idx <- integer(0)
+          failed_eval_idx <- integer(0)
           for (fold in seq_len(n_folds_use)) {
             test_pos <- which(fold_id == fold)
             train_pos <- which(fold_id != fold)
-            if (!length(test_pos) || !length(train_pos)) {
-              next
-            }
-
             test_idx <- eval_idx[test_pos]
             train_idx <- eval_idx[train_pos]
+            if (!length(test_pos) || !length(train_pos)) {
+              by_fold[[fold]] <- make_failed_fold_metrics(
+                fold,
+                test_idx,
+                train_idx,
+                "empty_train_or_test_fold"
+              )
+              failed_eval_idx <- c(failed_eval_idx, test_idx)
+              next
+            }
 
             fallback <- NULL
             if (likelihood == "mixed") {
@@ -8645,6 +8991,13 @@ generate_ModelOutcome_neural <- function(){
             }
             raw_train <- sort(unique(raw_train))
             if (!length(raw_train)) {
+              by_fold[[fold]] <- make_failed_fold_metrics(
+                fold,
+                test_idx,
+                train_idx,
+                "empty_raw_training_rows"
+              )
+              failed_eval_idx <- c(failed_eval_idx, test_idx)
               next
             }
 
@@ -8724,13 +9077,18 @@ generate_ModelOutcome_neural <- function(){
             }
             set.seed(as.integer(fold_seed) + as.integer(fold))
 
+            fit_failure_reason <- NULL
             fit_ok <- tryCatch({
               eval(init_model, envir = fold_env)
               is.function(fold_env$my_model)
-            }, error = function(e) FALSE)
+            }, error = function(e) {
+              fit_failure_reason <<- conditionMessage(e)
+              FALSE
+            })
 
             pred_fold <- NULL
             if (isTRUE(fit_ok)) {
+              prediction_failure_reason <- NULL
               pred_fold <- tryCatch({
                 if (pairwise_mode) {
                   X_left_test <- X_left[test_idx, , drop = FALSE]
@@ -8793,22 +9151,39 @@ generate_ModelOutcome_neural <- function(){
                     return_logits = identical(likelihood, "mixed")
                   )
                 }
-              }, error = function(e) NULL)
+              }, error = function(e) {
+                prediction_failure_reason <<- conditionMessage(e)
+                NULL
+              })
+            } else {
+              prediction_failure_reason <- fit_failure_reason %||% "fold_fit_failed"
             }
 
             if (is.null(pred_fold)) {
-              pred_fold <- fallback
+              by_fold[[fold]] <- make_failed_fold_metrics(
+                fold,
+                test_idx,
+                train_idx,
+                prediction_failure_reason %||% "prediction_failed"
+              )
+              failed_eval_idx <- c(failed_eval_idx, test_idx)
+              next
             }
 
+            prediction_failure_reason <- NULL
+            fold_metrics <- tryCatch({
             if (likelihood == "mixed") {
               train_family_present <- unique(likelihood_code_all[train_idx])
               test_code <- likelihood_code_all[test_idx]
               if (!all(test_code %in% train_family_present)) {
-                missing_idx <- which(!test_code %in% train_family_present)
-                if (length(missing_idx) > 0L) {
-                  pred_fold$logits[missing_idx, , drop = FALSE] <- fallback$logits[missing_idx, , drop = FALSE]
-                  pred_fold$sigma[missing_idx] <- fallback$sigma[missing_idx]
-                }
+                by_fold[[fold]] <- make_failed_fold_metrics(
+                  fold,
+                  test_idx,
+                  train_idx,
+                  "missing_training_likelihood_family"
+                )
+                failed_eval_idx <- c(failed_eval_idx, test_idx)
+                next
               }
               pred_oos$logits[test_idx, ] <- as.matrix(pred_fold$logits)
               pred_oos$sigma[test_idx] <- as.numeric(pred_fold$sigma)
@@ -8828,10 +9203,30 @@ generate_ModelOutcome_neural <- function(){
               pred_oos$sigma[test_idx] <- as.numeric(pred_fold$sigma)
               fold_metrics <- compute_metrics(y_all[test_idx], pred_fold)
             }
+            fold_metrics
+            }, error = function(e) {
+              prediction_failure_reason <<- conditionMessage(e)
+              NULL
+            })
+            if (is.null(fold_metrics)) {
+              by_fold[[fold]] <- make_failed_fold_metrics(
+                fold,
+                test_idx,
+                train_idx,
+                prediction_failure_reason %||% "prediction_metric_failed"
+              )
+              failed_eval_idx <- c(failed_eval_idx, test_idx)
+              next
+            }
             fold_metrics$fold <- fold
             fold_metrics$eval_note <- "oos"
             fold_metrics$n_test <- length(test_idx)
             fold_metrics$n_train <- length(train_idx)
+            fold_metrics$prediction_status <- "ok"
+            fold_metrics$failure_reason <- NA_character_
+            fold_metrics$n_eval_success <- as.integer(fold_metrics$n_eval %||% length(test_idx))
+            fold_metrics$n_eval_failed <- max(0L, length(test_idx) - fold_metrics$n_eval_success)
+            successful_eval_idx <- c(successful_eval_idx, test_idx)
             fold_metric_items <- if (likelihood == "mixed") {
               format_mixed_metric_items(fold_metrics)
             } else if (likelihood == "bernoulli") {
@@ -8863,33 +9258,51 @@ generate_ModelOutcome_neural <- function(){
             by_fold[[fold]] <- fold_metrics
           }
 
+          successful_eval_idx <- sort(unique(successful_eval_idx))
+          failed_eval_idx <- sort(unique(c(failed_eval_idx, setdiff(eval_idx, successful_eval_idx))))
+          failed_fold_ids <- which(vapply(by_fold, function(x) {
+            is.list(x) && identical(x$prediction_status, "failed")
+          }, logical(1)))
           pred_eval <- NULL
-          if (likelihood == "mixed") {
-            pred_eval <- list(
-              logits = pred_oos$logits[eval_idx, , drop = FALSE],
-              sigma = pred_oos$sigma[eval_idx]
+          if (length(successful_eval_idx) > 0L) {
+            pred_eval <- subset_oos_prediction(successful_eval_idx)
+            overall_metrics <- compute_metrics(
+              y_all[successful_eval_idx],
+              pred_eval,
+              idx_use = successful_eval_idx
             )
-          } else if (likelihood == "bernoulli") {
-            pred_eval <- pred_oos[eval_idx]
-          } else if (likelihood == "categorical") {
-            pred_eval <- pred_oos[eval_idx, , drop = FALSE]
           } else {
-            pred_eval <- list(mu = pred_oos$mu[eval_idx],
-                              sigma = pred_oos$sigma[eval_idx])
+            overall_metrics <- make_na_metrics(likelihood)
           }
-
-          overall_metrics <- compute_metrics(y_all[eval_idx], pred_eval, idx_use = eval_idx)
           overall_metrics$eval_note <- sprintf("oos_%dfold", n_folds_use)
           overall_metrics$eval_subset <- subset_note
           overall_metrics$n_folds <- n_folds_use
           overall_metrics$seed <- eval_control$seed
-          overall_metrics$eval_index <- eval_idx
+          overall_metrics$eval_index <- successful_eval_idx
+          overall_metrics$n_eval_success <- length(successful_eval_idx)
+          overall_metrics$n_eval_failed <- length(failed_eval_idx)
+          overall_metrics$n_failed_folds <- length(failed_fold_ids)
+          overall_metrics$failed_fold_ids <- as.integer(failed_fold_ids)
+          overall_metrics$prediction_status <- if (length(failed_fold_ids) < 1L) {
+            "ok"
+          } else if (length(successful_eval_idx) > 0L) {
+            "partial"
+          } else {
+            "failed"
+          }
+          overall_metrics$failure_reason <- if (length(failed_fold_ids) < 1L) {
+            NA_character_
+          } else if (length(successful_eval_idx) > 0L) {
+            "prediction_failed_some_folds"
+          } else {
+            "prediction_failed_all_folds"
+          }
           overall_metrics$by_fold <- by_fold
 
-          if (pairwise_mode) {
+          if (pairwise_mode && length(successful_eval_idx) > 0L) {
             stage_primary <- party_left == party_right
               if (length(stage_primary) == n_total) {
-                stage_primary <- stage_primary[eval_idx]
+                stage_primary <- stage_primary[successful_eval_idx]
                 by_stage <- list()
                 if (any(stage_primary, na.rm = TRUE)) {
                   idx0 <- which(stage_primary)
@@ -8907,9 +9320,9 @@ generate_ModelOutcome_neural <- function(){
                          sigma = pred_eval$sigma[idx0])
                   }
                   by_stage$primary <- compute_metrics(
-                    y_all[eval_idx][idx0],
+                    y_all[successful_eval_idx][idx0],
                     pred_stage,
-                    idx_use = eval_idx[idx0]
+                    idx_use = successful_eval_idx[idx0]
                   )
                 }
                 if (any(!stage_primary, na.rm = TRUE)) {
@@ -8928,9 +9341,9 @@ generate_ModelOutcome_neural <- function(){
                          sigma = pred_eval$sigma[idx1])
                   }
                   by_stage$general <- compute_metrics(
-                    y_all[eval_idx][idx1],
+                    y_all[successful_eval_idx][idx1],
                     pred_stage,
-                    idx_use = eval_idx[idx1]
+                    idx_use = successful_eval_idx[idx1]
                   )
                 }
                 if (length(by_stage) > 0L) {
@@ -9777,6 +10190,41 @@ generate_ModelOutcome_neural <- function(){
   resolved_svi_num_draws <- NULL
   svi_budget_info <- NULL
   svi_steps_completed <- NULL
+  optimizer_tag <- NULL
+  user_supplied_optimizer <- FALSE
+  svi_lr <- NA_real_
+  schedule_tag <- NA_character_
+  warmup_frac <- NA_real_
+  warmup_steps <- NA_integer_
+  decay_steps <- NA_integer_
+  end_factor <- NA_real_
+  lr_schedule <- NULL
+  optimizer_diagnostics <- list(
+    optimizer_status = if (isTRUE(use_svi)) "pending" else "not_svi",
+    optimizer = NA_character_,
+    optimizer_requested = NA_character_,
+    user_supplied_optimizer = NA,
+    schedule_name = NA_character_,
+    svi_lr = NA_real_,
+    warmup_frac = NA_real_,
+    warmup_steps = NA_integer_,
+    decay_steps = NA_integer_,
+    end_factor = NA_real_,
+    steps_completed = NA_integer_,
+    lr_trace = numeric(0),
+    lr_trace_status = if (isTRUE(use_svi)) "pending" else "not_svi"
+  )
+  gradient_diagnostics <- list(
+    gradient_status = if (isTRUE(use_svi)) "unavailable" else "not_svi",
+    checkpoint_steps = integer(0),
+    global_l2_norm = NA_real_,
+    global_max_abs = NA_real_,
+    notes = if (isTRUE(use_svi)) {
+      "Checkpoint gradient norms are unavailable from the active NumPyro SVI API."
+    } else {
+      "SVI was not used for this fit."
+    }
+  )
   early_stopping_enabled <- isTRUE(mcmc_control$early_stopping)
   early_stopping_info <- list(
     enabled = early_stopping_enabled,
@@ -9988,6 +10436,21 @@ generate_ModelOutcome_neural <- function(){
       optimizer_tag = optimizer_tag,
       guide_name = guide_name,
       user_supplied_optimizer = user_supplied_optimizer
+    )
+    optimizer_diagnostics <- list(
+      optimizer_status = "configured",
+      optimizer = optimizer_tag,
+      optimizer_requested = if (isTRUE(user_supplied_optimizer)) optimizer_raw else NA_character_,
+      user_supplied_optimizer = isTRUE(user_supplied_optimizer),
+      schedule_name = schedule_tag,
+      svi_lr = svi_lr,
+      warmup_frac = warmup_frac,
+      warmup_steps = as.integer(warmup_steps),
+      decay_steps = as.integer(decay_steps),
+      end_factor = end_factor,
+      steps_completed = NA_integer_,
+      lr_trace = numeric(0),
+      lr_trace_status = "pending"
     )
     svi_optim <- if (optimizer_tag == "adam") {
       strenv$numpyro$optim$Adam(lr_schedule)
@@ -10710,6 +11173,15 @@ generate_ModelOutcome_neural <- function(){
                    col = "red"), TRUE)
       }
     }
+    lr_trace_info <- neural_extract_lr_trace(
+      lr_schedule = lr_schedule,
+      steps_completed = svi_steps_completed %||% length(svi_loss_curve),
+      fallback_lr = svi_lr
+    )
+    optimizer_diagnostics$steps_completed <- as.integer(svi_steps_completed %||% length(svi_loss_curve))
+    optimizer_diagnostics$lr_trace <- lr_trace_info$lr_trace
+    optimizer_diagnostics$lr_trace_status <- lr_trace_info$lr_trace_status
+    optimizer_diagnostics$optimizer_status <- "ok"
     params <- svi$get_params(svi_state)
     SVIParams <- params
     n_draws <- ai(resolved_svi_num_draws)
@@ -11761,6 +12233,17 @@ generate_ModelOutcome_neural <- function(){
     }
   }
 
+  parameter_diagnostics <- neural_build_parameter_diagnostics(ParamsMean)
+  convergence_diagnostics <- neural_build_convergence_diagnostics(
+    parameter_diagnostics = parameter_diagnostics,
+    svi_loss_curve = svi_loss_curve,
+    early_stopping = early_stopping_info,
+    fit_metrics = fit_metrics,
+    steps_completed = svi_steps_completed,
+    steps_planned = resolved_svi_steps,
+    use_svi = isTRUE(use_svi)
+  )
+
   neural_model_info <- list(
     params = ParamsMean,
     param_names = param_names,
@@ -11874,6 +12357,10 @@ generate_ModelOutcome_neural <- function(){
     svi_num_draws = resolved_svi_num_draws,
     early_stopping = early_stopping_info,
     svi_budget_info = svi_budget_info,
+    convergence_diagnostics = convergence_diagnostics,
+    optimizer_diagnostics = optimizer_diagnostics,
+    gradient_diagnostics = gradient_diagnostics,
+    parameter_diagnostics = parameter_diagnostics,
     stage_diagnostics = stage_diagnostics,
     model_dims = ModelDims,
     model_depth = ModelDepth,

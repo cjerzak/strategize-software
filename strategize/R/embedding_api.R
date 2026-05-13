@@ -533,6 +533,9 @@ cs2step_neural_extract_internal <- function(object,
 
 #' @rdname extract_embeddings
 #' @param newdata New data in the same format accepted by \code{predict()}.
+#' @param level Embedding level to return: \code{"candidate"} keeps the
+#'   historical candidate/profile output, \code{"respondent_context"} returns
+#'   context-side embeddings, and \code{"all"} returns both.
 #' @export
 extract_embeddings.strategic_predictor <- function(object,
                                                    newdata,

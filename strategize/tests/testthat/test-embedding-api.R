@@ -151,6 +151,94 @@ embedding_test_predictor_fit <- local({
   }
 })
 
+embedding_test_context_predictor_fit <- local({
+  cache <- new.env(parent = emptyenv())
+
+  function(mode = c("single", "pairwise"),
+           cross_candidate_encoder = NULL,
+           seed = 1L) {
+    mode <- match.arg(mode)
+    cross_key <- if (is.null(cross_candidate_encoder)) "default" else as.character(cross_candidate_encoder)
+    cache_key <- paste(mode, cross_key, as.integer(seed), sep = "::")
+    if (exists(cache_key, envir = cache, inherits = FALSE)) {
+      return(get(cache_key, envir = cache, inherits = FALSE))
+    }
+
+    skip_on_cran()
+    skip_if_no_jax()
+    withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+    data <- generate_test_data(
+      n = if (identical(mode, "pairwise")) 64 else 32,
+      n_factors = 3,
+      n_levels = 2,
+      seed = seed
+    )
+    data <- add_adversarial_structure(data, seed = seed + 101L)
+    W_df <- as.data.frame(data$W, stringsAsFactors = FALSE)
+    X <- embedding_test_covariates(W_df)[, c("income", "household size"), drop = FALSE]
+    names_list <- strategize:::cs2step_build_names_list(W_df)
+    factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
+    W_idx <- strategize:::cs2step_encode_W_indices(
+      W_df,
+      names_list = names_list,
+      unknown = "error",
+      pad_unknown = 0L
+    )
+    fit <- suppressWarnings(strategize:::cs2step_eval_outcome_model_neural(
+      Y = as.numeric(data$Y),
+      W_idx = W_idx,
+      names_list = names_list,
+      factor_levels = factor_levels,
+      diff = identical(mode, "pairwise"),
+      pair_id = if (identical(mode, "pairwise")) data$pair_id else NULL,
+      profile_order = if (identical(mode, "pairwise")) data$profile_order else NULL,
+      competing_group_variable_candidate = data$competing_group_variable_candidate,
+      competing_group_variable_respondent = data$competing_group_variable_respondent,
+      X = X,
+      conda_env_required = TRUE,
+      neural_mcmc_control = embedding_test_neural_control(cross_candidate_encoder)
+    ))
+
+    predictor <- structure(
+      list(
+        model_type = "neural",
+        mode = mode,
+        encoder = list(
+          factor_names = names(names_list),
+          names_list = names_list,
+          factor_levels = factor_levels
+        ),
+        fit = fit,
+        metadata = list(
+          conda_env = "strategize_env",
+          conda_env_required = TRUE
+        )
+      ),
+      class = "strategic_predictor"
+    )
+    out <- list(fit = predictor, data = data, W = W_df, X = X)
+    assign(cache_key, out, envir = cache)
+    out
+  }
+})
+
+embedding_test_newdata_subset <- function(fit_obj, rows) {
+  out <- list(
+    W = fit_obj$W[rows, , drop = FALSE],
+    X = fit_obj$X[rows, , drop = FALSE],
+    competing_group_variable_candidate =
+      fit_obj$data$competing_group_variable_candidate[rows],
+    competing_group_variable_respondent =
+      fit_obj$data$competing_group_variable_respondent[rows]
+  )
+  if (identical(fit_obj$fit$mode, "pairwise")) {
+    out$pair_id <- fit_obj$data$pair_id[rows]
+    out$profile_order <- fit_obj$data$profile_order[rows]
+  }
+  out
+}
+
 embedding_test_pairwise_foundation_fit <- local({
   cache <- NULL
 
@@ -241,6 +329,67 @@ test_that("extract_embeddings returns single-mode neural embeddings", {
   expect_identical(emb$metadata$cross_candidate_encoder, "none")
 })
 
+test_that("extract_embeddings returns single-mode respondent-context embeddings", {
+  fit_obj <- embedding_test_context_predictor_fit(mode = "single", seed = 9311)
+  newdata <- embedding_test_newdata_subset(fit_obj, 1:12)
+  emb <- extract_embeddings(
+    fit_obj$fit,
+    newdata = newdata,
+    level = "respondent_context"
+  )
+
+  expect_s3_class(emb, "strategic_embeddings")
+  expect_identical(emb$mode, "single")
+  expect_null(emb$embeddings)
+  expect_true(is.matrix(emb$respondent_context))
+  expect_equal(dim(emb$respondent_context), c(12L, 12L))
+  expect_true(all(is.finite(emb$respondent_context)))
+  expect_identical(emb$metadata$level, "respondent_context")
+  expect_true(isTRUE(emb$metadata$context_components$respondent_group))
+  expect_true(isTRUE(emb$metadata$context_components$respondent_covariates))
+})
+
+test_that("respondent-context embeddings react to covariates and respondent groups", {
+  fit_obj <- embedding_test_context_predictor_fit(mode = "single", seed = 9311)
+  newdata <- embedding_test_newdata_subset(fit_obj, 1:12)
+  emb_base <- extract_embeddings(
+    fit_obj$fit,
+    newdata = newdata,
+    level = "respondent_context"
+  )
+
+  cov_changed <- newdata
+  cov_changed$X$income <- cov_changed$X$income + 3
+  emb_cov <- extract_embeddings(
+    fit_obj$fit,
+    newdata = cov_changed,
+    level = "respondent_context"
+  )
+
+  group_changed <- newdata
+  group_changed$competing_group_variable_respondent <- ifelse(
+    group_changed$competing_group_variable_respondent == "PartyA",
+    "PartyB",
+    "PartyA"
+  )
+  emb_group <- extract_embeddings(
+    fit_obj$fit,
+    newdata = group_changed,
+    level = "respondent_context"
+  )
+
+  expect_false(isTRUE(all.equal(
+    emb_base$respondent_context,
+    emb_cov$respondent_context,
+    tolerance = 1e-8
+  )))
+  expect_false(isTRUE(all.equal(
+    emb_base$respondent_context,
+    emb_group$respondent_context,
+    tolerance = 1e-8
+  )))
+})
+
 test_that("extract_embeddings returns left and right matrices for pairwise term mode", {
   fit_obj <- embedding_test_predictor_fit(
     mode = "pairwise",
@@ -266,6 +415,87 @@ test_that("extract_embeddings returns left and right matrices for pairwise term 
   expect_true(all(is.finite(emb$right)))
   expect_null(emb$joint)
   expect_identical(emb$metadata$cross_candidate_encoder, "term")
+})
+
+test_that("extract_embeddings returns pairwise respondent-context embeddings", {
+  fit_obj <- embedding_test_context_predictor_fit(
+    mode = "pairwise",
+    cross_candidate_encoder = "term",
+    seed = 9313
+  )
+  pair_keep <- unique(fit_obj$data$pair_id)[1:10]
+  rows <- which(fit_obj$data$pair_id %in% pair_keep)
+  newdata <- embedding_test_newdata_subset(fit_obj, rows)
+  emb <- extract_embeddings(
+    fit_obj$fit,
+    newdata = newdata,
+    level = "respondent_context"
+  )
+
+  expect_s3_class(emb, "strategic_embeddings")
+  expect_identical(emb$mode, "pairwise")
+  expect_null(emb$left)
+  expect_null(emb$right)
+  expect_null(emb$joint)
+  expect_true(is.matrix(emb$respondent_context))
+  expect_equal(dim(emb$respondent_context), c(length(pair_keep), 12L))
+  expect_true(all(is.finite(emb$respondent_context)))
+})
+
+test_that("extract_embeddings can return candidate and respondent-context levels together", {
+  fit_obj <- embedding_test_context_predictor_fit(
+    mode = "pairwise",
+    cross_candidate_encoder = "term",
+    seed = 9313
+  )
+  pair_keep <- unique(fit_obj$data$pair_id)[1:8]
+  rows <- which(fit_obj$data$pair_id %in% pair_keep)
+  emb <- extract_embeddings(
+    fit_obj$fit,
+    newdata = embedding_test_newdata_subset(fit_obj, rows),
+    level = "all"
+  )
+
+  expect_true(is.matrix(emb$left))
+  expect_true(is.matrix(emb$right))
+  expect_true(is.matrix(emb$respondent_context))
+  expect_equal(nrow(emb$left), length(pair_keep))
+  expect_equal(nrow(emb$respondent_context), length(pair_keep))
+  expect_identical(emb$metadata$level, "all")
+})
+
+test_that("pairwise respondent-context extraction passes through group fields", {
+  fit_obj <- embedding_test_context_predictor_fit(
+    mode = "pairwise",
+    cross_candidate_encoder = "term",
+    seed = 9313
+  )
+  expect_true(isTRUE(fit_obj$fit$fit$neural_model_info$has_stage_context))
+  pair_keep <- unique(fit_obj$data$pair_id)[1:12]
+  rows <- which(fit_obj$data$pair_id %in% pair_keep)
+  newdata <- embedding_test_newdata_subset(fit_obj, rows)
+
+  emb_with_groups <- extract_embeddings(
+    fit_obj$fit,
+    newdata = newdata,
+    level = "respondent_context"
+  )
+  newdata_without_groups <- newdata
+  newdata_without_groups$competing_group_variable_candidate <- NULL
+  newdata_without_groups$competing_group_variable_respondent <- NULL
+  emb_without_groups <- extract_embeddings(
+    fit_obj$fit,
+    newdata = newdata_without_groups,
+    level = "respondent_context"
+  )
+
+  expect_true(isTRUE(emb_with_groups$metadata$context_components$stage))
+  expect_true(isTRUE(emb_with_groups$metadata$context_components$matchup))
+  expect_false(isTRUE(all.equal(
+    emb_with_groups$respondent_context,
+    emb_without_groups$respondent_context,
+    tolerance = 1e-8
+  )))
 })
 
 test_that("extract_embeddings returns post-attention pairwise embeddings for attn mode", {
