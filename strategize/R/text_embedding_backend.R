@@ -161,7 +161,7 @@ cs2step_resolve_conda_binary <- function(conda = "auto") {
   path.expand(conda_bin)
 }
 
-cs2step_python_probe <- function(python, code) {
+cs2step_python_probe <- function(python, code, env = character()) {
   python <- path.expand(as.character(python %||% ""))
   if (!nzchar(python) || !file.exists(python)) {
     return(list(status = 127L, output = "python interpreter not found"))
@@ -170,7 +170,13 @@ cs2step_python_probe <- function(python, code) {
   on.exit(unlink(script), add = TRUE)
   writeLines(code, script, useBytes = TRUE)
   output <- tryCatch(
-    suppressWarnings(system2(python, script, stdout = TRUE, stderr = TRUE)),
+    suppressWarnings(system2(
+      python,
+      script,
+      stdout = TRUE,
+      stderr = TRUE,
+      env = as.character(env %||% character())
+    )),
     error = function(e) structure(conditionMessage(e), status = 127L)
   )
   status <- attr(output, "status")
@@ -178,6 +184,81 @@ cs2step_python_probe <- function(python, code) {
     status <- 0L
   }
   list(status = as.integer(status), output = as.character(output))
+}
+
+cs2step_python_version_major_minor <- function(python) {
+  code <- paste(
+    "import sys",
+    "print('PYTHON_VERSION::{}.{}'.format(sys.version_info.major, sys.version_info.minor))",
+    sep = "\n"
+  )
+  probe <- cs2step_python_probe(python, code)
+  line <- grep("^PYTHON_VERSION::", probe$output, value = TRUE)
+  version <- if (length(line) > 0L) sub("^PYTHON_VERSION::", "", line[[1]]) else ""
+  list(
+    ok = identical(probe$status, 0L) && nzchar(version),
+    major_minor = version,
+    status = probe$status,
+    output = probe$output
+  )
+}
+
+cs2step_python_distribution_probe <- function(python, distributions) {
+  distributions <- unique(as.character(distributions %||% character(0)))
+  if (!length(distributions)) {
+    return(list(ok = logical(0), version = character(0), details = character(0), status = 0L))
+  }
+  quoted <- paste(sprintf("'%s'", gsub("'", "\\\\'", distributions, fixed = TRUE)), collapse = ", ")
+  code <- paste(
+    "from importlib import metadata",
+    sprintf("dists = [%s]", quoted),
+    "for name in dists:",
+    "    try:",
+    "        print('OK::' + name + '::' + metadata.version(name))",
+    "    except Exception as exc:",
+    "        print('FAIL::' + name + '::' + exc.__class__.__name__ + '::' + str(exc))",
+    sep = "\n"
+  )
+  probe <- cs2step_python_probe(python, code)
+  ok <- setNames(rep(FALSE, length(distributions)), distributions)
+  version <- setNames(rep("", length(distributions)), distributions)
+  details <- setNames(rep("", length(distributions)), distributions)
+  for (line in probe$output) {
+    if (!nzchar(line)) {
+      next
+    }
+    if (startsWith(line, "OK::")) {
+      parts <- strsplit(line, "::", fixed = TRUE)[[1]]
+      if (length(parts) >= 3L && parts[[2]] %in% distributions) {
+        ok[[parts[[2]]]] <- TRUE
+        version[[parts[[2]]]] <- paste(parts[-(1:2)], collapse = "::")
+      }
+    } else if (startsWith(line, "FAIL::")) {
+      parts <- strsplit(line, "::", fixed = TRUE)[[1]]
+      if (length(parts) >= 2L && parts[[2]] %in% distributions) {
+        details[[parts[[2]]]] <- paste(parts[-(1:2)], collapse = "::")
+      }
+    }
+  }
+  list(ok = ok, version = version, details = details, status = probe$status)
+}
+
+cs2step_python_jax_backend_probe <- function(python, platform = NULL) {
+  code <- paste(
+    "import jax",
+    "print('JAX_DEFAULT_BACKEND::' + str(jax.default_backend()))",
+    sep = "\n"
+  )
+  platform <- as.character(platform %||% "")
+  env <- if (nzchar(platform)) sprintf("JAX_PLATFORMS=%s", platform) else character()
+  probe <- cs2step_python_probe(python, code, env = env)
+  line <- grep("^JAX_DEFAULT_BACKEND::", probe$output, value = TRUE)
+  backend <- if (length(line) > 0L) sub("^JAX_DEFAULT_BACKEND::", "", line[[1]]) else ""
+  ok <- identical(probe$status, 0L) && nzchar(backend)
+  if (nzchar(platform)) {
+    ok <- ok && identical(backend, platform)
+  }
+  list(ok = ok, backend = backend, status = probe$status, output = probe$output)
 }
 
 cs2step_python_module_probe <- function(python, modules) {
@@ -272,6 +353,87 @@ cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "aut
     core_module_details = module_probe$details,
     core_modules_ready = python_exists && all(module_probe$ok)
   )
+}
+
+cs2step_backend_host_info <- function() {
+  info <- Sys.info()
+  os <- as.character(unname(info["sysname"]))
+  if (!nzchar(os) || is.na(os)) {
+    os <- .Platform$OS.type
+  }
+  machine <- as.character(unname(info["machine"]))
+  if (!nzchar(machine) || is.na(machine)) {
+    machine <- R.version$arch %||% ""
+  }
+  list(
+    os = os,
+    machine = machine,
+    is_macos = identical(os, "Darwin"),
+    is_arm64 = grepl("arm64|aarch64", machine, ignore.case = TRUE)
+  )
+}
+
+cs2step_backend_mps_compatibility <- function(state) {
+  python <- path.expand(as.character(state$python %||% ""))
+  python_exists <- isTRUE(state$python_exists) && nzchar(python) && file.exists(python)
+  if (!python_exists) {
+    return(list(
+      compatible = FALSE,
+      python_major_minor = "",
+      python_313 = FALSE,
+      jax_mps_installed = FALSE,
+      jax_mps_version = "",
+      jax_backend = "",
+      jax_backend_mps = FALSE,
+      details = "python interpreter not found"
+    ))
+  }
+
+  python_version <- cs2step_python_version_major_minor(python)
+  python_313 <- identical(python_version$major_minor, "3.13")
+  dist_probe <- cs2step_python_distribution_probe(python, "jax-mps")
+  jax_mps_installed <- isTRUE(dist_probe$ok[["jax-mps"]])
+  jax_backend_probe <- if (python_313 && jax_mps_installed) {
+    cs2step_python_jax_backend_probe(python, platform = "mps")
+  } else {
+    list(ok = FALSE, backend = "", status = NA_integer_, output = character())
+  }
+
+  list(
+    compatible = python_313 && jax_mps_installed && isTRUE(jax_backend_probe$ok),
+    python_major_minor = python_version$major_minor,
+    python_313 = python_313,
+    jax_mps_installed = jax_mps_installed,
+    jax_mps_version = dist_probe$version[["jax-mps"]] %||% "",
+    jax_backend = jax_backend_probe$backend,
+    jax_backend_mps = isTRUE(jax_backend_probe$ok),
+    details = paste(c(python_version$output, dist_probe$details, jax_backend_probe$output), collapse = "\n")
+  )
+}
+
+cs2step_describe_mps_compatibility <- function(compatibility) {
+  issues <- character()
+  if (!isTRUE(compatibility$python_313)) {
+    found <- compatibility$python_major_minor %||% ""
+    if (!nzchar(found)) {
+      found <- "unknown"
+    }
+    issues <- c(issues, sprintf("Python 3.13 required, found %s", found))
+  }
+  if (!isTRUE(compatibility$jax_mps_installed)) {
+    issues <- c(issues, "Python distribution 'jax-mps' is not installed")
+  }
+  if (!isTRUE(compatibility$jax_backend_mps)) {
+    backend <- compatibility$jax_backend %||% ""
+    if (!nzchar(backend)) {
+      backend <- "unavailable"
+    }
+    issues <- c(issues, sprintf("JAX default backend under JAX_PLATFORMS=mps is %s", backend))
+  }
+  if (!length(issues)) {
+    return("compatible")
+  }
+  paste(issues, collapse = "; ")
 }
 
 cs2step_command_probe <- function(command, args = character()) {

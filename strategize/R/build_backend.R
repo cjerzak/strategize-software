@@ -4,11 +4,23 @@
 #' workflow, neural APIs, and foundation checkpoint loading. Users may also
 #' create and manage a compatible environment themselves.
 #'
+#' @details
+#' The default \code{backend = "auto"} preserves the existing non-MPS behavior.
+#' The \code{"mps"} backend is experimental, opt-in, and supported only on
+#' macOS Apple Silicon. It creates a Python 3.13 environment, installs
+#' \code{jax-mps}, verifies that JAX reports the MPS backend under
+#' \code{JAX_PLATFORMS=mps}, and recreates an existing incompatible environment.
+#'
 #' @param conda_env Name of the conda environment in which to place the backends.
 #'   Defaults to \code{"strategize_env"}.
 #' @param conda The path to a conda executable. Using \code{"auto"} allows reticulate
 #'   to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.
 #'   If creation fails and a conda binary is found on PATH, the function retries with it.
+#' @param backend JAX backend selector. Use \code{"auto"} to preserve the default
+#'   host-aware behavior, \code{"cpu"} to install plain CPU JAX,
+#'   \code{"cuda"} to require Linux and install CUDA-capable JAX wheels when
+#'   supported by the NVIDIA driver, or \code{"mps"} to opt in to the
+#'   experimental Apple Silicon \code{jax-mps} backend.
 #'
 #' @return Invisibly returns \code{NULL}. This function is called for its side effects
 #'   of creating and configuring a conda environment for \code{strategize}.
@@ -23,19 +35,42 @@
 #'
 #' # If you want to specify a particular conda path:
 #' # build_backend(conda_env = "strategize_env", conda = "/usr/local/bin/conda")
+#'
+#' # Experimental Apple Silicon MPS backend:
+#' # build_backend(backend = "mps")
+#' # Sys.setenv(JAX_PLATFORMS = "mps") may be needed before importing JAX
+#' # directly through reticulate in an already-running R session.
 #' }
 #'
 #' @export
 #' @md
 
-build_backend <- function(conda_env = "strategize_env", conda = "auto") {
+build_backend <- function(conda_env = "strategize_env", conda = "auto",
+                          backend = c("auto", "cpu", "cuda", "mps")) {
+  backend <- match.arg(backend)
+  host <- cs2step_backend_host_info()
+  if (identical(backend, "mps") &&
+      (!isTRUE(host$is_macos) || !isTRUE(host$is_arm64))) {
+    stop(
+      "backend = 'mps' requires macOS on Apple Silicon.",
+      call. = FALSE
+    )
+  }
+  if (identical(backend, "cuda") && !identical(host$os, "Linux")) {
+    stop(
+      "backend = 'cuda' requires Linux with a compatible NVIDIA driver.",
+      call. = FALSE
+    )
+  }
+
   env_registered <- function(conda_bin) {
     state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
     isTRUE(state$registered)
   }
 
   create_env <- function(conda_bin) {
-    reticulate::conda_create(envname = conda_env, conda = conda_bin, python_version = "3.12")
+    python_version <- if (identical(backend, "mps")) "3.13" else "3.12"
+    reticulate::conda_create(envname = conda_env, conda = conda_bin, python_version = python_version)
     invisible(TRUE)
   }
 
@@ -57,16 +92,61 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
     invisible(TRUE)
   }
 
-  conda_bin <- cs2step_resolve_conda_binary(conda) %||% conda
-  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
-  if (isTRUE(state$core_modules_ready)) {
+  write_activation_scripts <- function(state) {
     try({
+      if (!isTRUE(state$python_exists) || !nzchar(state$python %||% "")) {
+        return(invisible(FALSE))
+      }
       actdir <- file.path(dirname(dirname(state$python)), "etc", "conda", "activate.d")
       dir.create(actdir, recursive = TRUE, showWarnings = FALSE)
       writeLines("unset LD_LIBRARY_PATH", file.path(actdir, "00-unset-ld.sh"))
+      mps_script <- file.path(actdir, "10-jax-mps.sh")
+      if (identical(backend, "mps")) {
+        writeLines("export JAX_PLATFORMS=mps", mps_script)
+      } else if (file.exists(mps_script)) {
+        unlink(mps_script)
+      }
     }, silent = TRUE)
+    invisible(TRUE)
+  }
+
+  mps_message <- function() {
+    if (identical(backend, "mps")) {
+      message(
+        "MPS backend selected. R sessions using reticulate directly may need ",
+        "Sys.setenv(JAX_PLATFORMS = \"mps\") before the first JAX import."
+      )
+    }
+  }
+
+  conda_bin <- cs2step_resolve_conda_binary(conda) %||% conda
+  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  mps_compatibility <- if (identical(backend, "mps") &&
+      isTRUE(state$registered) && isTRUE(state$python_exists)) {
+    cs2step_backend_mps_compatibility(state)
+  } else {
+    NULL
+  }
+
+  if (isTRUE(state$core_modules_ready) &&
+      (!identical(backend, "mps") || isTRUE(mps_compatibility$compatible))) {
+    write_activation_scripts(state)
     message(sprintf("Environment '%s' is ready.", conda_env))
+    mps_message()
     return(invisible(NULL))
+  }
+
+  if (identical(backend, "mps") &&
+      isTRUE(state$registered) && isTRUE(state$python_exists) &&
+      !isTRUE(mps_compatibility$compatible)) {
+    message(sprintf(
+      "Conda environment '%s' is not compatible with backend = 'mps' (%s); recreating it.",
+      conda_env,
+      cs2step_describe_mps_compatibility(mps_compatibility)
+    ))
+    remove_env(conda_bin)
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+    mps_compatibility <- NULL
   }
 
   if (isTRUE(state$registered) && !isTRUE(state$python_exists)) {
@@ -76,6 +156,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
     ))
     remove_env(conda_bin)
     state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+    mps_compatibility <- NULL
   }
 
   ok <- TRUE
@@ -113,7 +194,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
     )
   }
   
-  os <- Sys.info()[["sysname"]]
+  os <- host$os
   msg <- function(...) message(sprintf(...))
   
   pip_install <- function(pkgs, ...) {
@@ -122,7 +203,10 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
   }
   
   # --- (A) Choose CUDA 13 vs 12 *by driver version* and install JAX FIRST ---
-  install_jax_gpu <- function() {
+  install_jax <- function() {
+    if (identical(backend, "cpu")) {
+      return(pip_install("jax"))
+    }
     if (!identical(os, "Linux")){
       return(pip_install("jax")) 
     }
@@ -146,11 +230,23 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
       pip_install('jax')
     }
   }
+
+  if (identical(backend, "mps") &&
+      isTRUE(state$registered) && isTRUE(state$python_exists)) {
+    mps_compatibility <- cs2step_backend_mps_compatibility(state)
+  }
   
   missing_core <- names(state$core_module_status)[!state$core_module_status]
-  if (length(missing_core) > 0L || !isTRUE(state$python_exists)) {
+  needs_mps_install <- identical(backend, "mps") && !isTRUE(mps_compatibility$compatible)
+  if (length(missing_core) > 0L || !isTRUE(state$python_exists) || needs_mps_install) {
     # Install JAX first so later dependencies do not pin a CPU-only variant.
-    install_jax_gpu()
+    if (identical(backend, "mps")) {
+      if (needs_mps_install) {
+        pip_install("jax-mps")
+      }
+    } else {
+      install_jax()
+    }
     pip_specs <- cs2step_backend_core_pip_packages()
     other_pkgs <- unname(pip_specs[setdiff(names(pip_specs), "jax")])
     pip_install(other_pkgs)
@@ -169,12 +265,22 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto") {
     )
   }
 
-  # (Optional) neutralize LD_LIBRARY_PATH inside this env to prevent overrides
-  try({
-    actdir <- file.path(dirname(dirname(state$python)), "etc", "conda", "activate.d")
-    dir.create(actdir, recursive = TRUE, showWarnings = FALSE)
-    writeLines("unset LD_LIBRARY_PATH", file.path(actdir, "00-unset-ld.sh"))
-  }, silent = TRUE)
+  if (identical(backend, "mps")) {
+    mps_compatibility <- cs2step_backend_mps_compatibility(state)
+    if (!isTRUE(mps_compatibility$compatible)) {
+      stop(
+        sprintf(
+          "Conda environment '%s' is not ready for backend = 'mps': %s",
+          conda_env,
+          cs2step_describe_mps_compatibility(mps_compatibility)
+        ),
+        call. = FALSE
+      )
+    }
+  }
+
+  write_activation_scripts(state)
   
   msg("Environment '%s' is ready.", conda_env)
+  mps_message()
 }

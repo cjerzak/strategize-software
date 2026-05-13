@@ -4,7 +4,11 @@
 \alias{build_backend}
 \title{Build the computational environment for \code{strategize}}
 \usage{
-build_backend(conda_env = "strategize_env", conda = "auto")
+build_backend(
+  conda_env = "strategize_env",
+  conda = "auto",
+  backend = c("auto", "cpu", "cuda", "mps")
+)
 }
 \arguments{
 \item{conda_env}{Name of the conda environment in which to place the backends.
@@ -13,6 +17,12 @@ Defaults to \code{"strategize_env"}.}
 \item{conda}{The path to a conda executable. Using \code{"auto"} allows reticulate
 to attempt to automatically find an appropriate conda binary. Defaults to \code{"auto"}.
 If creation fails and a conda binary is found on PATH, the function retries with it.}
+
+\item{backend}{JAX backend selector. Use \code{"auto"} to preserve the default
+host-aware behavior, \code{"cpu"} to install plain CPU JAX,
+\code{"cuda"} to require Linux and install CUDA-capable JAX wheels when
+supported by the NVIDIA driver, or \code{"mps"} to opt in to the
+experimental Apple Silicon \code{jax-mps} backend.}
 }
 \value{
 Invisibly returns \code{NULL}. This function is called for its side effects
@@ -25,6 +35,13 @@ Creates the conda environment used by the package's JAX-backed optimization
 workflow, neural APIs, and foundation checkpoint loading. Users may also
 create and manage a compatible environment themselves.
 }
+\details{
+The default \code{backend = "auto"} preserves the existing non-MPS behavior.
+The \code{"mps"} backend is experimental, opt-in, and supported only on
+macOS Apple Silicon. It creates a Python 3.13 environment, installs
+\code{jax-mps}, verifies that JAX reports the MPS backend under
+\code{JAX_PLATFORMS=mps}, and recreates an existing incompatible environment.
+}
 \examples{
 \dontrun{
 # Create a conda environment named "strategize_env"
@@ -33,6 +50,11 @@ build_backend(conda_env = "strategize_env", conda = "auto")
 
 # If you want to specify a particular conda path:
 # build_backend(conda_env = "strategize_env", conda = "/usr/local/bin/conda")
+
+# Experimental Apple Silicon MPS backend:
+# build_backend(backend = "mps")
+# Sys.setenv(JAX_PLATFORMS = "mps") may be needed before importing JAX
+# directly through reticulate in an already-running R session.
 }
 
 }
