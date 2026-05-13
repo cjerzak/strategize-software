@@ -159,20 +159,52 @@ neural_has_shape <- function(x) {
   tryCatch(reticulate::is_py_object(x), error = function(e) FALSE)
 }
 
-neural_batch_vector_jnp <- function(x, dtype = NULL) {
-  arr <- strenv$jnp$atleast_1d(strenv$jnp$array(x))
+neural_as_jnp_array <- function(x, dtype = NULL) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  has_array_shape <- tryCatch(!is.null(x$shape), error = function(e) FALSE)
+  arr <- if (isTRUE(has_array_shape)) {
+    x
+  } else {
+    strenv$jnp$array(x)
+  }
   if (!is.null(dtype)) {
     arr <- strenv$jnp$astype(arr, dtype)
   }
   arr
 }
 
-neural_batch_matrix_jnp <- function(x, dtype = NULL) {
-  arr <- strenv$jnp$atleast_2d(strenv$jnp$array(x))
+neural_as_jnp_vector <- function(x, dtype = NULL) {
+  arr <- neural_as_jnp_array(x)
+  if (is.null(arr)) {
+    return(NULL)
+  }
+  arr <- strenv$jnp$atleast_1d(arr)
   if (!is.null(dtype)) {
     arr <- strenv$jnp$astype(arr, dtype)
   }
   arr
+}
+
+neural_as_jnp_matrix <- function(x, dtype = NULL) {
+  arr <- neural_as_jnp_array(x)
+  if (is.null(arr)) {
+    return(NULL)
+  }
+  arr <- strenv$jnp$atleast_2d(arr)
+  if (!is.null(dtype)) {
+    arr <- strenv$jnp$astype(arr, dtype)
+  }
+  arr
+}
+
+neural_batch_vector_jnp <- function(x, dtype = NULL) {
+  neural_as_jnp_vector(x, dtype = dtype)
+}
+
+neural_batch_matrix_jnp <- function(x, dtype = NULL) {
+  neural_as_jnp_matrix(x, dtype = dtype)
 }
 
 neural_format_svi_elbo_plot_title <- function(svi_loss_curve,
@@ -1053,12 +1085,26 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  experiment_description_present = NULL,
                                                  default_experiment_text = NULL,
                                                  default_experiment_text_present = FALSE) {
+  text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
+  text_matrix_list <- function(x) {
+    if (is.null(x)) {
+      return(NULL)
+    }
+    lapply(x, text_matrix)
+  }
+  covariate_matrix_list <- function(x) {
+    if (is.null(x)) {
+      return(NULL)
+    }
+    lapply(x, function(x_i) neural_as_jnp_matrix(x_i, dtype = strenv$dtj))
+  }
+
   list(
     model_dims = model_dims,
     cand_party_to_resp_idx = cand_party_to_resp_idx,
     n_party_levels = n_party_levels,
-    factor_name_text = factor_name_text,
-    level_name_text = level_name_text,
+    factor_name_text = text_matrix(factor_name_text),
+    level_name_text = text_matrix_list(level_name_text),
     factor_order_by_experiment = factor_order_by_experiment,
     default_factor_order = if (is.null(default_factor_order)) {
       NULL
@@ -1071,21 +1117,21 @@ neural_make_runtime_token_model_info <- function(model_dims,
     } else {
       as.integer(max_factor_tokens)
     },
-    covariate_name_text = covariate_name_text,
+    covariate_name_text = text_matrix(covariate_name_text),
     covariate_names = as.character(covariate_names %||% character(0)),
-    resp_cov_mean = resp_cov_mean,
-    resp_cov_scale = resp_cov_scale,
-    resp_cov_default_present = resp_cov_default_present,
+    resp_cov_mean = neural_as_jnp_vector(resp_cov_mean, dtype = strenv$dtj),
+    resp_cov_scale = neural_as_jnp_vector(resp_cov_scale, dtype = strenv$dtj),
+    resp_cov_default_present = neural_as_jnp_vector(resp_cov_default_present, dtype = strenv$dtj),
     covariate_order_by_experiment = covariate_order_by_experiment,
     default_covariate_order = if (is.null(default_covariate_order)) {
       NULL
     } else {
       as.integer(default_covariate_order)
     },
-    covariate_value_stats_by_experiment = covariate_value_stats_by_experiment,
-    default_covariate_value_stats = default_covariate_value_stats,
-    covariate_value_metadata_by_experiment = covariate_value_metadata_by_experiment,
-    default_covariate_value_metadata = default_covariate_value_metadata,
+    covariate_value_stats_by_experiment = covariate_matrix_list(covariate_value_stats_by_experiment),
+    default_covariate_value_stats = neural_as_jnp_matrix(default_covariate_value_stats, dtype = strenv$dtj),
+    covariate_value_metadata_by_experiment = covariate_matrix_list(covariate_value_metadata_by_experiment),
+    default_covariate_value_metadata = neural_as_jnp_matrix(default_covariate_value_metadata, dtype = strenv$dtj),
     max_covariate_tokens = if (is.null(max_covariate_tokens)) {
       NULL
     } else {
@@ -1100,9 +1146,9 @@ neural_make_runtime_token_model_info <- function(model_dims,
     experiment_token_mode = experiment_token_mode,
     covariate_value_encoding = covariate_value_encoding,
     shared_projection_value_encoder = shared_projection_value_encoder,
-    experiment_description_text = experiment_description_text,
-    experiment_description_present = experiment_description_present,
-    default_experiment_text = default_experiment_text,
+    experiment_description_text = text_matrix(experiment_description_text),
+    experiment_description_present = neural_as_jnp_vector(experiment_description_present, dtype = strenv$dtj),
+    default_experiment_text = text_matrix(default_experiment_text),
     default_experiment_text_present = isTRUE(default_experiment_text_present)
   )
 }
@@ -1402,47 +1448,47 @@ neural_prepare_covariate_lookup_array <- function(mat_list,
                                                   default_mat,
                                                   experiment_idx = NULL,
                                                   n_batch = 1L) {
+  mat_list <- mat_list %||% list()
   default_use <- if (!is.null(default_mat)) {
-    as.matrix(default_mat)
+    neural_as_jnp_matrix(default_mat, dtype = strenv$dtj)
   } else if (length(mat_list %||% list()) > 0L) {
     first_ok <- which(vapply(mat_list, Negate(is.null), logical(1)))
     if (length(first_ok) > 0L) {
-      as.matrix(mat_list[[first_ok[[1L]]]])
+      neural_as_jnp_matrix(mat_list[[first_ok[[1L]]]], dtype = strenv$dtj)
     } else {
       NULL
     }
   } else {
     NULL
   }
-  if (is.null(default_use) || nrow(default_use) < 1L || ncol(default_use) < 1L) {
+  if (is.null(default_use)) {
     return(NULL)
   }
-  storage.mode(default_use) <- "double"
-  n_rows <- nrow(default_use)
-  n_cols <- ncol(default_use)
-  if (!is.null(experiment_idx) && length(mat_list %||% list()) > 0L) {
+  n_rows <- ai(default_use$shape[[1]])
+  n_cols <- ai(default_use$shape[[2]])
+  if (n_rows < 1L || n_cols < 1L) {
+    return(NULL)
+  }
+  if (!is.null(experiment_idx) && length(mat_list) > 0L) {
     n_lookup <- length(mat_list)
-    arr <- array(0, dim = c(n_lookup, n_rows, n_cols))
+    arr_list <- vector("list", n_lookup)
     for (i in seq_len(n_lookup)) {
       mat_i <- mat_list[[i]]
-      if (is.null(mat_i)) {
-        mat_i <- default_use
+      arr_list[[i]] <- if (is.null(mat_i)) {
+        default_use
       } else {
-        mat_i <- as.matrix(mat_i)
-        storage.mode(mat_i) <- "double"
+        neural_as_jnp_matrix(mat_i, dtype = strenv$dtj)
       }
-      arr[i, , ] <- mat_i
     }
-    arr_jnp <- strenv$jnp$array(arr)$astype(strenv$dtj)
-    exp_idx <- strenv$jnp$astype(strenv$jnp$atleast_1d(experiment_idx), strenv$jnp$int32)
+    arr_jnp <- strenv$jnp$stack(arr_list, axis = 0L)
+    exp_idx <- neural_as_jnp_vector(experiment_idx, dtype = strenv$jnp$int32)
     if (ai(exp_idx$shape[[1]]) == 1L && n_batch > 1L) {
       exp_idx <- exp_idx * strenv$jnp$ones(list(n_batch), dtype = strenv$jnp$int32)
     }
     exp_idx <- strenv$jnp$clip(exp_idx, ai(0L), ai(n_lookup - 1L))
     return(strenv$jnp$take(arr_jnp, exp_idx, axis = 0L))
   }
-  base_jnp <- strenv$jnp$array(default_use)$astype(strenv$dtj)
-  strenv$jnp$reshape(base_jnp, list(1L, n_rows, n_cols)) *
+  strenv$jnp$reshape(default_use, list(1L, n_rows, n_cols)) *
     strenv$jnp$ones(list(n_batch, 1L, 1L), dtype = strenv$dtj)
 }
 
@@ -2682,7 +2728,12 @@ neural_resolve_factor_order_jnp <- function(model_info,
     return(NULL)
   }
   n_factors_use <- if (is.null(n_factors)) {
-    length(model_info$factor_name_text %||% list())
+    factor_text <- model_info$factor_name_text %||% NULL
+    if (!is.null(factor_text) && neural_has_shape(factor_text)) {
+      ai(factor_text$shape[[1]])
+    } else {
+      length(factor_text %||% list())
+    }
   } else {
     as.integer(n_factors)
   }
@@ -2690,7 +2741,7 @@ neural_resolve_factor_order_jnp <- function(model_info,
     return(NULL)
   }
   if (!is.null(factor_order)) {
-    order_mat <- strenv$jnp$atleast_2d(factor_order)
+    order_mat <- neural_as_jnp_matrix(factor_order, dtype = strenv$jnp$int32)
     if (ai(order_mat$shape[[2]]) != max_spans) {
       stop(
         sprintf(
@@ -2704,7 +2755,7 @@ neural_resolve_factor_order_jnp <- function(model_info,
     if (ai(order_mat$shape[[1]]) == 1L && n_batch > 1L) {
       order_mat <- order_mat * strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$jnp$int32)
     }
-    return(strenv$jnp$astype(order_mat, strenv$jnp$int32))
+    return(order_mat)
   }
   if (!is.null(experiment_idx) && length(model_info$factor_order_by_experiment %||% list()) > 0L) {
     lookup <- neural_factor_order_lookup_matrix(
@@ -2713,8 +2764,7 @@ neural_resolve_factor_order_jnp <- function(model_info,
     )
     if (!is.null(lookup) && nrow(lookup) > 0L) {
       lookup_jnp <- strenv$jnp$array(lookup)$astype(strenv$jnp$int32)
-      exp_idx <- strenv$jnp$atleast_1d(experiment_idx)
-      exp_idx <- strenv$jnp$astype(exp_idx, strenv$jnp$int32)
+      exp_idx <- neural_as_jnp_vector(experiment_idx, dtype = strenv$jnp$int32)
       if (ai(exp_idx$shape[[1]]) == 1L && n_batch > 1L) {
         exp_idx <- exp_idx * strenv$jnp$ones(list(n_batch), dtype = strenv$jnp$int32)
       }
@@ -2743,12 +2793,13 @@ neural_text_matrix_jnp <- function(x) {
   if (is.null(x)) {
     return(NULL)
   }
-  x_mat <- as.matrix(x)
-  if (nrow(x_mat) < 1L || ncol(x_mat) < 1L) {
+  x_jnp <- neural_as_jnp_matrix(x, dtype = strenv$dtj)
+  if (is.null(x_jnp) ||
+      ai(x_jnp$shape[[1]]) < 1L ||
+      ai(x_jnp$shape[[2]]) < 1L) {
     return(NULL)
   }
-  storage.mode(x_mat) <- "double"
-  strenv$jnp$array(x_mat)$astype(strenv$dtj)
+  x_jnp
 }
 
 neural_project_text_matrix <- function(text_matrix, projection) {
@@ -2826,12 +2877,12 @@ neural_covariate_basis <- function(resp_cov_mat,
   cov_scale <- model_info$resp_cov_scale %||% NULL
   n_covariates <- ai(resp_cov_mat$shape[[2]])
   mean_mat <- if (!is.null(cov_mean)) {
-    strenv$jnp$atleast_2d(cov_mean)
+    neural_as_jnp_matrix(cov_mean, dtype = strenv$dtj)
   } else {
     strenv$jnp$zeros(list(1L, n_covariates), dtype = strenv$dtj)
   }
   scale_mat <- if (!is.null(cov_scale)) {
-    strenv$jnp$atleast_2d(cov_scale)
+    neural_as_jnp_matrix(cov_scale, dtype = strenv$dtj)
   } else {
     strenv$jnp$ones(list(1L, n_covariates), dtype = strenv$dtj)
   }
@@ -2850,12 +2901,12 @@ neural_covariate_z_scores <- function(resp_cov_mat, model_info) {
   cov_scale <- model_info$resp_cov_scale %||% NULL
   n_covariates <- ai(resp_cov_mat$shape[[2]])
   mean_mat <- if (!is.null(cov_mean)) {
-    strenv$jnp$atleast_2d(cov_mean)
+    neural_as_jnp_matrix(cov_mean, dtype = strenv$dtj)
   } else {
     strenv$jnp$zeros(list(1L, n_covariates), dtype = strenv$dtj)
   }
   scale_mat <- if (!is.null(cov_scale)) {
-    strenv$jnp$atleast_2d(cov_scale)
+    neural_as_jnp_matrix(cov_scale, dtype = strenv$dtj)
   } else {
     strenv$jnp$ones(list(1L, n_covariates), dtype = strenv$dtj)
   }
@@ -2952,8 +3003,7 @@ neural_resolve_covariate_order_jnp <- function(model_info,
   }
 
   if (!is.null(resp_cov_order)) {
-    order_arr <- strenv$jnp$atleast_2d(resp_cov_order)
-    order_arr <- strenv$jnp$astype(order_arr, strenv$jnp$int32)
+    order_arr <- neural_as_jnp_matrix(resp_cov_order, dtype = strenv$jnp$int32)
     if (ai(order_arr$shape[[2]]) != max_spans) {
       stop(
         sprintf(
@@ -2976,7 +3026,7 @@ neural_resolve_covariate_order_jnp <- function(model_info,
   )
   if (!is.null(lookup) && !is.null(experiment_idx)) {
     lookup_jnp <- strenv$jnp$array(lookup)$astype(strenv$jnp$int32)
-    exp_idx <- strenv$jnp$astype(strenv$jnp$atleast_1d(experiment_idx), strenv$jnp$int32)
+    exp_idx <- neural_as_jnp_vector(experiment_idx, dtype = strenv$jnp$int32)
     if (ai(exp_idx$shape[[1]]) == 1L && n_batch > 1L) {
       exp_idx <- exp_idx * strenv$jnp$ones(list(n_batch), dtype = strenv$jnp$int32)
     }
@@ -3413,7 +3463,7 @@ add_context_tokens <- function(model_info,
     resp_cov <- model_info$resp_cov_mean
   }
   if (!is.null(resp_cov)) {
-    resp_cov_mat <- strenv$jnp$atleast_2d(resp_cov)
+    resp_cov_mat <- neural_as_jnp_matrix(resp_cov, dtype = strenv$dtj)
     if (ai(resp_cov_mat$shape[[1]]) == 1L && is_batch && N_batch > 1L) {
       resp_cov_mat <- resp_cov_mat * strenv$jnp$ones(list(N_batch, 1L))
     }
@@ -3424,7 +3474,7 @@ add_context_tokens <- function(model_info,
     resp_cov_present <- model_info$resp_cov_default_present
   }
   if (!is.null(resp_cov_present)) {
-    resp_cov_present_mat <- strenv$jnp$atleast_2d(resp_cov_present)
+    resp_cov_present_mat <- neural_as_jnp_matrix(resp_cov_present, dtype = strenv$dtj)
     if (ai(resp_cov_present_mat$shape[[1]]) == 1L && is_batch && N_batch > 1L) {
       resp_cov_present_mat <- resp_cov_present_mat * strenv$jnp$ones(list(N_batch, 1L))
     }
@@ -7974,7 +8024,7 @@ generate_ModelOutcome_neural <- function(){
                                                    n_rows = 1L) {
     n_rows <- ai(n_rows)
     if (!is.null(resp_cov_present)) {
-      return(strenv$jnp$atleast_2d(resp_cov_present)$astype(ddtype_))
+      return(neural_as_jnp_matrix(resp_cov_present, dtype = ddtype_))
     }
     if (!is.null(resp_cov_default_present)) {
       default_present <- matrix(as.numeric(resp_cov_default_present), nrow = 1L)
@@ -7984,10 +8034,10 @@ generate_ModelOutcome_neural <- function(){
           nrow = n_rows
         )
       }
-      return(strenv$jnp$array(default_present)$astype(ddtype_))
+      return(neural_as_jnp_matrix(default_present, dtype = ddtype_))
     }
     if (!is.null(resp_cov)) {
-      resp_cov_mat <- strenv$jnp$atleast_2d(resp_cov)
+      resp_cov_mat <- neural_as_jnp_matrix(resp_cov, dtype = ddtype_)
       return(strenv$jnp$ones(resp_cov_mat$shape, dtype = ddtype_))
     }
     if (n_resp_covariates > 0L) {

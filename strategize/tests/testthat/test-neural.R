@@ -857,6 +857,52 @@ test_that("runtime token model info carries experiment text semantics", {
   expect_equal(drop(tok_exp1_r[1, 1, ]), c(0, 1), tolerance = 1e-6)
 })
 
+test_that("runtime covariate defaults are JAX-normalized for covariate transforms", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    covariate_names = c("alpha", "beta"),
+    resp_cov_mean = c(1, 2),
+    resp_cov_scale = c(2, 4),
+    resp_cov_default_present = c(1, 1)
+  )
+  resp_cov_mat <- strategize:::strenv$jnp$array(
+    matrix(
+      c(3, 6,
+        1, 2),
+      nrow = 2L,
+      byrow = TRUE
+    ),
+    dtype = strategize:::strenv$jnp$float32
+  )
+  resp_cov_present_mat <- strategize:::strenv$jnp$array(
+    matrix(
+      c(1, 1,
+        1, 0),
+      nrow = 2L,
+      byrow = TRUE
+    ),
+    dtype = strategize:::strenv$jnp$float32
+  )
+
+  z <- strategize:::neural_covariate_z_scores(resp_cov_mat, model_info)
+  basis <- strategize:::neural_covariate_basis(
+    resp_cov_mat = resp_cov_mat,
+    resp_cov_present_mat = resp_cov_present_mat,
+    model_info = model_info
+  )
+  z_r <- reticulate::py_to_r(strategize:::strenv$np$array(z))
+  basis_r <- reticulate::py_to_r(strategize:::strenv$np$array(basis))
+
+  expect_true(strategize:::neural_has_shape(model_info$resp_cov_mean))
+  expect_equal(dim(z_r), c(2L, 2L))
+  expect_equal(dim(basis_r), c(2L, 2L, 3L))
+  expect_true(all(is.finite(as.numeric(z_r))))
+  expect_true(all(is.finite(as.numeric(basis_r))))
+})
+
 test_that("shared_projection emits ordered covariate spans with padding masks", {
   skip_if_no_jax()
   strategize:::initialize_jax()
@@ -1136,6 +1182,17 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
 
   tok_default <- reticulate::py_to_r(strategize:::strenv$np$array(build_tokens(model_info)$tokens))
   tok_exp1 <- reticulate::py_to_r(strategize:::strenv$np$array(build_tokens(model_info, experiment_idx = 1L)$tokens))
+  tok_fallback <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = NULL,
+    resp_cov_present = NULL,
+    experiment_idx = 1L,
+    params = params,
+    batch = FALSE,
+    return_mask = TRUE
+  )
+  tok_fallback_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_fallback$tokens))
 
   cov_text_beta <- cov_text
   cov_text_beta[2, ] <- c(2, 0)
@@ -1144,6 +1201,8 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
   tok_name <- reticulate::py_to_r(strategize:::strenv$np$array(build_tokens(model_info_name)$tokens))
 
   expect_equal(dim(tok_default), c(1L, 12L, 2L))
+  expect_equal(dim(tok_fallback_r), c(1L, 12L, 2L))
+  expect_true(all(is.finite(as.numeric(tok_fallback_r))))
   expect_false(isTRUE(all.equal(
     drop(tok_default[1, 3, ]),
     drop(tok_exp1[1, 3, ]),
