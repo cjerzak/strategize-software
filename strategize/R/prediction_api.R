@@ -1981,6 +1981,17 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
       cs2step_neural_to_r_array(out$default_covariate_value_metadata)
     )
   }
+  if (!is.null(out$covariate_value_text)) {
+    out$covariate_value_text <- cs2step_neural_to_r_array(out$covariate_value_text)
+  }
+  if (!is.null(out$covariate_value_text_present)) {
+    out$covariate_value_text_present <- as.matrix(
+      cs2step_neural_to_r_array(out$covariate_value_text_present)
+    )
+  }
+  if (!is.null(out$covariate_value_type)) {
+    out$covariate_value_type <- as.integer(cs2step_neural_to_r_array(out$covariate_value_type))
+  }
   if (!is.null(out$experiment_description_text)) {
     out$experiment_description_text <- as.matrix(
       cs2step_neural_to_r_array(out$experiment_description_text)
@@ -2067,6 +2078,12 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   }
   if (is.null(out$has_matchup_context)) {
     out$has_matchup_context <- FALSE
+  }
+  if (is.null(out$has_covariate_missing_token)) {
+    out$has_covariate_missing_token <- FALSE
+  }
+  if (is.null(out$has_covariate_value_text_projection)) {
+    out$has_covariate_value_text_projection <- FALSE
   }
   if (is.null(out$party_missing_label)) {
     out$party_missing_label <- neural_missing_group_label("candidate")

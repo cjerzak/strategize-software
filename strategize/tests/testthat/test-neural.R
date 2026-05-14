@@ -983,6 +983,197 @@ test_that("shared_projection emits ordered covariate spans with padding masks", 
   expect_equal(tok_cov_r[1, 9:12, ], matrix(0, nrow = 4L, ncol = 2L), tolerance = 1e-6)
 })
 
+test_that("shared_projection emits active spans for missing-in-row covariates", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels()
+  cov_text <- matrix(
+    c(1, 0,
+      0, 1),
+    nrow = 2L,
+    byrow = TRUE
+  )
+  rownames(cov_text) <- c("alpha", "beta")
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    covariate_names = c("alpha", "beta"),
+    covariate_name_text = cov_text,
+    resp_cov_mean = c(0, 0),
+    resp_cov_scale = c(1, 1),
+    default_covariate_order = c(0L, 1L),
+    max_covariate_tokens = 12L,
+    token_family_levels = token_levels,
+    covariate_value_encoding = "shared_projection",
+    shared_projection_value_encoder = "legacy_scalar"
+  )
+
+  params <- list(
+    E_covariate_start = strategize:::strenv$jnp$array(
+      c(1, 2),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_end = strategize:::strenv$jnp$array(
+      c(3, 4),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_role = strategize:::strenv$jnp$array(
+      matrix(0, nrow = 4L, ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_missing = strategize:::strenv$jnp$array(
+      c(7, 9),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    W_covariate_value_shared = strategize:::strenv$jnp$array(
+      matrix(c(10, 20), nrow = 1L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_token_family = strategize:::strenv$jnp$array(
+      matrix(0, nrow = length(token_levels), ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_experiment = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_covariate_name_text = strategize:::strenv$jnp$array(
+      diag(2),
+      dtype = strategize:::strenv$jnp$float32
+    )
+  )
+
+  cov_info <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(c(4, 8), nrow = 1L),
+    resp_cov_present = matrix(c(1, 0), nrow = 1L),
+    params = params,
+    batch = FALSE,
+    return_mask = TRUE
+  )
+  tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
+  mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$mask))
+
+  expect_equal(as.numeric(mask_r[1, ]), c(rep(1, 8), rep(0, 4)))
+  expect_equal(drop(tok_cov_r[1, 3, ]), c(40, 80), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 5, ]), c(1, 2), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 6, ]), c(0, 1), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 7, ]), c(7, 9), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 8, ]), c(3, 4), tolerance = 1e-6)
+
+  cov_absent <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(c(4, 8), nrow = 1L),
+    resp_cov_present = matrix(c(1, 0), nrow = 1L),
+    resp_cov_order = matrix(c(0L, -1L, -1L), nrow = 1L),
+    params = params,
+    batch = FALSE,
+    return_mask = TRUE
+  )
+  absent_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_absent$tokens))
+  absent_mask <- reticulate::py_to_r(strategize:::strenv$np$array(cov_absent$mask))
+  expect_equal(as.numeric(absent_mask[1, ]), c(rep(1, 4), rep(0, 8)))
+  expect_equal(absent_r[1, 5:12, ], matrix(0, nrow = 8L, ncol = 2L), tolerance = 1e-6)
+})
+
+test_that("shared_projection uses categorical value text by value code", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels()
+  value_text <- array(0, dim = c(3L, 3L, 2L))
+  value_text[1L, 3L, ] <- c(5, 7)
+  value_text[2L, 2L, ] <- c(1, 2)
+  value_text[3L, 3L, ] <- c(99, 99)
+  value_present <- matrix(0, nrow = 3L, ncol = 3L)
+  value_present[1L, 3L] <- 1
+  value_present[2L, 2L] <- 1
+  value_present[3L, 3L] <- 1
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    covariate_names = c("party", "ordered", "numeric"),
+    covariate_name_text = matrix(0, nrow = 3L, ncol = 2L),
+    resp_cov_mean = c(0, 0, 0),
+    resp_cov_scale = c(1, 1, 1),
+    default_covariate_order = c(0L, 1L, 2L),
+    max_covariate_tokens = 12L,
+    token_family_levels = token_levels,
+    covariate_value_encoding = "shared_projection",
+    shared_projection_value_encoder = "legacy_scalar",
+    covariate_value_text = value_text,
+    covariate_value_text_present = value_present,
+    covariate_value_type = c(1L, 2L, 0L)
+  )
+
+  params <- list(
+    E_covariate_start = strategize:::strenv$jnp$array(
+      c(0, 0),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_end = strategize:::strenv$jnp$array(
+      c(0, 0),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_role = strategize:::strenv$jnp$array(
+      matrix(0, nrow = 4L, ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_covariate_missing = strategize:::strenv$jnp$array(
+      c(0, 0),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    W_covariate_value_shared = strategize:::strenv$jnp$array(
+      matrix(c(10, 20), nrow = 1L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    W_covariate_value_text = strategize:::strenv$jnp$array(
+      diag(2),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_token_family = strategize:::strenv$jnp$array(
+      matrix(0, nrow = length(token_levels), ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_experiment = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_covariate_name_text = strategize:::strenv$jnp$array(
+      matrix(0, nrow = 2L, ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    )
+  )
+
+  cov_info <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(c(2, 1, 2), nrow = 1L),
+    resp_cov_present = matrix(c(1, 1, 1), nrow = 1L),
+    params = params,
+    batch = FALSE,
+    return_mask = TRUE
+  )
+  tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
+
+  expect_equal(drop(tok_cov_r[1, 3, ]), c(5, 7), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 7, ]), c(11, 22), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 11, ]), c(20, 40), tolerance = 1e-6)
+
+  cov_fallback <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    resp_cov = matrix(c(1, 1, 2), nrow = 1L),
+    resp_cov_present = matrix(c(1, 1, 1), nrow = 1L),
+    params = params,
+    batch = FALSE,
+    return_mask = TRUE
+  )
+  fallback_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_fallback$tokens))
+  expect_equal(drop(fallback_r[1, 3, ]), c(10, 20), tolerance = 1e-6)
+})
+
 test_that("covariate distribution profiles summarize local metadata", {
   profiles <- strategize:::neural_build_covariate_distribution_profiles(
     X_mat = cbind(
