@@ -326,6 +326,186 @@ neural_build_parameter_diagnostics <- function(params) {
   )
 }
 
+neural_build_gradient_diagnostics <- function(status = "ok",
+                                              source = NA_character_,
+                                              notes = character(0)) {
+  list(
+    gradient_status = status,
+    checkpoint_steps = integer(0),
+    checkpoint_global_l2_norm = numeric(0),
+    checkpoint_global_rms = numeric(0),
+    checkpoint_global_max_abs = numeric(0),
+    checkpoint_n_nonfinite = integer(0),
+    checkpoint_n_elements = integer(0),
+    global_l2_norm = NA_real_,
+    global_rms = NA_real_,
+    global_max_abs = NA_real_,
+    source = source,
+    notes = notes
+  )
+}
+
+neural_append_gradient_checkpoint <- function(diagnostics, step, checkpoint) {
+  if (is.null(diagnostics) || !is.list(diagnostics)) {
+    diagnostics <- neural_build_gradient_diagnostics(
+      status = "ok",
+      source = "checkpoint_value_and_grad"
+    )
+  }
+
+  step <- suppressWarnings(as.integer(step))
+  if (length(step) != 1L || is.na(step)) {
+    step <- NA_integer_
+  }
+  grad_l2 <- suppressWarnings(as.numeric(checkpoint$grad_l2 %||% NA_real_))
+  grad_rms <- suppressWarnings(as.numeric(checkpoint$grad_rms %||% NA_real_))
+  grad_max_abs <- suppressWarnings(as.numeric(checkpoint$grad_max_abs %||% NA_real_))
+  grad_n_nonfinite <- suppressWarnings(as.integer(checkpoint$grad_n_nonfinite %||% NA_integer_))
+  grad_n_elements <- suppressWarnings(as.integer(checkpoint$grad_n_elements %||% NA_integer_))
+
+  diagnostics$checkpoint_steps <- c(
+    as.integer(diagnostics$checkpoint_steps %||% integer(0)),
+    step
+  )
+  diagnostics$checkpoint_global_l2_norm <- c(
+    as.numeric(diagnostics$checkpoint_global_l2_norm %||% numeric(0)),
+    grad_l2
+  )
+  diagnostics$checkpoint_global_rms <- c(
+    as.numeric(diagnostics$checkpoint_global_rms %||% numeric(0)),
+    grad_rms
+  )
+  diagnostics$checkpoint_global_max_abs <- c(
+    as.numeric(diagnostics$checkpoint_global_max_abs %||% numeric(0)),
+    grad_max_abs
+  )
+  diagnostics$checkpoint_n_nonfinite <- c(
+    as.integer(diagnostics$checkpoint_n_nonfinite %||% integer(0)),
+    grad_n_nonfinite
+  )
+  diagnostics$checkpoint_n_elements <- c(
+    as.integer(diagnostics$checkpoint_n_elements %||% integer(0)),
+    grad_n_elements
+  )
+  diagnostics$global_l2_norm <- grad_l2
+  diagnostics$global_rms <- grad_rms
+  diagnostics$global_max_abs <- grad_max_abs
+  diagnostics$source <- "checkpoint_value_and_grad"
+  if (!identical(diagnostics$gradient_status, "failed")) {
+    diagnostics$gradient_status <- "ok"
+  }
+  diagnostics
+}
+
+neural_mark_gradient_diagnostics_failed <- function(diagnostics, error_message = NULL) {
+  if (is.null(diagnostics) || !is.list(diagnostics)) {
+    diagnostics <- neural_build_gradient_diagnostics(
+      status = "failed",
+      source = "checkpoint_value_and_grad"
+    )
+  }
+  diagnostics$gradient_status <- "failed"
+  diagnostics$source <- "checkpoint_value_and_grad"
+  if (!is.null(error_message) && nzchar(error_message)) {
+    note <- sprintf("Checkpoint gradient diagnostics failed: %s", error_message)
+    diagnostics$notes <- unique(c(as.character(diagnostics$notes %||% character(0)), note))
+  }
+  diagnostics
+}
+
+neural_svi_gradient_helper <- local({
+  helper <- NULL
+  function() {
+    if (!is.null(helper)) {
+      return(helper)
+    }
+    if (!requireNamespace("reticulate", quietly = TRUE)) {
+      stop("reticulate is required for SVI gradient diagnostics.", call. = FALSE)
+    }
+    reticulate::py_run_string(
+      paste(
+        "def _strategize_svi_checkpoint_gradient_diagnostics(svi_obj, svi_state, kwargs):",
+        "    import jax",
+        "    import jax.numpy as jnp",
+        "    import numpyro.infer.svi as _svi_mod",
+        "    kwargs = {} if kwargs is None else dict(kwargs)",
+        "    if not hasattr(_svi_mod, '_make_loss_fn'):",
+        "        raise RuntimeError('numpyro.infer.svi._make_loss_fn is unavailable')",
+        "    _, rng_key_eval = jax.random.split(svi_state.rng_key)",
+        "    params = svi_obj.optim.get_params(svi_state.optim_state)",
+        "    loss_fn = _svi_mod._make_loss_fn(",
+        "        svi_obj.loss,",
+        "        rng_key_eval,",
+        "        svi_obj.constrain_fn,",
+        "        svi_obj.model,",
+        "        svi_obj.guide,",
+        "        tuple(),",
+        "        kwargs,",
+        "        svi_obj.static_kwargs,",
+        "        mutable_state=svi_state.mutable_state,",
+        "    )",
+        "    (_, _), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)",
+        "    leaves = jax.tree_util.tree_leaves(grads)",
+        "    sq_sum = jnp.asarray(0.0)",
+        "    max_abs = jnp.asarray(0.0)",
+        "    n_nonfinite = jnp.asarray(0, dtype=jnp.int32)",
+        "    n_elements = jnp.asarray(0, dtype=jnp.int32)",
+        "    for leaf in leaves:",
+        "        arr = jnp.asarray(leaf)",
+        "        n_elements = n_elements + jnp.asarray(arr.size, dtype=jnp.int32)",
+        "        if arr.size == 0:",
+        "            continue",
+        "        finite = jnp.isfinite(arr)",
+        "        abs_finite = jnp.where(finite, jnp.abs(arr), 0.0)",
+        "        sq_sum = sq_sum + jnp.sum(jnp.square(abs_finite))",
+        "        max_abs = jnp.maximum(max_abs, jnp.max(abs_finite))",
+        "        n_nonfinite = n_nonfinite + jnp.sum(jnp.logical_not(finite)).astype(jnp.int32)",
+        "    grad_l2 = jnp.sqrt(sq_sum)",
+        "    grad_rms = jnp.where(",
+        "        n_elements > 0,",
+        "        jnp.sqrt(sq_sum / n_elements.astype(grad_l2.dtype)),",
+        "        jnp.asarray(float('nan'), dtype=grad_l2.dtype),",
+        "    )",
+        "    return {",
+        "        'grad_l2': float(jax.device_get(grad_l2)),",
+        "        'grad_rms': float(jax.device_get(grad_rms)),",
+        "        'grad_max_abs': float(jax.device_get(max_abs)),",
+        "        'grad_n_nonfinite': int(jax.device_get(n_nonfinite)),",
+        "        'grad_n_elements': int(jax.device_get(n_elements)),",
+        "    }",
+        sep = "\n"
+      )
+    )
+    helper <<- reticulate::py_eval("_strategize_svi_checkpoint_gradient_diagnostics")
+    helper
+  }
+})
+
+neural_py_kwargs_from_list <- function(args) {
+  kwargs <- reticulate::dict()
+  arg_names <- names(args)
+  if (is.null(arg_names) || length(arg_names) != length(args)) {
+    arg_names <- rep("", length(args))
+  }
+  for (i in seq_along(args)) {
+    if (!nzchar(arg_names[[i]])) {
+      next
+    }
+    kwargs[[arg_names[[i]]]] <- if (is.null(args[[i]])) {
+      reticulate::py_none()
+    } else {
+      args[[i]]
+    }
+  }
+  kwargs
+}
+
+neural_compute_svi_gradient_checkpoint <- function(svi, svi_state, model_args) {
+  helper <- neural_svi_gradient_helper()
+  kwargs <- neural_py_kwargs_from_list(model_args %||% list())
+  helper(svi, svi_state, kwargs)
+}
+
 neural_extract_lr_trace <- function(lr_schedule, steps_completed, fallback_lr = NA_real_) {
   steps_completed <- suppressWarnings(as.integer(steps_completed))
   if (length(steps_completed) != 1L || is.na(steps_completed) || steps_completed < 1L) {
@@ -5609,6 +5789,7 @@ generate_ModelOutcome_neural <- function(){
     early_stopping_validation_frac = 0.05,
     early_stopping_validation_max_n = 2048L,
     early_stopping_validation_batch_size = 128L,
+    gradient_diagnostics = TRUE,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01
@@ -10399,17 +10580,26 @@ generate_ModelOutcome_neural <- function(){
     lr_trace = numeric(0),
     lr_trace_status = if (isTRUE(use_svi)) "pending" else "not_svi"
   )
-  gradient_diagnostics <- list(
-    gradient_status = if (isTRUE(use_svi)) "unavailable" else "not_svi",
-    checkpoint_steps = integer(0),
-    global_l2_norm = NA_real_,
-    global_max_abs = NA_real_,
-    notes = if (isTRUE(use_svi)) {
-      "Checkpoint gradient norms are unavailable from the active NumPyro SVI API."
-    } else {
-      "SVI was not used for this fit."
-    }
-  )
+  gradient_diagnostics_enabled <- isTRUE(mcmc_control$gradient_diagnostics)
+  gradient_diagnostics <- if (!isTRUE(use_svi)) {
+    neural_build_gradient_diagnostics(
+      status = "not_svi",
+      source = NA_character_,
+      notes = "SVI was not used for this fit."
+    )
+  } else if (!isTRUE(gradient_diagnostics_enabled)) {
+    neural_build_gradient_diagnostics(
+      status = "disabled",
+      source = NA_character_,
+      notes = "Checkpoint gradient diagnostics were disabled by neural_mcmc_control$gradient_diagnostics = FALSE."
+    )
+  } else {
+    neural_build_gradient_diagnostics(
+      status = "ok",
+      source = "checkpoint_value_and_grad"
+    )
+  }
+  gradient_diagnostics_failed <- FALSE
   early_stopping_enabled <- isTRUE(mcmc_control$early_stopping)
   early_stopping_info <- list(
     enabled = early_stopping_enabled,
@@ -11018,6 +11208,59 @@ generate_ModelOutcome_neural <- function(){
       }
       sprintf(paste0("%.", as.integer(digits), "f"), as.numeric(value))
     }
+    format_svi_grad_value <- function(value) {
+      if (length(value) != 1L || !is.finite(value)) {
+        return("NA")
+      }
+      formatC(as.numeric(value), digits = 4L, format = "fg", flag = "#")
+    }
+    record_svi_gradient_checkpoint <- function(svi_state_current,
+                                               model_args_current,
+                                               step_current) {
+      if (!isTRUE(gradient_diagnostics_enabled) ||
+          isTRUE(gradient_diagnostics_failed)) {
+        return(NULL)
+      }
+      checkpoint <- tryCatch(
+        neural_compute_svi_gradient_checkpoint(
+          svi = svi,
+          svi_state = svi_state_current,
+          model_args = model_args_current
+        ),
+        error = function(e) {
+          gradient_diagnostics <<- neural_mark_gradient_diagnostics_failed(
+            gradient_diagnostics,
+            conditionMessage(e)
+          )
+          gradient_diagnostics_failed <<- TRUE
+          NULL
+        }
+      )
+      if (is.null(checkpoint)) {
+        return(NULL)
+      }
+      gradient_diagnostics <<- neural_append_gradient_checkpoint(
+        gradient_diagnostics,
+        step = step_current,
+        checkpoint = checkpoint
+      )
+      checkpoint
+    }
+    format_svi_gradient_fields <- function(checkpoint) {
+      if (!isTRUE(gradient_diagnostics_enabled)) {
+        return("")
+      }
+      grad_l2 <- suppressWarnings(as.numeric(checkpoint$grad_l2 %||% NA_real_))
+      grad_rms <- suppressWarnings(as.numeric(checkpoint$grad_rms %||% NA_real_))
+      grad_max_abs <- suppressWarnings(as.numeric(checkpoint$grad_max_abs %||% NA_real_))
+      grad_bad <- suppressWarnings(as.integer(checkpoint$grad_n_nonfinite %||% NA_integer_))
+      paste0(
+        "; grad_l2=", format_svi_grad_value(grad_l2),
+        "; grad_rms=", format_svi_grad_value(grad_rms),
+        "; grad_max=", format_svi_grad_value(grad_max_abs),
+        "; grad_bad=", ifelse(length(grad_bad) == 1L && !is.na(grad_bad), as.character(grad_bad), "NA")
+      )
+    }
     current_process_rss_mb <- function() {
       if (!requireNamespace("ps", quietly = TRUE)) {
         return(NA_real_)
@@ -11192,6 +11435,11 @@ generate_ModelOutcome_neural <- function(){
         steps_completed <- steps_completed + as.integer(chunk_steps)
         steps_remaining <- steps_remaining - as.integer(chunk_steps)
         svi_steps_completed <- as.integer(steps_completed)
+        gradient_checkpoint <- record_svi_gradient_checkpoint(
+          svi_state_current = svi_state,
+          model_args_current = svi_train_model_args,
+          step_current = steps_completed
+        )
 
         validation_metric_error <- NULL
         metric_value <- tryCatch(
@@ -11269,7 +11517,7 @@ generate_ModelOutcome_neural <- function(){
           paste0(
             "SVI early-stop check %d/%d: step=%d/%d; validation %s=%.6f; ",
             "train_elbo=%s; best=%.6f at step %d; delta_prev=%s; iter_per_s=%s; ",
-            "rss_mb=%s; elapsed=%ss."
+            "rss_mb=%s; elapsed=%ss%s."
           ),
           as.integer(early_stopping_info$stop_check),
           total_checks_planned,
@@ -11283,7 +11531,8 @@ generate_ModelOutcome_neural <- function(){
           delta_prev_text,
           format_svi_diag_value(iter_per_s_value, digits = 3L),
           format_svi_diag_value(rss_mb_value, digits = 1L),
-          format_svi_diag_value(elapsed_seconds, digits = 3L)
+          format_svi_diag_value(elapsed_seconds, digits = 3L),
+          format_svi_gradient_fields(gradient_checkpoint)
         ))
 
         if (no_improve_checks >= early_stopping_info$patience &&
@@ -11332,6 +11581,13 @@ generate_ModelOutcome_neural <- function(){
         as.integer(length(svi_loss_curve))
       } else {
         as.integer(svi_steps)
+      }
+      if (!is.null(svi_state)) {
+        record_svi_gradient_checkpoint(
+          svi_state_current = svi_state,
+          model_args_current = svi_model_args,
+          step_current = svi_steps_completed
+        )
       }
       early_stopping_info$reason <- early_stopping_reason
       early_stopping_info$stop_step <- as.integer(svi_steps_completed)

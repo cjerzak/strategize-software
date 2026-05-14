@@ -192,7 +192,9 @@
 #'   \code{neural_mcmc_control$early_stopping_validation_max_n} (default
 #'   \code{2048}) to cap the retained validation size after fraction-based
 #'   sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
-#'   cap.
+#'   cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
+#'   and are evaluated at the early-stopping checkpoint cadence; set
+#'   \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
 #'
 #' @param penalty_type A character string specifying the type of penalty (e.g., \code{"KL"}, \code{"L2"},
 #'   or \code{"LogMaxProb"}) used in the objective function for shifting the factor-level probabilities

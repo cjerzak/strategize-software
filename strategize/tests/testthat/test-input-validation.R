@@ -588,6 +588,38 @@ test_that("validate_strategize_inputs rejects invalid early_stopping values", {
   )
 })
 
+test_that("validate_strategize_inputs accepts gradient_diagnostics logical options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  for (val in c(TRUE, FALSE)) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y, W = W, lambda = 0.1,
+        neural_mcmc_control = list(gradient_diagnostics = val)
+      ),
+      info = sprintf("Expected gradient_diagnostics=%s to be accepted", as.character(val))
+    )
+  }
+})
+
+test_that("validate_strategize_inputs rejects invalid gradient_diagnostics values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(gradient_diagnostics = "yes")
+    ),
+    "gradient_diagnostics"
+  )
+})
+
 test_that("validate_strategize_inputs accepts early stopping validation size controls", {
   skip_on_cran()
 

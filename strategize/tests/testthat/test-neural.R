@@ -2142,6 +2142,34 @@ test_that("output-only neural early stopping advances SVI through chunked run ca
     as.integer(model_info$early_stopping$stop_step),
     as.integer(model_info$svi_steps_completed)
   )
+  expect_true(is.list(model_info$gradient_diagnostics))
+  expect_identical(model_info$gradient_diagnostics$gradient_status, "ok")
+  expect_length(
+    model_info$gradient_diagnostics$checkpoint_global_l2_norm,
+    length(model_info$early_stopping$validation_loss_history)
+  )
+  expect_true(is.finite(model_info$gradient_diagnostics$global_l2_norm))
+  expect_true(is.finite(model_info$gradient_diagnostics$global_rms))
+  expect_true(is.finite(model_info$gradient_diagnostics$global_max_abs))
+  expect_gte(as.integer(tail(model_info$gradient_diagnostics$checkpoint_n_elements, 1L)), 1L)
+})
+
+test_that("output-only neural checkpoint gradient diagnostics can be disabled", {
+  captured <- capture_messages(
+    suppressWarnings(run_output_only_attn_vi_fit(
+      seed = 20260421,
+      early_stopping = TRUE,
+      svi_steps = 25L,
+      neural_mcmc_control_overrides = list(gradient_diagnostics = FALSE)
+    ))
+  )
+  model_info <- get_neural_model_info(captured$value)
+  early_stop_lines <- grep("^SVI early-stop check [0-9]+/[0-9]+: ", captured$messages, value = TRUE)
+
+  expect_identical(model_info$gradient_diagnostics$gradient_status, "disabled")
+  expect_length(model_info$gradient_diagnostics$checkpoint_global_l2_norm, 0L)
+  expect_gt(length(early_stop_lines), 0L)
+  expect_false(any(grepl("grad_l2=|grad_rms=|grad_max=|grad_bad=", early_stop_lines)))
 })
 
 test_that("early stopping validation target helper applies fraction and optional cap", {
@@ -2412,7 +2440,7 @@ test_that("average-case normal neural logging reports per-check validation nll s
   expect_true(all(is.finite(c(check_idx, early_idx, summary_idx))))
   expect_match(
     messages[[check_idx]],
-    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "^SVI early-stop check [0-9]+/[0-9]+: step=[0-9]+/[0-9]+; validation nll=1\\.000000; train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=1\\.000000 at step [0-9]+; delta_prev=(NA|\\+0\\.000000); iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s; grad_l2=[^;]+; grad_rms=[^;]+; grad_max=[^;]+; grad_bad=(NA|[0-9]+)\\.$"
   )
   expect_lt(check_idx, early_idx)
   expect_lt(early_idx, summary_idx)
@@ -2441,7 +2469,7 @@ test_that("output-only attn VI logging reports compact early-stop summaries when
   expect_gt(length(early_stop_lines), 0L)
   expect_match(
     early_stop_lines[[1]],
-    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s; grad_l2=[^;]+; grad_rms=[^;]+; grad_max=[^;]+; grad_bad=(NA|[0-9]+)\\.$"
   )
   expect_false(any(grepl("param_rms=|param_delta_rms=|muon_mu_l2=|adam_mu_l2=|adam_nu_rms=", early_stop_lines)))
 })
@@ -2460,7 +2488,7 @@ test_that("output-only attn VI logging uses the same compact summary for non-Muo
   expect_gt(length(early_stop_lines), 0L)
   expect_match(
     early_stop_lines[[1]],
-    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s\\.$"
+    "train_elbo=(NA|-?[0-9]+\\.[0-9]{2}); best=-?[0-9]+\\.[0-9]{6} at step [0-9]+; delta_prev=NA; iter_per_s=(NA|[0-9]+\\.[0-9]{3}); rss_mb=(NA|[0-9]+\\.[0-9]); elapsed=[0-9]+\\.[0-9]{3}s; grad_l2=[^;]+; grad_rms=[^;]+; grad_max=[^;]+; grad_bad=(NA|[0-9]+)\\.$"
   )
   expect_false(any(grepl("param_rms=|param_delta_rms=|muon_mu_l2=|adam_mu_l2=|adam_nu_rms=", early_stop_lines)))
 })
@@ -3276,6 +3304,8 @@ test_that("full-data normal neural path runs with direct MCMC warm-start init", 
   expect_valid_strategize_output(res, n_factors = ncol(data$W))
   expect_false(is.null(model_info))
   expect_identical(model_info$likelihood, "normal")
+  expect_identical(model_info$gradient_diagnostics$gradient_status, "not_svi")
+  expect_length(model_info$gradient_diagnostics$checkpoint_global_l2_norm, 0L)
   expect_true(all(is.finite(as.numeric(res$Q_point))))
 })
 

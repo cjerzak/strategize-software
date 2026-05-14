@@ -78,7 +78,9 @@ NULL
 #'   \code{neural_mcmc_control$early_stopping_validation_max_n} (default
 #'   \code{2048}) to cap the retained validation size after fraction-based
 #'   sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
-#'   cap.
+#'   cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
+#'   and are evaluated at the early-stopping checkpoint cadence; set
+#'   \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -775,6 +777,21 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
     if (!is.logical(early_stopping) || length(early_stopping) != 1L || is.na(early_stopping)) {
       stop(
         "'neural_mcmc_control$early_stopping' must be TRUE or FALSE.",
+        call. = FALSE
+      )
+    }
+  }
+  gradient_diagnostics <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["gradient_diagnostics"]]
+  } else {
+    NULL
+  }
+  if (!is.null(gradient_diagnostics)) {
+    if (!is.logical(gradient_diagnostics) ||
+        length(gradient_diagnostics) != 1L ||
+        is.na(gradient_diagnostics)) {
+      stop(
+        "'neural_mcmc_control$gradient_diagnostics' must be TRUE or FALSE.",
         call. = FALSE
       )
     }
