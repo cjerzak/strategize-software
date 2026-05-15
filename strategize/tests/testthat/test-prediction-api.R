@@ -88,6 +88,95 @@ test_that("strategic_prediction() fits GLM predictor (pairwise) and predicts pro
   testthat::expect_true(all(preds >= 0 & preds <= 1))
 })
 
+test_that("GLM pairwise predict preserves first-seen pair order across locales", {
+  data <- generate_test_data(n = 400, n_factors = 3, n_levels = 2, seed = 606)
+
+  fit <- strategic_prediction(
+    Y = data$Y,
+    W = data$W,
+    model = "glm",
+    mode = "pairwise",
+    pair_id = data$pair_id,
+    profile_order = data$profile_order,
+    use_regularization = FALSE
+  )
+
+  candidate_pairs <- unique(data$pair_id)[seq_len(40L)]
+  candidate_pred <- vapply(candidate_pairs, function(pair) {
+    idx <- which(data$pair_id == pair)
+    predict(
+      fit,
+      newdata = list(
+        W = data$W[idx, , drop = FALSE],
+        pair_id = rep("candidate_pair", length(idx)),
+        profile_order = data$profile_order[idx]
+      )
+    )[[1L]]
+  }, numeric(1))
+  ordered_candidates <- order(candidate_pred)
+  selected_pairs <- candidate_pairs[c(
+    ordered_candidates[[length(ordered_candidates)]],
+    ordered_candidates[[1L]],
+    ordered_candidates[[ceiling(length(ordered_candidates) / 2L)]]
+  )]
+
+  rows <- unlist(lapply(selected_pairs, function(pair) {
+    which(data$pair_id == pair)
+  }), use.names = FALSE)
+  first_seen_pair_id <- c("é_pair", "a_pair", "Z_pair")
+  pair_id <- rep(first_seen_pair_id, each = 2L)
+  W_new <- data$W[rows, , drop = FALSE]
+  profile_order <- data$profile_order[rows]
+
+  expected <- vapply(seq_along(first_seen_pair_id), function(i) {
+    idx <- which(pair_id == first_seen_pair_id[[i]])
+    predict(
+      fit,
+      newdata = list(
+        W = W_new[idx, , drop = FALSE],
+        pair_id = pair_id[idx],
+        profile_order = profile_order[idx]
+      )
+    )[[1L]]
+  }, numeric(1))
+  testthat::expect_gt(diff(range(expected)), 1e-6)
+
+  predict_batch <- function() {
+    predict(
+      fit,
+      newdata = list(W = W_new, pair_id = pair_id, profile_order = profile_order)
+    )
+  }
+
+  batch <- predict_batch()
+  testthat::expect_equal(unname(batch), unname(expected), tolerance = 1e-10)
+
+  old_collate <- Sys.getlocale("LC_COLLATE")
+  withr::defer(Sys.setlocale("LC_COLLATE", old_collate))
+
+  predict_under_locale <- function(locale) {
+    set_locale <- suppressWarnings(Sys.setlocale("LC_COLLATE", locale))
+    if (is.na(set_locale) || !nzchar(set_locale)) {
+      return(NULL)
+    }
+    predict_batch()
+  }
+
+  c_batch <- predict_under_locale("C")
+  testthat::expect_false(is.null(c_batch))
+  testthat::expect_equal(unname(c_batch), unname(expected), tolerance = 1e-10)
+
+  utf8_batch <- NULL
+  for (locale in c("C.UTF-8", "en_US.UTF-8", "en_US.utf8")) {
+    utf8_batch <- predict_under_locale(locale)
+    if (!is.null(utf8_batch)) {
+      break
+    }
+  }
+  testthat::skip_if(is.null(utf8_batch), "No UTF-8 collation locale available")
+  testthat::expect_equal(unname(utf8_batch), unname(expected), tolerance = 1e-10)
+})
+
 test_that("predict_pair() is approximately swap-invariant for symmetric data", {
   data <- generate_test_data(n = 2000, n_factors = 3, n_levels = 2, seed = 202)
 
@@ -226,6 +315,68 @@ test_that("cs2step_unpack_newdata keeps pairwise group metadata separate from X"
     c("PartyA", "PartyA")
   )
   testthat::expect_identical(colnames(unpacked$X), "income")
+})
+
+test_that("cs2step_build_pair_mat preserves first-seen pair order", {
+  W <- data.frame(
+    price = c("A", "B", "A", "B", "A", "B"),
+    message = c("X", "Y", "Y", "X", "X", "Y"),
+    stringsAsFactors = FALSE
+  )
+  pair_id <- c("b_pair", "b_pair", "a_pair", "a_pair", "c_pair", "c_pair")
+  profile_order <- c(2L, 1L, 1L, 2L, 2L, 1L)
+
+  pair_info <- strategize:::cs2step_build_pair_mat(
+    pair_id = pair_id,
+    W = W,
+    profile_order = profile_order
+  )
+
+  testthat::expect_identical(names(pair_info$pair_sizes), c("b_pair", "a_pair", "c_pair"))
+  testthat::expect_identical(unname(pair_info$pair_sizes), c(2L, 2L, 2L))
+  testthat::expect_identical(
+    unname(pair_info$pair_mat),
+    matrix(c(2L, 1L, 3L, 4L, 6L, 5L), ncol = 2L, byrow = TRUE)
+  )
+})
+
+test_that("cs2step_build_pair_mat is stable across collation locales", {
+  W <- data.frame(
+    price = c("A", "B", "A", "B", "A", "B"),
+    message = c("X", "Y", "Y", "X", "X", "Y"),
+    stringsAsFactors = FALSE
+  )
+  pair_id <- c("é_pair", "é_pair", "a_pair", "a_pair", "Z_pair", "Z_pair")
+  profile_order <- c(1L, 2L, 1L, 2L, 1L, 2L)
+  old_collate <- Sys.getlocale("LC_COLLATE")
+  withr::defer(Sys.setlocale("LC_COLLATE", old_collate))
+
+  build_under_locale <- function(locale) {
+    set_locale <- suppressWarnings(Sys.setlocale("LC_COLLATE", locale))
+    if (is.na(set_locale) || !nzchar(set_locale)) {
+      return(NULL)
+    }
+    strategize:::cs2step_build_pair_mat(
+      pair_id = pair_id,
+      W = W,
+      profile_order = profile_order
+    )
+  }
+
+  c_pair_info <- build_under_locale("C")
+  testthat::expect_false(is.null(c_pair_info))
+  utf8_pair_info <- NULL
+  for (locale in c("C.UTF-8", "en_US.UTF-8", "en_US.utf8")) {
+    utf8_pair_info <- build_under_locale(locale)
+    if (!is.null(utf8_pair_info)) {
+      break
+    }
+  }
+  testthat::skip_if(is.null(utf8_pair_info), "No UTF-8 collation locale available")
+
+  testthat::expect_identical(utf8_pair_info$pair_mat, c_pair_info$pair_mat)
+  testthat::expect_identical(utf8_pair_info$pair_sizes, c_pair_info$pair_sizes)
+  testthat::expect_identical(names(c_pair_info$pair_sizes), unique(pair_id))
 })
 
 test_that("neural_model_jit_cache_key ignores legacy jit_cache_key noise", {

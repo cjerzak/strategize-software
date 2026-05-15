@@ -5719,7 +5719,12 @@ cs2step_build_pair_mat <- function(pair_id,
          call. = FALSE)
   }
 
-  pair_indices_list <- tapply(seq_along(pair_id), pair_id, c)
+  pair_key <- as.character(pair_id)
+  pair_indices_list <- split(
+    seq_along(pair_id),
+    factor(pair_key, levels = unique(pair_key)),
+    drop = TRUE
+  )
   profile_order_present <- !is.null(profile_order) &&
     length(profile_order) == length(pair_id)
 

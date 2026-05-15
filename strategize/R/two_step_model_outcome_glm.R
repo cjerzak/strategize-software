@@ -103,48 +103,15 @@ generate_ModelOutcome <- function(){
       }
       
       if(diff == T){
-        #table(table(pair_id_)); length(unique(pair_id_))
-        pair_indices_list <- tapply(1:length(pair_id_), pair_id_, c)
-        pair_sizes <- lengths(pair_indices_list)
+        pair_info <- cs2step_build_pair_mat(
+          pair_id = pair_id_,
+          W = W_,
+          profile_order = profile_order_,
+          competing_group_variable_candidate = competing_group_variable_candidate_
+        )
+        pair_mat <- pair_info$pair_mat
+        pair_sizes <- pair_info$pair_sizes
         pair_size_ok <- all(pair_sizes == 2L)
-
-        profile_order_present <- !is.null(profile_order_) && length(profile_order_) == length(Y_)
-
-        row_key <- apply(W_, 1, function(row) {
-          paste(ifelse(is.na(row), "NA", as.character(row)), collapse = "|")
-        })
-        row_hash <- vapply(row_key, function(key) {
-          ints <- utf8ToInt(key)
-          if (!length(ints)) {
-            return(0)
-          }
-          sum(ints * seq_along(ints)) %% 2147483647
-        }, numeric(1))
-
-        pair_mat <- do.call(rbind, lapply(pair_indices_list, function(idx){
-          order_by_profile <- profile_order_present &&
-            length(idx) == 2L &&
-            length(unique(profile_order_[idx])) == 2L &&
-            !any(is.na(profile_order_[idx]))
-          if (!is.null(competing_group_variable_candidate_)) {
-            if (order_by_profile) {
-              idx[order(competing_group_variable_candidate_[idx],
-                        profile_order_[idx],
-                        row_hash[idx],
-                        idx)]
-            } else {
-              idx[order(competing_group_variable_candidate_[idx],
-                        row_hash[idx],
-                        idx)]
-            }
-          } else if (order_by_profile) {
-            idx[order(profile_order_[idx],
-                      row_hash[idx],
-                      idx)]
-          } else {
-            idx[order(row_hash[idx], idx)]
-          }
-        }))
         Y_glm <- Y_[pair_mat[,1]]
 
         main_dat_use <- main_dat <- apply(main_info,1,function(row_){
