@@ -1,7 +1,7 @@
 #' Conjoint Foundation Models
 #'
 #' @description
-#' Load and adapt pooled conjoint foundation-model artifacts produced by
+#' Load pooled conjoint foundation-model artifacts produced by
 #' \pkg{preference.fm}.
 #'
 #' @details
@@ -12,8 +12,9 @@
 #'   \code{preference.fm::fit_conjoint_foundation_model()}.
 #'   \item Save them as checkpoint directories with
 #'   \code{preference.fm::save_conjoint_foundation_bundle()}.
-#'   \item Load, adapt, extract embeddings, and run predictors with
-#'   \pkg{strategize}.
+#'   \item Load bundles, extract embeddings, and run predictors with
+#'   \pkg{strategize}; adapt semantic foundation models with
+#'   \code{preference.fm::adapt_conjoint_foundation_model()}.
 #' }
 #'
 #' Pooled training does not force every experiment into one universal output
@@ -33,8 +34,8 @@
 #' \code{\link{fit_conjoint_foundation_model}()} and
 #' \code{\link{save_conjoint_foundation_bundle}()} are retained as migration
 #' stubs that point to \pkg{preference.fm}. Use
-#' \code{\link{adapt_conjoint_foundation_model}()} for the target-study
-#' adaptation contract.
+#' \code{preference.fm::adapt_conjoint_foundation_model()} for semantic
+#' target-study adaptation.
 #'
 #' @name conjoint-foundation
 NULL
@@ -1958,8 +1959,9 @@ cs_foundation_unpack_group <- function(group,
 #' This exported name is retained for migration guidance. Pooled training is
 #' now owned by \pkg{preference.fm}. Use
 #' \code{preference.fm::fit_conjoint_foundation_model()} to train pooled
-#' models, then return to \pkg{strategize} for loading, adaptation, embedding
-#' extraction, and prediction.
+#' models, \code{preference.fm::adapt_conjoint_foundation_model()} for semantic
+#' adaptation, and \pkg{strategize} for loading, embedding extraction, and
+#' prediction.
 #'
 #' Each element of \code{experiments} is a per-study specification with the
 #' following contract.
@@ -2141,9 +2143,9 @@ fit_conjoint_foundation_model <- function(experiments,
   stop(
     "Pooled conjoint foundation-model training has moved to preference.fm.\n",
     "Use preference.fm::fit_conjoint_foundation_model() to train pooled models, ",
-    "then use strategize::load_conjoint_foundation_bundle(), ",
-    "strategize::adapt_conjoint_foundation_model(), or ",
-    "strategize::extract_embeddings() with the trained checkpoint.",
+    "preference.fm::adapt_conjoint_foundation_model() for semantic adaptation, ",
+    "and strategize::load_conjoint_foundation_bundle() or strategize::extract_embeddings() ",
+    "with the trained checkpoint.",
     call. = FALSE
   )
 }
@@ -2273,8 +2275,11 @@ cs_foundation_match_group <- function(foundation_model,
 #' @return A \code{strategic_predictor}.
 #'
 #' @details
-#' Adaptation reuses the package's existing Bayesian neural outcome model rather
-#' than fitting a separate downstream architecture. Internally, this function:
+#' Current semantic zero-overlap foundation models are adapted canonically with
+#' \code{preference.fm::adapt_conjoint_foundation_model()}. This helper is
+#' retained for legacy runtime compatibility and reuses the package's existing
+#' Bayesian neural outcome model rather than fitting a separate downstream
+#' architecture. Internally, this function:
 #'
 #' \enumerate{
 #'   \item normalizes the target study into the same local schema representation
@@ -2351,7 +2356,7 @@ cs_foundation_match_group <- function(foundation_model,
 #'
 #' build_backend(conda_env = "strategize_env")
 #'
-#' foundation_fit <- fit_conjoint_foundation_model(
+#' foundation_fit <- preference.fm::fit_conjoint_foundation_model(
 #'   experiments = list(
 #'     list(
 #'       experiment_id = "study_a",
@@ -2367,7 +2372,7 @@ cs_foundation_match_group <- function(foundation_model,
 #'   )
 #' )
 #'
-#' adapted_fit <- adapt_conjoint_foundation_model(
+#' adapted_fit <- preference.fm::adapt_conjoint_foundation_model(
 #'   foundation_model = foundation_fit,
 #'   Y = c(1, 0, 0, 1),
 #'   W = data.frame(

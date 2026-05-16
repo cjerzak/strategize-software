@@ -20,11 +20,26 @@ context_head_language_span_fixture <- function(cross_mode = "attn",
       byrow = TRUE
     )
   )
+  factor_struct <- matrix(c(0, 0), nrow = 1L, byrow = TRUE)
+  colnames(factor_struct) <- c("s1", "s2")
+  level_struct <- list(
+    alpha = matrix(
+      c(0, 0,
+        0, 0,
+        0, 0),
+      nrow = 3L,
+      byrow = TRUE
+    )
+  )
 
   model_info <- strategize:::neural_make_runtime_token_model_info(
     model_dims = 2L,
     factor_name_text = factor_text,
     level_name_text = level_text,
+    factor_struct_matrix = factor_struct,
+    level_struct_matrices = level_struct,
+    factor_struct_feature_names = colnames(factor_struct),
+    level_struct_feature_names = c("s1", "s2"),
     default_factor_order = c(0L),
     factor_tokenization = "language_span",
     max_factor_tokens = 8L,
@@ -59,6 +74,8 @@ context_head_language_span_fixture <- function(cross_mode = "attn",
     E_segment = jnp$zeros(list(2L, 2L), dtype = dtj),
     W_factor_name_text = jnp$eye(2L, dtype = dtj),
     W_level_name_text = jnp$eye(2L, dtype = dtj),
+    W_factor_struct = jnp$zeros(list(2L, 2L), dtype = dtj),
+    W_level_struct = jnp$zeros(list(2L, 2L), dtype = dtj),
     E_party = NULL,
     E_rel = NULL,
     E_stage = NULL,

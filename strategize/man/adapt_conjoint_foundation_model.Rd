@@ -102,8 +102,11 @@ A \code{strategic_predictor}.
 Adapt a pooled conjoint foundation model to a single study
 }
 \details{
-Adaptation reuses the package's existing Bayesian neural outcome model rather
-than fitting a separate downstream architecture. Internally, this function:
+Current semantic zero-overlap foundation models are adapted canonically with
+\code{preference.fm::adapt_conjoint_foundation_model()}. This helper is
+retained for legacy runtime compatibility and reuses the package's existing
+Bayesian neural outcome model rather than fitting a separate downstream
+architecture. Internally, this function:
 
 \enumerate{
   \item normalizes the target study into the same local schema representation
@@ -180,7 +183,7 @@ library(strategize)
 
 build_backend(conda_env = "strategize_env")
 
-foundation_fit <- fit_conjoint_foundation_model(
+foundation_fit <- preference.fm::fit_conjoint_foundation_model(
   experiments = list(
     list(
       experiment_id = "study_a",
@@ -196,7 +199,7 @@ foundation_fit <- fit_conjoint_foundation_model(
   )
 )
 
-adapted_fit <- adapt_conjoint_foundation_model(
+adapted_fit <- preference.fm::adapt_conjoint_foundation_model(
   foundation_model = foundation_fit,
   Y = c(1, 0, 0, 1),
   W = data.frame(

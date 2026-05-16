@@ -1434,11 +1434,34 @@ test_that("language_span emits ordered factor spans with padding masks", {
                      6, 6,
                      0, 0), nrow = 3L, byrow = TRUE)
   )
+  factor_struct <- matrix(
+    c(0.1, 0.0,
+      0.0, 0.2,
+      0.3, 0.4),
+    nrow = 3L,
+    byrow = TRUE,
+    dimnames = list(c("alpha", "beta", "gamma"), c("s1", "s2"))
+  )
+  level_struct <- list(
+    alpha = matrix(c(0.0, 0.0,
+                     0.7, 0.8,
+                     0.0, 0.0), nrow = 3L, byrow = TRUE),
+    beta = matrix(c(0.2, 0.0,
+                    0.0, 0.2,
+                    0.0, 0.0), nrow = 3L, byrow = TRUE),
+    gamma = matrix(c(0.5, 0.6,
+                     0.0, 0.0,
+                     0.0, 0.0), nrow = 3L, byrow = TRUE)
+  )
 
   model_info <- strategize:::neural_make_runtime_token_model_info(
     model_dims = 2L,
     factor_name_text = factor_text,
     level_name_text = level_text,
+    factor_struct_matrix = factor_struct,
+    level_struct_matrices = level_struct,
+    factor_struct_feature_names = colnames(factor_struct),
+    level_struct_feature_names = c("s1", "s2"),
     default_factor_order = c(2L, 0L),
     factor_tokenization = "language_span",
     max_factor_tokens = 12L,
@@ -1475,6 +1498,14 @@ test_that("language_span emits ordered factor spans with padding masks", {
     W_level_name_text = strategize:::strenv$jnp$array(
       diag(2),
       dtype = strategize:::strenv$jnp$float32
+    ),
+    W_factor_struct = strategize:::strenv$jnp$array(
+      diag(2),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    W_level_struct = strategize:::strenv$jnp$array(
+      diag(2),
+      dtype = strategize:::strenv$jnp$float32
     )
   )
 
@@ -1492,12 +1523,31 @@ test_that("language_span emits ordered factor spans with padding masks", {
   expect_equal(dim(tok_r), c(1L, 12L, 2L))
   expect_equal(as.numeric(mask_r[1, ]), c(rep(1, 8), rep(0, 4)))
   expect_equal(drop(tok_r[1, 1, ]), c(1, 2), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 2, ]), c(1, 1), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 3, ]), c(5, 5), tolerance = 1e-6)
+  expect_equal(drop(tok_r[1, 2, ]), c(1.3, 1.4), tolerance = 1e-6)
+  expect_equal(drop(tok_r[1, 3, ]), c(5.5, 5.6), tolerance = 1e-6)
   expect_equal(drop(tok_r[1, 4, ]), c(3, 4), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 6, ]), c(1, 0), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 7, ]), c(20, 0), tolerance = 1e-6)
+  expect_equal(drop(tok_r[1, 6, ]), c(1.1, 0), tolerance = 1e-6)
+  expect_equal(drop(tok_r[1, 7, ]), c(20.7, 0.8), tolerance = 1e-6)
   expect_equal(tok_r[1, 9:12, ], matrix(0, nrow = 4L, ncol = 2L), tolerance = 1e-6)
+})
+
+test_that("language_span requires structural factor and level token info", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  expect_error(
+    strategize:::neural_make_runtime_token_model_info(
+      model_dims = 2L,
+      factor_name_text = matrix(c(1, 0, 0, 1), nrow = 2L, byrow = TRUE),
+      level_name_text = list(
+        matrix(c(1, 0, 0, 1, 0, 0), nrow = 3L, byrow = TRUE),
+        matrix(c(0, 1, 1, 0, 0, 0), nrow = 3L, byrow = TRUE)
+      ),
+      factor_tokenization = "language_span",
+      max_factor_tokens = 8L
+    ),
+    "requires structural token_info fields"
+  )
 })
 
 test_that("default term-mode neural predictor returns valid pairwise probabilities", {
@@ -2283,7 +2333,6 @@ test_that("output-only neural early stopping validates ordered factor and covari
       batch_size = 16L,
       early_stopping = TRUE,
       eval_enabled = FALSE,
-      factor_tokenization = "language_span",
       covariate_value_encoding = "shared_projection",
       warn_stage_imbalance_pct = 0,
       warn_min_cell_n = 0L
@@ -2300,9 +2349,9 @@ test_that("output-only neural early stopping validates ordered factor and covari
 
   expect_true(isTRUE(model_info$early_stopping$enabled))
   expect_true(isTRUE(model_info$early_stopping$active))
-  expect_identical(model_info$factor_tokenization, "language_span")
+  expect_identical(model_info$factor_tokenization, "legacy_indexed")
   expect_identical(model_info$covariate_value_encoding, "shared_projection")
-  expect_true(isTRUE(model_info$has_factor_span_tokens))
+  expect_false(isTRUE(model_info$has_factor_span_tokens))
   expect_true(isTRUE(model_info$has_covariate_span_tokens))
   expect_true(isTRUE(model_info$has_shared_covariate_value_projection))
   expect_null(model_info$early_stopping$error_message)

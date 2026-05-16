@@ -1938,6 +1938,22 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
       as.matrix(cs2step_neural_to_r_array(x))
     })
   }
+  if (!is.null(out$factor_struct_matrix)) {
+    out$factor_struct_matrix <- as.matrix(
+      cs2step_neural_to_r_array(out$factor_struct_matrix)
+    )
+  }
+  if (!is.null(out$level_struct_matrices)) {
+    out$level_struct_matrices <- lapply(out$level_struct_matrices, function(x) {
+      as.matrix(cs2step_neural_to_r_array(x))
+    })
+  }
+  if (!is.null(out$factor_struct_feature_names)) {
+    out$factor_struct_feature_names <- as.character(out$factor_struct_feature_names)
+  }
+  if (!is.null(out$level_struct_feature_names)) {
+    out$level_struct_feature_names <- as.character(out$level_struct_feature_names)
+  }
   if (!is.null(out$covariate_name_text)) {
     out$covariate_name_text <- as.matrix(cs2step_neural_to_r_array(out$covariate_name_text))
   }
@@ -2044,7 +2060,8 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
                   "n_matchup_levels", "n_resp_party_levels", "n_resp_covariates", "model_dims", "model_depth",
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
-                  "default_experiment_index", "text_semantic_dim", "max_factor_tokens",
+                  "default_experiment_index", "text_semantic_dim", "factor_struct_dim",
+                  "level_struct_dim", "max_factor_tokens",
                   "max_covariate_tokens")
   for (field in int_fields) {
     if (!is.null(out[[field]])) {
@@ -2084,6 +2101,20 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   }
   if (is.null(out$has_covariate_value_text_projection)) {
     out$has_covariate_value_text_projection <- FALSE
+  }
+  if (is.null(out$has_factor_struct_projection)) {
+    out$has_factor_struct_projection <- FALSE
+  }
+  if (is.null(out$has_level_struct_projection)) {
+    out$has_level_struct_projection <- FALSE
+  }
+  if (is.null(out$factor_struct_dim) && !is.null(out$factor_struct_matrix)) {
+    out$factor_struct_dim <- ncol(as.matrix(out$factor_struct_matrix))
+  }
+  if (is.null(out$level_struct_dim) &&
+      !is.null(out$level_struct_matrices) &&
+      length(out$level_struct_matrices) > 0L) {
+    out$level_struct_dim <- ncol(as.matrix(out$level_struct_matrices[[1L]]))
   }
   if (is.null(out$party_missing_label)) {
     out$party_missing_label <- neural_missing_group_label("candidate")

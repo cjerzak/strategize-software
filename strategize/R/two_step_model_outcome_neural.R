@@ -1019,6 +1019,12 @@ neural_build_param_schema <- function(params,
       "W_covariate_name_text"
     )
   }
+  if (!is.null(params$W_factor_struct)) {
+    param_names <- c(param_names, "W_factor_struct")
+  }
+  if (!is.null(params$W_level_struct)) {
+    param_names <- c(param_names, "W_level_struct")
+  }
   if (!is.null(params$W_experiment_text)) {
     param_names <- c(param_names, "W_experiment_text")
   }
@@ -1198,6 +1204,10 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        max_factor_tokens = NULL,
                                                        factor_order_by_experiment = NULL,
                                                        default_factor_order = NULL,
+                                                       factor_struct_matrix = NULL,
+                                                       level_struct_matrices = NULL,
+                                                       factor_struct_feature_names = NULL,
+                                                       level_struct_feature_names = NULL,
                                                        cross_candidate_encoder_mode = "none",
                                                        cross_candidate_encoder = FALSE,
                                                        likelihood = "bernoulli",
@@ -1225,6 +1235,10 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   info$max_factor_tokens <- max_factor_tokens
   info$factor_order_by_experiment <- factor_order_by_experiment
   info$default_factor_order <- default_factor_order
+  info$factor_struct_matrix <- factor_struct_matrix
+  info$level_struct_matrices <- level_struct_matrices
+  info$factor_struct_feature_names <- factor_struct_feature_names
+  info$level_struct_feature_names <- level_struct_feature_names
   info$cross_candidate_encoder_mode <- cross_candidate_encoder_mode
   info$cross_candidate_encoder <- cross_candidate_encoder
   info$likelihood <- likelihood
@@ -1245,11 +1259,138 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   info
 }
 
+neural_dim2 <- function(x) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (neural_has_shape(x)) {
+    return(as.integer(c(ai(x$shape[[1]]), ai(x$shape[[2]]))))
+  }
+  dim(as.matrix(x))
+}
+
+neural_validate_language_span_structural_info <- function(factor_struct_matrix,
+                                                          level_struct_matrices,
+                                                          factor_struct_feature_names,
+                                                          level_struct_feature_names,
+                                                          factor_name_text = NULL,
+                                                          level_name_text = NULL,
+                                                          context = "language_span tokenization") {
+  required_missing <- c(
+    if (is.null(factor_struct_matrix)) "factor_struct_matrix" else character(0),
+    if (is.null(level_struct_matrices)) "level_struct_matrices" else character(0),
+    if (is.null(factor_struct_feature_names)) "factor_struct_feature_names" else character(0),
+    if (is.null(level_struct_feature_names)) "level_struct_feature_names" else character(0)
+  )
+  if (length(required_missing) > 0L) {
+    stop(
+      sprintf("%s requires structural token_info fields: %s.",
+              context, paste(required_missing, collapse = ", ")),
+      call. = FALSE
+    )
+  }
+
+  factor_dims <- neural_dim2(factor_struct_matrix)
+  if (length(factor_dims) != 2L ||
+      any(is.na(factor_dims)) ||
+      factor_dims[[1L]] < 1L ||
+      factor_dims[[2L]] < 1L) {
+    stop(
+      sprintf("%s requires a non-empty factor_struct_matrix.", context),
+      call. = FALSE
+    )
+  }
+  factor_feature_names <- as.character(factor_struct_feature_names)
+  if (length(factor_feature_names) != factor_dims[[2L]]) {
+    stop(
+      sprintf(
+        "%s requires factor_struct_feature_names length (%d) to match factor_struct_matrix columns (%d).",
+        context,
+        length(factor_feature_names),
+        factor_dims[[2L]]
+      ),
+      call. = FALSE
+    )
+  }
+
+  n_factor_text <- {
+    dims <- neural_dim2(factor_name_text)
+    if (!is.null(dims)) dims[[1L]] else NA_integer_
+  }
+  if (!is.na(n_factor_text) && n_factor_text > 0L && n_factor_text != factor_dims[[1L]]) {
+    stop(
+      sprintf(
+        "%s requires factor_struct_matrix rows (%d) to match factor_name_text rows (%d).",
+        context,
+        factor_dims[[1L]],
+        n_factor_text
+      ),
+      call. = FALSE
+    )
+  }
+
+  if (!is.list(level_struct_matrices) || length(level_struct_matrices) != factor_dims[[1L]]) {
+    stop(
+      sprintf(
+        "%s requires level_struct_matrices to contain one matrix per factor (%d).",
+        context,
+        factor_dims[[1L]]
+      ),
+      call. = FALSE
+    )
+  }
+  level_feature_names <- as.character(level_struct_feature_names)
+  if (length(level_feature_names) < 1L) {
+    stop(
+      sprintf("%s requires non-empty level_struct_feature_names.", context),
+      call. = FALSE
+    )
+  }
+  for (d_ in seq_along(level_struct_matrices)) {
+    level_dims <- neural_dim2(level_struct_matrices[[d_]])
+    if (length(level_dims) != 2L ||
+        any(is.na(level_dims)) ||
+        level_dims[[1L]] < 1L ||
+        level_dims[[2L]] != length(level_feature_names)) {
+      stop(
+        sprintf(
+          "%s requires level_struct_matrices[[%d]] to have %d columns and at least one row.",
+          context,
+          d_,
+          length(level_feature_names)
+        ),
+        call. = FALSE
+      )
+    }
+    if (!is.null(level_name_text) && length(level_name_text) >= d_) {
+      text_dims <- neural_dim2(level_name_text[[d_]])
+      if (!is.null(text_dims) && text_dims[[1L]] > 0L && text_dims[[1L]] != level_dims[[1L]]) {
+        stop(
+          sprintf(
+            "%s requires level_struct_matrices[[%d]] rows (%d) to match level_name_text[[%d]] rows (%d).",
+            context,
+            d_,
+            level_dims[[1L]],
+            d_,
+            text_dims[[1L]]
+          ),
+          call. = FALSE
+        )
+      }
+    }
+  }
+  invisible(TRUE)
+}
+
 neural_make_runtime_token_model_info <- function(model_dims,
                                                  cand_party_to_resp_idx = NULL,
                                                  n_party_levels = NULL,
                                                  factor_name_text = NULL,
                                                  level_name_text = NULL,
+                                                 factor_struct_matrix = NULL,
+                                                 level_struct_matrices = NULL,
+                                                 factor_struct_feature_names = NULL,
+                                                 level_struct_feature_names = NULL,
                                                  factor_order_by_experiment = NULL,
                                                  default_factor_order = NULL,
                                                  factor_tokenization = NULL,
@@ -1291,6 +1432,17 @@ neural_make_runtime_token_model_info <- function(model_dims,
     }
     lapply(x, function(x_i) neural_as_jnp_matrix(x_i, dtype = strenv$dtj))
   }
+  factor_tokenization <- neural_factor_tokenization(mode = factor_tokenization)
+  if (identical(factor_tokenization, "language_span")) {
+    neural_validate_language_span_structural_info(
+      factor_struct_matrix = factor_struct_matrix,
+      level_struct_matrices = level_struct_matrices,
+      factor_struct_feature_names = factor_struct_feature_names,
+      level_struct_feature_names = level_struct_feature_names,
+      factor_name_text = factor_name_text,
+      level_name_text = level_name_text
+    )
+  }
 
   list(
     model_dims = model_dims,
@@ -1298,6 +1450,10 @@ neural_make_runtime_token_model_info <- function(model_dims,
     n_party_levels = n_party_levels,
     factor_name_text = text_matrix(factor_name_text),
     level_name_text = text_matrix_list(level_name_text),
+    factor_struct_matrix = text_matrix(factor_struct_matrix),
+    factor_struct_feature_names = as.character(factor_struct_feature_names %||% character(0)),
+    level_struct_matrices = text_matrix_list(level_struct_matrices),
+    level_struct_feature_names = as.character(level_struct_feature_names %||% character(0)),
     factor_order_by_experiment = factor_order_by_experiment,
     default_factor_order = if (is.null(default_factor_order)) {
       NULL
@@ -1820,6 +1976,10 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$experiment_token_mode), error = function(e) "na"),
     tryCatch(as.character(model_info$factor_tokenization), error = function(e) "na"),
     tryCatch(as.character(model_info$max_factor_tokens), error = function(e) "na"),
+    tryCatch(paste(dim(as.matrix(model_info$factor_struct_matrix)), collapse = "x"), error = function(e) "na"),
+    tryCatch(paste(vapply(model_info$level_struct_matrices %||% list(), function(x) {
+      paste(dim(as.matrix(x)), collapse = "x")
+    }, character(1)), collapse = ","), error = function(e) "na"),
     tryCatch(as.character(model_info$covariate_value_encoding), error = function(e) "na"),
     tryCatch(as.character(model_info$shared_projection_value_encoder), error = function(e) "na"),
     tryCatch(as.character(model_info$max_covariate_tokens), error = function(e) "na"),
@@ -2418,7 +2578,7 @@ neural_resolve_svi_optimizer_tag <- function(optimizer_tag,
 }
 
 neural_muon_target_name_regex <- function() {
-  "^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross|W_out|M_cross_raw)$"
+  "^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross|W_factor_struct|W_level_struct|W_out|M_cross_raw)$"
 }
 
 neural_muon_normalize_param_name <- function(name) {
@@ -3985,6 +4145,16 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
       list(1L, D_local, dims)
     ) * strenv$jnp$ones(list(n_batch, 1L, 1L), dtype = strenv$dtj)
   }
+  factor_struct_proj <- neural_project_text_matrix(
+    model_info$factor_struct_matrix,
+    params$W_factor_struct
+  )
+  if (!is.null(factor_struct_proj)) {
+    factor_tok_all <- factor_tok_all + strenv$jnp$reshape(
+      factor_struct_proj,
+      list(1L, D_local, dims)
+    ) * strenv$jnp$ones(list(n_batch, 1L, 1L), dtype = strenv$dtj)
+  }
   factor_tok <- strenv$jnp$take_along_axis(
     factor_tok_all,
     gather_idx,
@@ -4004,6 +4174,18 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
       if (!is.null(level_text_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
         token_d <- strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
+      }
+    }
+    if (!is.null(params$W_level_struct) &&
+        !is.null(model_info$level_struct_matrices) &&
+        length(model_info$level_struct_matrices) >= d_) {
+      level_struct_proj <- neural_project_text_matrix(
+        model_info$level_struct_matrices[[d_]],
+        params$W_level_struct
+      )
+      if (!is.null(level_struct_proj)) {
+        idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+        token_d <- token_d + strenv$jnp$take(level_struct_proj, idx_d, axis = 0L)
       }
     }
     level_token_list[[d_]] <- token_d
@@ -4186,12 +4368,21 @@ neural_build_factor_span_tokens_soft <- function(pi_vec,
     model_info$factor_name_text,
     params$W_factor_name_text
   )
+  factor_struct_proj <- neural_project_text_matrix(
+    model_info$factor_struct_matrix,
+    params$W_factor_struct
+  )
   for (d_ in seq_len(n_factors)) {
-    factor_token_list[[d_]] <- if (!is.null(factor_text_proj)) {
+    factor_token_d <- if (!is.null(factor_text_proj)) {
       strenv$jnp$take(factor_text_proj, ai(d_ - 1L), axis = 0L)
     } else {
       strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
     }
+    if (!is.null(factor_struct_proj)) {
+      factor_token_d <- factor_token_d +
+        strenv$jnp$take(factor_struct_proj, ai(d_ - 1L), axis = 0L)
+    }
+    factor_token_list[[d_]] <- factor_token_d
     token_d <- strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
     idx <- model_info$factor_index_list[[d_]]
     idx <- strenv$jnp$atleast_1d(idx)
@@ -4222,6 +4413,30 @@ neural_build_factor_span_tokens_soft <- function(pi_vec,
           }
         }
         token_d <- strenv$jnp$einsum("l,lm->m", p_full, level_text_proj)
+      }
+    }
+    if (!is.null(params$W_level_struct) &&
+        !is.null(model_info$level_struct_matrices) &&
+        length(model_info$level_struct_matrices) >= d_) {
+      level_struct_proj <- neural_project_text_matrix(
+        model_info$level_struct_matrices[[d_]],
+        params$W_level_struct
+      )
+      if (!is.null(level_struct_proj)) {
+        n_p <- ai(p_full$shape[[1]])
+        n_e <- ai(level_struct_proj$shape[[1]])
+        if (!is.na(n_p) && !is.na(n_e) && n_p != n_e) {
+          if (n_e > n_p) {
+            pad_n <- ai(n_e - n_p)
+            pad <- strenv$jnp$zeros(list(pad_n), dtype = strenv$dtj)
+            p_full_struct <- strenv$jnp$concatenate(list(p_full, pad), axis = 0L)
+          } else {
+            p_full_struct <- strenv$jnp$take(p_full, strenv$jnp$arange(ai(n_e)), axis = 0L)
+          }
+        } else {
+          p_full_struct <- p_full
+        }
+        token_d <- token_d + strenv$jnp$einsum("l,lm->m", p_full_struct, level_struct_proj)
       }
     }
     level_token_list[[d_]] <- token_d
@@ -6261,6 +6476,25 @@ generate_ModelOutcome_neural <- function(){
   max_covariate_tokens <- as.integer(neural_token_info_use$max_covariate_tokens)
   factor_name_text <- neural_token_info_use$factor_name_text %||% NULL
   level_name_text <- neural_token_info_use$level_name_text %||% NULL
+  factor_struct_matrix <- neural_token_info_use$factor_struct_matrix %||% NULL
+  level_struct_matrices <- neural_token_info_use$level_struct_matrices %||% NULL
+  factor_struct_feature_names <- as.character(
+    neural_token_info_use$factor_struct_feature_names %||% character(0)
+  )
+  level_struct_feature_names <- as.character(
+    neural_token_info_use$level_struct_feature_names %||% character(0)
+  )
+  if (identical(factor_tokenization, "language_span")) {
+    neural_validate_language_span_structural_info(
+      factor_struct_matrix = factor_struct_matrix,
+      level_struct_matrices = level_struct_matrices,
+      factor_struct_feature_names = factor_struct_feature_names,
+      level_struct_feature_names = level_struct_feature_names,
+      factor_name_text = factor_name_text,
+      level_name_text = level_name_text,
+      context = "neural_token_info language_span"
+    )
+  }
   covariate_name_text <- neural_token_info_use$covariate_name_text %||% NULL
   covariate_value_text <- neural_token_info_use$covariate_value_text %||% NULL
   covariate_value_text_present <- neural_token_info_use$covariate_value_text_present %||% NULL
@@ -6346,6 +6580,16 @@ generate_ModelOutcome_neural <- function(){
     }
   }
   text_semantic_dim <- as.integer(neural_token_info_use$text_dim %||% 0L)
+  factor_struct_dim <- if (!is.null(factor_struct_matrix)) {
+    ncol(as.matrix(factor_struct_matrix))
+  } else {
+    0L
+  }
+  level_struct_dim <- if (!is.null(level_struct_matrices) && length(level_struct_matrices) > 0L) {
+    ncol(as.matrix(level_struct_matrices[[1L]]))
+  } else {
+    0L
+  }
   n_candidate_factor_tokens <- if (identical(factor_tokenization, "language_span")) {
     ai(max_factor_tokens)
   } else {
@@ -7347,8 +7591,44 @@ generate_ModelOutcome_neural <- function(){
 
     W_factor_name_text <- NULL
     W_level_name_text <- NULL
+    W_factor_struct <- NULL
+    W_level_struct <- NULL
     W_covariate_name_text <- NULL
     W_experiment_text <- NULL
+    if (identical(factor_tokenization, "language_span") && factor_struct_dim > 0L) {
+      factor_struct_shape <- reticulate::tuple(ai(factor_struct_dim), ModelDims)
+      factor_struct_sd <- tau_context / sqrt(as.numeric(factor_struct_dim))
+      W_factor_struct <- p2d(
+        name = "W_factor_struct",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "W_factor_struct",
+            strenv$numpyro$distributions$Normal(0., factor_struct_sd),
+            sample_shape = factor_struct_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_factor_struct", factor_struct_sd, factor_struct_shape)
+        }
+      )
+    }
+    if (identical(factor_tokenization, "language_span") && level_struct_dim > 0L) {
+      level_struct_shape <- reticulate::tuple(ai(level_struct_dim), ModelDims)
+      level_struct_sd <- tau_context / sqrt(as.numeric(level_struct_dim))
+      W_level_struct <- p2d(
+        name = "W_level_struct",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "W_level_struct",
+            strenv$numpyro$distributions$Normal(0., level_struct_sd),
+            sample_shape = level_struct_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_level_struct", level_struct_sd, level_struct_shape)
+        }
+      )
+    }
     if (text_semantic_dim > 0L) {
       text_proj_shape <- reticulate::tuple(ai(text_semantic_dim), ModelDims)
       text_proj_sd <- tau_context / sqrt(as.numeric(text_semantic_dim))
@@ -8174,6 +8454,12 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(W_level_name_text)) {
       params_view$W_level_name_text <- W_level_name_text
     }
+    if (!is.null(W_factor_struct)) {
+      params_view$W_factor_struct <- W_factor_struct
+    }
+    if (!is.null(W_level_struct)) {
+      params_view$W_level_struct <- W_level_struct
+    }
     if (!is.null(W_covariate_name_text)) {
       params_view$W_covariate_name_text <- W_covariate_name_text
     }
@@ -8422,6 +8708,10 @@ generate_ModelOutcome_neural <- function(){
       n_party_levels = ai(n_party_levels),
       factor_name_text = factor_name_text,
       level_name_text = level_name_text,
+      factor_struct_matrix = factor_struct_matrix,
+      level_struct_matrices = level_struct_matrices,
+      factor_struct_feature_names = factor_struct_feature_names,
+      level_struct_feature_names = level_struct_feature_names,
       factor_order_by_experiment = factor_order_by_experiment,
       default_factor_order = default_factor_order,
       factor_tokenization = factor_tokenization,
@@ -8789,6 +9079,10 @@ generate_ModelOutcome_neural <- function(){
       n_party_levels = ai(n_party_levels),
       factor_name_text = factor_name_text,
       level_name_text = level_name_text,
+      factor_struct_matrix = factor_struct_matrix,
+      level_struct_matrices = level_struct_matrices,
+      factor_struct_feature_names = factor_struct_feature_names,
+      level_struct_feature_names = level_struct_feature_names,
       factor_order_by_experiment = factor_order_by_experiment,
       default_factor_order = default_factor_order,
       factor_tokenization = factor_tokenization,
@@ -10040,6 +10334,8 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("E_factor_role")
     maybe_site("W_factor_name_text")
     maybe_site("W_level_name_text")
+    maybe_site("W_factor_struct")
+    maybe_site("W_level_struct")
     maybe_site("W_covariate_name_text")
     maybe_site("W_experiment_text")
     maybe_site("alpha_cross")
@@ -10152,6 +10448,10 @@ generate_ModelOutcome_neural <- function(){
     covariate_value_type = covariate_value_type,
     factor_order_by_experiment = factor_order_by_experiment,
     default_factor_order = default_factor_order,
+    factor_struct_matrix = factor_struct_matrix,
+    level_struct_matrices = level_struct_matrices,
+    factor_struct_feature_names = factor_struct_feature_names,
+    level_struct_feature_names = level_struct_feature_names,
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens
   )
@@ -10169,6 +10469,10 @@ generate_ModelOutcome_neural <- function(){
   )
   validation_model_info$factor_name_text <- factor_name_text
   validation_model_info$level_name_text <- level_name_text
+  validation_model_info$factor_struct_matrix <- factor_struct_matrix
+  validation_model_info$level_struct_matrices <- level_struct_matrices
+  validation_model_info$factor_struct_feature_names <- factor_struct_feature_names
+  validation_model_info$level_struct_feature_names <- level_struct_feature_names
   validation_model_info$covariate_name_text <- covariate_name_text
   validation_model_info$covariate_names <- covariate_names_override
   validation_model_info$resp_cov_mean <- resp_cov_mean
@@ -11929,6 +12233,8 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("E_matchup")
   maybe_site("W_factor_name_text")
   maybe_site("W_level_name_text")
+  maybe_site("W_factor_struct")
+  maybe_site("W_level_struct")
   maybe_site("W_covariate_name_text")
   maybe_site("W_experiment_text")
   maybe_site("alpha_cross")
@@ -12069,6 +12375,10 @@ generate_ModelOutcome_neural <- function(){
     covariate_value_type = covariate_value_type,
     factor_order_by_experiment = factor_order_by_experiment,
     default_factor_order = default_factor_order,
+    factor_struct_matrix = factor_struct_matrix,
+    level_struct_matrices = level_struct_matrices,
+    factor_struct_feature_names = factor_struct_feature_names,
+    level_struct_feature_names = level_struct_feature_names,
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens
   )
@@ -12086,6 +12396,10 @@ generate_ModelOutcome_neural <- function(){
   )
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
+  predict_model_info$factor_struct_matrix <- factor_struct_matrix
+  predict_model_info$level_struct_matrices <- level_struct_matrices
+  predict_model_info$factor_struct_feature_names <- factor_struct_feature_names
+  predict_model_info$level_struct_feature_names <- level_struct_feature_names
   predict_model_info$covariate_name_text <- covariate_name_text
   predict_model_info$experiment_description_text <- experiment_description_text
   predict_model_info$experiment_description_present <- experiment_description_present
@@ -12744,6 +13058,10 @@ generate_ModelOutcome_neural <- function(){
     max_factor_tokens = max_factor_tokens,
     factor_name_text = factor_name_text,
     level_name_text = level_name_text,
+    factor_struct_matrix = factor_struct_matrix,
+    factor_struct_feature_names = factor_struct_feature_names,
+    level_struct_matrices = level_struct_matrices,
+    level_struct_feature_names = level_struct_feature_names,
     covariate_name_text = covariate_name_text,
     experiment_description_text = experiment_description_text,
     experiment_description_present = experiment_description_present,
@@ -12757,6 +13075,8 @@ generate_ModelOutcome_neural <- function(){
     covariate_value_encoding = covariate_value_encoding,
     shared_projection_value_encoder = shared_projection_value_encoder,
     text_semantic_dim = as.integer(text_semantic_dim),
+    factor_struct_dim = as.integer(factor_struct_dim),
+    level_struct_dim = as.integer(level_struct_dim),
     has_candidate_group_context = isTRUE(has_candidate_group_context),
     has_respondent_group_context = isTRUE(has_respondent_group_context),
     has_relation_token_context = isTRUE(has_relation_context),
@@ -12774,6 +13094,8 @@ generate_ModelOutcome_neural <- function(){
     has_experiment_text_projection = !is.null(ParamsMean$W_experiment_text),
     has_factor_name_text = !is.null(ParamsMean$W_factor_name_text) && text_semantic_dim > 0L,
     has_level_name_text = !is.null(ParamsMean$W_level_name_text) && text_semantic_dim > 0L,
+    has_factor_struct_projection = !is.null(ParamsMean$W_factor_struct) && factor_struct_dim > 0L,
+    has_level_struct_projection = !is.null(ParamsMean$W_level_struct) && level_struct_dim > 0L,
     has_covariate_name_text = !is.null(ParamsMean$W_covariate_name_text) && text_semantic_dim > 0L,
     has_covariate_tokens = !is.null(ParamsMean$E_covariate_start) || !is.null(ParamsMean$E_covariate_id),
     has_covariate_span_tokens = !is.null(ParamsMean$E_covariate_start),

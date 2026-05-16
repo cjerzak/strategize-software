@@ -4,7 +4,7 @@
 \alias{conjoint-foundation}
 \title{Conjoint Foundation Models}
 \description{
-Load and adapt pooled conjoint foundation-model artifacts produced by
+Load pooled conjoint foundation-model artifacts produced by
 \pkg{preference.fm}.
 }
 \details{
@@ -15,8 +15,9 @@ Foundation-model work now follows a split workflow:
   \code{preference.fm::fit_conjoint_foundation_model()}.
   \item Save them as checkpoint directories with
   \code{preference.fm::save_conjoint_foundation_bundle()}.
-  \item Load, adapt, extract embeddings, and run predictors with
-  \pkg{strategize}.
+  \item Load bundles, extract embeddings, and run predictors with
+  \pkg{strategize}; adapt semantic foundation models with
+  \code{preference.fm::adapt_conjoint_foundation_model()}.
 }
 
 Pooled training does not force every experiment into one universal output
@@ -36,6 +37,6 @@ distributions. Canonical ids still determine schema sharing across studies.
 \code{\link{fit_conjoint_foundation_model}()} and
 \code{\link{save_conjoint_foundation_bundle}()} are retained as migration
 stubs that point to \pkg{preference.fm}. Use
-\code{\link{adapt_conjoint_foundation_model}()} for the target-study
-adaptation contract.
+\code{preference.fm::adapt_conjoint_foundation_model()} for semantic
+target-study adaptation.
 }
