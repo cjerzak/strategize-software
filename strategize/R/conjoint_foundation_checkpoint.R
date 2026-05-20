@@ -41,6 +41,9 @@ cs_foundation_build_abstract_tree <- function(array_manifest) {
     if (length(params_meta) > 0L) {
       group_tree$params <- lapply(params_meta, cs_foundation_array_abstract_leaf)
     }
+    if (!is.null(group_meta$theta_mean)) {
+      group_tree$theta_mean <- cs_foundation_array_abstract_leaf(group_meta$theta_mean)
+    }
     if (!is.null(group_meta$theta_var)) {
       group_tree$theta_var <- cs_foundation_array_abstract_leaf(group_meta$theta_var)
     }
@@ -177,6 +180,10 @@ cs_foundation_load_checkpoint_dir <- function(path,
       next
     }
     py_group <- cs_foundation_py_get_item(restored_groups, group_id)
+    if (!is.null(manifest_groups[[group_id]]$theta_mean)) {
+      theta_mean <- cs_foundation_py_get_item(py_group, "theta_mean")
+      bundle$groups[[group_key]]$fit$theta_mean <- as.numeric(cs2step_neural_to_r_array(theta_mean))
+    }
     params_meta <- manifest_groups[[group_id]]$params %||% list()
     if (length(params_meta) > 0L) {
       py_params <- cs_foundation_py_get_item(py_group, "params")
@@ -185,10 +192,14 @@ cs_foundation_load_checkpoint_dir <- function(path,
       })
       names(params) <- names(params_meta)
       model_info <- bundle$groups[[group_key]]$fit$neural_model_info %||% list()
-      theta_mean <- tryCatch(
-        cs_foundation_restore_theta_mean(params = params, model_info = model_info),
-        error = function(e) NULL
-      )
+      if (is.null(bundle$groups[[group_key]]$fit$theta_mean)) {
+        theta_mean <- tryCatch(
+          cs_foundation_restore_theta_mean(params = params, model_info = model_info),
+          error = function(e) NULL
+        )
+      } else {
+        theta_mean <- NULL
+      }
       model_info$params <- params
       bundle$groups[[group_key]]$fit$neural_model_info <- model_info
       bundle$groups[[group_key]]$fit$params <- params

@@ -161,4 +161,37 @@ test_that("checkpoint directory loader restores direct params without preference
   expect_s3_class(loaded, "conjoint_foundation_model")
   expect_false(is.null(loaded$groups[[group_key]]$fit$neural_model_info$params$W_out))
   expect_equal(loaded$groups[[group_key]]$fit$theta_mean, 1)
+
+  manifest_with_theta <- manifest
+  manifest_with_theta$arrays$groups$group_001$theta_mean <- list(shape = 1L, dtype = "float32")
+  manifest_with_theta$arrays$groups$group_001$theta_var <- list(shape = 1L, dtype = "float32")
+  abstract_tree <- strategize:::cs_foundation_build_abstract_tree(manifest_with_theta$arrays)
+  expect_named(abstract_tree$groups$group_001, c("params", "theta_mean", "theta_var"))
+
+  tmp_direct <- tempfile()
+  dir.create(tmp_direct, recursive = TRUE)
+  saveRDS(bundle, file.path(tmp_direct, "metadata.rds"))
+  manifest_direct <- manifest
+  manifest_direct$arrays$groups$group_001$theta_mean <- list(shape = 1L, dtype = "float32")
+  jsonlite::write_json(
+    manifest_direct,
+    file.path(tmp_direct, "manifest.json"),
+    auto_unbox = TRUE,
+    null = "null"
+  )
+  tree_direct <- tree
+  tree_direct$groups$group_001$theta_mean <- strategize:::strenv$jnp$multiply(
+    strategize:::strenv$jnp$ones(reticulate::tuple(1L)),
+    42L
+  )$astype(strategize:::strenv$dtj)
+  if (reticulate::py_has_attr(ocp, "save_pytree")) {
+    ocp$save_pytree(file.path(tmp_direct, "arrays"), tree_direct)
+  } else {
+    ocp$PyTreeCheckpointer()$save(file.path(tmp_direct, "arrays"), item = tree_direct)
+  }
+
+  loaded_direct <- load_conjoint_foundation_bundle(tmp_direct, preload_params = FALSE)
+  expect_s3_class(loaded_direct, "conjoint_foundation_model")
+  expect_false(is.null(loaded_direct$groups[[group_key]]$fit$neural_model_info$params$W_out))
+  expect_equal(loaded_direct$groups[[group_key]]$fit$theta_mean, 42)
 })
