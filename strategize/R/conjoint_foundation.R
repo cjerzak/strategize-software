@@ -1720,7 +1720,41 @@ cs_foundation_build_init_site_values <- function(group,
       "legacy_indexed"
   )
   exp_map <- cs_foundation_build_local_factor_map(experiment)
-  slot_lookup <- setNames(registry$slot_table$slot_name, registry$slot_table$slot_key)
+  slot_table <- registry$slot_table %||% data.frame(
+    slot_name = character(0),
+    slot_key = character(0),
+    stringsAsFactors = FALSE
+  )
+  slot_lookup <- setNames(
+    as.character(slot_table$slot_name %||% character(0)),
+    as.character(slot_table$slot_key %||% character(0))
+  )
+  lookup_slot <- function(slot_key) {
+    if (is.null(slot_key) || is.na(slot_key) || !nzchar(slot_key)) {
+      return(NULL)
+    }
+    slot_name <- unname(slot_lookup[slot_key])
+    if (length(slot_name) != 1L || is.na(slot_name) || !nzchar(slot_name)) {
+      return(NULL)
+    }
+    slot_name
+  }
+  if (isTRUE(strict_schema_match)) {
+    matched_slot <- vapply(experiment$factor_names, function(factor_name) {
+      slot_key <- exp_map$factor_map[[factor_name]]$slot_key %||% NA_character_
+      lookup_slot(slot_key) %||% NA_character_
+    }, character(1))
+    unmatched <- experiment$factor_names[is.na(matched_slot) | !nzchar(matched_slot)]
+    if (length(unmatched) > 0L) {
+      stop(
+        sprintf(
+          "No shared slot found for factor(s) during adaptation: %s",
+          paste(unmatched, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+  }
   init_values <- list()
 
   direct_names <- setdiff(names(params), c(
@@ -1747,14 +1781,8 @@ cs_foundation_build_init_site_values <- function(group,
     feature_id_tgt <- matrix(0, nrow = length(experiment$factor_names), ncol = ncol(feature_id_src))
     for (j in seq_along(experiment$factor_names)) {
       factor_name <- experiment$factor_names[[j]]
-      slot_name <- slot_lookup[[exp_map$factor_map[[factor_name]]$slot_key]] %||% NULL
+      slot_name <- lookup_slot(exp_map$factor_map[[factor_name]]$slot_key)
       if (is.null(slot_name)) {
-        if (isTRUE(strict_schema_match)) {
-          stop(
-            sprintf("No shared slot found for factor '%s' during adaptation.", factor_name),
-            call. = FALSE
-          )
-        }
         next
       }
       src_idx <- match(slot_name, registry$slot_table$slot_name)
@@ -1768,18 +1796,11 @@ cs_foundation_build_init_site_values <- function(group,
   if (!identical(factor_tokenization, "language_span")) {
     for (j in seq_along(experiment$factor_names)) {
       factor_name <- experiment$factor_names[[j]]
-      slot_name <- slot_lookup[[exp_map$factor_map[[factor_name]]$slot_key]] %||% NULL
+      slot_name <- lookup_slot(exp_map$factor_map[[factor_name]]$slot_key)
       local_levels <- experiment$names_list[[factor_name]][[1]]
       model_dims <- as.integer(group$fit$neural_model_info$model_dims)
       tgt <- matrix(0, nrow = length(local_levels) + 1L, ncol = model_dims)
-      if (is.null(slot_name)) {
-        if (isTRUE(strict_schema_match)) {
-          stop(
-            sprintf("No shared slot found for factor '%s' during adaptation.", factor_name),
-            call. = FALSE
-          )
-        }
-      } else {
+      if (!is.null(slot_name)) {
         src_idx <- match(slot_name, registry$slot_table$slot_name)
         src_name <- paste0("E_factor_", src_idx)
         src_val <- params[[src_name]]
@@ -2017,13 +2038,14 @@ cs_foundation_unpack_group <- function(group,
 #'   cross-study sharing of level identities when explicitly provided.}
 #' }
 #'
-#' Pooled training groups experiments by compatible neural family:
-#' \code{(mode, likelihood, n_outcomes)} for non-pairwise studies and by
-#' \code{(mode, pairwise_context_mode, likelihood, n_outcomes)} for pairwise
-#' studies. The returned object may therefore hold multiple internal foundation
-#' groups when the input studies mix pairwise and single designs, mix
-#' stage-aware and stage-free pairwise studies, or mix Bernoulli, categorical,
-#' and Gaussian outcomes.
+#' Pooled training groups experiments by backend-compatible task mode. Pairwise
+#' context mode is a supported capability of a pairwise group rather than a
+#' split key: stage-free and stage-aware pairwise studies can share one group.
+#' If any pooled pairwise study requires stage-aware context, the shared
+#' pairwise group is promoted to stage-aware-capable and records all supported
+#' pairwise context modes. The returned object may therefore hold multiple
+#' internal foundation groups when the input studies mix pairwise and single
+#' designs.
 #'
 #' Schema sharing rules are conservative:
 #' \itemize{
@@ -2085,8 +2107,14 @@ cs_foundation_unpack_group <- function(group,
 #'
 #' build_backend(conda_env = "strategize_env")
 #'
+#' text_embedding_fn <- function(x) {
+#'   x <- as.character(x)
+#'   cbind(nchar = nchar(x), has_space = as.numeric(grepl(" ", x)))
+#' }
+#'
 #' study_a <- list(
 #'   experiment_id = "study_a",
+#'   experiment_description = "Pairwise policy-message study",
 #'   Y = c(1, 0, 0, 1),
 #'   W = data.frame(
 #'     price = c("Low", "Low", "High", "High"),
@@ -2099,6 +2127,7 @@ cs_foundation_unpack_group <- function(group,
 #'
 #' study_b <- list(
 #'   experiment_id = "study_b",
+#'   experiment_description = "Pairwise messenger study",
 #'   Y = c(0, 1, 1, 0),
 #'   W = data.frame(
 #'     price = c("Low", "High", "Low", "High"),
@@ -2114,9 +2143,10 @@ cs_foundation_unpack_group <- function(group,
 #'   )
 #' )
 #'
-#' foundation_fit <- fit_conjoint_foundation_model(
+#' foundation_fit <- preference.fm::fit_conjoint_foundation_model(
 #'   experiments = list(study_a, study_b),
 #'   foundation_control = list(
+#'     text_embedding_fn = text_embedding_fn,
 #'     neural_mcmc_control = list(
 #'       ModelDims = 32L,
 #'       ModelDepth = 1L,
@@ -2356,10 +2386,16 @@ cs_foundation_match_group <- function(foundation_model,
 #'
 #' build_backend(conda_env = "strategize_env")
 #'
+#' text_embedding_fn <- function(x) {
+#'   x <- as.character(x)
+#'   cbind(nchar = nchar(x), has_space = as.numeric(grepl(" ", x)))
+#' }
+#'
 #' foundation_fit <- preference.fm::fit_conjoint_foundation_model(
 #'   experiments = list(
 #'     list(
 #'       experiment_id = "study_a",
+#'       experiment_description = "Source policy-message study",
 #'       Y = c(1, 0, 0, 1),
 #'       W = data.frame(
 #'         price = c("Low", "Low", "High", "High"),
@@ -2369,7 +2405,8 @@ cs_foundation_match_group <- function(foundation_model,
 #'       profile_order = c(1, 2, 1, 2),
 #'       canonical_factor_id = c(price = "price", message = "message")
 #'     )
-#'   )
+#'   ),
+#'   foundation_control = list(text_embedding_fn = text_embedding_fn)
 #' )
 #'
 #' adapted_fit <- preference.fm::adapt_conjoint_foundation_model(
@@ -2383,7 +2420,9 @@ cs_foundation_match_group <- function(foundation_model,
 #'   pair_id = c(1, 1, 2, 2),
 #'   profile_order = c(1, 2, 1, 2),
 #'   experiment_id = "target_study",
-#'   canonical_factor_id = c(price = "price", message = "message")
+#'   experiment_description = "Target policy-message study",
+#'   canonical_factor_id = c(price = "price", message = "message"),
+#'   foundation_adaptation_control = list(text_embedding_fn = text_embedding_fn)
 #' )
 #'
 #' predict(

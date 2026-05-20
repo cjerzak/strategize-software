@@ -100,13 +100,14 @@ Optional fields:
   cross-study sharing of level identities when explicitly provided.}
 }
 
-Pooled training groups experiments by compatible neural family:
-\code{(mode, likelihood, n_outcomes)} for non-pairwise studies and by
-\code{(mode, pairwise_context_mode, likelihood, n_outcomes)} for pairwise
-studies. The returned object may therefore hold multiple internal foundation
-groups when the input studies mix pairwise and single designs, mix
-stage-aware and stage-free pairwise studies, or mix Bernoulli, categorical,
-and Gaussian outcomes.
+Pooled training groups experiments by backend-compatible task mode. Pairwise
+context mode is a supported capability of a pairwise group rather than a
+split key: stage-free and stage-aware pairwise studies can share one group.
+If any pooled pairwise study requires stage-aware context, the shared
+pairwise group is promoted to stage-aware-capable and records all supported
+pairwise context modes. The returned object may therefore hold multiple
+internal foundation groups when the input studies mix pairwise and single
+designs.
 
 Schema sharing rules are conservative:
 \itemize{
@@ -168,8 +169,14 @@ library(strategize)
 
 build_backend(conda_env = "strategize_env")
 
+text_embedding_fn <- function(x) {
+  x <- as.character(x)
+  cbind(nchar = nchar(x), has_space = as.numeric(grepl(" ", x)))
+}
+
 study_a <- list(
   experiment_id = "study_a",
+  experiment_description = "Pairwise policy-message study",
   Y = c(1, 0, 0, 1),
   W = data.frame(
     price = c("Low", "Low", "High", "High"),
@@ -182,6 +189,7 @@ study_a <- list(
 
 study_b <- list(
   experiment_id = "study_b",
+  experiment_description = "Pairwise messenger study",
   Y = c(0, 1, 1, 0),
   W = data.frame(
     price = c("Low", "High", "Low", "High"),
@@ -197,9 +205,10 @@ study_b <- list(
   )
 )
 
-foundation_fit <- fit_conjoint_foundation_model(
+foundation_fit <- preference.fm::fit_conjoint_foundation_model(
   experiments = list(study_a, study_b),
   foundation_control = list(
+    text_embedding_fn = text_embedding_fn,
     neural_mcmc_control = list(
       ModelDims = 32L,
       ModelDepth = 1L,

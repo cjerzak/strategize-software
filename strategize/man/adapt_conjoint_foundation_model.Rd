@@ -183,10 +183,16 @@ library(strategize)
 
 build_backend(conda_env = "strategize_env")
 
+text_embedding_fn <- function(x) {
+  x <- as.character(x)
+  cbind(nchar = nchar(x), has_space = as.numeric(grepl(" ", x)))
+}
+
 foundation_fit <- preference.fm::fit_conjoint_foundation_model(
   experiments = list(
     list(
       experiment_id = "study_a",
+      experiment_description = "Source policy-message study",
       Y = c(1, 0, 0, 1),
       W = data.frame(
         price = c("Low", "Low", "High", "High"),
@@ -196,7 +202,8 @@ foundation_fit <- preference.fm::fit_conjoint_foundation_model(
       profile_order = c(1, 2, 1, 2),
       canonical_factor_id = c(price = "price", message = "message")
     )
-  )
+  ),
+  foundation_control = list(text_embedding_fn = text_embedding_fn)
 )
 
 adapted_fit <- preference.fm::adapt_conjoint_foundation_model(
@@ -210,7 +217,9 @@ adapted_fit <- preference.fm::adapt_conjoint_foundation_model(
   pair_id = c(1, 1, 2, 2),
   profile_order = c(1, 2, 1, 2),
   experiment_id = "target_study",
-  canonical_factor_id = c(price = "price", message = "message")
+  experiment_description = "Target policy-message study",
+  canonical_factor_id = c(price = "price", message = "message"),
+  foundation_adaptation_control = list(text_embedding_fn = text_embedding_fn)
 )
 
 predict(

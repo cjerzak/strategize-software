@@ -106,7 +106,14 @@ test_that("checkpoint directory loader restores direct params without preference
     fit = list(
       theta_mean = NULL,
       theta_var = NULL,
-      neural_model_info = list(params = NULL),
+      neural_model_info = list(
+        params = NULL,
+        param_names = "W_out",
+        param_shapes = list(c(1L, 1L)),
+        param_sizes = list(1L),
+        param_offsets = list(0L),
+        n_params = 1L
+      ),
       fit_metrics = NULL
     )
   )
@@ -153,4 +160,5 @@ test_that("checkpoint directory loader restores direct params without preference
   loaded <- load_conjoint_foundation_bundle(tmp, preload_params = FALSE)
   expect_s3_class(loaded, "conjoint_foundation_model")
   expect_false(is.null(loaded$groups[[group_key]]$fit$neural_model_info$params$W_out))
+  expect_equal(loaded$groups[[group_key]]$fit$theta_mean, 1)
 })

@@ -59,7 +59,10 @@ All runtimes are normalized to a canonical 1024-dimensional embedding width so s
 \dontrun{
 backend <- build_text_embedding_backend(conda_env = "strategize_env")
 
-foundation_fit <- fit_conjoint_foundation_model(
+study_a$experiment_description <- "Source study A"
+study_b$experiment_description <- "Source study B"
+
+foundation_fit <- preference.fm::fit_conjoint_foundation_model(
   experiments = list(study_a, study_b),
   foundation_control = list(
     text_embedding_fn = backend$fn

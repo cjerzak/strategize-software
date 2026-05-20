@@ -90,6 +90,50 @@ cs_foundation_restore_text_matrix <- function(py_group, name, meta) {
   out
 }
 
+cs_foundation_param_schema <- function(params, model_info) {
+  if (is.null(params) || !is.list(params)) {
+    return(NULL)
+  }
+  model_info <- model_info %||% list()
+  has_schema <- !is.null(model_info$param_names) &&
+    !is.null(model_info$param_shapes) &&
+    !is.null(model_info$param_sizes) &&
+    !is.null(model_info$param_offsets)
+  if (isTRUE(has_schema)) {
+    param_sizes <- as.integer(unlist(model_info$param_sizes, use.names = FALSE))
+    param_offsets <- as.integer(unlist(model_info$param_offsets, use.names = FALSE))
+    return(list(
+      param_names = as.character(model_info$param_names),
+      param_shapes = lapply(model_info$param_shapes, as.integer),
+      param_sizes = param_sizes,
+      param_offsets = param_offsets,
+      n_params = as.integer(model_info$n_params %||% sum(param_sizes))
+    ))
+  }
+  if (!is.null(model_info$n_factors) && !is.null(model_info$model_depth)) {
+    return(neural_build_param_schema(
+      params = params,
+      n_factors = model_info$n_factors,
+      model_depth = model_info$model_depth,
+      factor_tokenization = neural_factor_tokenization(model_info)
+    ))
+  }
+  NULL
+}
+
+cs_foundation_restore_theta_mean <- function(params, model_info) {
+  schema <- cs_foundation_param_schema(params = params, model_info = model_info)
+  if (is.null(schema)) {
+    return(NULL)
+  }
+  missing_params <- setdiff(as.character(schema$param_names), names(params))
+  if (length(missing_params) > 0L) {
+    return(NULL)
+  }
+  theta <- neural_flatten_params(params, schema, dtype = strenv$dtj)
+  as.numeric(cs2step_neural_to_r_array(theta))
+}
+
 cs_foundation_load_checkpoint_dir <- function(path,
                                              conda_env = "strategize_env",
                                              conda_env_required = TRUE,
@@ -140,9 +184,17 @@ cs_foundation_load_checkpoint_dir <- function(path,
         cs_foundation_py_get_item(py_params, param_name)
       })
       names(params) <- names(params_meta)
-      bundle$groups[[group_key]]$fit$neural_model_info$params <- params
+      model_info <- bundle$groups[[group_key]]$fit$neural_model_info %||% list()
+      theta_mean <- tryCatch(
+        cs_foundation_restore_theta_mean(params = params, model_info = model_info),
+        error = function(e) NULL
+      )
+      model_info$params <- params
+      bundle$groups[[group_key]]$fit$neural_model_info <- model_info
       bundle$groups[[group_key]]$fit$params <- params
-      bundle$groups[[group_key]]$fit$theta_mean <- NULL
+      if (!is.null(theta_mean)) {
+        bundle$groups[[group_key]]$fit$theta_mean <- theta_mean
+      }
     }
     if (!is.null(manifest_groups[[group_id]]$theta_var)) {
       theta_var <- cs_foundation_py_get_item(py_group, "theta_var")
