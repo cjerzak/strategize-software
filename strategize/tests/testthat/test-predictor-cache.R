@@ -50,3 +50,107 @@ test_that("strategic_prediction() can reuse cached predictors", {
 
   expect_equal(preds_cached, preds_reused, tolerance = 1e-8)
 })
+
+test_that("strategic_prediction() derives neural checkpoint paths from cache_path", {
+  captured_control <- NULL
+  saved_path <- NULL
+
+  testthat::local_mocked_bindings(
+    cs2step_eval_outcome_model_neural = function(Y,
+                                                 W_idx,
+                                                 names_list = NULL,
+                                                 factor_levels,
+                                                 diff,
+                                                 pair_id = NULL,
+                                                 profile_order = NULL,
+                                                 X = NULL,
+                                                 conda_env = NULL,
+                                                 conda_env_required = NULL,
+                                                 neural_mcmc_control = NULL,
+                                                 varcov_cluster_variable = NULL,
+                                                 nFolds_glm = NULL,
+                                                 ...) {
+      captured_control <<- neural_mcmc_control
+      list(
+        neural_model_info = list(fit_metrics = list(in_sample_metrics = list())),
+        fit_metrics = NULL
+      )
+    },
+    save_strategic_predictor = function(fit,
+                                        file,
+                                        overwrite = FALSE,
+                                        compress = TRUE,
+                                        include_metrics = TRUE) {
+      saved_path <<- file
+      invisible(file)
+    },
+    .package = "strategize"
+  )
+
+  cache_path <- tempfile(fileext = ".rds")
+  fit <- strategic_prediction(
+    Y = c(0, 1, 0, 1),
+    W = data.frame(feature = c("a", "b", "a", "b")),
+    model = "neural",
+    mode = "single",
+    cache_path = cache_path,
+    conda_env_required = FALSE
+  )
+
+  expect_s3_class(fit, "strategic_predictor")
+  expect_equal(captured_control$checkpoint_path, paste0(cache_path, ".inprogress"))
+  expect_equal(saved_path, cache_path)
+})
+
+test_that("strategic_prediction() cache_overwrite removes explicit neural checkpoints", {
+  captured_control <- NULL
+
+  testthat::local_mocked_bindings(
+    cs2step_eval_outcome_model_neural = function(Y,
+                                                 W_idx,
+                                                 names_list = NULL,
+                                                 factor_levels,
+                                                 diff,
+                                                 pair_id = NULL,
+                                                 profile_order = NULL,
+                                                 X = NULL,
+                                                 conda_env = NULL,
+                                                 conda_env_required = NULL,
+                                                 neural_mcmc_control = NULL,
+                                                 varcov_cluster_variable = NULL,
+                                                 nFolds_glm = NULL,
+                                                 ...) {
+      captured_control <<- neural_mcmc_control
+      list(
+        neural_model_info = list(fit_metrics = list(in_sample_metrics = list())),
+        fit_metrics = NULL
+      )
+    },
+    save_strategic_predictor = function(fit,
+                                        file,
+                                        overwrite = FALSE,
+                                        compress = TRUE,
+                                        include_metrics = TRUE) {
+      invisible(file)
+    },
+    .package = "strategize"
+  )
+
+  cache_path <- tempfile(fileext = ".rds")
+  explicit_checkpoint <- tempfile("explicit-checkpoint-")
+  dir.create(explicit_checkpoint, recursive = TRUE)
+
+  strategic_prediction(
+    Y = c(0, 1, 0, 1),
+    W = data.frame(feature = c("a", "b", "a", "b")),
+    model = "neural",
+    mode = "single",
+    cache_path = cache_path,
+    cache_overwrite = TRUE,
+    conda_env_required = FALSE,
+    neural_mcmc_control = list(checkpoint_path = explicit_checkpoint)
+  )
+
+  expect_equal(captured_control$checkpoint_path, explicit_checkpoint)
+  expect_false(dir.exists(explicit_checkpoint))
+})

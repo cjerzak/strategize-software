@@ -432,7 +432,10 @@ cs2step_validate_pairwise_ids <- function(pair_id, n) {
 #' @param nFolds_glm Number of folds for glinternet CV (GLM).
 #' @param cache_path Optional path to a cached predictor (.rds). If it exists and
 #'   \code{cache_overwrite} is \code{FALSE}, the cached model is loaded instead of refitting.
-#'   When a new model is fit, it is saved to this path.
+#'   When a new model is fit, it is saved to this path. For neural fits,
+#'   \code{cache_path} also enables restartable SVI checkpoints under
+#'   \code{paste0(cache_path, ".inprogress")}; successful final saves remove
+#'   that in-progress directory.
 #' @param cache_overwrite Logical; refit and overwrite any existing cache at \code{cache_path}.
 #' @param cache_compress Compression setting passed to \code{saveRDS()}.
 #' @return An object of class \code{strategic_predictor}.
@@ -465,6 +468,9 @@ strategic_prediction <- function(Y,
         conda_env = conda_env,
         conda_env_required = conda_env_required
       ))
+    }
+    if (isTRUE(cache_overwrite)) {
+      neural_svi_checkpoint_remove_dir(paste0(cache_path, ".inprogress"))
     }
   }
   cs2step_validate_binary_outcome(Y)
@@ -503,11 +509,23 @@ strategic_prediction <- function(Y,
 
   diff <- identical(mode_use, "pairwise")
 
-	  fit <- if (identical(model, "glm")) {
-	    cs2step_eval_outcome_model_glm(
-	      Y = as.numeric(Y),
-	      W_idx = W_idx_train,
-	      factor_levels = factor_levels,
+  fit_control <- neural_mcmc_control
+  if (identical(model, "neural") && !is.null(cache_path)) {
+    fit_control <- fit_control %||% list()
+    checkpoint_path <- fit_control$checkpoint_path %||% paste0(cache_path, ".inprogress")
+    if (is.null(fit_control$checkpoint_path)) {
+      fit_control$checkpoint_path <- checkpoint_path
+    }
+    if (isTRUE(cache_overwrite)) {
+      neural_svi_checkpoint_remove_dir(checkpoint_path)
+    }
+  }
+
+  fit <- if (identical(model, "glm")) {
+    cs2step_eval_outcome_model_glm(
+      Y = as.numeric(Y),
+      W_idx = W_idx_train,
+      factor_levels = factor_levels,
       diff = diff,
       pair_id = pair_id,
       profile_order = profile_order,
@@ -525,48 +543,48 @@ strategic_prediction <- function(Y,
       pair_id = pair_id,
       profile_order = profile_order,
       X = X,
-	      conda_env = conda_env,
-	      conda_env_required = conda_env_required,
-	      neural_mcmc_control = neural_mcmc_control,
-	      varcov_cluster_variable = varcov_cluster_variable,
-	      nFolds_glm = nFolds_glm
-	    )
-	  }
+      conda_env = conda_env,
+      conda_env_required = conda_env_required,
+      neural_mcmc_control = fit_control,
+      varcov_cluster_variable = varcov_cluster_variable,
+      nFolds_glm = nFolds_glm
+    )
+  }
 
-	  if (identical(model, "neural") && is.null(fit$fit_metrics)) {
-	    fit$fit_metrics <- fit$neural_model_info$fit_metrics %||% NULL
-	  }
+  if (identical(model, "neural") && is.null(fit$fit_metrics)) {
+    fit$fit_metrics <- fit$neural_model_info$fit_metrics %||% NULL
+  }
 
-	  out <- structure(
-	    list(
-	      model_type = model,
-	      mode = mode_use,
-	      encoder = list(
-	        factor_names = names(names_list),
-	        names_list = names_list,
-	        factor_levels = factor_levels,
-	        unknown_policy = "holdout"
-	      ),
-	      fit = fit,
-	      metadata = list(
-	        call = match.call(),
-	        timestamp = Sys.time(),
-	        conda_env = if (identical(model, "neural")) conda_env else NULL,
-	        conda_env_required = if (identical(model, "neural")) conda_env_required else NULL
-	      )
-	    ),
-	    class = "strategic_predictor"
-	  )
-	  if (!is.null(cache_path)) {
-	    save_strategic_predictor(
-	      out,
-	      file = cache_path,
-	      overwrite = TRUE,
-	      compress = cache_compress
-	    )
-	  }
-	  out
-	}
+  out <- structure(
+    list(
+      model_type = model,
+      mode = mode_use,
+      encoder = list(
+        factor_names = names(names_list),
+        names_list = names_list,
+        factor_levels = factor_levels,
+        unknown_policy = "holdout"
+      ),
+      fit = fit,
+      metadata = list(
+        call = match.call(),
+        timestamp = Sys.time(),
+        conda_env = if (identical(model, "neural")) conda_env else NULL,
+        conda_env_required = if (identical(model, "neural")) conda_env_required else NULL
+      )
+    ),
+    class = "strategic_predictor"
+  )
+  if (!is.null(cache_path)) {
+    save_strategic_predictor(
+      out,
+      file = cache_path,
+      overwrite = TRUE,
+      compress = cache_compress
+    )
+  }
+  out
+}
 
 cs2step_glm_build_design <- function(W_idx, main_info, interaction_info) {
   W_idx <- as.matrix(W_idx)
@@ -2318,6 +2336,7 @@ save_strategic_predictor <- function(fit,
   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
   bundle <- cs2step_pack_predictor(fit, include_metrics = include_metrics)
   saveRDS(bundle, file = file, compress = compress)
+  neural_svi_checkpoint_remove_dir(paste0(file, ".inprogress"))
   invisible(file)
 }
 
@@ -2517,6 +2536,7 @@ save_neural_outcome_bundle <- function(file,
 
   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
   saveRDS(bundle, file = file, compress = compress)
+  neural_svi_checkpoint_remove_dir(paste0(file, ".inprogress"))
   invisible(file)
 }
 

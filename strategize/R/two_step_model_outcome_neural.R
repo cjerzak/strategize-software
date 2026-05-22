@@ -6012,7 +6012,11 @@ generate_ModelOutcome_neural <- function(){
     gradient_diagnostics = TRUE,
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
-    svi_lr_end_factor = 0.01
+    svi_lr_end_factor = 0.01,
+    checkpoint_path = NULL,
+    checkpoint_resume = NULL,
+    checkpoint_n_checks = 10L,
+    checkpoint_compress = FALSE
   )
   RMS_scale = 0.5
   UsedRegularization <- FALSE
@@ -6219,6 +6223,9 @@ generate_ModelOutcome_neural <- function(){
         is.null(mcmc_overrides$early_stopping_validation_batch_size)) {
       mcmc_control$early_stopping_validation_batch_size <- NULL
     }
+  }
+  if (isTRUE(save_outcome_model) && is.null(mcmc_control$checkpoint_path)) {
+    mcmc_control$checkpoint_path <- paste0(bundle_path, ".inprogress")
   }
   user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
   user_supplied_svi_num_draws <- !is.null(mcmc_overrides) &&
@@ -11238,6 +11245,68 @@ generate_ModelOutcome_neural <- function(){
       )
     }
     rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
+    svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
+    svi_checkpoint_fingerprint <- NULL
+    svi_checkpoint_latest <- NULL
+    svi_checkpoint_best <- NULL
+    if (isTRUE(svi_checkpoint$enabled)) {
+      svi_checkpoint_fingerprint <- neural_svi_checkpoint_fingerprint(list(
+        data = list(
+          Y = Y_use,
+          W = W_,
+          X = X_use,
+          X_present = X_present_use,
+          pair_id = pair_id_ %||% NULL,
+          profile_order = profile_order_ %||% NULL,
+          competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
+          competing_group_variable_respondent = competing_group_variable_respondent_ %||% NULL,
+          respondent_id = respondent_id %||% NULL,
+          respondent_task_id = respondent_task_id %||% NULL
+        ),
+        model = list(
+          likelihood = likelihood,
+          n_outcomes = as.integer(nOutcomes),
+          factor_levels = factor_levels_int,
+          pairwise_mode = isTRUE(pairwise_mode),
+          pairwise_context_mode = pairwise_context_mode,
+          model_dims = as.integer(ModelDims),
+          model_depth = as.integer(ModelDepth),
+          residual_mode = residual_mode,
+          cross_candidate_encoder_mode = cross_candidate_encoder_mode,
+          qk_norm = isTRUE(qk_norm_enabled),
+          subsample_method = subsample_method,
+          output_only_mode = isTRUE(output_only_mode),
+          guide = guide_name,
+          optimizer = optimizer_tag,
+          svi_lr = svi_lr,
+          schedule = schedule_tag,
+          warmup_frac = warmup_frac,
+          end_factor = end_factor,
+          n_particles = as.integer(n_particles),
+          svi_budget_info = svi_budget_info
+        ),
+        control = neural_svi_checkpoint_strip_control(mcmc_control),
+        token = neural_token_info %||% NULL
+      ))
+      if (isTRUE(svi_checkpoint$resume)) {
+        svi_checkpoint_latest <- neural_svi_checkpoint_restore_latest(
+          svi_checkpoint$path,
+          svi_checkpoint_fingerprint
+        )
+        svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
+          svi_checkpoint$path,
+          svi_checkpoint_fingerprint
+        )
+        if (!is.null(svi_checkpoint_latest)) {
+          message(sprintf(
+            "Resuming neural SVI checkpoint from %s at step %d/%d.",
+            svi_checkpoint$path,
+            as.integer(svi_checkpoint_latest$completed_step %||% 0L),
+            as.integer(svi_checkpoint_latest$resolved_svi_steps %||% svi_steps)
+          ))
+        }
+      }
+    }
     validation_split_reason <- "validation_split_unavailable"
     build_svi_validation_split <- function() {
       validation_split_reason <<- "validation_split_unavailable"
@@ -11702,33 +11771,175 @@ generate_ModelOutcome_neural <- function(){
       early_stopping_info$validation_target_n <- NA_integer_
     }
 
-    if (isTRUE(early_stopping_running)) {
-      svi_state <- do.call(svi$init, c(list(rng_key), svi_train_model_args))
+    checkpoint_context <- function() {
+      list(
+        likelihood = likelihood,
+        pairwise_mode = isTRUE(pairwise_mode),
+        subsample_method = subsample_method,
+        early_stopping_running = isTRUE(early_stopping_running)
+      )
+    }
+    checkpoint_save <- function(type = c("latest", "best"),
+                                svi_state_current = NULL,
+                                svi_params_current = NULL,
+                                prediction_params_current = NULL,
+                                step_current = NULL,
+                                loss_history_current = NULL,
+                                best_metric_current = NA_real_,
+                                best_step_current = NA_integer_,
+                                no_improve_checks_current = 0L) {
+      type <- match.arg(type)
+      if (!isTRUE(svi_checkpoint$enabled)) {
+        return(NULL)
+      }
+      if (is.null(svi_params_current) && !is.null(svi_state_current)) {
+        svi_params_current <- tryCatch(svi$get_params(svi_state_current), error = function(e) NULL)
+      }
+      if (is.null(svi_params_current)) {
+        return(NULL)
+      }
+      if (is.null(prediction_params_current)) {
+        prediction_params_current <- tryCatch(
+          extract_svi_param_sites(svi_params_current),
+          error = function(e) NULL
+        )
+      }
+      payload <- neural_svi_checkpoint_make_payload(
+        snapshot_type = type,
+        fingerprint = svi_checkpoint_fingerprint,
+        completed_step = as.integer(step_current %||% svi_steps_completed %||% 0L),
+        resolved_svi_steps = resolved_svi_steps,
+        svi_params = svi_params_current,
+        prediction_params = prediction_params_current,
+        loss_history = loss_history_current %||% svi_loss_curve %||% numeric(0),
+        validation_history = early_stopping_info$validation_loss_history %||% numeric(0),
+        best_metric = best_metric_current,
+        best_step = best_step_current,
+        no_improve_checks = no_improve_checks_current,
+        early_stopping = early_stopping_info,
+        optimizer_diagnostics = optimizer_diagnostics,
+        svi_budget_info = svi_budget_info,
+        checkpoint_context = checkpoint_context()
+      )
+      neural_svi_checkpoint_save_snapshot(
+        svi_checkpoint$path,
+        type = type,
+        payload = payload,
+        compress = isTRUE(svi_checkpoint$compress)
+      )
+      payload
+    }
+    checkpoint_run_chunk <- function(chunk_steps,
+                                     model_args_current,
+                                     init_state_current = NULL,
+                                     init_params_current = NULL,
+                                     progress_bar = FALSE) {
+      run_args <- list(
+        rng_key,
+        ai(chunk_steps),
+        progress_bar = isTRUE(progress_bar)
+      )
+      if (!is.null(init_state_current)) {
+        run_args$init_state <- init_state_current
+      } else if (!is.null(init_params_current)) {
+        run_args$init_params <- init_params_current
+      }
+      do.call(svi$run, c(run_args, model_args_current))
+    }
+
+    checkpoint_resume_params <- NULL
+    checkpoint_resume_completed <- 0L
+    checkpoint_training_complete <- FALSE
+    checkpoint_final_snapshot <- NULL
+    if (isTRUE(svi_checkpoint$enabled) && !is.null(svi_checkpoint_latest)) {
+      checkpoint_resume_completed <- as.integer(svi_checkpoint_latest$completed_step %||% 0L)
+      if (is.na(checkpoint_resume_completed) || checkpoint_resume_completed < 0L) {
+        checkpoint_resume_completed <- 0L
+      }
+      checkpoint_resume_params <- neural_svi_checkpoint_params_to_jax(
+        svi_checkpoint_latest$svi_params
+      )
+      if (!is.null(svi_checkpoint_latest$early_stopping)) {
+        early_stopping_info <- modifyList(
+          early_stopping_info,
+          svi_checkpoint_latest$early_stopping
+        )
+      }
+      if (!is.null(svi_checkpoint_latest$validation_history)) {
+        early_stopping_info$validation_loss_history <- as.numeric(
+          svi_checkpoint_latest$validation_history
+        )
+      }
+      checkpoint_training_complete <- checkpoint_resume_completed >= as.integer(svi_steps) ||
+        isTRUE(svi_checkpoint_latest$early_stopping$stopped_early)
+      if (isTRUE(checkpoint_training_complete)) {
+        checkpoint_final_snapshot <- if (!is.null(svi_checkpoint_best) &&
+                                         is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
+          svi_checkpoint_best
+        } else {
+          svi_checkpoint_latest
+        }
+        SVIParams <- neural_svi_checkpoint_params_to_jax(checkpoint_final_snapshot$svi_params)
+        svi_loss_curve <- as.numeric(svi_checkpoint_latest$loss_history %||% numeric(0))
+        svi_steps_completed <- as.integer(checkpoint_resume_completed)
+        early_stopping_info$reason <- early_stopping_info$reason %||% early_stopping_reason
+        early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+        message(sprintf(
+          "Neural SVI checkpoint already reached step %d/%d; rebuilding final fit from saved parameters.",
+          as.integer(svi_steps_completed),
+          as.integer(svi_steps)
+        ))
+      }
+    }
+
+    if (!isTRUE(checkpoint_training_complete) && isTRUE(early_stopping_running)) {
+      svi_state <- if (is.null(checkpoint_resume_params)) {
+        do.call(svi$init, c(list(rng_key), svi_train_model_args))
+      } else {
+        NULL
+      }
       best_svi_state <- NULL
-      best_metric <- Inf
-      last_metric <- NA_real_
-      no_improve_checks <- 0L
+      best_metric <- if (!is.null(svi_checkpoint_best) &&
+                         is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
+        as.numeric(svi_checkpoint_best$best_metric)
+      } else {
+        Inf
+      }
+      if (is.finite(best_metric)) {
+        early_stopping_info$best_metric <- best_metric
+        early_stopping_info$best_step <- as.integer(svi_checkpoint_best$best_step %||%
+                                                      early_stopping_info$best_step)
+      }
+      last_metric <- if (length(early_stopping_info$validation_loss_history) > 0L) {
+        tail(early_stopping_info$validation_loss_history, 1L)
+      } else {
+        NA_real_
+      }
+      no_improve_checks <- as.integer(svi_checkpoint_latest$no_improve_checks %||% 0L)
+      if (is.na(no_improve_checks) || no_improve_checks < 0L) {
+        no_improve_checks <- 0L
+      }
       chunk_size <- max(1L, as.integer(early_stopping_info$eval_every %||% svi_steps))
       total_checks_planned <- max(1L, as.integer(ceiling(svi_steps / chunk_size)))
       svi_loss_chunks <- list()
-      steps_remaining <- as.integer(svi_steps)
-      steps_completed <- 0L
+      if (!is.null(svi_checkpoint_latest$loss_history) &&
+          length(svi_checkpoint_latest$loss_history) > 0L) {
+        svi_loss_chunks[[1L]] <- as.numeric(svi_checkpoint_latest$loss_history)
+      }
+      steps_completed <- as.integer(checkpoint_resume_completed)
+      steps_remaining <- max(0L, as.integer(svi_steps) - steps_completed)
 
       while (steps_remaining > 0L) {
         chunk_steps <- min(chunk_size, steps_remaining)
         chunk_started_at <- proc.time()[["elapsed"]]
-        run_result <- do.call(
-          svi$run,
-          c(
-            list(
-              rng_key,
-              ai(chunk_steps),
-              progress_bar = FALSE,
-              init_state = svi_state
-            ),
-            svi_train_model_args
-          )
+        run_result <- checkpoint_run_chunk(
+          chunk_steps = chunk_steps,
+          model_args_current = svi_train_model_args,
+          init_state_current = svi_state,
+          init_params_current = checkpoint_resume_params,
+          progress_bar = FALSE
         )
+        checkpoint_resume_params <- NULL
         chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         run_parts <- parse_svi_run_result(run_result)
         if (is.null(run_parts$state)) {
@@ -11744,6 +11955,7 @@ generate_ModelOutcome_neural <- function(){
         steps_completed <- steps_completed + as.integer(chunk_steps)
         steps_remaining <- steps_remaining - as.integer(chunk_steps)
         svi_steps_completed <- as.integer(steps_completed)
+        current_loss_history <- unlist(svi_loss_chunks, use.names = FALSE)
         gradient_checkpoint <- record_svi_gradient_checkpoint(
           svi_state_current = svi_state,
           model_args_current = svi_train_model_args,
@@ -11761,10 +11973,32 @@ generate_ModelOutcome_neural <- function(){
         if (!is.null(validation_metric_error)) {
           early_stopping_info$error_message <- validation_metric_error
           early_stopping_reason <- "validation_error"
+          early_stopping_info$reason <- early_stopping_reason
+          early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+          checkpoint_save(
+            type = "latest",
+            svi_state_current = svi_state,
+            step_current = steps_completed,
+            loss_history_current = current_loss_history,
+            best_metric_current = best_metric,
+            best_step_current = early_stopping_info$best_step,
+            no_improve_checks_current = no_improve_checks
+          )
           break
         }
         if (!is.finite(metric_value)) {
           early_stopping_reason <- "metric_failed"
+          early_stopping_info$reason <- early_stopping_reason
+          early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+          checkpoint_save(
+            type = "latest",
+            svi_state_current = svi_state,
+            step_current = steps_completed,
+            loss_history_current = current_loss_history,
+            best_metric_current = best_metric,
+            best_step_current = early_stopping_info$best_step,
+            no_improve_checks_current = no_improve_checks
+          )
           break
         }
 
@@ -11779,8 +12013,9 @@ generate_ModelOutcome_neural <- function(){
           metric_value
         )
         early_stopping_info$stop_check <- as.integer(length(early_stopping_info$validation_loss_history))
-        if (!is.finite(best_metric) ||
-            metric_value < (best_metric - early_stopping_info$min_delta)) {
+        improved_metric <- !is.finite(best_metric) ||
+          metric_value < (best_metric - early_stopping_info$min_delta)
+        if (isTRUE(improved_metric)) {
           best_metric <- metric_value
           best_svi_state <- svi_state
           early_stopping_info$best_step <- as.integer(steps_completed)
@@ -11844,10 +12079,44 @@ generate_ModelOutcome_neural <- function(){
           format_svi_gradient_fields(gradient_checkpoint)
         ))
 
+        if (isTRUE(improved_metric)) {
+          checkpoint_save(
+            type = "best",
+            svi_state_current = svi_state,
+            step_current = steps_completed,
+            loss_history_current = current_loss_history,
+            best_metric_current = best_metric,
+            best_step_current = early_stopping_info$best_step,
+            no_improve_checks_current = no_improve_checks
+          )
+        }
+        early_stopping_info$reason <- early_stopping_reason
+        early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+        checkpoint_save(
+          type = "latest",
+          svi_state_current = svi_state,
+          step_current = steps_completed,
+          loss_history_current = current_loss_history,
+          best_metric_current = best_metric,
+          best_step_current = early_stopping_info$best_step,
+          no_improve_checks_current = no_improve_checks
+        )
+
         if (no_improve_checks >= early_stopping_info$patience &&
             steps_completed < as.integer(svi_steps)) {
           early_stopping_info$stopped_early <- TRUE
           early_stopping_reason <- "patience_exhausted"
+          early_stopping_info$reason <- early_stopping_reason
+          early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+          checkpoint_save(
+            type = "latest",
+            svi_state_current = svi_state,
+            step_current = steps_completed,
+            loss_history_current = current_loss_history,
+            best_metric_current = best_metric,
+            best_step_current = early_stopping_info$best_step,
+            no_improve_checks_current = no_improve_checks
+          )
           message(sprintf(
             "SVI early stopping at step %d/%d on validation %s=%.6f.",
             steps_completed,
@@ -11870,12 +12139,95 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$final_metric <- last_metric
       }
       if (!is.null(best_svi_state) &&
-          !early_stopping_reason %in% c("metric_failed", "validation_error")) {
+          !early_stopping_reason %in% c("metric_failed", "validation_error") &&
+          !isTRUE(svi_checkpoint$enabled)) {
         svi_state <- best_svi_state
       }
       early_stopping_info$reason <- early_stopping_reason
       early_stopping_info$stop_step <- as.integer(svi_steps_completed %||% svi_steps)
-    } else {
+      if (isTRUE(svi_checkpoint$enabled) &&
+          !early_stopping_reason %in% c("metric_failed", "validation_error")) {
+        svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
+          svi_checkpoint$path,
+          svi_checkpoint_fingerprint
+        )
+        if (!is.null(svi_checkpoint_best) &&
+            is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
+          SVIParams <- neural_svi_checkpoint_params_to_jax(svi_checkpoint_best$svi_params)
+        }
+      }
+    } else if (!isTRUE(checkpoint_training_complete) && isTRUE(svi_checkpoint$enabled)) {
+      chunk_size <- max(1L, as.integer(ceiling(svi_steps / svi_checkpoint$n_checks)))
+      total_checks_planned <- max(1L, as.integer(ceiling(svi_steps / chunk_size)))
+      svi_loss_chunks <- list()
+      if (!is.null(svi_checkpoint_latest$loss_history) &&
+          length(svi_checkpoint_latest$loss_history) > 0L) {
+        svi_loss_chunks[[1L]] <- as.numeric(svi_checkpoint_latest$loss_history)
+      }
+      steps_completed <- as.integer(checkpoint_resume_completed)
+      steps_remaining <- max(0L, as.integer(svi_steps) - steps_completed)
+      svi_state <- NULL
+      checkpoint_index <- max(0L, as.integer(ceiling(steps_completed / chunk_size)))
+      while (steps_remaining > 0L) {
+        chunk_steps <- min(chunk_size, steps_remaining)
+        run_result <- checkpoint_run_chunk(
+          chunk_steps = chunk_steps,
+          model_args_current = svi_model_args,
+          init_state_current = svi_state,
+          init_params_current = checkpoint_resume_params,
+          progress_bar = FALSE
+        )
+        checkpoint_resume_params <- NULL
+        run_parts <- parse_svi_run_result(run_result)
+        if (is.null(run_parts$state)) {
+          early_stopping_reason <- "update_failed"
+          break
+        }
+        svi_state <- run_parts$state
+        chunk_losses <- as.numeric(run_parts$losses)
+        if (!length(chunk_losses)) {
+          chunk_losses <- rep(NA_real_, chunk_steps)
+        }
+        svi_loss_chunks[[length(svi_loss_chunks) + 1L]] <- chunk_losses
+        steps_completed <- steps_completed + as.integer(chunk_steps)
+        steps_remaining <- steps_remaining - as.integer(chunk_steps)
+        checkpoint_index <- checkpoint_index + 1L
+        svi_steps_completed <- as.integer(steps_completed)
+        current_loss_history <- unlist(svi_loss_chunks, use.names = FALSE)
+        gradient_checkpoint <- record_svi_gradient_checkpoint(
+          svi_state_current = svi_state,
+          model_args_current = svi_model_args,
+          step_current = steps_completed
+        )
+        message(sprintf(
+          "SVI checkpoint %d/%d: step=%d/%d; train_elbo=%s%s.",
+          checkpoint_index,
+          total_checks_planned,
+          steps_completed,
+          svi_steps,
+          format_svi_diag_value(tail(chunk_losses, 1L), digits = 2L),
+          format_svi_gradient_fields(gradient_checkpoint)
+        ))
+        early_stopping_info$reason <- early_stopping_reason
+        early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+        checkpoint_save(
+          type = "latest",
+          svi_state_current = svi_state,
+          step_current = steps_completed,
+          loss_history_current = current_loss_history,
+          best_metric_current = NA_real_,
+          best_step_current = NA_integer_,
+          no_improve_checks_current = 0L
+        )
+      }
+      svi_loss_curve <- if (length(svi_loss_chunks) > 0L) {
+        unlist(svi_loss_chunks, use.names = FALSE)
+      } else {
+        NULL
+      }
+      early_stopping_info$reason <- early_stopping_reason
+      early_stopping_info$stop_step <- as.integer(svi_steps_completed %||% svi_steps)
+    } else if (!isTRUE(checkpoint_training_complete)) {
       svi_result <- do.call(
         svi$run,
         c(
@@ -11932,7 +12284,11 @@ generate_ModelOutcome_neural <- function(){
     optimizer_diagnostics$lr_trace <- lr_trace_info$lr_trace
     optimizer_diagnostics$lr_trace_status <- lr_trace_info$lr_trace_status
     optimizer_diagnostics$optimizer_status <- "ok"
-    params <- svi$get_params(svi_state)
+    params <- if (!is.null(SVIParams)) {
+      SVIParams
+    } else {
+      svi$get_params(svi_state)
+    }
     SVIParams <- params
     n_draws <- ai(resolved_svi_num_draws)
     if (length(n_draws) != 1L || is.na(n_draws) || !is.finite(n_draws) || n_draws < 1L) {

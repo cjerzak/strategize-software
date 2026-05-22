@@ -81,6 +81,13 @@ NULL
 #'   cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
 #'   and are evaluated at the early-stopping checkpoint cadence; set
 #'   \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
+#'   Advanced restart checkpoints can be enabled with
+#'   \code{neural_mcmc_control$checkpoint_path}; rerunning with the same data and
+#'   controls resumes from \code{latest.rds} and promotes the best validation
+#'   checkpoint when present. \code{checkpoint_resume} defaults to \code{TRUE}
+#'   when a checkpoint path is present, \code{checkpoint_n_checks} defaults to
+#'   \code{10} for non-early-stopping checkpoint cadence, and
+#'   \code{checkpoint_compress} defaults to \code{FALSE}.
 #' @param diff Difference mode flag
 #' @param primary_pushforward Primary-stage push-forward estimator
 #' @param primary_strength Scalar controlling the decisiveness of primaries
@@ -792,6 +799,67 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         is.na(gradient_diagnostics)) {
       stop(
         "'neural_mcmc_control$gradient_diagnostics' must be TRUE or FALSE.",
+        call. = FALSE
+      )
+    }
+  }
+  checkpoint_path <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["checkpoint_path"]]
+  } else {
+    NULL
+  }
+  if (!is.null(checkpoint_path)) {
+    checkpoint_path <- as.character(checkpoint_path)
+    if (length(checkpoint_path) != 1L || is.na(checkpoint_path) || !nzchar(checkpoint_path)) {
+      stop(
+        "'neural_mcmc_control$checkpoint_path' must be a non-empty path.",
+        call. = FALSE
+      )
+    }
+  }
+  checkpoint_resume <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["checkpoint_resume"]]
+  } else {
+    NULL
+  }
+  if (!is.null(checkpoint_resume)) {
+    if (!is.logical(checkpoint_resume) ||
+        length(checkpoint_resume) != 1L ||
+        is.na(checkpoint_resume)) {
+      stop(
+        "'neural_mcmc_control$checkpoint_resume' must be TRUE or FALSE.",
+        call. = FALSE
+      )
+    }
+  }
+  checkpoint_n_checks <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["checkpoint_n_checks"]]
+  } else {
+    NULL
+  }
+  if (!is.null(checkpoint_n_checks)) {
+    if (!is.numeric(checkpoint_n_checks) ||
+        length(checkpoint_n_checks) != 1L ||
+        !is.finite(checkpoint_n_checks) ||
+        checkpoint_n_checks < 1 ||
+        checkpoint_n_checks != round(checkpoint_n_checks)) {
+      stop(
+        "'neural_mcmc_control$checkpoint_n_checks' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  checkpoint_compress <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["checkpoint_compress"]]
+  } else {
+    NULL
+  }
+  if (!is.null(checkpoint_compress)) {
+    if (!is.logical(checkpoint_compress) ||
+        length(checkpoint_compress) != 1L ||
+        is.na(checkpoint_compress)) {
+      stop(
+        "'neural_mcmc_control$checkpoint_compress' must be TRUE or FALSE.",
         call. = FALSE
       )
     }

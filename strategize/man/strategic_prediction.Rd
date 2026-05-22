@@ -55,7 +55,10 @@ strategic_prediction(
 
 \item{cache_path}{Optional path to a cached predictor (.rds). If it exists and
 \code{cache_overwrite} is \code{FALSE}, the cached model is loaded instead of refitting.
-When a new model is fit, it is saved to this path.}
+When a new model is fit, it is saved to this path. For neural fits,
+\code{cache_path} also enables restartable SVI checkpoints under
+\code{paste0(cache_path, ".inprogress")}; successful final saves remove
+that in-progress directory.}
 
 \item{cache_overwrite}{Logical; refit and overwrite any existing cache at \code{cache_path}.}
 
