@@ -108,10 +108,17 @@ cs2step_neural_extract_context_prepared <- function(params,
     if (!is.null(params$E_matchup)) {
       matchup_idx <- neural_matchup_index(prep$party_left, prep$party_right, model_info)
     }
+    context_present <- neural_pair_context_present(
+      prep$party_left,
+      prep$party_right,
+      prep$resp_party,
+      model_info
+    )
   } else {
     n_batch <- ai(prep$X_single$shape[[1]])
     stage_idx <- NULL
     matchup_idx <- NULL
+    context_present <- NULL
   }
 
   ctx_info <- neural_build_context_tokens_batch(
@@ -126,7 +133,8 @@ cs2step_neural_extract_context_prepared <- function(params,
     place_embedding = prep$place_embedding %||% NULL,
     time_embedding = prep$time_embedding %||% NULL,
     params = params,
-    return_mask = TRUE
+    return_mask = TRUE,
+    context_present = context_present
   )
   ctx_tokens <- ctx_info$tokens %||% NULL
   ctx_mask <- ctx_info$mask %||% NULL
@@ -174,6 +182,12 @@ cs2step_neural_extract_pair_prepared <- function(params,
   if (!is.null(params$E_matchup)) {
     matchup_idx <- neural_matchup_index(prep$party_left, prep$party_right, model_info)
   }
+  context_present <- neural_pair_context_present(
+    prep$party_left,
+    prep$party_right,
+    prep$resp_party,
+    model_info
+  )
 
   if (isTRUE(use_cross_encoder)) {
     n_batch <- ai(prep$X_left$shape[[1]])
@@ -191,7 +205,8 @@ cs2step_neural_extract_pair_prepared <- function(params,
       place_embedding = prep$place_embedding %||% NULL,
       time_embedding = prep$time_embedding %||% NULL,
       params = params,
-      return_mask = TRUE
+      return_mask = TRUE,
+      context_present = context_present
     )
     ctx_tokens <- ctx_info$tokens %||% NULL
     ctx_mask <- ctx_info$mask %||% NULL
@@ -203,7 +218,8 @@ cs2step_neural_extract_pair_prepared <- function(params,
       experiment_idx = prep$experiment_idx %||% NULL,
       factor_order = prep$factor_order %||% NULL,
       params = params,
-      return_mask = TRUE
+      return_mask = TRUE,
+      context_present = context_present
     )
     left_tokens <- neural_add_segment_embedding(
       left_info$tokens,
@@ -219,7 +235,8 @@ cs2step_neural_extract_pair_prepared <- function(params,
       experiment_idx = prep$experiment_idx %||% NULL,
       factor_order = prep$factor_order %||% NULL,
       params = params,
-      return_mask = TRUE
+      return_mask = TRUE,
+      context_present = context_present
     )
     right_tokens <- neural_add_segment_embedding(
       right_info$tokens,
@@ -287,6 +304,10 @@ cs2step_neural_extract_pair_prepared <- function(params,
   matchup_all <- if (is.null(matchup_idx)) NULL else {
     strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
   }
+  context_present_all <- strenv$jnp$concatenate(
+    list(context_present, context_present),
+    axis = 0L
+  )
 
   if (isTRUE(use_cross_attn)) {
     enc_all <- neural_encode_candidate_core_prepared(
@@ -304,6 +325,7 @@ cs2step_neural_extract_pair_prepared <- function(params,
       factor_order = factor_order_all,
       stage_idx = stage_all,
       matchup_idx = matchup_all,
+      context_present = context_present_all,
       return_tokens = TRUE
     )
     phi_all <- enc_all$phi
@@ -325,6 +347,7 @@ cs2step_neural_extract_pair_prepared <- function(params,
       factor_order = factor_order_all,
       stage_idx = stage_all,
       matchup_idx = matchup_all,
+      context_present = context_present_all,
       return_tokens = FALSE
     )
     cand_all <- NULL

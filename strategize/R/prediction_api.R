@@ -2410,7 +2410,8 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   }
 
   int_fields <- c("n_params", "n_factors", "n_candidate_tokens", "n_party_levels",
-                  "n_matchup_levels", "n_resp_party_levels", "n_resp_covariates", "model_dims", "model_depth",
+                  "n_matchup_levels", "n_resp_party_levels", "party_missing_index",
+                  "resp_party_missing_index", "n_resp_covariates", "model_dims", "model_depth",
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
                   "default_experiment_index", "text_semantic_dim", "factor_struct_dim",
                   "level_struct_dim", "place_context_dim", "time_context_dim", "max_factor_tokens",
@@ -2521,6 +2522,15 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   }
   if (is.null(out$resp_party_missing_label)) {
     out$resp_party_missing_label <- neural_missing_group_label("respondent")
+  }
+  if (is.null(out$party_missing_index)) {
+    out$party_missing_index <- neural_model_party_missing_index(out)
+  }
+  if (is.null(out$resp_party_missing_index)) {
+    out$resp_party_missing_index <- neural_model_resp_party_missing_index(out)
+  }
+  if (is.null(out$context_present_masking)) {
+    out$context_present_masking <- TRUE
   }
   if (is.null(out$n_resp_party_levels) && !is.null(out$resp_party_levels)) {
     out$n_resp_party_levels <- as.integer(length(out$resp_party_levels))

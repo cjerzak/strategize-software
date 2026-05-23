@@ -1750,6 +1750,144 @@ test_that("language_span emits ordered factor spans with padding masks", {
   expect_equal(tok_r[1, 9:12, ], matrix(0, nrow = 4L, ncol = 2L), tolerance = 1e-6)
 })
 
+test_that("pairwise context tokens are masked for context-absent rows", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels(
+    include_candidate_group = TRUE,
+    include_relation = TRUE,
+    include_stage = TRUE,
+    include_respondent_group = TRUE,
+    include_matchup = TRUE
+  )
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    cand_party_to_resp_idx = c(0L, 1L, -1L),
+    n_party_levels = 3L,
+    token_family_levels = token_levels
+  )
+  model_info <- strategize:::neural_set_pairwise_context_model_info(
+    info = model_info,
+    pairwise_context_mode = "stage_aware",
+    has_candidate_group_context = TRUE,
+    has_respondent_group_context = TRUE,
+    has_relation_token_context = TRUE,
+    has_stage_context = TRUE,
+    has_matchup_context = TRUE,
+    n_resp_party_levels = 3L,
+    party_missing_index = 2L,
+    resp_party_missing_index = 2L
+  )
+  params <- list(
+    E_factor_1 = strategize:::strenv$jnp$array(
+      matrix(c(1, 2, 3, 4), nrow = 2L, byrow = TRUE),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_party = strategize:::strenv$jnp$array(
+      matrix(c(10, 11, 12, 13, 14, 15), nrow = 3L, byrow = TRUE),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_rel = strategize:::strenv$jnp$array(
+      matrix(c(20, 21, 22, 23, 24, 25), nrow = 3L, byrow = TRUE),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_resp_party = strategize:::strenv$jnp$array(
+      matrix(c(30, 31, 32, 33, 34, 35), nrow = 3L, byrow = TRUE),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_stage = strategize:::strenv$jnp$array(
+      array(seq_len(12), dim = c(3L, 2L, 2L)),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_matchup = strategize:::strenv$jnp$array(
+      matrix(seq_len(12), nrow = 6L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_token_family = strategize:::strenv$jnp$array(
+      matrix(0, nrow = length(token_levels), ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    )
+  )
+
+  cand_info <- strategize:::neural_build_candidate_tokens_hard(
+    X_idx = strategize:::strenv$jnp$array(matrix(c(0L, 1L), ncol = 1L))$astype(strategize:::strenv$jnp$int32),
+    party_idx = strategize:::strenv$jnp$array(c(0L, 2L))$astype(strategize:::strenv$jnp$int32),
+    resp_party_idx = strategize:::strenv$jnp$array(c(0L, 2L))$astype(strategize:::strenv$jnp$int32),
+    context_present = strategize:::strenv$jnp$array(c(1L, 0L)),
+    model_info = model_info,
+    params = params,
+    return_mask = TRUE
+  )
+  cand_tokens <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info$tokens))
+  cand_mask <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info$mask))
+  expect_equal(cand_mask, matrix(c(1, 1, 1, 1, 0, 0), nrow = 2L, byrow = TRUE))
+  expect_equal(cand_tokens[2, 2:3, ], matrix(0, nrow = 2L, ncol = 2L), tolerance = 1e-6)
+
+  ctx_info <- strategize:::neural_build_context_tokens_batch(
+    model_info = model_info,
+    resp_party_idx = strategize:::strenv$jnp$array(c(0L, 2L))$astype(strategize:::strenv$jnp$int32),
+    stage_idx = strategize:::strenv$jnp$array(c(1L, 0L))$astype(strategize:::strenv$jnp$int32),
+    matchup_idx = strategize:::strenv$jnp$array(c(0L, 5L))$astype(strategize:::strenv$jnp$int32),
+    context_present = strategize:::strenv$jnp$array(c(1L, 0L)),
+    params = params,
+    return_mask = TRUE
+  )
+  ctx_tokens <- reticulate::py_to_r(strategize:::strenv$np$array(ctx_info$tokens))
+  ctx_mask <- reticulate::py_to_r(strategize:::strenv$np$array(ctx_info$mask))
+  expect_equal(ctx_mask, matrix(c(1, 1, 1, 0, 0, 0), nrow = 2L, byrow = TRUE))
+  expect_equal(ctx_tokens[2, , ], matrix(0, nrow = 3L, ncol = 2L), tolerance = 1e-6)
+})
+
+test_that("stage diagnostics ignore context-absent pairwise rows", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  W <- data.frame(feature = rep(c("A", "B"), 4L), stringsAsFactors = FALSE)
+  names_list <- strategize:::cs2step_build_names_list(W)
+  W_idx <- strategize:::cs2step_encode_W_indices(
+    W,
+    names_list = names_list,
+    unknown = "error",
+    pad_unknown = 0L
+  )
+  fit <- suppressWarnings(strategize:::cs2step_eval_outcome_model_neural(
+    Y = c(1, 0, 1, 0, 1, 0, 1, 0),
+    W_idx = W_idx,
+    names_list = names_list,
+    factor_levels = vapply(names_list, function(x) length(x[[1]]), integer(1)),
+    diff = TRUE,
+    pair_id = rep(seq_len(4L), each = 2L),
+    profile_order = rep(1:2, 4L),
+    competing_group_variable_candidate = c("A", "A", "A", "B", NA, NA, "A", "B"),
+    competing_group_variable_respondent = c("A", "A", "A", "A", NA, NA, NA, NA),
+    conda_env_required = TRUE,
+    neural_mcmc_control = list(
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      subsample_method = "batch_vi",
+      optimizer = "adam",
+      svi_steps = 4L,
+      svi_num_draws = 1L,
+      batch_size = 4L,
+      early_stopping = FALSE,
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  ))
+  stage <- fit$neural_model_info$stage_diagnostics
+
+  expect_identical(stage$stage_context_policy, "masked_optional")
+  expect_identical(stage$n_context_present_pairs, 2L)
+  expect_identical(stage$n_context_absent_pairs, 2L)
+  expect_identical(stage$n_primary, 1L)
+  expect_identical(stage$n_general, 1L)
+  expect_equal(stage$pct_primary, 0.5)
+  expect_true(isTRUE(stage$stage_context_enabled))
+})
+
 test_that("language_span requires structural factor and level token info", {
   skip_if_no_jax()
   strategize:::initialize_jax()

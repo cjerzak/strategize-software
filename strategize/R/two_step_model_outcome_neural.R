@@ -919,6 +919,113 @@ neural_matchup_index <- function(party_left_idx, party_right_idx, model_info){
   strenv$jnp$astype(idx, strenv$jnp$int32)
 }
 
+neural_model_party_missing_index <- function(model_info = NULL) {
+  if (!is.null(model_info$party_missing_index)) {
+    return(as.integer(model_info$party_missing_index))
+  }
+  party_levels <- model_info$party_levels %||% NULL
+  party_missing_label <- model_info$party_missing_label %||%
+    neural_missing_group_label("candidate")
+  if (!is.null(party_levels)) {
+    return(neural_missing_group_index(party_levels, party_missing_label))
+  }
+  0L
+}
+
+neural_model_resp_party_missing_index <- function(model_info = NULL) {
+  if (!is.null(model_info$resp_party_missing_index)) {
+    return(as.integer(model_info$resp_party_missing_index))
+  }
+  resp_party_levels <- model_info$resp_party_levels %||% NULL
+  resp_party_missing_label <- model_info$resp_party_missing_label %||%
+    neural_missing_group_label("respondent")
+  if (!is.null(resp_party_levels)) {
+    return(neural_missing_group_index(resp_party_levels, resp_party_missing_label))
+  }
+  0L
+}
+
+neural_context_present_mask <- function(party_idx = NULL,
+                                        other_party_idx = NULL,
+                                        resp_party_idx = NULL,
+                                        context_present = NULL,
+                                        model_info = NULL) {
+  if (!is.null(context_present)) {
+    return(strenv$jnp$array(context_present) > 0L)
+  }
+
+  checks <- list()
+  if (!is.null(party_idx)) {
+    party_missing_index <- ai(neural_model_party_missing_index(model_info))
+    checks[[length(checks) + 1L]] <- strenv$jnp$not_equal(
+      strenv$jnp$array(party_idx),
+      party_missing_index
+    )
+  }
+  if (!is.null(other_party_idx)) {
+    party_missing_index <- ai(neural_model_party_missing_index(model_info))
+    checks[[length(checks) + 1L]] <- strenv$jnp$not_equal(
+      strenv$jnp$array(other_party_idx),
+      party_missing_index
+    )
+  }
+  if (!is.null(resp_party_idx)) {
+    resp_party_missing_index <- ai(neural_model_resp_party_missing_index(model_info))
+    checks[[length(checks) + 1L]] <- strenv$jnp$not_equal(
+      strenv$jnp$array(resp_party_idx),
+      resp_party_missing_index
+    )
+  }
+  if (!length(checks)) {
+    return(NULL)
+  }
+
+  present <- checks[[1L]]
+  if (length(checks) > 1L) {
+    for (i in 2L:length(checks)) {
+      present <- strenv$jnp$logical_and(present, checks[[i]])
+    }
+  }
+  present
+}
+
+neural_context_present_float <- function(party_idx = NULL,
+                                         other_party_idx = NULL,
+                                         resp_party_idx = NULL,
+                                         context_present = NULL,
+                                         model_info = NULL,
+                                         n_batch = NULL) {
+  mask <- neural_context_present_mask(
+    party_idx = party_idx,
+    other_party_idx = other_party_idx,
+    resp_party_idx = resp_party_idx,
+    context_present = context_present,
+    model_info = model_info
+  )
+  if (is.null(mask)) {
+    return(NULL)
+  }
+  out <- strenv$jnp$atleast_1d(strenv$jnp$astype(mask, strenv$dtj))
+  if (!is.null(n_batch) &&
+      ai(out$shape[[1]]) == 1L &&
+      ai(n_batch) > 1L) {
+    out <- out * strenv$jnp$ones(list(ai(n_batch)), dtype = strenv$dtj)
+  }
+  out
+}
+
+neural_pair_context_present <- function(party_left_idx,
+                                        party_right_idx,
+                                        resp_party_idx,
+                                        model_info = NULL) {
+  neural_context_present_mask(
+    party_idx = party_left_idx,
+    other_party_idx = party_right_idx,
+    resp_party_idx = resp_party_idx,
+    model_info = model_info
+  )
+}
+
 neural_logits_to_q <- function(logits, likelihood){
   if (likelihood == "bernoulli") {
     prob <- strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L))
@@ -1646,7 +1753,10 @@ neural_set_pairwise_context_model_info <- function(info,
                                                    has_matchup_context = FALSE,
                                                    party_missing_label = neural_missing_group_label("candidate"),
                                                    resp_party_missing_label = neural_missing_group_label("respondent"),
-                                                   n_resp_party_levels = NULL) {
+                                                   n_resp_party_levels = NULL,
+                                                   party_missing_index = NULL,
+                                                   resp_party_missing_index = NULL,
+                                                   context_present_masking = TRUE) {
   info$pairwise_context_mode <- neural_pairwise_context_mode(
     list(pairwise_context_mode = pairwise_context_mode)
   )
@@ -1662,6 +1772,13 @@ neural_set_pairwise_context_model_info <- function(info,
   if (!is.null(n_resp_party_levels)) {
     info$n_resp_party_levels <- as.integer(n_resp_party_levels)
   }
+  if (!is.null(party_missing_index)) {
+    info$party_missing_index <- as.integer(party_missing_index)
+  }
+  if (!is.null(resp_party_missing_index)) {
+    info$resp_party_missing_index <- as.integer(resp_party_missing_index)
+  }
+  info$context_present_masking <- isTRUE(context_present_masking)
   info
 }
 
@@ -3967,7 +4084,8 @@ add_party_rel_tokens <- function(tokens,
                                  params = NULL,
                                  use_role = FALSE,
                                  role_id = NULL,
-                                 require_party = NULL){
+                                 require_party = NULL,
+                                 context_present = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -3982,6 +4100,14 @@ add_party_rel_tokens <- function(tokens,
 
   party_idx_arr <- strenv$jnp$array(party_idx)
   party_idx_arr <- strenv$jnp$astype(party_idx_arr, strenv$jnp$int32)
+  n_batch <- if (tok_ndim == 3L) ai(tokens$shape[[1]]) else 1L
+  context_weight <- neural_context_present_float(
+    party_idx = party_idx_arr,
+    resp_party_idx = resp_party_idx,
+    context_present = context_present,
+    model_info = model_info,
+    n_batch = n_batch
+  )
 
   party_vec <- NULL
   if (!is.null(params$E_party)) {
@@ -4015,6 +4141,14 @@ add_party_rel_tokens <- function(tokens,
       strenv$jnp$reshape(party_vec, list(1L, dims))
     }
     party_tok <- neural_add_token_family_embedding(party_tok, "party", model_info, params)
+    if (!is.null(context_weight)) {
+      party_scale <- if (tok_ndim == 3L) {
+        strenv$jnp$reshape(context_weight, list(tokens$shape[[1]], 1L, 1L))
+      } else {
+        strenv$jnp$reshape(context_weight, list(1L, 1L))
+      }
+      party_tok <- party_tok * party_scale
+    }
     tokens <- strenv$jnp$concatenate(list(tokens, party_tok),
                                      axis = if (tok_ndim == 3L) 1L else 0L)
   }
@@ -4027,7 +4161,9 @@ add_party_rel_tokens <- function(tokens,
         ai(2L)
       }
     } else {
-      cand_map <- strenv$jnp$atleast_1d(model_info$cand_party_to_resp_idx)
+      cand_map <- strenv$jnp$atleast_1d(
+        strenv$jnp$array(model_info$cand_party_to_resp_idx)
+      )$astype(strenv$jnp$int32)
       cand_resp_idx <- strenv$jnp$take(cand_map, party_idx_arr, axis = 0L)
       is_known <- cand_resp_idx >= 0L
       resp_arr <- strenv$jnp$array(resp_party_idx)
@@ -4044,6 +4180,14 @@ add_party_rel_tokens <- function(tokens,
       strenv$jnp$reshape(rel_vec, list(1L, dims))
     }
     rel_tok <- neural_add_token_family_embedding(rel_tok, "relation", model_info, params)
+    if (!is.null(context_weight)) {
+      rel_scale <- if (tok_ndim == 3L) {
+        strenv$jnp$reshape(context_weight, list(tokens$shape[[1]], 1L, 1L))
+      } else {
+        strenv$jnp$reshape(context_weight, list(1L, 1L))
+      }
+      rel_tok <- rel_tok * rel_scale
+    }
     tokens <- strenv$jnp$concatenate(list(tokens, rel_tok),
                                      axis = if (tok_ndim == 3L) 1L else 0L)
   }
@@ -4063,7 +4207,8 @@ add_context_tokens <- function(model_info,
                                time_embedding = NULL,
                                params = NULL,
                                batch = FALSE,
-                               return_mask = FALSE){
+                               return_mask = FALSE,
+                               context_present = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -4094,6 +4239,10 @@ add_context_tokens <- function(model_info,
     } else {
       stage_idx_use <- strenv$jnp$atleast_1d(stage_idx)
     }
+    stage_idx_use <- strenv$jnp$maximum(
+      strenv$jnp$astype(stage_idx_use, strenv$jnp$int32),
+      ai(0L)
+    )
   }
 
   matchup_idx_use <- NULL
@@ -4104,6 +4253,17 @@ add_context_tokens <- function(model_info,
   N_batch <- 1L
   if (is_batch) {
     N_batch <- tryCatch(ai(resp_party_idx_use$shape[[1L]]), error = function(e) 1L)
+  }
+  context_weight <- neural_context_present_float(
+    resp_party_idx = resp_party_idx_use,
+    context_present = context_present,
+    model_info = model_info,
+    n_batch = N_batch
+  )
+  context_token_mask <- if (is.null(context_weight)) {
+    strenv$jnp$ones(list(N_batch, 1L), dtype = strenv$dtj)
+  } else {
+    strenv$jnp$reshape(context_weight, list(N_batch, 1L))
   }
 
   experiment_idx_use <- experiment_idx
@@ -4233,31 +4393,25 @@ add_context_tokens <- function(model_info,
     stage_vec <- params$E_stage[resp_party_idx_use, stage_idx_use]
     stage_tok <- strenv$jnp$reshape(stage_vec, list(-1L, 1L, dims))
     stage_tok <- neural_add_token_family_embedding(stage_tok, "stage", model_info, params)
+    stage_tok <- stage_tok * strenv$jnp$reshape(context_token_mask, list(N_batch, 1L, 1L))
     token_list[[length(token_list) + 1L]] <- stage_tok
-    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
-      list(N_batch, 1L),
-      dtype = strenv$dtj
-    )
+    token_mask_list[[length(token_mask_list) + 1L]] <- context_token_mask
   }
   if (!is.null(params$E_resp_party)) {
     resp_vec <- strenv$jnp$take(params$E_resp_party, resp_party_idx_use, axis = 0L)
     resp_tok <- strenv$jnp$reshape(resp_vec, list(-1L, 1L, dims))
     resp_tok <- neural_add_token_family_embedding(resp_tok, "resp_party", model_info, params)
+    resp_tok <- resp_tok * strenv$jnp$reshape(context_token_mask, list(N_batch, 1L, 1L))
     token_list[[length(token_list) + 1L]] <- resp_tok
-    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
-      list(N_batch, 1L),
-      dtype = strenv$dtj
-    )
+    token_mask_list[[length(token_mask_list) + 1L]] <- context_token_mask
   }
   if (!is.null(params$E_matchup) && !is.null(matchup_idx_use)) {
     matchup_vec <- strenv$jnp$take(params$E_matchup, matchup_idx_use, axis = 0L)
     matchup_tok <- strenv$jnp$reshape(matchup_vec, list(-1L, 1L, dims))
     matchup_tok <- neural_add_token_family_embedding(matchup_tok, "matchup", model_info, params)
+    matchup_tok <- matchup_tok * strenv$jnp$reshape(context_token_mask, list(N_batch, 1L, 1L))
     token_list[[length(token_list) + 1L]] <- matchup_tok
-    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
-      list(N_batch, 1L),
-      dtype = strenv$dtj
-    )
+    token_mask_list[[length(token_mask_list) + 1L]] <- context_token_mask
   }
   if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
       !is.null(params$E_covariate_start)) {
@@ -4518,7 +4672,8 @@ neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
                                                experiment_idx = NULL,
                                                factor_order = NULL,
                                                params = NULL,
-                                               return_mask = FALSE){
+                                               return_mask = FALSE,
+                                               context_present = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -4587,16 +4742,27 @@ neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
                                  resp_party_idx = resp_party_idx,
                                  model_info = model_info,
                                  params = params,
-                                 require_party = FALSE)
+                                 require_party = FALSE,
+                                 context_present = context_present)
   if (!isTRUE(return_mask)) {
     return(tokens)
   }
   width_after_aux <- ai(tokens$shape[[2]])
   if (width_after_aux > width_before_aux) {
+    aux_present <- neural_context_present_float(
+      party_idx = party_idx,
+      resp_party_idx = resp_party_idx,
+      context_present = context_present,
+      model_info = model_info,
+      n_batch = n_batch
+    )
     aux_mask <- strenv$jnp$ones(
       list(n_batch, ai(width_after_aux - width_before_aux)),
       dtype = strenv$dtj
     )
+    if (!is.null(aux_present)) {
+      aux_mask <- aux_mask * strenv$jnp$reshape(aux_present, list(n_batch, 1L))
+    }
     token_mask <- strenv$jnp$concatenate(list(token_mask, aux_mask), axis = 1L)
   }
   list(tokens = tokens, mask = token_mask)
@@ -4613,7 +4779,8 @@ neural_build_context_tokens_batch <- function(model_info,
                                               place_embedding = NULL,
                                               time_embedding = NULL,
                                               params = NULL,
-                                              return_mask = FALSE){
+                                              return_mask = FALSE,
+                                              context_present = NULL){
   add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
@@ -4626,7 +4793,8 @@ neural_build_context_tokens_batch <- function(model_info,
                      time_embedding = time_embedding,
                      params = params,
                      batch = TRUE,
-                     return_mask = return_mask)
+                     return_mask = return_mask,
+                     context_present = context_present)
 }
 
 neural_build_factor_span_tokens_soft <- function(pi_vec,
@@ -4809,7 +4977,8 @@ neural_build_factor_span_tokens_soft <- function(pi_vec,
 
 neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model_info, params = NULL,
                                                use_role = FALSE, resp_party_idx = NULL,
-                                               factor_order = NULL, return_mask = FALSE){
+                                               factor_order = NULL, return_mask = FALSE,
+                                               context_present = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -4885,13 +5054,24 @@ neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model
                                  use_role = use_role,
                                  resp_party_idx = resp_party_idx,
                                  model_info = model_info,
-                                 params = params)
+                                 params = params,
+                                 context_present = context_present)
   if (!isTRUE(return_mask)) {
     return(tokens)
   }
   width_after_aux <- ai(tokens$shape[[2]])
   if (width_after_aux > width_before_aux) {
+    aux_present <- neural_context_present_float(
+      party_idx = party_idx,
+      resp_party_idx = resp_party_idx,
+      context_present = context_present,
+      model_info = model_info,
+      n_batch = 1L
+    )
     aux_mask <- strenv$jnp$ones(list(1L, ai(width_after_aux - width_before_aux)), dtype = strenv$dtj)
+    if (!is.null(aux_present)) {
+      aux_mask <- aux_mask * strenv$jnp$reshape(aux_present, list(1L, 1L))
+    }
     token_mask <- strenv$jnp$concatenate(list(token_mask, aux_mask), axis = 1L)
   }
   list(tokens = tokens, mask = token_mask)
@@ -4908,7 +5088,8 @@ neural_build_context_tokens <- function(model_info,
                                         place_embedding = NULL,
                                         time_embedding = NULL,
                                         params = NULL,
-                                        return_mask = FALSE){
+                                        return_mask = FALSE,
+                                        context_present = NULL){
   add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
@@ -4921,7 +5102,8 @@ neural_build_context_tokens <- function(model_info,
                      time_embedding = time_embedding,
                      params = params,
                      batch = FALSE,
-                     return_mask = return_mask)
+                     return_mask = return_mask,
+                     context_present = context_present)
 }
 
 neural_build_choice_token <- function(model_info, params = NULL){
@@ -5133,6 +5315,7 @@ neural_encode_candidate_core_prepared <- function(params,
                                                   factor_order = NULL,
                                                   stage_idx = NULL,
                                                   matchup_idx = NULL,
+                                                  context_present = NULL,
                                                   return_tokens = FALSE) {
   X_idx <- neural_batch_matrix_jnp(X_idx, dtype = strenv$jnp$int32)
   party_idx <- neural_batch_vector_jnp(party_idx, dtype = strenv$jnp$int32)
@@ -5164,6 +5347,9 @@ neural_encode_candidate_core_prepared <- function(params,
   if (!is.null(matchup_idx)) {
     matchup_idx <- neural_batch_vector_jnp(matchup_idx, dtype = strenv$jnp$int32)
   }
+  if (!is.null(context_present)) {
+    context_present <- neural_batch_vector_jnp(context_present, dtype = strenv$dtj)
+  }
   n_batch <- ai(X_idx$shape[[1]])
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
   choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
@@ -5179,7 +5365,8 @@ neural_encode_candidate_core_prepared <- function(params,
     place_embedding = place_embedding,
     time_embedding = time_embedding,
     params = params,
-    return_mask = TRUE
+    return_mask = TRUE,
+    context_present = context_present
   )
   ctx_tokens <- ctx_info$tokens %||% NULL
   ctx_mask <- ctx_info$mask %||% NULL
@@ -5191,7 +5378,8 @@ neural_encode_candidate_core_prepared <- function(params,
     experiment_idx = experiment_idx,
     factor_order = factor_order,
     params = params,
-    return_mask = TRUE
+    return_mask = TRUE,
+    context_present = context_present
   )
   cand_tokens <- cand_info$tokens
   cand_mask <- cand_info$mask
@@ -5241,7 +5429,8 @@ neural_predict_pair_cross_core_prepared <- function(params,
                                                     time_embedding = NULL,
                                                     factor_order = NULL,
                                                     stage_idx,
-                                                    matchup_idx = NULL) {
+                                                    matchup_idx = NULL,
+                                                    context_present = NULL) {
   Xl <- neural_batch_matrix_jnp(Xl, dtype = strenv$jnp$int32)
   Xr <- neural_batch_matrix_jnp(Xr, dtype = strenv$jnp$int32)
   pl <- neural_batch_vector_jnp(pl, dtype = strenv$jnp$int32)
@@ -5272,6 +5461,9 @@ neural_predict_pair_cross_core_prepared <- function(params,
   if (!is.null(matchup_idx)) {
     matchup_idx <- neural_batch_vector_jnp(matchup_idx, dtype = strenv$jnp$int32)
   }
+  if (!is.null(context_present)) {
+    context_present <- neural_batch_vector_jnp(context_present, dtype = strenv$dtj)
+  }
   n_batch <- ai(Xl$shape[[1]])
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
   choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
@@ -5287,7 +5479,8 @@ neural_predict_pair_cross_core_prepared <- function(params,
     place_embedding = place_embedding,
     time_embedding = time_embedding,
     params = params,
-    return_mask = TRUE
+    return_mask = TRUE,
+    context_present = context_present
   )
   ctx_tokens <- ctx_info$tokens %||% NULL
   ctx_mask <- ctx_info$mask %||% NULL
@@ -5299,7 +5492,8 @@ neural_predict_pair_cross_core_prepared <- function(params,
     experiment_idx = experiment_idx,
     factor_order = factor_order,
     params = params,
-    return_mask = TRUE
+    return_mask = TRUE,
+    context_present = context_present
   )
   left_tokens <- neural_add_segment_embedding(
     left_info$tokens,
@@ -5315,7 +5509,8 @@ neural_predict_pair_cross_core_prepared <- function(params,
     experiment_idx = experiment_idx,
     factor_order = factor_order,
     params = params,
-    return_mask = TRUE
+    return_mask = TRUE,
+    context_present = context_present
   )
   right_tokens <- neural_add_segment_embedding(
     right_info$tokens,
@@ -5402,6 +5597,7 @@ neural_predict_pair_core_prepared <- function(params,
   if (!is.null(params$E_matchup)) {
     matchup_idx <- neural_matchup_index(pl, pr, model_info)
   }
+  context_present <- neural_pair_context_present(pl, pr, resp_p, model_info)
 
   if (isTRUE(use_cross_encoder)) {
     logits <- neural_predict_pair_cross_core_prepared(
@@ -5420,7 +5616,8 @@ neural_predict_pair_core_prepared <- function(params,
       time_embedding = time_embedding,
       factor_order = factor_order,
       stage_idx = stage_idx,
-      matchup_idx = matchup_idx
+      matchup_idx = matchup_idx,
+      context_present = context_present
     )
   } else {
     n_batch <- ai(Xl$shape[[1]])
@@ -5454,6 +5651,10 @@ neural_predict_pair_core_prepared <- function(params,
     matchup_all <- if (is.null(matchup_idx)) NULL else {
       strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
     }
+    context_present_all <- strenv$jnp$concatenate(
+      list(context_present, context_present),
+      axis = 0L
+    )
 
     if (isTRUE(use_cross_attn)) {
       enc_all <- neural_encode_candidate_core_prepared(
@@ -5471,6 +5672,7 @@ neural_predict_pair_core_prepared <- function(params,
         factor_order = factor_order_all,
         stage_idx = stage_all,
         matchup_idx = matchup_all,
+        context_present = context_present_all,
         return_tokens = TRUE
       )
       phi_all <- enc_all$phi
@@ -5492,6 +5694,7 @@ neural_predict_pair_core_prepared <- function(params,
         factor_order = factor_order_all,
         stage_idx = stage_all,
         matchup_idx = matchup_all,
+        context_present = context_present_all,
         return_tokens = FALSE
       )
       cand_all <- NULL
@@ -5897,7 +6100,8 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
                                          stage_idx = NULL,
                                          matchup_idx = NULL,
                                          resp_cov_vec = NULL,
-                                         params = NULL, use_role = FALSE){
+                                         params = NULL, use_role = FALSE,
+                                         context_present = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -5909,13 +6113,15 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
                                            matchup_idx = matchup_idx,
                                            resp_cov_vec = resp_cov_vec,
                                            params = params,
-                                           return_mask = TRUE)
+                                           return_mask = TRUE,
+                                           context_present = context_present)
   resp_tokens <- resp_info$tokens %||% NULL
   resp_mask <- resp_info$mask %||% NULL
   cand_info <- neural_build_candidate_tokens_soft(pi_vec, party_idx, 0L, model_info, params,
                                                   use_role = use_role,
                                                   resp_party_idx = resp_party_idx,
-                                                  return_mask = TRUE)
+                                                  return_mask = TRUE,
+                                                  context_present = context_present)
   cand_tokens <- cand_info$tokens
   cand_mask <- cand_info$mask
   seq_info <- neural_pack_candidate_sequence(
@@ -5949,9 +6155,18 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
                                             resp_cov_vec = NULL,
                                             params = NULL,
                                             use_role = FALSE,
-                                            return_tokens = FALSE){
+                                            return_tokens = FALSE,
+                                            context_present = NULL){
   if (is.null(params)) {
     params <- model_info$params
+  }
+  if (is.null(context_present)) {
+    context_present <- neural_pair_context_present(
+      party_left_idx,
+      party_right_idx,
+      resp_party_idx,
+      model_info
+    )
   }
   choice_tok <- neural_build_choice_token(model_info, params)
   choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
@@ -5961,17 +6176,20 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
                                            matchup_idx = matchup_idx,
                                            resp_cov_vec = resp_cov_vec,
                                            params = params,
-                                           return_mask = TRUE)
+                                           return_mask = TRUE,
+                                           context_present = context_present)
   resp_tokens <- resp_info$tokens %||% NULL
   resp_mask <- resp_info$mask %||% NULL
   left_info <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
                                                   use_role = use_role,
                                                   resp_party_idx = resp_party_idx,
-                                                  return_mask = TRUE)
+                                                  return_mask = TRUE,
+                                                  context_present = context_present)
   right_info <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 0L, model_info, params,
                                                    use_role = use_role,
                                                    resp_party_idx = resp_party_idx,
-                                                   return_mask = TRUE)
+                                                   return_mask = TRUE,
+                                                   context_present = context_present)
   left_tokens <- left_info$tokens
   right_tokens <- right_info$tokens
   left_mask <- left_info$mask
@@ -6066,6 +6284,12 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
   if (!is.null(params$E_matchup)) {
     matchup_idx <- neural_matchup_index(party_left_idx, party_right_idx, model_info)
   }
+  context_present <- neural_pair_context_present(
+    party_left_idx,
+    party_right_idx,
+    resp_party_idx,
+    model_info
+  )
   if (isTRUE(use_cross_encoder)) {
     choice_tok <- neural_build_choice_token(model_info, params)
     choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
@@ -6075,15 +6299,18 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                             matchup_idx = matchup_idx,
                                             resp_cov_vec = resp_cov_vec,
                                             params = params,
-                                            return_mask = TRUE)
+                                            return_mask = TRUE,
+                                            context_present = context_present)
     ctx_tokens <- ctx_info$tokens %||% NULL
     ctx_mask <- ctx_info$mask %||% NULL
     left_info <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
                                                     resp_party_idx = resp_party_idx,
-                                                    return_mask = TRUE)
+                                                    return_mask = TRUE,
+                                                    context_present = context_present)
     right_info <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 1L, model_info, params,
                                                      resp_party_idx = resp_party_idx,
-                                                     return_mask = TRUE)
+                                                     return_mask = TRUE,
+                                                     context_present = context_present)
     left_tokens <- neural_add_segment_embedding(
       left_info$tokens,
       0L,
@@ -6131,6 +6358,7 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                                 matchup_idx = matchup_idx,
                                                 resp_cov_vec = resp_cov_vec,
                                                 params = params,
+                                                context_present = context_present,
                                                 return_tokens = isTRUE(use_cross_attn))
     phi_left <- phi_pair$phi_left
     phi_right <- phi_pair$phi_right
@@ -7160,6 +7388,7 @@ generate_ModelOutcome_neural <- function(){
   stage_context_enabled <- FALSE
   stage_diagnostics <- list(
     pairwise_context_mode = pairwise_context_mode,
+    stage_context_policy = "masked_optional",
     candidate_group_context = isTRUE(has_candidate_group_context),
     respondent_group_context = isTRUE(has_respondent_group_context),
     relation_context = isTRUE(has_relation_context),
@@ -7174,11 +7403,21 @@ generate_ModelOutcome_neural <- function(){
   )
   if (pairwise_mode) {
     stage_is_primary <- party_left == party_right
-    stage_rows_use <- if (isTRUE(universal_enabled) && !is.null(universal_task_mode_use)) {
+    pairwise_rows_use <- if (isTRUE(universal_enabled) && !is.null(universal_task_mode_use)) {
       universal_task_mode_use == "pairwise"
     } else {
       rep(TRUE, length(stage_is_primary))
     }
+    context_present_pair <- !is.na(party_left) &
+      !is.na(party_right) &
+      !is.na(resp_party_use) &
+      party_left != party_missing_index &
+      party_right != party_missing_index &
+      resp_party_use != resp_party_missing_index
+    context_present_pair[is.na(context_present_pair)] <- FALSE
+    n_context_present_pairs <- sum(pairwise_rows_use & context_present_pair, na.rm = TRUE)
+    n_context_absent_pairs <- sum(pairwise_rows_use & !context_present_pair, na.rm = TRUE)
+    stage_rows_use <- pairwise_rows_use & context_present_pair
     n_total <- sum(stage_rows_use, na.rm = TRUE)
     n_primary <- if (n_total > 0L) {
       sum(stage_is_primary[stage_rows_use], na.rm = TRUE)
@@ -7245,9 +7484,12 @@ generate_ModelOutcome_neural <- function(){
       )
     }
 
-    stage_diagnostics <- c(stage_diagnostics, list(
+    stage_updates <- list(
+      stage_context_policy = "masked_optional",
       n_primary = as.integer(n_primary),
       n_general = as.integer(n_general),
+      n_context_present_pairs = as.integer(n_context_present_pairs),
+      n_context_absent_pairs = as.integer(n_context_absent_pairs),
       pct_primary = pct_primary,
       resp_party_stage_table = stage_table,
       single_stage_only = single_stage_only,
@@ -7258,7 +7500,8 @@ generate_ModelOutcome_neural <- function(){
       stage_context_enabled = stage_context_enabled,
       stage_context_reason = stage_context_reason,
       pairwise_context_mode = pairwise_context_mode
-    ))
+    )
+    stage_diagnostics[names(stage_updates)] <- stage_updates
   }
   use_matchup_token <- isTRUE(pairwise_mode) &&
     isTRUE(stage_context_enabled) &&
@@ -9252,17 +9495,21 @@ generate_ModelOutcome_neural <- function(){
       has_matchup_context = use_matchup_token,
       party_missing_label = party_missing_label,
       resp_party_missing_label = resp_party_missing_label,
-      n_resp_party_levels = n_resp_party_levels
+      n_resp_party_levels = n_resp_party_levels,
+      party_missing_index = party_missing_index,
+      resp_party_missing_index = resp_party_missing_index,
+      context_present_masking = TRUE
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
-                                return_mask = FALSE) {
+                                return_mask = FALSE, context_present = NULL) {
       neural_build_candidate_tokens_hard(X_idx, party_idx,
                                          model_info = model_info_local,
                                          resp_party_idx = resp_p,
                                          experiment_idx = experiment_idx,
                                          params = params_view,
-                                         return_mask = return_mask)
+                                         return_mask = return_mask,
+                                         context_present = context_present)
     }
 
     add_segment_embedding <- function(tokens, segment_idx) {
@@ -9289,7 +9536,8 @@ generate_ModelOutcome_neural <- function(){
                                     resp_c_present = NULL,
                                     experiment_idx = NULL,
                                     matchup_idx = NULL,
-                                    return_mask = FALSE) {
+                                    return_mask = FALSE,
+                                    context_present = NULL) {
       neural_build_context_tokens_batch(model_info = model_info_local,
                                         resp_party_idx = resp_p,
                                         stage_idx = stage_idx,
@@ -9298,7 +9546,8 @@ generate_ModelOutcome_neural <- function(){
                                         resp_cov_present = resp_c_present,
                                         experiment_idx = experiment_idx,
                                         params = params_view,
-                                        return_mask = return_mask)
+                                        return_mask = return_mask,
+                                        context_present = context_present)
     }
 
     build_sep_token <- function(N_batch) {
@@ -9308,7 +9557,8 @@ generate_ModelOutcome_neural <- function(){
     }
 
     encode_pair_cross <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
-                                  experiment_idx = NULL, stage_idx, matchup_idx = NULL) {
+                                  experiment_idx = NULL, stage_idx, matchup_idx = NULL,
+                                  context_present = NULL) {
       N_batch <- ai(Xl$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -9320,12 +9570,17 @@ generate_ModelOutcome_neural <- function(){
         resp_c_present,
         experiment_idx,
         matchup_idx,
-        return_mask = TRUE
+        return_mask = TRUE,
+        context_present = context_present
       )
       ctx_tokens <- ctx_info$tokens %||% NULL
       ctx_mask <- ctx_info$mask %||% NULL
-      left_info <- embed_candidate(Xl, pl, resp_p, experiment_idx, return_mask = TRUE)
-      right_info <- embed_candidate(Xr, pr, resp_p, experiment_idx, return_mask = TRUE)
+      left_info <- embed_candidate(Xl, pl, resp_p, experiment_idx,
+                                   return_mask = TRUE,
+                                   context_present = context_present)
+      right_info <- embed_candidate(Xr, pr, resp_p, experiment_idx,
+                                    return_mask = TRUE,
+                                    context_present = context_present)
       left_tokens <- add_segment_embedding(left_info$tokens, 0L)
       right_tokens <- add_segment_embedding(right_info$tokens, 1L)
       sep_tok <- build_sep_token(N_batch)
@@ -9352,7 +9607,7 @@ generate_ModelOutcome_neural <- function(){
 
     encode_candidate <- function(Xa, pa, resp_p, resp_c, resp_c_present = NULL,
                                  experiment_idx = NULL, stage_idx, matchup_idx = NULL,
-                                 return_tokens = FALSE) {
+                                 return_tokens = FALSE, context_present = NULL) {
       N_batch <- ai(Xa$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -9364,11 +9619,14 @@ generate_ModelOutcome_neural <- function(){
         resp_c_present,
         experiment_idx,
         matchup_idx,
-        return_mask = TRUE
+        return_mask = TRUE,
+        context_present = context_present
       )
       ctx_tokens <- ctx_info$tokens %||% NULL
       ctx_mask <- ctx_info$mask %||% NULL
-      cand_info <- embed_candidate(Xa, pa, resp_p, experiment_idx, return_mask = TRUE)
+      cand_info <- embed_candidate(Xa, pa, resp_p, experiment_idx,
+                                   return_mask = TRUE,
+                                   context_present = context_present)
       cand_tokens <- cand_info$tokens
       cand_mask <- cand_info$mask
       seq_info <- neural_pack_candidate_sequence(
@@ -9397,7 +9655,8 @@ generate_ModelOutcome_neural <- function(){
     }
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
-                                      experiment_idx = NULL, stage_idx, matchup_idx = NULL) {
+                                      experiment_idx = NULL, stage_idx, matchup_idx = NULL,
+                                      context_present = NULL) {
       N_batch <- ai(Xl$shape[[1]])
       X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
       p_all <- strenv$jnp$concatenate(list(pl, pr), axis = 0L)
@@ -9407,16 +9666,21 @@ generate_ModelOutcome_neural <- function(){
       experiment_idx_all <- if (is.null(experiment_idx)) NULL else strenv$jnp$concatenate(list(experiment_idx, experiment_idx), axis = 0L)
       stage_all <- if (is.null(stage_idx)) NULL else strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
       matchup_all <- if (is.null(matchup_idx)) NULL else strenv$jnp$concatenate(list(matchup_idx, matchup_idx), axis = 0L)
+      context_present_all <- if (is.null(context_present)) NULL else {
+        strenv$jnp$concatenate(list(context_present, context_present), axis = 0L)
+      }
       if (isTRUE(use_cross_attn)) {
         enc_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
                                     resp_c_present_all, experiment_idx_all,
-                                    stage_all, matchup_all, return_tokens = TRUE)
+                                    stage_all, matchup_all, return_tokens = TRUE,
+                                    context_present = context_present_all)
         phi_all <- enc_all$phi
         cand_all <- enc_all$cand_tokens_out
       } else {
         phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
                                     resp_c_present_all, experiment_idx_all,
-                                    stage_all, matchup_all)
+                                    stage_all, matchup_all,
+                                    context_present = context_present_all)
         cand_all <- NULL
       }
       idx_left <- strenv$jnp$arange(N_batch)
@@ -9444,14 +9708,17 @@ generate_ModelOutcome_neural <- function(){
       if (isTRUE(use_matchup_token)) {
         matchup_idx <- compute_matchup_idx(pl, pr)
       }
+      context_present <- neural_pair_context_present(pl, pr, resp_p, model_info_local)
       if (isTRUE(use_cross_encoder)) {
         logits <- encode_pair_cross(Xl, Xr, pl, pr, resp_p, resp_c,
                                     resp_c_present, experiment_idx,
-                                    stage_idx, matchup_idx)
+                                    stage_idx, matchup_idx,
+                                    context_present = context_present)
       } else {
         phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c,
                                           resp_c_present, experiment_idx,
-                                          stage_idx, matchup_idx)
+                                          stage_idx, matchup_idx,
+                                          context_present = context_present)
         phi_l <- phi_pair$phi_left
         phi_r <- phi_pair$phi_right
         if (isTRUE(use_cross_attn)) {
@@ -9635,17 +9902,21 @@ generate_ModelOutcome_neural <- function(){
       has_matchup_context = use_matchup_token,
       party_missing_label = party_missing_label,
       resp_party_missing_label = resp_party_missing_label,
-      n_resp_party_levels = n_resp_party_levels
+      n_resp_party_levels = n_resp_party_levels,
+      party_missing_index = party_missing_index,
+      resp_party_missing_index = resp_party_missing_index,
+      context_present_masking = TRUE
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
-                                return_mask = FALSE) {
+                                return_mask = FALSE, context_present = NULL) {
       neural_build_candidate_tokens_hard(X_idx, party_idx,
                                          model_info = model_info_local,
                                          resp_party_idx = resp_p,
                                          experiment_idx = experiment_idx,
                                          params = params_view,
-                                         return_mask = return_mask)
+                                         return_mask = return_mask,
+                                         context_present = context_present)
     }
 
     run_transformer <- function(tokens, token_mask = NULL, return_details = FALSE) {
@@ -10473,6 +10744,9 @@ generate_ModelOutcome_neural <- function(){
             stage_primary <- party_left == party_right
               if (length(stage_primary) == n_total) {
                 stage_primary <- stage_primary[successful_eval_idx]
+                stage_keep <- context_present_pair[successful_eval_idx]
+                stage_keep[is.na(stage_keep)] <- FALSE
+                stage_primary[!stage_keep] <- NA
                 by_stage <- list()
                 if (any(stage_primary, na.rm = TRUE)) {
                   idx0 <- which(stage_primary)
@@ -10977,7 +11251,10 @@ generate_ModelOutcome_neural <- function(){
     has_matchup_context = use_matchup_token,
     party_missing_label = party_missing_label,
     resp_party_missing_label = resp_party_missing_label,
-    n_resp_party_levels = n_resp_party_levels
+    n_resp_party_levels = n_resp_party_levels,
+    party_missing_index = party_missing_index,
+    resp_party_missing_index = resp_party_missing_index,
+    context_present_masking = TRUE
   )
   validation_model_info$factor_name_text <- factor_name_text
   validation_model_info$level_name_text <- level_name_text
@@ -13274,7 +13551,10 @@ generate_ModelOutcome_neural <- function(){
     has_matchup_context = use_matchup_token,
     party_missing_label = party_missing_label,
     resp_party_missing_label = resp_party_missing_label,
-    n_resp_party_levels = n_resp_party_levels
+    n_resp_party_levels = n_resp_party_levels,
+    party_missing_index = party_missing_index,
+    resp_party_missing_index = resp_party_missing_index,
+    context_present_masking = TRUE
   )
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
@@ -13736,6 +14016,9 @@ generate_ModelOutcome_neural <- function(){
         stage_primary <- party_left == party_right
         if (length(stage_primary) == length(Y_use)) {
           stage_primary <- stage_primary[eval_idx_in]
+          stage_keep <- context_present_pair[eval_idx_in]
+          stage_keep[is.na(stage_keep)] <- FALSE
+          stage_primary[!stage_keep] <- NA
           by_stage <- list()
           if (any(stage_primary, na.rm = TRUE)) {
             idx0 <- which(stage_primary)
@@ -13930,6 +14213,8 @@ generate_ModelOutcome_neural <- function(){
     n_resp_party_levels = ai(n_resp_party_levels),
     party_missing_label = party_missing_label,
     resp_party_missing_label = resp_party_missing_label,
+    party_missing_index = as.integer(party_missing_index),
+    resp_party_missing_index = as.integer(resp_party_missing_index),
     party_index_map = party_index_map,
     resp_party_index_map = resp_party_index_map,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
@@ -13990,6 +14275,7 @@ generate_ModelOutcome_neural <- function(){
     has_candidate_group_context = isTRUE(has_candidate_group_context),
     has_respondent_group_context = isTRUE(has_respondent_group_context),
     has_relation_token_context = isTRUE(has_relation_context),
+    context_present_masking = TRUE,
     has_stage_context = isTRUE(stage_context_enabled),
     has_matchup_context = isTRUE(use_matchup_token),
     has_stage_token = !is.null(ParamsMean$E_stage),
