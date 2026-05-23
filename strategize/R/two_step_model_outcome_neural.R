@@ -85,6 +85,108 @@ neural_matchup_context_enabled <- function(model_info = NULL) {
   neural_context_flag(model_info, "has_matchup_context", default = TRUE)
 }
 
+neural_place_context_enabled <- function(model_info = NULL) {
+  isTRUE(neural_context_flag(model_info, "place_context_enabled", default = FALSE)) ||
+    isTRUE(neural_context_flag(model_info, "has_place_context", default = FALSE))
+}
+
+neural_place_feature_names <- function() {
+  frequencies <- c(1L, 2L, 4L, 8L)
+  c(
+    "sphere_x",
+    "sphere_y",
+    "sphere_z",
+    unlist(lapply(frequencies, function(freq) {
+      paste0(
+        c("sin_x_", "cos_x_", "sin_y_", "cos_y_", "sin_z_", "cos_z_"),
+        freq
+      )
+    }), use.names = FALSE),
+    "missing_country"
+  )
+}
+
+neural_encode_place_context <- function(latitude, longitude, present = TRUE) {
+  feature_names <- neural_place_feature_names()
+  out <- stats::setNames(rep(0, length(feature_names)), feature_names)
+  lat <- suppressWarnings(as.numeric(latitude))
+  lon <- suppressWarnings(as.numeric(longitude))
+  if (!isTRUE(present) || length(lat) != 1L || length(lon) != 1L ||
+      is.na(lat) || is.na(lon) || !is.finite(lat) || !is.finite(lon)) {
+    out[["missing_country"]] <- 1
+    return(out)
+  }
+  lat_rad <- lat * pi / 180
+  lon_rad <- lon * pi / 180
+  sphere <- c(
+    sphere_x = cos(lat_rad) * cos(lon_rad),
+    sphere_y = cos(lat_rad) * sin(lon_rad),
+    sphere_z = sin(lat_rad)
+  )
+  out[names(sphere)] <- sphere
+  for (freq in c(1L, 2L, 4L, 8L)) {
+    angle <- freq * pi * sphere
+    out[[paste0("sin_x_", freq)]] <- sin(angle[["sphere_x"]])
+    out[[paste0("cos_x_", freq)]] <- cos(angle[["sphere_x"]])
+    out[[paste0("sin_y_", freq)]] <- sin(angle[["sphere_y"]])
+    out[[paste0("cos_y_", freq)]] <- cos(angle[["sphere_y"]])
+    out[[paste0("sin_z_", freq)]] <- sin(angle[["sphere_z"]])
+    out[[paste0("cos_z_", freq)]] <- cos(angle[["sphere_z"]])
+  }
+  out
+}
+
+neural_default_place_context_matrix <- function(key = "__missing_country__") {
+  matrix(
+    neural_encode_place_context(NA_real_, NA_real_, present = FALSE),
+    nrow = 1L,
+    dimnames = list(as.character(key %||% "__missing_country__"), neural_place_feature_names())
+  )
+}
+
+neural_time_context_enabled <- function(model_info = NULL) {
+  isTRUE(neural_context_flag(model_info, "time_context_enabled", default = FALSE)) ||
+    isTRUE(neural_context_flag(model_info, "has_time_context", default = FALSE))
+}
+
+neural_time_feature_names <- function() {
+  periods <- c(2L, 5L, 10L, 20L, 50L, 100L)
+  c(
+    "linear_year_2000_25",
+    unlist(lapply(periods, function(period) {
+      paste0(c("sin_period_", "cos_period_"), period)
+    }), use.names = FALSE),
+    "missing_year"
+  )
+}
+
+neural_encode_time_context <- function(year, present = TRUE) {
+  feature_names <- neural_time_feature_names()
+  out <- stats::setNames(rep(0, length(feature_names)), feature_names)
+  year_num <- suppressWarnings(as.numeric(year))
+  if (!isTRUE(present) || length(year_num) != 1L ||
+      is.na(year_num) || !is.finite(year_num)) {
+    out[["missing_year"]] <- 1
+    return(out)
+  }
+  centered <- year_num - 2000
+  out[["linear_year_2000_25"]] <- centered / 25
+  for (period in c(2L, 5L, 10L, 20L, 50L, 100L)) {
+    angle <- 2 * pi * centered / period
+    out[[paste0("sin_period_", period)]] <- sin(angle)
+    out[[paste0("cos_period_", period)]] <- cos(angle)
+  }
+  out
+}
+
+neural_default_time_context_matrix <- function(key = "__missing_year__") {
+  matrix(
+    neural_encode_time_context(NA_real_, present = FALSE),
+    nrow = 1L,
+    dimnames = list(as.character(key %||% "__missing_year__"), neural_time_feature_names())
+  )
+}
+
 neural_missing_group_label <- function(kind = c("candidate", "respondent")) {
   kind <- match.arg(kind)
   if (identical(kind, "candidate")) {
@@ -1028,6 +1130,12 @@ neural_build_param_schema <- function(params,
   if (!is.null(params$W_experiment_text)) {
     param_names <- c(param_names, "W_experiment_text")
   }
+  if (!is.null(params$W_place_context)) {
+    param_names <- c(param_names, "W_place_context")
+  }
+  if (!is.null(params$W_time_context)) {
+    param_names <- c(param_names, "W_time_context")
+  }
   if (!is.null(params$M_cross)) {
     param_names <- c(param_names, "M_cross")
   }
@@ -1418,7 +1526,19 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  experiment_description_text = NULL,
                                                  experiment_description_present = NULL,
                                                  default_experiment_text = NULL,
-                                                 default_experiment_text_present = FALSE) {
+                                                 default_experiment_text_present = FALSE,
+                                                 place_embedding = NULL,
+                                                 place_present = NULL,
+                                                 place_context_enabled = FALSE,
+                                                 place_feature_names = NULL,
+                                                 default_place_embedding = NULL,
+                                                 default_place_present = FALSE,
+                                                 time_embedding = NULL,
+                                                 time_present = NULL,
+                                                 time_context_enabled = FALSE,
+                                                 time_feature_names = NULL,
+                                                 default_time_embedding = NULL,
+                                                 default_time_present = FALSE) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
     if (is.null(x)) {
@@ -1501,7 +1621,19 @@ neural_make_runtime_token_model_info <- function(model_dims,
     experiment_description_text = text_matrix(experiment_description_text),
     experiment_description_present = neural_as_jnp_vector(experiment_description_present, dtype = strenv$dtj),
     default_experiment_text = text_matrix(default_experiment_text),
-    default_experiment_text_present = isTRUE(default_experiment_text_present)
+    default_experiment_text_present = isTRUE(default_experiment_text_present),
+    place_embedding = text_matrix(place_embedding),
+    place_present = neural_as_jnp_vector(place_present, dtype = strenv$dtj),
+    place_context_enabled = isTRUE(place_context_enabled),
+    place_feature_names = as.character(place_feature_names %||% neural_place_feature_names()),
+    default_place_embedding = text_matrix(default_place_embedding),
+    default_place_present = isTRUE(default_place_present),
+    time_embedding = text_matrix(time_embedding),
+    time_present = neural_as_jnp_vector(time_present, dtype = strenv$dtj),
+    time_context_enabled = isTRUE(time_context_enabled),
+    time_feature_names = as.character(time_feature_names %||% neural_time_feature_names()),
+    default_time_embedding = text_matrix(default_time_embedding),
+    default_time_present = isTRUE(default_time_present)
   )
 }
 
@@ -1974,6 +2106,10 @@ neural_model_jit_cache_key <- function(model_info) {
     neural_cross_encoder_mode(model_info),
     tryCatch(as.character(model_info$likelihood), error = function(e) "na"),
     tryCatch(as.character(model_info$experiment_token_mode), error = function(e) "na"),
+    tryCatch(as.character(model_info$place_context_enabled), error = function(e) "na"),
+    tryCatch(as.character(model_info$place_context_dim), error = function(e) "na"),
+    tryCatch(as.character(model_info$time_context_enabled), error = function(e) "na"),
+    tryCatch(as.character(model_info$time_context_dim), error = function(e) "na"),
     tryCatch(as.character(model_info$factor_tokenization), error = function(e) "na"),
     tryCatch(as.character(model_info$max_factor_tokens), error = function(e) "na"),
     tryCatch(paste(dim(as.matrix(model_info$factor_struct_matrix)), collapse = "x"), error = function(e) "na"),
@@ -2262,6 +2398,8 @@ neural_active_candidate_token_budget <- function(model_info) {
 
 neural_active_context_token_budget <- function(model_info) {
   base_tokens <- as.integer(isTRUE(model_info$has_experiment_token)) +
+    as.integer(neural_place_context_enabled(model_info)) +
+    as.integer(neural_time_context_enabled(model_info)) +
     as.integer(isTRUE(model_info$has_stage_token)) +
     as.integer(neural_respondent_group_context_enabled(model_info)) +
     as.integer(isTRUE(model_info$has_matchup_token))
@@ -2775,7 +2913,9 @@ neural_token_family_levels <- function(include_candidate_group = TRUE,
                                        include_relation = TRUE,
                                        include_stage = TRUE,
                                        include_respondent_group = TRUE,
-                                       include_matchup = TRUE) {
+                                       include_matchup = TRUE,
+                                       include_place = FALSE,
+                                       include_time = FALSE) {
   levels <- c(
     "factor_candidate",
     "covariate",
@@ -2810,6 +2950,17 @@ neural_token_family_levels <- function(include_candidate_group = TRUE,
       match("experiment", levels)
     }
     levels <- append(levels, "matchup", after = insert_after)
+  }
+  if (isTRUE(include_place)) {
+    levels <- append(levels, "place", after = match("experiment", levels))
+  }
+  if (isTRUE(include_time)) {
+    insert_after <- if (isTRUE(include_place)) {
+      match("place", levels)
+    } else {
+      match("experiment", levels)
+    }
+    levels <- append(levels, "time", after = insert_after)
   }
   levels
 }
@@ -3221,6 +3372,96 @@ neural_project_experiment_text <- function(model_info,
     }
   }
   NULL
+}
+
+neural_prepare_context_matrix <- function(context_matrix, n_batch = 1L) {
+  context_jnp <- neural_text_matrix_jnp(context_matrix)
+  if (is.null(context_jnp)) {
+    return(NULL)
+  }
+  n_batch <- as.integer(n_batch %||% 1L)
+  if (ai(context_jnp$shape[[1]]) == 1L && n_batch > 1L) {
+    context_jnp <- context_jnp * strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)
+  }
+  context_jnp
+}
+
+neural_project_place_context <- function(model_info,
+                                         params,
+                                         experiment_idx = NULL,
+                                         place_embedding = NULL,
+                                         n_batch = 1L) {
+  if (!isTRUE(neural_place_context_enabled(model_info)) ||
+      is.null(params$W_place_context)) {
+    return(NULL)
+  }
+  place_mat <- NULL
+  if (!is.null(place_embedding)) {
+    place_mat <- neural_prepare_context_matrix(place_embedding, n_batch = n_batch)
+  } else if (!is.null(experiment_idx) && !is.null(model_info$place_embedding)) {
+    place_proj_all <- neural_project_text_matrix(
+      model_info$place_embedding,
+      params$W_place_context
+    )
+    if (!is.null(place_proj_all)) {
+      return(strenv$jnp$take(place_proj_all, experiment_idx, axis = 0L))
+    }
+  }
+  if (is.null(place_mat) && !is.null(model_info$default_place_embedding)) {
+    place_mat <- neural_prepare_context_matrix(
+      model_info$default_place_embedding,
+      n_batch = n_batch
+    )
+  }
+  if (is.null(place_mat)) {
+    place_mat <- neural_prepare_context_matrix(
+      neural_default_place_context_matrix(),
+      n_batch = n_batch
+    )
+  }
+  if (is.null(place_mat)) {
+    return(NULL)
+  }
+  strenv$jnp$einsum("td,dm->tm", place_mat, params$W_place_context)
+}
+
+neural_project_time_context <- function(model_info,
+                                        params,
+                                        experiment_idx = NULL,
+                                        time_embedding = NULL,
+                                        n_batch = 1L) {
+  if (!isTRUE(neural_time_context_enabled(model_info)) ||
+      is.null(params$W_time_context)) {
+    return(NULL)
+  }
+  time_mat <- NULL
+  if (!is.null(time_embedding)) {
+    time_mat <- neural_prepare_context_matrix(time_embedding, n_batch = n_batch)
+  } else if (!is.null(experiment_idx) && !is.null(model_info$time_embedding)) {
+    time_proj_all <- neural_project_text_matrix(
+      model_info$time_embedding,
+      params$W_time_context
+    )
+    if (!is.null(time_proj_all)) {
+      return(strenv$jnp$take(time_proj_all, experiment_idx, axis = 0L))
+    }
+  }
+  if (is.null(time_mat) && !is.null(model_info$default_time_embedding)) {
+    time_mat <- neural_prepare_context_matrix(
+      model_info$default_time_embedding,
+      n_batch = n_batch
+    )
+  }
+  if (is.null(time_mat)) {
+    time_mat <- neural_prepare_context_matrix(
+      neural_default_time_context_matrix(),
+      n_batch = n_batch
+    )
+  }
+  if (is.null(time_mat)) {
+    return(NULL)
+  }
+  strenv$jnp$einsum("td,dm->tm", time_mat, params$W_time_context)
 }
 
 neural_covariate_basis <- function(resp_cov_mat,
@@ -3818,6 +4059,8 @@ add_context_tokens <- function(model_info,
                                resp_cov_present = NULL,
                                resp_cov_order = NULL,
                                experiment_idx = NULL,
+                               place_embedding = NULL,
+                               time_embedding = NULL,
                                params = NULL,
                                batch = FALSE,
                                return_mask = FALSE){
@@ -3939,6 +4182,48 @@ add_context_tokens <- function(model_info,
       params
     )
     token_list[[length(token_list) + 1L]] <- experiment_tok
+    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+      list(N_batch, 1L),
+      dtype = strenv$dtj
+    )
+  }
+  place_proj <- neural_project_place_context(
+    model_info = model_info,
+    params = params,
+    experiment_idx = experiment_idx_use,
+    place_embedding = place_embedding,
+    n_batch = N_batch
+  )
+  if (!is.null(place_proj)) {
+    place_tok <- strenv$jnp$reshape(place_proj, list(-1L, 1L, dims))
+    place_tok <- neural_add_token_family_embedding(
+      place_tok,
+      "place",
+      model_info,
+      params
+    )
+    token_list[[length(token_list) + 1L]] <- place_tok
+    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
+      list(N_batch, 1L),
+      dtype = strenv$dtj
+    )
+  }
+  time_proj <- neural_project_time_context(
+    model_info = model_info,
+    params = params,
+    experiment_idx = experiment_idx_use,
+    time_embedding = time_embedding,
+    n_batch = N_batch
+  )
+  if (!is.null(time_proj)) {
+    time_tok <- strenv$jnp$reshape(time_proj, list(-1L, 1L, dims))
+    time_tok <- neural_add_token_family_embedding(
+      time_tok,
+      "time",
+      model_info,
+      params
+    )
+    token_list[[length(token_list) + 1L]] <- time_tok
     token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
       list(N_batch, 1L),
       dtype = strenv$dtj
@@ -4325,6 +4610,8 @@ neural_build_context_tokens_batch <- function(model_info,
                                               resp_cov_present = NULL,
                                               resp_cov_order = NULL,
                                               experiment_idx = NULL,
+                                              place_embedding = NULL,
+                                              time_embedding = NULL,
                                               params = NULL,
                                               return_mask = FALSE){
   add_context_tokens(model_info = model_info,
@@ -4335,6 +4622,8 @@ neural_build_context_tokens_batch <- function(model_info,
                      resp_cov_present = resp_cov_present,
                      resp_cov_order = resp_cov_order,
                      experiment_idx = experiment_idx,
+                     place_embedding = place_embedding,
+                     time_embedding = time_embedding,
                      params = params,
                      batch = TRUE,
                      return_mask = return_mask)
@@ -4616,6 +4905,8 @@ neural_build_context_tokens <- function(model_info,
                                         resp_cov_present_vec = NULL,
                                         resp_cov_order = NULL,
                                         experiment_idx = NULL,
+                                        place_embedding = NULL,
+                                        time_embedding = NULL,
                                         params = NULL,
                                         return_mask = FALSE){
   add_context_tokens(model_info = model_info,
@@ -4626,6 +4917,8 @@ neural_build_context_tokens <- function(model_info,
                      resp_cov_present = resp_cov_present_vec,
                      resp_cov_order = resp_cov_order,
                      experiment_idx = experiment_idx,
+                     place_embedding = place_embedding,
+                     time_embedding = time_embedding,
                      params = params,
                      batch = FALSE,
                      return_mask = return_mask)
@@ -4835,6 +5128,8 @@ neural_encode_candidate_core_prepared <- function(params,
                                                   resp_cov_present = NULL,
                                                   resp_cov_order = NULL,
                                                   experiment_idx = NULL,
+                                                  place_embedding = NULL,
+                                                  time_embedding = NULL,
                                                   factor_order = NULL,
                                                   stage_idx = NULL,
                                                   matchup_idx = NULL,
@@ -4853,6 +5148,12 @@ neural_encode_candidate_core_prepared <- function(params,
   }
   if (!is.null(experiment_idx)) {
     experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(place_embedding)) {
+    place_embedding <- neural_batch_matrix_jnp(place_embedding, dtype = strenv$dtj)
+  }
+  if (!is.null(time_embedding)) {
+    time_embedding <- neural_batch_matrix_jnp(time_embedding, dtype = strenv$dtj)
   }
   if (!is.null(factor_order)) {
     factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
@@ -4875,6 +5176,8 @@ neural_encode_candidate_core_prepared <- function(params,
     resp_cov_present = resp_cov_present,
     resp_cov_order = resp_cov_order,
     experiment_idx = experiment_idx,
+    place_embedding = place_embedding,
+    time_embedding = time_embedding,
     params = params,
     return_mask = TRUE
   )
@@ -4934,6 +5237,8 @@ neural_predict_pair_cross_core_prepared <- function(params,
                                                     resp_c_present = NULL,
                                                     resp_c_order = NULL,
                                                     experiment_idx = NULL,
+                                                    place_embedding = NULL,
+                                                    time_embedding = NULL,
                                                     factor_order = NULL,
                                                     stage_idx,
                                                     matchup_idx = NULL) {
@@ -4954,6 +5259,12 @@ neural_predict_pair_cross_core_prepared <- function(params,
   if (!is.null(experiment_idx)) {
     experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
   }
+  if (!is.null(place_embedding)) {
+    place_embedding <- neural_batch_matrix_jnp(place_embedding, dtype = strenv$dtj)
+  }
+  if (!is.null(time_embedding)) {
+    time_embedding <- neural_batch_matrix_jnp(time_embedding, dtype = strenv$dtj)
+  }
   if (!is.null(factor_order)) {
     factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
   }
@@ -4973,6 +5284,8 @@ neural_predict_pair_cross_core_prepared <- function(params,
     resp_cov_present = resp_c_present,
     resp_cov_order = resp_c_order,
     experiment_idx = experiment_idx,
+    place_embedding = place_embedding,
+    time_embedding = time_embedding,
     params = params,
     return_mask = TRUE
   )
@@ -5049,6 +5362,8 @@ neural_predict_pair_core_prepared <- function(params,
                                               resp_c_present = NULL,
                                               resp_c_order = NULL,
                                               experiment_idx = NULL,
+                                              place_embedding = NULL,
+                                              time_embedding = NULL,
                                               factor_order = NULL,
                                               return_logits = FALSE) {
   Xl <- neural_batch_matrix_jnp(Xl, dtype = strenv$jnp$int32)
@@ -5067,6 +5382,12 @@ neural_predict_pair_core_prepared <- function(params,
   }
   if (!is.null(experiment_idx)) {
     experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
+  }
+  if (!is.null(place_embedding)) {
+    place_embedding <- neural_batch_matrix_jnp(place_embedding, dtype = strenv$dtj)
+  }
+  if (!is.null(time_embedding)) {
+    time_embedding <- neural_batch_matrix_jnp(time_embedding, dtype = strenv$dtj)
   }
   if (!is.null(factor_order)) {
     factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
@@ -5095,6 +5416,8 @@ neural_predict_pair_core_prepared <- function(params,
       resp_c_present = resp_c_present,
       resp_c_order = resp_c_order,
       experiment_idx = experiment_idx,
+      place_embedding = place_embedding,
+      time_embedding = time_embedding,
       factor_order = factor_order,
       stage_idx = stage_idx,
       matchup_idx = matchup_idx
@@ -5119,6 +5442,12 @@ neural_predict_pair_core_prepared <- function(params,
     experiment_idx_all <- if (is.null(experiment_idx)) NULL else {
       strenv$jnp$concatenate(list(experiment_idx, experiment_idx), axis = 0L)
     }
+    place_embedding_all <- if (is.null(place_embedding)) NULL else {
+      strenv$jnp$concatenate(list(place_embedding, place_embedding), axis = 0L)
+    }
+    time_embedding_all <- if (is.null(time_embedding)) NULL else {
+      strenv$jnp$concatenate(list(time_embedding, time_embedding), axis = 0L)
+    }
     stage_all <- if (is.null(stage_idx)) NULL else {
       strenv$jnp$concatenate(list(stage_idx, stage_idx), axis = 0L)
     }
@@ -5137,6 +5466,8 @@ neural_predict_pair_core_prepared <- function(params,
         resp_cov_present = resp_c_present_all,
         resp_cov_order = resp_c_order_all,
         experiment_idx = experiment_idx_all,
+        place_embedding = place_embedding_all,
+        time_embedding = time_embedding_all,
         factor_order = factor_order_all,
         stage_idx = stage_all,
         matchup_idx = matchup_all,
@@ -5156,6 +5487,8 @@ neural_predict_pair_core_prepared <- function(params,
         resp_cov_present = resp_c_present_all,
         resp_cov_order = resp_c_order_all,
         experiment_idx = experiment_idx_all,
+        place_embedding = place_embedding_all,
+        time_embedding = time_embedding_all,
         factor_order = factor_order_all,
         stage_idx = stage_all,
         matchup_idx = matchup_all,
@@ -5242,6 +5575,8 @@ neural_predict_single_core_prepared <- function(params,
                                                 resp_c_present = NULL,
                                                 resp_c_order = NULL,
                                                 experiment_idx = NULL,
+                                                place_embedding = NULL,
+                                                time_embedding = NULL,
                                                 factor_order = NULL,
                                                 return_logits = FALSE) {
   Xb <- neural_batch_matrix_jnp(Xb, dtype = strenv$jnp$int32)
@@ -5259,6 +5594,12 @@ neural_predict_single_core_prepared <- function(params,
   if (!is.null(experiment_idx)) {
     experiment_idx <- neural_batch_vector_jnp(experiment_idx, dtype = strenv$jnp$int32)
   }
+  if (!is.null(place_embedding)) {
+    place_embedding <- neural_batch_matrix_jnp(place_embedding, dtype = strenv$dtj)
+  }
+  if (!is.null(time_embedding)) {
+    time_embedding <- neural_batch_matrix_jnp(time_embedding, dtype = strenv$dtj)
+  }
   if (!is.null(factor_order)) {
     factor_order <- neural_batch_matrix_jnp(factor_order, dtype = strenv$jnp$int32)
   }
@@ -5272,6 +5613,8 @@ neural_predict_single_core_prepared <- function(params,
     resp_cov_present = resp_c_present,
     resp_cov_order = resp_c_order,
     experiment_idx = experiment_idx,
+    place_embedding = place_embedding,
+    time_embedding = time_embedding,
     factor_order = factor_order,
     return_tokens = FALSE
   )
@@ -5309,6 +5652,8 @@ neural_predict_prepared <- function(params,
       resp_c_present = prep$resp_cov_present %||% NULL,
       resp_c_order = prep$resp_cov_order %||% NULL,
       experiment_idx = prep$experiment_idx %||% NULL,
+      place_embedding = prep$place_embedding %||% NULL,
+      time_embedding = prep$time_embedding %||% NULL,
       factor_order = prep$factor_order %||% NULL,
       return_logits = return_logits
     ))
@@ -5323,6 +5668,8 @@ neural_predict_prepared <- function(params,
     resp_c_present = prep$resp_cov_present %||% NULL,
     resp_c_order = prep$resp_cov_order %||% NULL,
     experiment_idx = prep$experiment_idx %||% NULL,
+    place_embedding = prep$place_embedding %||% NULL,
+    time_embedding = prep$time_embedding %||% NULL,
     factor_order = prep$factor_order %||% NULL,
     return_logits = return_logits
   )
@@ -5353,7 +5700,7 @@ neural_get_predict_jit <- function(model_info,
   )
   if (!exists(cache_key, envir = neural_prediction_jit_cache, inherits = FALSE)) {
     compiled <- if (isTRUE(pairwise)) {
-      strenv$jax$jit(function(params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
+      strenv$jax$jit(function(params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, place_embedding, time_embedding, factor_order) {
         neural_predict_pair_core_prepared(
           params = params,
           model_info = model_info,
@@ -5366,12 +5713,14 @@ neural_get_predict_jit <- function(model_info,
           resp_c_present = resp_c_present,
           resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          place_embedding = place_embedding,
+          time_embedding = time_embedding,
           factor_order = factor_order,
           return_logits = return_logits
         )
       })
     } else {
-      strenv$jax$jit(function(params, Xb, party_idx, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
+      strenv$jax$jit(function(params, Xb, party_idx, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, place_embedding, time_embedding, factor_order) {
         neural_predict_single_core_prepared(
           params = params,
           model_info = model_info,
@@ -5382,6 +5731,8 @@ neural_get_predict_jit <- function(model_info,
           resp_c_present = resp_c_present,
           resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          place_embedding = place_embedding,
+          time_embedding = time_embedding,
           factor_order = factor_order,
           return_logits = return_logits
         )
@@ -5404,7 +5755,7 @@ neural_get_predict_from_theta_jit <- function(model_info,
   )
   if (!exists(cache_key, envir = neural_prediction_jit_cache, inherits = FALSE)) {
     compiled <- if (isTRUE(pairwise)) {
-      predict_one <- function(theta_vec, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
+      predict_one <- function(theta_vec, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, place_embedding, time_embedding, factor_order) {
         params <- neural_params_from_theta(theta_vec, model_info)
         neural_predict_pair_core_prepared(
           params = params,
@@ -5418,17 +5769,19 @@ neural_get_predict_from_theta_jit <- function(model_info,
           resp_c_present = resp_c_present,
           resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          place_embedding = place_embedding,
+          time_embedding = time_embedding,
           factor_order = factor_order,
           return_logits = return_logits
         )
       }
       vmapped <- strenv$jax$vmap(
         predict_one,
-        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
       )
       strenv$jax$jit(vmapped)
     } else {
-      predict_one <- function(theta_vec, Xb, party_idx, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order) {
+      predict_one <- function(theta_vec, Xb, party_idx, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, place_embedding, time_embedding, factor_order) {
         params <- neural_params_from_theta(theta_vec, model_info)
         neural_predict_single_core_prepared(
           params = params,
@@ -5440,13 +5793,15 @@ neural_get_predict_from_theta_jit <- function(model_info,
           resp_c_present = resp_c_present,
           resp_c_order = resp_c_order,
           experiment_idx = experiment_idx,
+          place_embedding = place_embedding,
+          time_embedding = time_embedding,
           factor_order = factor_order,
           return_logits = return_logits
         )
       }
       vmapped <- strenv$jax$vmap(
         predict_one,
-        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+        in_axes = list(0L, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
       )
       strenv$jax$jit(vmapped)
     }
@@ -5476,6 +5831,8 @@ neural_predict_prepared_jitted <- function(params,
       prep$resp_cov_present %||% NULL,
       prep$resp_cov_order %||% NULL,
       prep$experiment_idx %||% NULL,
+      prep$place_embedding %||% NULL,
+      prep$time_embedding %||% NULL,
       prep$factor_order %||% NULL
     ))
   }
@@ -5488,6 +5845,8 @@ neural_predict_prepared_jitted <- function(params,
     prep$resp_cov_present %||% NULL,
     prep$resp_cov_order %||% NULL,
     prep$experiment_idx %||% NULL,
+    prep$place_embedding %||% NULL,
+    prep$time_embedding %||% NULL,
     prep$factor_order %||% NULL
   )
 }
@@ -5513,6 +5872,8 @@ neural_predict_from_theta_prepared_jitted <- function(theta_batch,
       prep$resp_cov_present %||% NULL,
       prep$resp_cov_order %||% NULL,
       prep$experiment_idx %||% NULL,
+      prep$place_embedding %||% NULL,
+      prep$time_embedding %||% NULL,
       prep$factor_order %||% NULL
     ))
   }
@@ -5525,6 +5886,8 @@ neural_predict_from_theta_prepared_jitted <- function(theta_batch,
     prep$resp_cov_present %||% NULL,
     prep$resp_cov_order %||% NULL,
     prep$experiment_idx %||% NULL,
+    prep$place_embedding %||% NULL,
+    prep$time_embedding %||% NULL,
     prep$factor_order %||% NULL
   )
 }
@@ -6528,6 +6891,52 @@ generate_ModelOutcome_neural <- function(){
   default_experiment_text_present <- isTRUE(
     neural_token_info_use$default_experiment_text_present %||% FALSE
   )
+  place_feature_names <- as.character(
+    neural_token_info_use$place_feature_names %||% neural_place_feature_names()
+  )
+  place_embedding <- neural_token_info_use$place_embedding %||% NULL
+  place_present <- neural_token_info_use$place_present %||% NULL
+  default_place_embedding <- neural_token_info_use$default_place_embedding %||% NULL
+  default_place_present <- isTRUE(neural_token_info_use$default_place_present %||% FALSE)
+  place_context_enabled <- isTRUE(neural_token_info_use$place_context_enabled %||% FALSE)
+  if (isTRUE(place_context_enabled)) {
+    if (is.null(place_embedding) && length(experiment_levels_override <- as.character(
+      neural_token_info_use$experiment_levels %||% character(0)
+    )) > 0L) {
+      place_embedding <- matrix(
+        rep(neural_encode_place_context(NA_real_, NA_real_, present = FALSE), times = length(experiment_levels_override)),
+        nrow = length(experiment_levels_override),
+        byrow = TRUE,
+        dimnames = list(experiment_levels_override, place_feature_names)
+      )
+    }
+    if (is.null(default_place_embedding)) {
+      default_place_embedding <- neural_default_place_context_matrix()
+    }
+  }
+  time_feature_names <- as.character(
+    neural_token_info_use$time_feature_names %||% neural_time_feature_names()
+  )
+  time_embedding <- neural_token_info_use$time_embedding %||% NULL
+  time_present <- neural_token_info_use$time_present %||% NULL
+  default_time_embedding <- neural_token_info_use$default_time_embedding %||% NULL
+  default_time_present <- isTRUE(neural_token_info_use$default_time_present %||% FALSE)
+  time_context_enabled <- isTRUE(neural_token_info_use$time_context_enabled %||% FALSE)
+  if (isTRUE(time_context_enabled)) {
+    if (is.null(time_embedding) && length(experiment_levels_override <- as.character(
+      neural_token_info_use$experiment_levels %||% character(0)
+    )) > 0L) {
+      time_embedding <- matrix(
+        rep(neural_encode_time_context(NA_real_, present = FALSE), times = length(experiment_levels_override)),
+        nrow = length(experiment_levels_override),
+        byrow = TRUE,
+        dimnames = list(experiment_levels_override, time_feature_names)
+      )
+    }
+    if (is.null(default_time_embedding)) {
+      default_time_embedding <- neural_default_time_context_matrix()
+    }
+  }
   experiment_token_mode <- tolower(as.character(
     neural_token_info_use$experiment_token_mode %||% "legacy_id"
   ))
@@ -6605,6 +7014,26 @@ generate_ModelOutcome_neural <- function(){
     ncol(as.matrix(level_struct_matrices[[1L]]))
   } else {
     0L
+  }
+  place_context_dim <- if (!is.null(place_embedding)) {
+    ncol(as.matrix(place_embedding))
+  } else if (!is.null(default_place_embedding)) {
+    ncol(as.matrix(default_place_embedding))
+  } else {
+    length(place_feature_names)
+  }
+  if (!isTRUE(place_context_enabled)) {
+    place_context_dim <- 0L
+  }
+  time_context_dim <- if (!is.null(time_embedding)) {
+    ncol(as.matrix(time_embedding))
+  } else if (!is.null(default_time_embedding)) {
+    ncol(as.matrix(default_time_embedding))
+  } else {
+    length(time_feature_names)
+  }
+  if (!isTRUE(time_context_enabled)) {
+    time_context_dim <- 0L
   }
   n_candidate_factor_tokens <- if (identical(factor_tokenization, "language_span")) {
     ai(max_factor_tokens)
@@ -6844,7 +7273,9 @@ generate_ModelOutcome_neural <- function(){
     include_relation = has_relation_context,
     include_stage = stage_context_enabled,
     include_respondent_group = has_respondent_group_context,
-    include_matchup = use_matchup_token
+    include_matchup = use_matchup_token,
+    include_place = place_context_enabled,
+    include_time = time_context_enabled
   )
   token_family_override <- neural_token_info_use$token_family_levels %||% NULL
   token_family_levels <- if (is.null(token_family_override)) {
@@ -7611,6 +8042,8 @@ generate_ModelOutcome_neural <- function(){
     W_level_struct <- NULL
     W_covariate_name_text <- NULL
     W_experiment_text <- NULL
+    W_place_context <- NULL
+    W_time_context <- NULL
     if (identical(factor_tokenization, "language_span") && factor_struct_dim > 0L) {
       factor_struct_shape <- reticulate::tuple(ai(factor_struct_dim), ModelDims)
       factor_struct_sd <- tau_context / sqrt(as.numeric(factor_struct_dim))
@@ -7703,6 +8136,40 @@ generate_ModelOutcome_neural <- function(){
           }
         )
       }
+    }
+    if (isTRUE(time_context_enabled) && time_context_dim > 0L) {
+      time_context_shape <- reticulate::tuple(ai(time_context_dim), ModelDims)
+      time_context_sd <- tau_context / sqrt(as.numeric(time_context_dim))
+      W_time_context <- p2d(
+        name = "W_time_context",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "W_time_context",
+            strenv$numpyro$distributions$Normal(0., time_context_sd),
+            sample_shape = time_context_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_time_context", time_context_sd, time_context_shape)
+        }
+      )
+    }
+    if (isTRUE(place_context_enabled) && place_context_dim > 0L) {
+      place_context_shape <- reticulate::tuple(ai(place_context_dim), ModelDims)
+      place_context_sd <- tau_context / sqrt(as.numeric(place_context_dim))
+      W_place_context <- p2d(
+        name = "W_place_context",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "W_place_context",
+            strenv$numpyro$distributions$Normal(0., place_context_sd),
+            sample_shape = place_context_shape
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("W_place_context", place_context_sd, place_context_shape)
+        }
+      )
     }
 
     E_covariate_start <- NULL
@@ -8482,6 +8949,12 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(W_experiment_text)) {
       params_view$W_experiment_text <- W_experiment_text
     }
+    if (!is.null(W_place_context)) {
+      params_view$W_place_context <- W_place_context
+    }
+    if (!is.null(W_time_context)) {
+      params_view$W_time_context <- W_time_context
+    }
     if (n_resp_covariates > 0L) {
       if (!is.null(E_covariate_start)) {
         params_view$E_covariate_start <- E_covariate_start
@@ -8755,7 +9228,19 @@ generate_ModelOutcome_neural <- function(){
       experiment_description_text = experiment_description_text,
       experiment_description_present = experiment_description_present,
       default_experiment_text = default_experiment_text,
-      default_experiment_text_present = default_experiment_text_present
+      default_experiment_text_present = default_experiment_text_present,
+      place_embedding = place_embedding,
+      place_present = place_present,
+      place_context_enabled = place_context_enabled,
+      place_feature_names = place_feature_names,
+      default_place_embedding = default_place_embedding,
+      default_place_present = default_place_present,
+      time_embedding = time_embedding,
+      time_present = time_present,
+      time_context_enabled = time_context_enabled,
+      time_feature_names = time_feature_names,
+      default_time_embedding = default_time_embedding,
+      default_time_present = default_time_present
     )
     model_info_local <- neural_set_pairwise_context_model_info(
       info = model_info_local,
@@ -9126,7 +9611,19 @@ generate_ModelOutcome_neural <- function(){
       experiment_description_text = experiment_description_text,
       experiment_description_present = experiment_description_present,
       default_experiment_text = default_experiment_text,
-      default_experiment_text_present = default_experiment_text_present
+      default_experiment_text_present = default_experiment_text_present,
+      place_embedding = place_embedding,
+      place_present = place_present,
+      place_context_enabled = place_context_enabled,
+      place_feature_names = place_feature_names,
+      default_place_embedding = default_place_embedding,
+      default_place_present = default_place_present,
+      time_embedding = time_embedding,
+      time_present = time_present,
+      time_context_enabled = time_context_enabled,
+      time_feature_names = time_feature_names,
+      default_time_embedding = default_time_embedding,
+      default_time_present = default_time_present
     )
     model_info_local <- neural_set_pairwise_context_model_info(
       info = model_info_local,
@@ -10351,6 +10848,8 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("W_level_struct")
     maybe_site("W_covariate_name_text")
     maybe_site("W_experiment_text")
+    maybe_site("W_place_context")
+    maybe_site("W_time_context")
     maybe_site("alpha_cross")
     maybe_site("RMS_cross")
     maybe_site("RMS_merge_cross")
@@ -10503,6 +11002,20 @@ generate_ModelOutcome_neural <- function(){
   validation_model_info$experiment_description_present <- experiment_description_present
   validation_model_info$default_experiment_text <- default_experiment_text
   validation_model_info$default_experiment_text_present <- default_experiment_text_present
+  validation_model_info$place_embedding <- place_embedding
+  validation_model_info$place_present <- place_present
+  validation_model_info$place_context_enabled <- place_context_enabled
+  validation_model_info$place_feature_names <- place_feature_names
+  validation_model_info$default_place_embedding <- default_place_embedding
+  validation_model_info$default_place_present <- default_place_present
+  validation_model_info$place_context_dim <- place_context_dim
+  validation_model_info$time_embedding <- time_embedding
+  validation_model_info$time_present <- time_present
+  validation_model_info$time_context_enabled <- time_context_enabled
+  validation_model_info$time_feature_names <- time_feature_names
+  validation_model_info$default_time_embedding <- default_time_embedding
+  validation_model_info$default_time_present <- default_time_present
+  validation_model_info$time_context_dim <- time_context_dim
   validation_return_logits <- identical(likelihood, "mixed")
   validation_predict_jit <- neural_get_predict_jit(
     model_info = validation_model_info,
@@ -10597,7 +11110,8 @@ generate_ModelOutcome_neural <- function(){
         NULL
       }
       pred <- validation_predict_jit(
-        params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order
+        params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order,
+        experiment_idx, NULL, NULL, factor_order
       )
       return(coerce_prediction_output_local(pred))
     }
@@ -10640,7 +11154,8 @@ generate_ModelOutcome_neural <- function(){
       NULL
     }
     pred <- validation_predict_jit(
-      params, Xb, pb, resp_p, resp_c, resp_c_present, resp_c_order, experiment_idx, factor_order
+      params, Xb, pb, resp_p, resp_c, resp_c_present, resp_c_order,
+      experiment_idx, NULL, NULL, factor_order
     )
     coerce_prediction_output_local(pred)
   }
@@ -12602,6 +13117,8 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_level_struct")
   maybe_site("W_covariate_name_text")
   maybe_site("W_experiment_text")
+  maybe_site("W_place_context")
+  maybe_site("W_time_context")
   maybe_site("alpha_cross")
   maybe_site("RMS_cross")
   maybe_site("RMS_merge_cross")
@@ -12770,6 +13287,20 @@ generate_ModelOutcome_neural <- function(){
   predict_model_info$experiment_description_present <- experiment_description_present
   predict_model_info$default_experiment_text <- default_experiment_text
   predict_model_info$default_experiment_text_present <- default_experiment_text_present
+  predict_model_info$place_embedding <- place_embedding
+  predict_model_info$place_present <- place_present
+  predict_model_info$place_context_enabled <- place_context_enabled
+  predict_model_info$place_feature_names <- place_feature_names
+  predict_model_info$default_place_embedding <- default_place_embedding
+  predict_model_info$default_place_present <- default_place_present
+  predict_model_info$place_context_dim <- place_context_dim
+  predict_model_info$time_embedding <- time_embedding
+  predict_model_info$time_present <- time_present
+  predict_model_info$time_context_enabled <- time_context_enabled
+  predict_model_info$time_feature_names <- time_feature_names
+  predict_model_info$default_time_embedding <- default_time_embedding
+  predict_model_info$default_time_present <- default_time_present
+  predict_model_info$time_context_dim <- time_context_dim
   predict_model_info$covariate_names <- covariate_names_override
   predict_model_info$covariate_order_by_experiment <- covariate_order_by_experiment
   predict_model_info$default_covariate_order <- default_covariate_order
@@ -12899,7 +13430,7 @@ generate_ModelOutcome_neural <- function(){
     }
     predict_fn(
       params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present,
-      resp_c_order, experiment_idx, factor_order
+      resp_c_order, experiment_idx, NULL, NULL, factor_order
     )
   }
 
@@ -12972,7 +13503,7 @@ generate_ModelOutcome_neural <- function(){
     }
     predict_fn(
       params, Xb, pb, resp_p, resp_c, resp_c_present,
-      resp_c_order, experiment_idx, factor_order
+      resp_c_order, experiment_idx, NULL, NULL, factor_order
     )
   }
 
@@ -13432,6 +13963,18 @@ generate_ModelOutcome_neural <- function(){
     experiment_description_present = experiment_description_present,
     default_experiment_text = default_experiment_text,
     default_experiment_text_present = default_experiment_text_present,
+    place_embedding = place_embedding,
+    place_present = place_present,
+    place_context_enabled = place_context_enabled,
+    place_feature_names = place_feature_names,
+    default_place_embedding = default_place_embedding,
+    default_place_present = default_place_present,
+    time_embedding = time_embedding,
+    time_present = time_present,
+    time_context_enabled = time_context_enabled,
+    time_feature_names = time_feature_names,
+    default_time_embedding = default_time_embedding,
+    default_time_present = default_time_present,
     experiment_levels = experiment_levels_override,
     n_experiment_levels = as.integer(n_experiment_levels),
     default_experiment_index = if (is.na(default_experiment_index)) NULL else as.integer(default_experiment_index),
@@ -13442,6 +13985,8 @@ generate_ModelOutcome_neural <- function(){
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),
     level_struct_dim = as.integer(level_struct_dim),
+    place_context_dim = as.integer(place_context_dim),
+    time_context_dim = as.integer(time_context_dim),
     has_candidate_group_context = isTRUE(has_candidate_group_context),
     has_respondent_group_context = isTRUE(has_respondent_group_context),
     has_relation_token_context = isTRUE(has_relation_context),
@@ -13457,6 +14002,8 @@ generate_ModelOutcome_neural <- function(){
     has_experiment_token = !is.null(ParamsMean$E_experiment) || !is.null(ParamsMean$W_experiment_text),
     has_experiment_id_embedding = !is.null(ParamsMean$E_experiment),
     has_experiment_text_projection = !is.null(ParamsMean$W_experiment_text),
+    has_place_context = !is.null(ParamsMean$W_place_context),
+    has_time_context = !is.null(ParamsMean$W_time_context),
     has_factor_name_text = !is.null(ParamsMean$W_factor_name_text) && text_semantic_dim > 0L,
     has_level_name_text = !is.null(ParamsMean$W_level_name_text) && text_semantic_dim > 0L,
     has_factor_struct_projection = !is.null(ParamsMean$W_factor_struct) && factor_struct_dim > 0L,

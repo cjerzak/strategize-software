@@ -23,7 +23,11 @@ For \code{mode="pairwise"}, either:
 \itemize{
   \item a data.frame containing factor columns plus \code{pair_id} (and optionally \code{profile_order}), or
   \item a list with elements \code{W}, \code{pair_id}, and optional \code{profile_order}.
-}}
+}
+Neural foundation predictors also accept optional \code{experiment_country}
+and \code{experiment_year} as scalar or row-aligned vectors; in pairwise
+mode row-aligned values are taken from the left/profile-level prediction
+row.}
 
 \item{type}{\code{"response"} (probability) or \code{"link"} (logit / linear predictor).}
 

@@ -857,6 +857,225 @@ test_that("runtime token model info carries experiment text semantics", {
   expect_equal(drop(tok_exp1_r[1, 1, ]), c(0, 1), tolerance = 1e-6)
 })
 
+test_that("time context encoding matches foundation year basis", {
+  emb_2025 <- strategize:::neural_encode_time_context(2025, present = TRUE)
+  emb_missing <- strategize:::neural_encode_time_context(NA_real_, present = FALSE)
+
+  expect_identical(names(emb_2025), strategize:::neural_time_feature_names())
+  expect_equal(unname(emb_2025[["linear_year_2000_25"]]), 1, tolerance = 1e-8)
+  expect_equal(
+    unname(emb_2025[["sin_period_10"]]),
+    sin(2 * pi * 25 / 10),
+    tolerance = 1e-8
+  )
+  expect_equal(
+    unname(emb_2025[["cos_period_10"]]),
+    cos(2 * pi * 25 / 10),
+    tolerance = 1e-8
+  )
+  expect_equal(unname(emb_2025[["missing_year"]]), 0, tolerance = 1e-8)
+  expect_equal(unname(emb_missing[["missing_year"]]), 1, tolerance = 1e-8)
+  expect_equal(sum(abs(emb_missing[names(emb_missing) != "missing_year"])), 0)
+})
+
+test_that("place context encoding matches foundation country basis", {
+  canada <- strategize:::cs2step_normalize_country("Canada")
+  emb_canada <- strategize:::neural_encode_place_context(
+    canada$country_latitude,
+    canada$country_longitude,
+    present = TRUE
+  )
+  emb_missing <- strategize:::neural_encode_place_context(
+    NA_real_,
+    NA_real_,
+    present = FALSE
+  )
+
+  expect_identical(names(emb_canada), strategize:::neural_place_feature_names())
+  expect_equal(unname(emb_canada[["missing_country"]]), 0, tolerance = 1e-8)
+  expect_equal(unname(emb_missing[["missing_country"]]), 1, tolerance = 1e-8)
+  expect_equal(sum(abs(emb_missing[names(emb_missing) != "missing_country"])), 0)
+  expect_true(any(abs(emb_canada[c("sphere_x", "sphere_y", "sphere_z")]) > 0))
+})
+
+test_that("place context token is emitted only when place context is enabled", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels(include_place = TRUE)
+  model_enabled <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    token_family_levels = token_levels,
+    place_context_enabled = TRUE,
+    default_place_embedding = matrix(c(1, 2), nrow = 1L)
+  )
+  model_disabled <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    token_family_levels = token_levels,
+    place_context_enabled = FALSE,
+    default_place_embedding = matrix(c(1, 2), nrow = 1L)
+  )
+  params <- list(
+    E_token_family = strategize:::strenv$jnp$array(
+      matrix(0, nrow = length(token_levels), ncol = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_experiment = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_covariate_name_text = NULL,
+    W_place_context = strategize:::strenv$jnp$array(
+      diag(2),
+      dtype = strategize:::strenv$jnp$float32
+    )
+  )
+
+  tok_enabled <- strategize:::add_context_tokens(
+    model_info = model_enabled,
+    resp_party_idx = 0L,
+    params = params,
+    batch = FALSE
+  )
+  tok_disabled <- strategize:::add_context_tokens(
+    model_info = model_disabled,
+    resp_party_idx = 0L,
+    params = params,
+    batch = FALSE
+  )
+
+  expect_equal(dim(reticulate::py_to_r(strategize:::strenv$np$array(tok_enabled)))[2], 1L)
+  expect_null(tok_disabled)
+})
+
+test_that("place context token changes with supplied country embedding", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels(include_place = TRUE)
+  place_family_idx <- match("place", token_levels) - 1L
+  family_mat <- matrix(0, nrow = length(token_levels), ncol = 2L)
+  family_mat[place_family_idx + 1L, ] <- c(100, 200)
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    token_family_levels = token_levels,
+    place_context_enabled = TRUE,
+    default_place_embedding = matrix(c(0, 0), nrow = 1L)
+  )
+  params <- list(
+    E_token_family = strategize:::strenv$jnp$array(
+      family_mat,
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_experiment = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_covariate_name_text = NULL,
+    W_place_context = strategize:::strenv$jnp$array(
+      matrix(c(1, 0, 0, 1), nrow = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    )
+  )
+  emb_usa <- matrix(c(1, 2), nrow = 1L)
+  emb_can <- matrix(c(3, 5), nrow = 1L)
+
+  tok_usa <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    place_embedding = emb_usa,
+    params = params,
+    batch = FALSE
+  )
+  tok_can <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    place_embedding = emb_can,
+    params = params,
+    batch = FALSE
+  )
+  tok_usa_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_usa))
+  tok_can_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_can))
+
+  expect_equal(drop(tok_usa_r[1, 1, ]), c(101, 202), tolerance = 1e-6)
+  expect_equal(drop(tok_can_r[1, 1, ]), c(103, 205), tolerance = 1e-6)
+  expect_false(isTRUE(all.equal(tok_usa_r, tok_can_r)))
+})
+
+test_that("pack and upgrade preserve place context model-info fields", {
+  model_info <- list(
+    place_embedding = matrix(1:4, nrow = 2L),
+    place_present = c(TRUE, FALSE),
+    place_context_enabled = TRUE,
+    place_feature_names = c("a", "b"),
+    default_place_embedding = matrix(c(0, 1), nrow = 1L),
+    default_place_present = FALSE,
+    place_context_dim = 2L
+  )
+  packed <- strategize:::cs2step_neural_pack_model_info(model_info, drop_params = TRUE)
+  upgraded <- strategize:::cs2step_neural_upgrade_model_info(packed)
+
+  expect_equal(packed$place_embedding, model_info$place_embedding)
+  expect_identical(packed$place_context_enabled, TRUE)
+  expect_identical(upgraded$place_feature_names, c("a", "b"))
+  expect_identical(upgraded$place_context_dim, 2L)
+  expect_identical(upgraded$default_place_present, FALSE)
+})
+
+test_that("time context token changes with supplied year embedding", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  token_levels <- strategize:::neural_token_family_levels(include_time = TRUE)
+  time_family_idx <- match("time", token_levels) - 1L
+  family_mat <- matrix(0, nrow = length(token_levels), ncol = 2L)
+  family_mat[time_family_idx + 1L, ] <- c(100, 200)
+  model_info <- strategize:::neural_make_runtime_token_model_info(
+    model_dims = 2L,
+    token_family_levels = token_levels,
+    time_context_enabled = TRUE,
+    default_time_embedding = strategize:::neural_default_time_context_matrix()
+  )
+  params <- list(
+    E_token_family = strategize:::strenv$jnp$array(
+      family_mat,
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    E_experiment = NULL,
+    E_stage = NULL,
+    E_resp_party = NULL,
+    E_matchup = NULL,
+    W_covariate_name_text = NULL,
+    W_time_context = strategize:::strenv$jnp$array(
+      matrix(c(1, 0, 0, 1), nrow = 2L),
+      dtype = strategize:::strenv$jnp$float32
+    )
+  )
+  emb_2020 <- matrix(c(1, 2), nrow = 1L)
+  emb_2025 <- matrix(c(3, 5), nrow = 1L)
+
+  tok_2020 <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    time_embedding = emb_2020,
+    params = params,
+    batch = FALSE
+  )
+  tok_2025 <- strategize:::add_context_tokens(
+    model_info = model_info,
+    resp_party_idx = 0L,
+    time_embedding = emb_2025,
+    params = params,
+    batch = FALSE
+  )
+  tok_2020_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_2020))
+  tok_2025_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_2025))
+
+  expect_equal(drop(tok_2020_r[1, 1, ]), c(101, 202), tolerance = 1e-6)
+  expect_equal(drop(tok_2025_r[1, 1, ]), c(103, 205), tolerance = 1e-6)
+  expect_false(isTRUE(all.equal(tok_2020_r, tok_2025_r)))
+})
+
 test_that("runtime covariate defaults are JAX-normalized for covariate transforms", {
   skip_if_no_jax()
   strategize:::initialize_jax()

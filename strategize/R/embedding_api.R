@@ -68,6 +68,8 @@ cs2step_embedding_context_availability <- function(model_info, params = NULL) {
     experiment = !is.null(params$E_experiment) ||
       !is.null(model_info$experiment_description_text) ||
       !is.null(model_info$default_experiment_text),
+    place = !is.null(params$W_place_context),
+    time = !is.null(params$W_time_context),
     respondent_group = !is.null(params$E_resp_party),
     respondent_covariates = !is.null(params$E_covariate_start) ||
       !is.null(params$E_covariate_id),
@@ -89,6 +91,8 @@ cs2step_neural_extract_single_prepared <- function(params,
     resp_cov_present = prep$resp_cov_present %||% NULL,
     resp_cov_order = prep$resp_cov_order %||% NULL,
     experiment_idx = prep$experiment_idx %||% NULL,
+    place_embedding = prep$place_embedding %||% NULL,
+    time_embedding = prep$time_embedding %||% NULL,
     factor_order = prep$factor_order %||% NULL,
     return_tokens = FALSE
   )
@@ -119,6 +123,8 @@ cs2step_neural_extract_context_prepared <- function(params,
     resp_cov_present = prep$resp_cov_present %||% NULL,
     resp_cov_order = prep$resp_cov_order %||% NULL,
     experiment_idx = prep$experiment_idx %||% NULL,
+    place_embedding = prep$place_embedding %||% NULL,
+    time_embedding = prep$time_embedding %||% NULL,
     params = params,
     return_mask = TRUE
   )
@@ -182,6 +188,8 @@ cs2step_neural_extract_pair_prepared <- function(params,
       resp_cov_present = prep$resp_cov_present %||% NULL,
       resp_cov_order = prep$resp_cov_order %||% NULL,
       experiment_idx = prep$experiment_idx %||% NULL,
+      place_embedding = prep$place_embedding %||% NULL,
+      time_embedding = prep$time_embedding %||% NULL,
       params = params,
       return_mask = TRUE
     )
@@ -264,6 +272,12 @@ cs2step_neural_extract_pair_prepared <- function(params,
   experiment_idx_all <- if (is.null(prep$experiment_idx)) NULL else {
     strenv$jnp$concatenate(list(prep$experiment_idx, prep$experiment_idx), axis = 0L)
   }
+  place_embedding_all <- if (is.null(prep$place_embedding)) NULL else {
+    strenv$jnp$concatenate(list(prep$place_embedding, prep$place_embedding), axis = 0L)
+  }
+  time_embedding_all <- if (is.null(prep$time_embedding)) NULL else {
+    strenv$jnp$concatenate(list(prep$time_embedding, prep$time_embedding), axis = 0L)
+  }
   factor_order_all <- if (is.null(prep$factor_order)) NULL else {
     strenv$jnp$concatenate(list(prep$factor_order, prep$factor_order), axis = 0L)
   }
@@ -285,6 +299,8 @@ cs2step_neural_extract_pair_prepared <- function(params,
       resp_cov_present = resp_c_present_all,
       resp_cov_order = resp_c_order_all,
       experiment_idx = experiment_idx_all,
+      place_embedding = place_embedding_all,
+      time_embedding = time_embedding_all,
       factor_order = factor_order_all,
       stage_idx = stage_all,
       matchup_idx = matchup_all,
@@ -304,6 +320,8 @@ cs2step_neural_extract_pair_prepared <- function(params,
       resp_cov_present = resp_c_present_all,
       resp_cov_order = resp_c_order_all,
       experiment_idx = experiment_idx_all,
+      place_embedding = place_embedding_all,
+      time_embedding = time_embedding_all,
       factor_order = factor_order_all,
       stage_idx = stage_all,
       matchup_idx = matchup_all,
@@ -394,6 +412,8 @@ cs2step_neural_extract_internal <- function(object,
                                             factor_order_new = NULL,
                                             experiment_id = NULL,
                                             experiment_description = NULL,
+                                            experiment_country = NULL,
+                                            experiment_year = NULL,
                                             pair_id = NULL,
                                             profile_order = NULL,
                                             level = c("candidate", "respondent_context", "all"),
@@ -423,16 +443,30 @@ cs2step_neural_extract_internal <- function(object,
   )
   model_info <- prep_params$model_info
   if (identical(object$mode, "pairwise") &&
-      !is.null(experiment_description) &&
-      length(experiment_description) == nrow(W_idx)) {
+      ((!is.null(experiment_description) && length(experiment_description) == nrow(W_idx)) ||
+       (!is.null(experiment_country) && length(experiment_country) == nrow(W_idx)) ||
+       (!is.null(experiment_year) && length(experiment_year) == nrow(W_idx)))) {
     pair_info <- cs2step_build_pair_mat(
       pair_id = pair_id,
       W = W_idx,
       profile_order = profile_order,
       competing_group_variable_candidate = competing_group_variable_candidate
     )
-    experiment_description <- experiment_description[pair_info$pair_mat[, 1], drop = TRUE]
+    if (!is.null(experiment_description) && length(experiment_description) == nrow(W_idx)) {
+      experiment_description <- experiment_description[pair_info$pair_mat[, 1], drop = TRUE]
+    }
+    if (!is.null(experiment_country) && length(experiment_country) == nrow(W_idx)) {
+      experiment_country <- experiment_country[pair_info$pair_mat[, 1], drop = TRUE]
+    }
+    if (!is.null(experiment_year) && length(experiment_year) == nrow(W_idx)) {
+      experiment_year <- experiment_year[pair_info$pair_mat[, 1], drop = TRUE]
+    }
   }
+  cs2step_neural_validate_place_context_request(
+    experiment_country,
+    model_info,
+    prep_params$params
+  )
   model_info <- cs2step_neural_apply_experiment_description(
     model_info = model_info,
     experiment_description = experiment_description,
@@ -454,8 +488,10 @@ cs2step_neural_extract_internal <- function(object,
         neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
       } else {
         NULL
-      },
+    },
     experiment_id = experiment_id,
+    experiment_country = experiment_country,
+    experiment_year = experiment_year,
     pair_id = pair_id,
     profile_order = profile_order,
     mode = object$mode
@@ -554,6 +590,8 @@ extract_embeddings.strategic_predictor <- function(object,
     competing_group_variable_respondent = unpacked$competing_group_variable_respondent,
     experiment_id = unpacked$experiment_id,
     experiment_description = unpacked$experiment_description,
+    experiment_country = unpacked$experiment_country,
+    experiment_year = unpacked$experiment_year,
     pair_id = unpacked$pair_id,
     profile_order = unpacked$profile_order,
     level = level,
@@ -579,7 +617,13 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
       competing_group_variable_candidate = newdata$competing_group_variable_candidate %||% NULL,
       competing_group_variable_respondent = newdata$competing_group_variable_respondent %||% NULL,
       experiment_id = newdata$experiment_id %||% NULL,
-      experiment_description = newdata$experiment_description %||% NULL
+      experiment_description = newdata$experiment_description %||% NULL,
+      experiment_country = if ("experiment_country" %in% names(newdata)) {
+        newdata$experiment_country %||% NA_character_
+      } else {
+        NULL
+      },
+      experiment_year = newdata$experiment_year %||% NULL
     ))
   }
 
@@ -602,13 +646,25 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
   } else {
     NULL
   }
+  experiment_country <- if ("experiment_country" %in% colnames(newdata)) {
+    newdata[["experiment_country"]]
+  } else {
+    NULL
+  }
+  experiment_year <- if ("experiment_year" %in% colnames(newdata)) {
+    newdata[["experiment_year"]]
+  } else {
+    NULL
+  }
   special_cols <- c(
     "pair_id",
     "profile_order",
     "competing_group_variable_candidate",
     "competing_group_variable_respondent",
     "experiment_id",
-    "experiment_description"
+    "experiment_description",
+    "experiment_country",
+    "experiment_year"
   )
   if (!is.null(factor_names)) {
     missing_cols <- setdiff(factor_names, colnames(newdata))
@@ -639,7 +695,9 @@ cs_foundation_unpack_embedding_newdata <- function(newdata,
     competing_group_variable_candidate = competing_group_variable_candidate,
     competing_group_variable_respondent = competing_group_variable_respondent,
     experiment_id = experiment_id,
-    experiment_description = experiment_description
+    experiment_description = experiment_description,
+    experiment_country = experiment_country,
+    experiment_year = experiment_year
   )
 }
 
@@ -1148,6 +1206,8 @@ extract_embeddings.conjoint_foundation_model <- function(object,
     factor_order_new = mapped$factor_order,
     experiment_id = request$experiment_id,
     experiment_description = unpacked$experiment_description %||% NULL,
+    experiment_country = unpacked$experiment_country %||% NULL,
+    experiment_year = unpacked$experiment_year %||% NULL,
     pair_id = request$pair_id,
     profile_order = request$profile_order,
     level = level,

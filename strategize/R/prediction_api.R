@@ -64,7 +64,13 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
       competing_group_variable_candidate = newdata$competing_group_variable_candidate %||% NULL,
       competing_group_variable_respondent = newdata$competing_group_variable_respondent %||% NULL,
       experiment_id = newdata$experiment_id %||% NULL,
-      experiment_description = newdata$experiment_description %||% NULL
+      experiment_description = newdata$experiment_description %||% NULL,
+      experiment_country = if ("experiment_country" %in% names(newdata)) {
+        newdata$experiment_country %||% NA_character_
+      } else {
+        NULL
+      },
+      experiment_year = newdata$experiment_year %||% NULL
     )
     return(out)
   }
@@ -76,6 +82,8 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   competing_group_variable_respondent <- NULL
   experiment_id <- NULL
   experiment_description <- NULL
+  experiment_country <- NULL
+  experiment_year <- NULL
   if (identical(mode, "pairwise")) {
     if ("pair_id" %in% colnames(newdata)) {
       pair_id <- newdata[["pair_id"]]
@@ -89,6 +97,12 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   }
   if ("experiment_description" %in% colnames(newdata)) {
     experiment_description <- newdata[["experiment_description"]]
+  }
+  if ("experiment_country" %in% colnames(newdata)) {
+    experiment_country <- newdata[["experiment_country"]]
+  }
+  if ("experiment_year" %in% colnames(newdata)) {
+    experiment_year <- newdata[["experiment_year"]]
   }
   if ("competing_group_variable_candidate" %in% colnames(newdata)) {
     competing_group_variable_candidate <- newdata[["competing_group_variable_candidate"]]
@@ -106,7 +120,9 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
       "competing_group_variable_candidate",
       "competing_group_variable_respondent",
       "experiment_id",
-      "experiment_description"
+      "experiment_description",
+      "experiment_country",
+      "experiment_year"
     )
   )
   X <- if (length(extra_cols) > 0L) {
@@ -122,7 +138,9 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
     competing_group_variable_candidate = competing_group_variable_candidate,
     competing_group_variable_respondent = competing_group_variable_respondent,
     experiment_id = experiment_id,
-    experiment_description = experiment_description
+    experiment_description = experiment_description,
+    experiment_country = experiment_country,
+    experiment_year = experiment_year
   )
 }
 
@@ -1010,6 +1028,164 @@ cs2step_neural_prepare_experiment_index <- function(experiment_id, model_info, n
   as.integer(matched - 1L)
 }
 
+cs2step_neural_normalize_experiment_year <- function(experiment_year,
+                                                     n_rows,
+                                                     arg = "experiment_year") {
+  if (is.null(experiment_year)) {
+    return(NULL)
+  }
+  n_rows <- as.integer(n_rows)
+  year <- experiment_year
+  if (length(year) == 1L && n_rows > 1L) {
+    year <- rep.int(year, n_rows)
+  }
+  if (length(year) != n_rows) {
+    stop(
+      sprintf(
+        "Prediction-time %s must have length one or the same number of rows as the prediction data.",
+        arg
+      ),
+      call. = FALSE
+    )
+  }
+  if (is.factor(year)) {
+    year <- as.character(year)
+  }
+  out <- rep(NA_integer_, n_rows)
+  if (n_rows < 1L) {
+    return(out)
+  }
+  is_missing <- is.na(year)
+  if (any(!is_missing)) {
+    year_num <- suppressWarnings(as.numeric(year[!is_missing]))
+    if (any(is.na(year_num) | !is.finite(year_num))) {
+      stop(sprintf("Prediction-time %s must be integer-like or NA.", arg), call. = FALSE)
+    }
+    if (any(abs(year_num - round(year_num)) > 1e-8)) {
+      stop(sprintf("Prediction-time %s must be integer-like or NA.", arg), call. = FALSE)
+    }
+    out[!is_missing] <- as.integer(round(year_num))
+  }
+  out
+}
+
+cs2step_neural_prepare_time_embedding <- function(experiment_year,
+                                                  model_info,
+                                                  n_rows) {
+  years <- cs2step_neural_normalize_experiment_year(experiment_year, n_rows)
+  if (is.null(years)) {
+    return(NULL)
+  }
+  emb <- do.call(rbind, lapply(years, function(year_i) {
+    neural_encode_time_context(
+      year = year_i,
+      present = !is.na(year_i)
+    )
+  }))
+  feature_names <- as.character(model_info$time_feature_names %||% neural_time_feature_names())
+  if (!is.null(feature_names) && length(feature_names) > 0L) {
+    missing_cols <- setdiff(feature_names, colnames(emb))
+    if (length(missing_cols) > 0L) {
+      extra <- matrix(0, nrow = nrow(emb), ncol = length(missing_cols))
+      colnames(extra) <- missing_cols
+      emb <- cbind(emb, extra)
+    }
+    emb <- emb[, feature_names, drop = FALSE]
+  }
+  emb
+}
+
+cs2step_neural_normalize_experiment_country <- function(experiment_country,
+                                                        n_rows,
+                                                        arg = "experiment_country") {
+  if (is.null(experiment_country)) {
+    return(NULL)
+  }
+  n_rows <- as.integer(n_rows)
+  country <- experiment_country
+  if (is.factor(country)) {
+    country <- as.character(country)
+  }
+  if (length(country) == 1L && n_rows > 1L) {
+    country <- rep.int(country, n_rows)
+  }
+  if (length(country) != n_rows) {
+    stop(
+      sprintf(
+        "Prediction-time %s must have length one or the same number of rows as the prediction data.",
+        arg
+      ),
+      call. = FALSE
+    )
+  }
+  lapply(seq_len(n_rows), function(i) {
+    cs2step_normalize_country(
+      country[[i]],
+      arg = sprintf("%s[%d]", arg, i)
+    )
+  })
+}
+
+cs2step_neural_prepare_place_embedding <- function(experiment_country,
+                                                   model_info,
+                                                   n_rows) {
+  countries <- cs2step_neural_normalize_experiment_country(
+    experiment_country,
+    n_rows
+  )
+  if (is.null(countries)) {
+    return(NULL)
+  }
+  feature_names_default <- neural_place_feature_names()
+  if (length(countries) < 1L) {
+    return(matrix(
+      numeric(0),
+      nrow = 0L,
+      ncol = length(feature_names_default),
+      dimnames = list(NULL, feature_names_default)
+    ))
+  }
+  emb <- do.call(rbind, lapply(countries, function(country_i) {
+    neural_encode_place_context(
+      latitude = country_i$country_latitude,
+      longitude = country_i$country_longitude,
+      present = isTRUE(country_i$country_present)
+    )
+  }))
+  feature_names <- as.character(model_info$place_feature_names %||% feature_names_default)
+  if (!is.null(feature_names) && length(feature_names) > 0L) {
+    missing_cols <- setdiff(feature_names, colnames(emb))
+    if (length(missing_cols) > 0L) {
+      extra <- matrix(0, nrow = nrow(emb), ncol = length(missing_cols))
+      colnames(extra) <- missing_cols
+      emb <- cbind(emb, extra)
+    }
+    emb <- emb[, feature_names, drop = FALSE]
+  }
+  emb
+}
+
+cs2step_neural_validate_place_context_request <- function(experiment_country,
+                                                          model_info,
+                                                          params = NULL) {
+  if (is.null(experiment_country)) {
+    return(invisible(TRUE))
+  }
+  if (!isTRUE(neural_place_context_enabled(model_info))) {
+    stop(
+      "Prediction-time experiment_country requires a predictor trained with place context. Retrain the predictor with experiment_country/place context enabled.",
+      call. = FALSE
+    )
+  }
+  if (!is.null(params) && is.null(params$W_place_context)) {
+    stop(
+      "Prediction-time experiment_country requires learned W_place_context parameters. Retrain the predictor with place context enabled.",
+      call. = FALSE
+    )
+  }
+  invisible(TRUE)
+}
+
 cs2step_neural_embed_experiment_description <- function(experiment_description,
                                                         model_info,
                                                         n_rows,
@@ -1080,6 +1256,8 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
                                                    resp_cov_new = NULL,
                                                    factor_order_new = NULL,
                                                    experiment_id = NULL,
+                                                   experiment_country = NULL,
+                                                   experiment_year = NULL,
                                                    pair_id = NULL,
                                                    profile_order = NULL,
                                                    mode = c("pairwise", "single")) {
@@ -1152,6 +1330,12 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     if (!is.null(experiment_id) && length(experiment_id) == nrow(W_idx)) {
       experiment_id <- experiment_id[pair_mat[, 1]]
     }
+    if (!is.null(experiment_country) && length(experiment_country) == nrow(W_idx)) {
+      experiment_country <- experiment_country[pair_mat[, 1]]
+    }
+    if (!is.null(experiment_year) && length(experiment_year) == nrow(W_idx)) {
+      experiment_year <- experiment_year[pair_mat[, 1]]
+    }
     if (!is.null(factor_order_new) && (is.matrix(factor_order_new) || is.data.frame(factor_order_new))) {
       if (nrow(factor_order_new) == nrow(W_idx)) {
         factor_order_new <- factor_order_new[pair_mat[, 1], , drop = FALSE]
@@ -1187,6 +1371,30 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     } else {
       strenv$jnp$array(as.integer(experiment_idx))$astype(strenv$jnp$int32)
     }
+    cs2step_neural_validate_place_context_request(
+      experiment_country,
+      model_info
+    )
+    place_embedding <- cs2step_neural_prepare_place_embedding(
+      experiment_country,
+      model_info,
+      n_rows
+    )
+    place_embedding_jnp <- if (is.null(place_embedding)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(place_embedding))$astype(strenv$dtj)
+    }
+    time_embedding <- cs2step_neural_prepare_time_embedding(
+      experiment_year,
+      model_info,
+      n_rows
+    )
+    time_embedding_jnp <- if (is.null(time_embedding)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.matrix(time_embedding))$astype(strenv$dtj)
+    }
     resp_cov <- cs2step_neural_prepare_resp_cov(
       resp_cov_new,
       model_info,
@@ -1218,6 +1426,8 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
       resp_cov_present = resp_cov_present_jnp,
       resp_cov_order = resp_cov_order_jnp,
       experiment_idx = experiment_idx_jnp,
+      place_embedding = place_embedding_jnp,
+      time_embedding = time_embedding_jnp,
       factor_order = factor_order_jnp
     ))
   }
@@ -1243,6 +1453,30 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     NULL
   } else {
     strenv$jnp$array(as.integer(experiment_idx))$astype(strenv$jnp$int32)
+  }
+  cs2step_neural_validate_place_context_request(
+    experiment_country,
+    model_info
+  )
+  place_embedding <- cs2step_neural_prepare_place_embedding(
+    experiment_country,
+    model_info,
+    n_rows
+  )
+  place_embedding_jnp <- if (is.null(place_embedding)) {
+    NULL
+  } else {
+    strenv$jnp$array(as.matrix(place_embedding))$astype(strenv$dtj)
+  }
+  time_embedding <- cs2step_neural_prepare_time_embedding(
+    experiment_year,
+    model_info,
+    n_rows
+  )
+  time_embedding_jnp <- if (is.null(time_embedding)) {
+    NULL
+  } else {
+    strenv$jnp$array(as.matrix(time_embedding))$astype(strenv$dtj)
   }
   resp_cov <- cs2step_neural_prepare_resp_cov(
     resp_cov_new,
@@ -1273,6 +1507,8 @@ cs2step_neural_prepare_prediction_data <- function(W_idx,
     resp_cov_present = resp_cov_present_jnp,
     resp_cov_order = resp_cov_order_jnp,
     experiment_idx = experiment_idx_jnp,
+    place_embedding = place_embedding_jnp,
+    time_embedding = time_embedding_jnp,
     factor_order = factor_order_jnp
   )
 }
@@ -1293,6 +1529,7 @@ cs2step_neural_prepare_params <- function(object,
   model_info <- cs2step_neural_upgrade_model_info(model_info)
   object$fit$neural_model_info <- model_info
   if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
+      cs2step_neural_has_resp_covariates(model_info) &&
       !isTRUE(model_info$has_covariate_span_tokens)) {
     stop(
       "This shared_projection predictor uses the pre-span covariate encoder. Refit under the updated architecture.",
@@ -1405,6 +1642,14 @@ cs2step_neural_coerce_prediction_output <- function(pred, likelihood) {
   pred
 }
 
+cs2step_neural_has_resp_covariates <- function(model_info) {
+  n_cov <- suppressWarnings(as.integer(model_info$n_resp_covariates %||% NA_integer_))
+  if (length(n_cov) == 1L && !is.na(n_cov)) {
+    return(n_cov > 0L)
+  }
+  length(model_info$covariate_names %||% character(0)) > 0L
+}
+
 cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, return_logits = FALSE) {
   if (!isTRUE(prep$pairwise)) {
     stop("Pairwise prepared prediction requires pairwise prep data.", call. = FALSE)
@@ -1443,6 +1688,8 @@ cs2step_neural_predict_internal <- function(object,
                                            competing_group_variable_respondent = NULL,
                                            experiment_id = NULL,
                                            experiment_description = NULL,
+                                           experiment_country = NULL,
+                                           experiment_year = NULL,
                                            pair_id = NULL,
                                            profile_order = NULL,
                                            type = c("response", "link"),
@@ -1490,7 +1737,10 @@ cs2step_neural_predict_internal <- function(object,
     )
   }
 
-  use_internal <- is.function(object$fit$my_model) && is.null(experiment_description)
+  use_internal <- is.function(object$fit$my_model) &&
+    is.null(experiment_description) &&
+    is.null(experiment_country) &&
+    is.null(experiment_year)
   prep <- NULL
 
   if (identical(object$mode, "pairwise")) {
@@ -1534,6 +1784,12 @@ cs2step_neural_predict_internal <- function(object,
     if (!is.null(experiment_description) && length(experiment_description) == nrow(W_idx)) {
       experiment_description <- experiment_description[pair_mat[, 1]]
     }
+    if (!is.null(experiment_country) && length(experiment_country) == nrow(W_idx)) {
+      experiment_country <- experiment_country[pair_mat[, 1]]
+    }
+    if (!is.null(experiment_year) && length(experiment_year) == nrow(W_idx)) {
+      experiment_year <- experiment_year[pair_mat[, 1]]
+    }
     experiment_idx <- cs2step_neural_prepare_experiment_index(experiment_id, model_info, nrow(X_left))
     resp_cov_prepped <- cs2step_neural_prepare_resp_cov(
       X_new,
@@ -1566,6 +1822,11 @@ cs2step_neural_predict_internal <- function(object,
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
       model_info <- prep_params$model_info
+      cs2step_neural_validate_place_context_request(
+        experiment_country,
+        model_info,
+        prep_params$params
+      )
       model_info <- cs2step_neural_apply_experiment_description(
         model_info = model_info,
         experiment_description = experiment_description,
@@ -1580,6 +1841,8 @@ cs2step_neural_predict_internal <- function(object,
         resp_cov_new = X_new,
         factor_order_new = factor_order_new,
         experiment_id = experiment_id,
+        experiment_country = experiment_country,
+        experiment_year = experiment_year,
         pair_id = pair_id,
         profile_order = profile_order,
         mode = "pairwise"
@@ -1622,6 +1885,11 @@ cs2step_neural_predict_internal <- function(object,
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
       model_info <- prep_params$model_info
+      cs2step_neural_validate_place_context_request(
+        experiment_country,
+        model_info,
+        prep_params$params
+      )
       model_info <- cs2step_neural_apply_experiment_description(
         model_info = model_info,
         experiment_description = experiment_description,
@@ -1636,6 +1904,8 @@ cs2step_neural_predict_internal <- function(object,
         resp_cov_new = X_new,
         factor_order_new = factor_order_new,
         experiment_id = experiment_id,
+        experiment_country = experiment_country,
+        experiment_year = experiment_year,
         mode = "single"
       )
       p <- cs2step_neural_predict_prepared(
@@ -1693,6 +1963,8 @@ cs2step_neural_predict_internal <- function(object,
       resp_cov_new = X_new,
       factor_order_new = factor_order_new,
       experiment_id = experiment_id,
+      experiment_country = experiment_country,
+      experiment_year = experiment_year,
       pair_id = pair_id,
       profile_order = profile_order,
       mode = object$mode
@@ -1754,6 +2026,10 @@ cs2step_neural_predict_internal <- function(object,
 #'     \item a data.frame containing factor columns plus \code{pair_id} (and optionally \code{profile_order}), or
 #'     \item a list with elements \code{W}, \code{pair_id}, and optional \code{profile_order}.
 #'   }
+#'   Neural foundation predictors also accept optional \code{experiment_country}
+#'   and \code{experiment_year} as scalar or row-aligned vectors; in pairwise
+#'   mode row-aligned values are taken from the left/profile-level prediction
+#'   row.
 #' @param type \code{"response"} (probability) or \code{"link"} (logit / linear predictor).
 #' @param interval \code{"none"} (default), \code{"ci"}, or \code{"draws"}.
 #' @param level Credible interval level for draws.
@@ -1785,8 +2061,16 @@ predict.strategic_predictor <- function(object,
   competing_group_variable_respondent <- unpacked$competing_group_variable_respondent
   experiment_id <- unpacked$experiment_id
   experiment_description <- unpacked$experiment_description
+  experiment_country <- unpacked$experiment_country
+  experiment_year <- unpacked$experiment_year
 
   if (identical(object$model_type, "glm")) {
+    if (!is.null(experiment_country)) {
+      stop(
+        "Prediction-time experiment_country requires a neural predictor trained with place context.",
+        call. = FALSE
+      )
+    }
     return(cs2step_glm_predict_internal(
       object = object,
       W_new = W_new,
@@ -1807,6 +2091,8 @@ predict.strategic_predictor <- function(object,
     competing_group_variable_respondent = competing_group_variable_respondent,
     experiment_id = experiment_id,
     experiment_description = experiment_description,
+    experiment_country = experiment_country,
+    experiment_year = experiment_year,
     pair_id = pair_id,
     profile_order = profile_order,
     type = type,
@@ -2041,6 +2327,54 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
       cs2step_neural_to_r_array(out$experiment_description_present)
     )
   }
+  if (!is.null(out$place_embedding)) {
+    out$place_embedding <- as.matrix(
+      cs2step_neural_to_r_array(out$place_embedding)
+    )
+  }
+  if (!is.null(out$default_place_embedding)) {
+    out$default_place_embedding <- as.matrix(
+      cs2step_neural_to_r_array(out$default_place_embedding)
+    )
+  }
+  if (!is.null(out$place_present)) {
+    out$place_present <- as.logical(
+      cs2step_neural_to_r_array(out$place_present)
+    )
+  }
+  if (!is.null(out$place_feature_names)) {
+    out$place_feature_names <- as.character(out$place_feature_names)
+  }
+  if (!is.null(out$place_context_enabled)) {
+    out$place_context_enabled <- isTRUE(out$place_context_enabled)
+  }
+  if (!is.null(out$default_place_present)) {
+    out$default_place_present <- isTRUE(out$default_place_present)
+  }
+  if (!is.null(out$time_embedding)) {
+    out$time_embedding <- as.matrix(
+      cs2step_neural_to_r_array(out$time_embedding)
+    )
+  }
+  if (!is.null(out$default_time_embedding)) {
+    out$default_time_embedding <- as.matrix(
+      cs2step_neural_to_r_array(out$default_time_embedding)
+    )
+  }
+  if (!is.null(out$time_present)) {
+    out$time_present <- as.logical(
+      cs2step_neural_to_r_array(out$time_present)
+    )
+  }
+  if (!is.null(out$time_feature_names)) {
+    out$time_feature_names <- as.character(out$time_feature_names)
+  }
+  if (!is.null(out$time_context_enabled)) {
+    out$time_context_enabled <- isTRUE(out$time_context_enabled)
+  }
+  if (!is.null(out$default_time_present)) {
+    out$default_time_present <- isTRUE(out$default_time_present)
+  }
   if (!is.null(out$default_experiment_text_present)) {
     out$default_experiment_text_present <- isTRUE(out$default_experiment_text_present)
   }
@@ -2079,7 +2413,7 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
                   "n_matchup_levels", "n_resp_party_levels", "n_resp_covariates", "model_dims", "model_depth",
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
                   "default_experiment_index", "text_semantic_dim", "factor_struct_dim",
-                  "level_struct_dim", "max_factor_tokens",
+                  "level_struct_dim", "place_context_dim", "time_context_dim", "max_factor_tokens",
                   "max_covariate_tokens")
   for (field in int_fields) {
     if (!is.null(out[[field]])) {
@@ -2113,6 +2447,54 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   }
   if (is.null(out$has_matchup_context)) {
     out$has_matchup_context <- FALSE
+  }
+  if (is.null(out$place_context_enabled)) {
+    out$place_context_enabled <- FALSE
+  }
+  if (is.null(out$has_place_context)) {
+    out$has_place_context <- FALSE
+  }
+  if (is.null(out$place_feature_names)) {
+    out$place_feature_names <- neural_place_feature_names()
+  }
+  if (is.null(out$place_context_dim)) {
+    out$place_context_dim <- if (!is.null(out$place_embedding)) {
+      ncol(as.matrix(out$place_embedding))
+    } else if (!is.null(out$default_place_embedding)) {
+      ncol(as.matrix(out$default_place_embedding))
+    } else {
+      0L
+    }
+  }
+  if (is.null(out$place_present)) {
+    out$place_present <- logical(0)
+  }
+  if (is.null(out$default_place_present)) {
+    out$default_place_present <- FALSE
+  }
+  if (is.null(out$time_context_enabled)) {
+    out$time_context_enabled <- FALSE
+  }
+  if (is.null(out$has_time_context)) {
+    out$has_time_context <- FALSE
+  }
+  if (is.null(out$time_feature_names)) {
+    out$time_feature_names <- neural_time_feature_names()
+  }
+  if (is.null(out$time_context_dim)) {
+    out$time_context_dim <- if (!is.null(out$time_embedding)) {
+      ncol(as.matrix(out$time_embedding))
+    } else if (!is.null(out$default_time_embedding)) {
+      ncol(as.matrix(out$default_time_embedding))
+    } else {
+      0L
+    }
+  }
+  if (is.null(out$time_present)) {
+    out$time_present <- logical(0)
+  }
+  if (is.null(out$default_time_present)) {
+    out$default_time_present <- FALSE
   }
   if (is.null(out$has_covariate_missing_token)) {
     out$has_covariate_missing_token <- FALSE
@@ -2241,7 +2623,8 @@ cs2step_unpack_predictor <- function(bundle,
   if (identical(
     neural_covariate_value_encoding(upgraded_model_info),
     "shared_projection"
-  ) && !isTRUE(upgraded_model_info$has_covariate_span_tokens)) {
+  ) && cs2step_neural_has_resp_covariates(upgraded_model_info) &&
+      !isTRUE(upgraded_model_info$has_covariate_span_tokens)) {
     stop(
       "This shared_projection bundle uses the pre-span covariate encoder. Refit the model under the updated architecture.",
       call. = FALSE

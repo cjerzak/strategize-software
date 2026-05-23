@@ -296,6 +296,8 @@ test_that("cs2step_unpack_newdata keeps pairwise group metadata separate from X"
     profile_order = c(1L, 2L),
     competing_group_variable_candidate = c("PartyA", "PartyB"),
     competing_group_variable_respondent = c("PartyA", "PartyA"),
+    experiment_country = c("USA", "CAN"),
+    experiment_year = c(2024L, 2025L),
     income = c(0.1, 0.2),
     stringsAsFactors = FALSE
   )
@@ -314,7 +316,138 @@ test_that("cs2step_unpack_newdata keeps pairwise group metadata separate from X"
     unpacked$competing_group_variable_respondent,
     c("PartyA", "PartyA")
   )
+  testthat::expect_identical(unpacked$experiment_country, c("USA", "CAN"))
+  testthat::expect_identical(unpacked$experiment_year, c(2024L, 2025L))
   testthat::expect_identical(colnames(unpacked$X), "income")
+})
+
+test_that("country normalization accepts aliases and rejects unknown countries", {
+  us_iso2 <- strategize:::cs2step_normalize_country("US")
+  us_name <- strategize:::cs2step_normalize_country("United States")
+  canada <- strategize:::cs2step_normalize_country("Canada")
+
+  testthat::expect_identical(us_iso2$country_key, "USA")
+  testthat::expect_identical(us_name$country_key, "USA")
+  testthat::expect_identical(canada$country_key, "CAN")
+  testthat::expect_false(isTRUE(strategize:::cs2step_normalize_country(NA_character_)$country_present))
+  testthat::expect_error(
+    strategize:::cs2step_normalize_country("Untied Stats"),
+    "Unknown experiment_country.*Did you mean"
+  )
+})
+
+test_that("prediction-time experiment_country accepts scalar and row-aligned values", {
+  model_info <- list(place_feature_names = strategize:::neural_place_feature_names())
+  emb_scalar <- strategize:::cs2step_neural_prepare_place_embedding(
+    experiment_country = "Canada",
+    model_info = model_info,
+    n_rows = 3L
+  )
+  emb_rows <- strategize:::cs2step_neural_prepare_place_embedding(
+    experiment_country = c("USA", NA_character_, "CAN"),
+    model_info = model_info,
+    n_rows = 3L
+  )
+
+  testthat::expect_equal(nrow(emb_scalar), 3L)
+  testthat::expect_equal(unname(emb_rows[2L, "missing_country"]), 1)
+  testthat::expect_false(isTRUE(all.equal(emb_rows[1L, ], emb_rows[3L, ])))
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_place_embedding(
+      experiment_country = c("USA", "CAN"),
+      model_info = model_info,
+      n_rows = 3L
+    ),
+    "length one or the same number of rows"
+  )
+})
+
+test_that("prediction-time experiment_year accepts scalar and row-aligned values", {
+  emb_scalar <- strategize:::cs2step_neural_prepare_time_embedding(
+    experiment_year = 2030,
+    model_info = list(time_feature_names = strategize:::neural_time_feature_names()),
+    n_rows = 3L
+  )
+  emb_rows <- strategize:::cs2step_neural_prepare_time_embedding(
+    experiment_year = c(2024L, NA_integer_, 2026L),
+    model_info = list(time_feature_names = strategize:::neural_time_feature_names()),
+    n_rows = 3L
+  )
+
+  testthat::expect_equal(nrow(emb_scalar), 3L)
+  testthat::expect_equal(
+    unname(emb_scalar[, "linear_year_2000_25"]),
+    rep((2030 - 2000) / 25, 3L),
+    tolerance = 1e-8
+  )
+  testthat::expect_equal(unname(emb_rows[2L, "missing_year"]), 1)
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_time_embedding(
+      experiment_year = c(2024L, 2025L),
+      model_info = list(time_feature_names = strategize:::neural_time_feature_names()),
+      n_rows = 3L
+    ),
+    "length one or the same number of rows"
+  )
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_time_embedding(
+      experiment_year = 2025.5,
+      model_info = list(time_feature_names = strategize:::neural_time_feature_names()),
+      n_rows = 1L
+    ),
+    "integer-like"
+  )
+})
+
+test_that("pairwise row-aligned experiment_country uses the left profile row", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  model_info <- list(
+    factor_levels = 1L,
+    party_levels = strategize:::neural_missing_group_label("candidate"),
+    resp_party_levels = strategize:::neural_missing_group_label("respondent"),
+    party_missing_label = strategize:::neural_missing_group_label("candidate"),
+    resp_party_missing_label = strategize:::neural_missing_group_label("respondent"),
+    covariate_names = character(0),
+    place_context_enabled = TRUE,
+    place_feature_names = strategize:::neural_place_feature_names(),
+    factor_tokenization = "legacy_indexed"
+  )
+  prep <- strategize:::cs2step_neural_prepare_prediction_data(
+    W_idx = matrix(1L, nrow = 4L, ncol = 1L),
+    model_info = model_info,
+    experiment_country = c("USA", "CAN", "USA", "CAN"),
+    pair_id = c(1L, 1L, 2L, 2L),
+    profile_order = c(1L, 2L, 2L, 1L),
+    mode = "pairwise"
+  )
+  place_r <- reticulate::py_to_r(strategize:::strenv$np$array(prep$place_embedding))
+  expected <- strategize:::cs2step_neural_prepare_place_embedding(
+    experiment_country = c("USA", "CAN"),
+    model_info = model_info,
+    n_rows = 2L
+  )
+
+  testthat::expect_equal(unname(place_r), unname(expected), tolerance = 1e-6)
+})
+
+test_that("old predictors error when experiment_country is supplied", {
+  data <- generate_test_data(n = 80, n_factors = 2, n_levels = 2, seed = 609)
+  fit <- strategic_prediction(
+    Y = data$Y,
+    W = data$W,
+    model = "glm",
+    mode = "single",
+    use_regularization = FALSE
+  )
+  newdata <- as.data.frame(data$W[1:3, , drop = FALSE])
+  newdata$experiment_country <- "Canada"
+
+  testthat::expect_error(
+    predict(fit, newdata = newdata),
+    "neural predictor trained with place context"
+  )
 })
 
 test_that("cs2step_build_pair_mat preserves first-seen pair order", {
