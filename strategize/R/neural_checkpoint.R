@@ -191,12 +191,24 @@ neural_svi_checkpoint_params_to_jax <- function(params) {
     return(NULL)
   }
   params_list <- as.list(params)
-  lapply(params_list, function(x) {
+  converted <- lapply(params_list, function(x) {
     if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
       return(x)
     }
     strenv$jnp$array(x)$astype(strenv$dtj)
   })
+  param_names <- names(params_list)
+  if (cs2step_has_reticulate() &&
+      !is.null(param_names) &&
+      length(param_names) == length(converted) &&
+      all(nzchar(param_names))) {
+    out <- reticulate::dict()
+    for (param_name in param_names) {
+      out[[param_name]] <- converted[[param_name]]
+    }
+    return(out)
+  }
+  converted
 }
 
 neural_svi_checkpoint_make_payload <- function(snapshot_type,

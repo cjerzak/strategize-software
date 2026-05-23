@@ -6031,6 +6031,8 @@ generate_ModelOutcome_neural <- function(){
   cross_candidate_encoder_supplied <- FALSE
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
+  neural_oos_eval_internal_flag <- exists("neural_oos_eval_internal", inherits = TRUE) &&
+    isTRUE(get("neural_oos_eval_internal", inherits = TRUE))
 
   file_suffix <- if (!is.null(outcome_model_key)) {
     sprintf("%s_%s_%s", GroupsPool[GroupCounter], Round_, outcome_model_key)
@@ -6042,7 +6044,8 @@ generate_ModelOutcome_neural <- function(){
   }
   bundle_path <- sprintf("./StrategizeInternals/neural_bundle_%s.rds", file_suffix)
 
-  if (isTRUE(presaved_outcome_model) && file.exists(bundle_path)) {
+  if (!isTRUE(neural_oos_eval_internal_flag) &&
+      isTRUE(presaved_outcome_model) && file.exists(bundle_path)) {
     bundle <- tryCatch(readRDS(bundle_path), error = function(e) NULL)
     if (is.list(bundle) && !is.null(bundle$fit) &&
         !is.null(bundle$fit$theta_mean) &&
@@ -6224,7 +6227,13 @@ generate_ModelOutcome_neural <- function(){
       mcmc_control$early_stopping_validation_batch_size <- NULL
     }
   }
-  if (isTRUE(save_outcome_model) && is.null(mcmc_control$checkpoint_path)) {
+  if (isTRUE(neural_oos_eval_internal_flag)) {
+    mcmc_control$checkpoint_path <- NULL
+    mcmc_control$checkpoint_resume <- FALSE
+  }
+  if (isTRUE(save_outcome_model) &&
+      !isTRUE(neural_oos_eval_internal_flag) &&
+      is.null(mcmc_control$checkpoint_path)) {
     mcmc_control$checkpoint_path <- paste0(bundle_path, ".inprogress")
   }
   user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
@@ -9236,10 +9245,7 @@ generate_ModelOutcome_neural <- function(){
 
   # Cross-fitted out-of-sample fit metrics (computed before final full-data fit).
   fit_metrics <- NULL
-  neural_skip_oos_eval <- FALSE
-  if (exists("neural_oos_eval_internal", inherits = TRUE)) {
-    neural_skip_oos_eval <- isTRUE(get("neural_oos_eval_internal", inherits = TRUE))
-  }
+  neural_skip_oos_eval <- isTRUE(neural_oos_eval_internal_flag)
   if (!isTRUE(neural_skip_oos_eval) && isTRUE(eval_control$enabled)) {
     fit_metrics <- local({
       restore_rng_state <- function(old_seed) {
@@ -11286,7 +11292,7 @@ generate_ModelOutcome_neural <- function(){
           svi_budget_info = svi_budget_info
         ),
         control = neural_svi_checkpoint_strip_control(mcmc_control),
-        token = neural_token_info %||% NULL
+        token = neural_token_info_use
       ))
       if (isTRUE(svi_checkpoint$resume)) {
         svi_checkpoint_latest <- neural_svi_checkpoint_restore_latest(
@@ -12139,13 +12145,16 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$final_metric <- last_metric
       }
       if (!is.null(best_svi_state) &&
-          !early_stopping_reason %in% c("metric_failed", "validation_error") &&
-          !isTRUE(svi_checkpoint$enabled)) {
-        svi_state <- best_svi_state
+          !early_stopping_reason %in% c("metric_failed", "validation_error")) {
+        SVIParams <- tryCatch(svi$get_params(best_svi_state), error = function(e) NULL)
+        if (!isTRUE(svi_checkpoint$enabled)) {
+          svi_state <- best_svi_state
+        }
       }
       early_stopping_info$reason <- early_stopping_reason
       early_stopping_info$stop_step <- as.integer(svi_steps_completed %||% svi_steps)
       if (isTRUE(svi_checkpoint$enabled) &&
+          is.null(SVIParams) &&
           !early_stopping_reason %in% c("metric_failed", "validation_error")) {
         svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
           svi_checkpoint$path,
@@ -13506,7 +13515,7 @@ generate_ModelOutcome_neural <- function(){
     head_dim = head_dim
   )
 
-  if (isTRUE(save_outcome_model)) {
+  if (isTRUE(save_outcome_model) && !isTRUE(neural_oos_eval_internal_flag)) {
     dir.create("./StrategizeInternals", showWarnings = FALSE)
     bundle_meta <- list(
       outcome_model_key = outcome_model_key,
