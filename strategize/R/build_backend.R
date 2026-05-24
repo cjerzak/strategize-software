@@ -21,6 +21,9 @@
 #'   \code{"cuda"} to require Linux and install CUDA-capable JAX wheels when
 #'   supported by the NVIDIA driver, or \code{"mps"} to opt in to the
 #'   experimental Apple Silicon \code{jax-mps} backend.
+#' @param force_reinstall Logical. If \code{TRUE}, remove the named conda
+#'   environment if it exists, then recreate and reinstall the backend from the
+#'   requested input specifications.
 #'
 #' @return Invisibly returns \code{NULL}. This function is called for its side effects
 #'   of creating and configuring a conda environment for \code{strategize}.
@@ -46,8 +49,13 @@
 #' @md
 
 build_backend <- function(conda_env = "strategize_env", conda = "auto",
-                          backend = c("auto", "cpu", "cuda", "mps")) {
+                          backend = c("auto", "cpu", "cuda", "mps"),
+                          force_reinstall = FALSE) {
   backend <- match.arg(backend)
+  if (!is.logical(force_reinstall) || length(force_reinstall) != 1L ||
+      is.na(force_reinstall)) {
+    stop("force_reinstall must be TRUE or FALSE.", call. = FALSE)
+  }
   host <- cs2step_backend_host_info()
   if (identical(backend, "mps") &&
       (!isTRUE(host$is_macos) || !isTRUE(host$is_arm64))) {
@@ -121,6 +129,23 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
 
   conda_bin <- cs2step_resolve_conda_binary(conda) %||% conda
   state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  if (isTRUE(force_reinstall) && isTRUE(state$registered)) {
+    message(sprintf(
+      "force_reinstall = TRUE; removing conda environment '%s' before rebuilding it.",
+      conda_env
+    ))
+    remove_env(conda_bin)
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+    if (isTRUE(state$registered)) {
+      stop(
+        sprintf(
+          "Conda environment '%s' is still registered after forced reinstall removal.",
+          conda_env
+        ),
+        call. = FALSE
+      )
+    }
+  }
   mps_compatibility <- if (identical(backend, "mps") &&
       isTRUE(state$registered) && isTRUE(state$python_exists)) {
     cs2step_backend_mps_compatibility(state)

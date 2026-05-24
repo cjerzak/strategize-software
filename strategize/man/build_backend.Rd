@@ -7,7 +7,8 @@
 build_backend(
   conda_env = "strategize_env",
   conda = "auto",
-  backend = c("auto", "cpu", "cuda", "mps")
+  backend = c("auto", "cpu", "cuda", "mps"),
+  force_reinstall = FALSE
 )
 }
 \arguments{
@@ -23,6 +24,10 @@ host-aware behavior, \code{"cpu"} to install plain CPU JAX,
 \code{"cuda"} to require Linux and install CUDA-capable JAX wheels when
 supported by the NVIDIA driver, or \code{"mps"} to opt in to the
 experimental Apple Silicon \code{jax-mps} backend.}
+
+\item{force_reinstall}{Logical. If \code{TRUE}, remove the named conda
+environment if it exists, then recreate and reinstall the backend from the
+requested input specifications.}
 }
 \value{
 Invisibly returns \code{NULL}. This function is called for its side effects

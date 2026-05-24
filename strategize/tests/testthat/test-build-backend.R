@@ -78,6 +78,191 @@ test_that("build_backend is idempotent when the core env is already healthy", {
   expect_invisible(build_backend(conda_env = "test_env", conda = "auto"))
 })
 
+test_that("build_backend force_reinstall removes and rebuilds a healthy env", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  install_calls <- list()
+  create_versions <- character()
+  remove_calls <- 0L
+  registered <- TRUE
+  installed <- TRUE
+  py_path <- file.path(withr::local_tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+  file.create(py_path)
+
+  states <- function(conda_env, conda) {
+    if (registered && !file.exists(py_path)) {
+      dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+      file.create(py_path)
+    }
+    build_backend_mock_state(
+      conda_env = conda_env,
+      conda = conda,
+      registered = registered,
+      python = if (registered) py_path else "",
+      python_exists = registered,
+      core_ready = registered && installed
+    )
+  }
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", machine = "x86_64", is_macos = TRUE, is_arm64 = FALSE)
+    },
+    cs2step_backend_env_state = states,
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_remove = function(envname, conda) {
+      remove_calls <<- remove_calls + 1L
+      registered <<- FALSE
+      installed <<- FALSE
+      unlink(py_path)
+      TRUE
+    },
+    conda_create = function(envname, conda, python_version) {
+      registered <<- TRUE
+      create_versions <<- c(create_versions, python_version)
+      TRUE
+    },
+    py_install = function(packages, envname, conda, pip, ...) {
+      install_calls <<- c(install_calls, list(packages))
+      installed <<- TRUE
+      TRUE
+    },
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  expect_invisible(build_backend(
+    conda_env = "test_env",
+    conda = "auto",
+    force_reinstall = TRUE
+  ))
+
+  installed_packages <- unlist(install_calls)
+  expect_equal(remove_calls, 1L)
+  expect_equal(create_versions, "3.12")
+  expect_true("jax" %in% installed_packages)
+  expect_true(all(c("numpy", "equinox", "numpyro", "optax", "orbax-checkpoint") %in% installed_packages))
+})
+
+test_that("build_backend force_reinstall skips removal for a missing env", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  install_calls <- list()
+  create_versions <- character()
+  registered <- FALSE
+  installed <- FALSE
+  py_path <- file.path(withr::local_tempdir(), "env", "bin", "python")
+
+  states <- function(conda_env, conda) {
+    if (registered && !file.exists(py_path)) {
+      dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+      file.create(py_path)
+    }
+    build_backend_mock_state(
+      conda_env = conda_env,
+      conda = conda,
+      registered = registered,
+      python = if (registered) py_path else "",
+      python_exists = registered,
+      core_ready = registered && installed
+    )
+  }
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", machine = "x86_64", is_macos = TRUE, is_arm64 = FALSE)
+    },
+    cs2step_backend_env_state = states,
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_remove = function(...) stop("conda_remove should not run"),
+    conda_create = function(envname, conda, python_version) {
+      registered <<- TRUE
+      create_versions <<- c(create_versions, python_version)
+      TRUE
+    },
+    py_install = function(packages, envname, conda, pip, ...) {
+      install_calls <<- c(install_calls, list(packages))
+      installed <<- TRUE
+      TRUE
+    },
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  build_backend(conda_env = "test_env", conda = "auto", force_reinstall = TRUE)
+
+  expect_equal(create_versions, "3.12")
+  expect_true("jax" %in% unlist(install_calls))
+})
+
+test_that("build_backend force_reinstall stops when removal leaves env registered", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  py_path <- file.path(withr::local_tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+  file.create(py_path)
+  remove_calls <- 0L
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", machine = "x86_64", is_macos = TRUE, is_arm64 = FALSE)
+    },
+    cs2step_backend_env_state = function(conda_env, conda) {
+      build_backend_mock_state(
+        conda_env = conda_env,
+        conda = conda,
+        registered = TRUE,
+        python = py_path,
+        python_exists = TRUE,
+        core_ready = TRUE
+      )
+    },
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_remove = function(envname, conda) {
+      remove_calls <<- remove_calls + 1L
+      TRUE
+    },
+    conda_create = function(...) stop("conda_create should not run"),
+    py_install = function(...) stop("py_install should not run"),
+    .package = "reticulate"
+  )
+
+  expect_error(
+    build_backend(conda_env = "test_env", conda = "auto", force_reinstall = TRUE),
+    "still registered after forced reinstall removal"
+  )
+  expect_equal(remove_calls, 1L)
+})
+
+test_that("build_backend force_reinstall validates scalar logical input", {
+  expect_error(
+    build_backend(force_reinstall = NA),
+    "force_reinstall must be TRUE or FALSE"
+  )
+  expect_error(
+    build_backend(force_reinstall = c(TRUE, FALSE)),
+    "force_reinstall must be TRUE or FALSE"
+  )
+})
+
 test_that("build_backend installs CPU JAX when nvidia-smi is unavailable", {
   skip_on_cran()
   skip_if_not_installed("withr")
@@ -498,6 +683,97 @@ test_that("build_backend with backend mps is idempotent for a valid MPS env", {
   expect_invisible(build_backend(conda_env = "test_env", conda = "auto", backend = "mps"))
 })
 
+test_that("build_backend force_reinstall rebuilds a valid MPS env", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  install_calls <- list()
+  create_versions <- character()
+  remove_calls <- 0L
+  registered <- TRUE
+  mps_installed <- TRUE
+  core_installed <- TRUE
+  python_version <- "3.13"
+  py_path <- file.path(withr::local_tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+  file.create(py_path)
+
+  states <- function(conda_env, conda) {
+    if (registered && !file.exists(py_path)) {
+      dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+      file.create(py_path)
+    }
+    build_backend_mock_state(
+      conda_env = conda_env,
+      conda = conda,
+      registered = registered,
+      python = if (registered) py_path else "",
+      python_exists = registered,
+      core_ready = registered && core_installed
+    )
+  }
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", machine = "arm64", is_macos = TRUE, is_arm64 = TRUE)
+    },
+    cs2step_backend_env_state = states,
+    cs2step_backend_mps_compatibility = function(state) {
+      compatible <- identical(python_version, "3.13") && mps_installed
+      build_backend_mps_compat(
+        compatible = compatible,
+        python_major_minor = python_version,
+        jax_mps_installed = mps_installed,
+        jax_backend = if (compatible) "mps" else ""
+      )
+    },
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_remove = function(envname, conda) {
+      remove_calls <<- remove_calls + 1L
+      registered <<- FALSE
+      core_installed <<- FALSE
+      mps_installed <<- FALSE
+      unlink(py_path)
+      TRUE
+    },
+    conda_create = function(envname, conda, python_version) {
+      version <- python_version
+      registered <<- TRUE
+      python_version <<- version
+      create_versions <<- c(create_versions, version)
+      TRUE
+    },
+    py_install = function(packages, envname, conda, pip, ...) {
+      install_calls <<- c(install_calls, list(packages))
+      if ("jax-mps" %in% packages) {
+        mps_installed <<- TRUE
+      }
+      if (any(c("numpyro", "optax", "equinox", "numpy", "orbax-checkpoint") %in% packages)) {
+        core_installed <<- TRUE
+      }
+      TRUE
+    },
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  build_backend(
+    conda_env = "test_env",
+    conda = "auto",
+    backend = "mps",
+    force_reinstall = TRUE
+  )
+
+  expect_equal(remove_calls, 1L)
+  expect_equal(create_versions, "3.13")
+  expect_equal(install_calls[[1]], "jax-mps")
+})
+
 test_that("build_backend with backend mps stops on unsupported hosts before env changes", {
   skip_on_cran()
   skip_if_not_installed("withr")
@@ -519,7 +795,7 @@ test_that("build_backend with backend mps stops on unsupported hosts before env 
   )
 
   expect_error(
-    build_backend(conda_env = "test_env", conda = "auto", backend = "mps"),
+    build_backend(conda_env = "test_env", conda = "auto", backend = "mps", force_reinstall = TRUE),
     "requires macOS on Apple Silicon"
   )
 })
@@ -603,7 +879,7 @@ test_that("build_backend with backend cuda requires Linux before env changes", {
   )
 
   expect_error(
-    build_backend(conda_env = "test_env", conda = "auto", backend = "cuda"),
+    build_backend(conda_env = "test_env", conda = "auto", backend = "cuda", force_reinstall = TRUE),
     "requires Linux"
   )
 })
