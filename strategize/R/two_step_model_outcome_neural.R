@@ -7327,14 +7327,45 @@ generate_ModelOutcome_neural <- function(){
   }
   n_rel_levels <- ai(3L)
 
+  neural_token_info_use <- if (exists("neural_token_info", inherits = TRUE) &&
+                               !is.null(neural_token_info)) {
+    neural_token_info
+  } else {
+    list()
+  }
+  neural_token_info_use <- neural_resolve_token_runtime_config(
+    neural_token_info = neural_token_info_use,
+    mcmc_control = mcmc_control
+  )
+  group_context_schema <- neural_token_info_use$group_context_schema %||% list()
+  group_context_tokenization <- tolower(as.character(
+    group_context_schema$tokenization %||%
+      neural_token_info_use$group_context_tokenization %||%
+      "auto"
+  ))
+  unified_group_context <- isTRUE(group_context_schema$enabled) ||
+    group_context_tokenization %in% c(
+      "unified",
+      "unified_role_embedding",
+      "unified_role_embeddings"
+    )
+
   # Candidate/respondent group context
   party_missing_label <- if (exists("party_missing_label_fixed", inherits = TRUE)) {
     as.character(get("party_missing_label_fixed", inherits = TRUE))
+  } else if (!is.null(group_context_schema$candidate_missing_label)) {
+    as.character(group_context_schema$candidate_missing_label)
+  } else if (!is.null(neural_token_info_use$candidate_group_missing_label)) {
+    as.character(neural_token_info_use$candidate_group_missing_label)
   } else {
     neural_missing_group_label("candidate")
   }
   resp_party_missing_label <- if (exists("resp_party_missing_label_fixed", inherits = TRUE)) {
     as.character(get("resp_party_missing_label_fixed", inherits = TRUE))
+  } else if (!is.null(group_context_schema$respondent_missing_label)) {
+    as.character(group_context_schema$respondent_missing_label)
+  } else if (!is.null(neural_token_info_use$respondent_group_missing_label)) {
+    as.character(neural_token_info_use$respondent_group_missing_label)
   } else {
     neural_missing_group_label("respondent")
   }
@@ -7352,13 +7383,33 @@ generate_ModelOutcome_neural <- function(){
     any(!is.na(candidate_group_input) & nzchar(candidate_group_input))
   has_respondent_group_context <- !is.null(respondent_group_input) &&
     any(!is.na(respondent_group_input) & nzchar(respondent_group_input))
-  has_relation_context <- isTRUE(has_candidate_group_context) &&
+  has_candidate_group_context <- isTRUE(has_candidate_group_context) ||
+    isTRUE(unified_group_context) ||
+    isTRUE(group_context_schema$include_candidate_group)
+  has_respondent_group_context <- isTRUE(has_respondent_group_context) ||
+    isTRUE(unified_group_context) ||
+    isTRUE(group_context_schema$include_respondent_group)
+  has_relation_context <- (isTRUE(has_candidate_group_context) &&
+    isTRUE(has_respondent_group_context)) ||
+    isTRUE(group_context_schema$include_relation)
+
+  force_stage_context <- isTRUE(unified_group_context) ||
+    isTRUE(group_context_schema$include_stage)
+  force_matchup_context <- isTRUE(unified_group_context) ||
+    isTRUE(group_context_schema$include_matchup)
+
+  has_relation_context <- isTRUE(has_relation_context) &&
+    isTRUE(has_candidate_group_context) &&
     isTRUE(has_respondent_group_context)
 
   # Candidate group mapping
   party_levels_override <- NULL
   if (exists("party_levels_fixed", inherits = TRUE)) {
     party_levels_override <- get("party_levels_fixed", inherits = TRUE)
+  } else if (!is.null(group_context_schema$candidate_group_levels)) {
+    party_levels_override <- group_context_schema$candidate_group_levels
+  } else if (!is.null(neural_token_info_use$candidate_group_levels)) {
+    party_levels_override <- neural_token_info_use$candidate_group_levels
   }
   party_levels <- neural_prepare_group_levels(
     values = candidate_group_input,
@@ -7378,6 +7429,10 @@ generate_ModelOutcome_neural <- function(){
   resp_party_levels_override <- NULL
   if (exists("resp_party_levels_fixed", inherits = TRUE)) {
     resp_party_levels_override <- get("resp_party_levels_fixed", inherits = TRUE)
+  } else if (!is.null(group_context_schema$respondent_group_levels)) {
+    resp_party_levels_override <- group_context_schema$respondent_group_levels
+  } else if (!is.null(neural_token_info_use$respondent_group_levels)) {
+    resp_party_levels_override <- neural_token_info_use$respondent_group_levels
   }
   resp_party_levels <- neural_prepare_group_levels(
     values = respondent_group_input,
@@ -7424,16 +7479,6 @@ generate_ModelOutcome_neural <- function(){
     X_present_ <- matrix(1, nrow = nrow(X_), ncol = ncol(X_))
     colnames(X_present_) <- colnames(X_)
   }
-  neural_token_info_use <- if (exists("neural_token_info", inherits = TRUE) &&
-                               !is.null(neural_token_info)) {
-    neural_token_info
-  } else {
-    list()
-  }
-  neural_token_info_use <- neural_resolve_token_runtime_config(
-    neural_token_info = neural_token_info_use,
-    mcmc_control = mcmc_control
-  )
   token_family_levels <- NULL
   factor_tokenization <- neural_token_info_use$factor_tokenization
   factor_order_by_experiment <- lapply(
@@ -7814,10 +7859,12 @@ generate_ModelOutcome_neural <- function(){
       (pct_primary < warn_stage_imbalance_pct || pct_primary > (1 - warn_stage_imbalance_pct))
     warn_sparse_cells <- isTRUE(has_relation_context) &&
       !is.na(min_cell_n) && min_cell_n < warn_min_cell_n
-    stage_context_enabled <- isTRUE(has_relation_context) &&
+    observed_stage_context <- isTRUE(has_relation_context) &&
       is.finite(pct_primary) &&
       n_primary > 0L &&
       n_general > 0L
+    stage_context_enabled <- isTRUE(pairwise_mode) &&
+      (isTRUE(force_stage_context) || isTRUE(observed_stage_context))
     pairwise_context_mode <- if (isTRUE(stage_context_enabled)) {
       "stage_aware"
     } else {
@@ -7826,25 +7873,29 @@ generate_ModelOutcome_neural <- function(){
     stage_context_reason <- if (!isTRUE(has_candidate_group_context) ||
                                 !isTRUE(has_respondent_group_context)) {
       "missing_group_metadata"
+    } else if (isTRUE(force_stage_context) && !isTRUE(observed_stage_context)) {
+      "forced_unified"
     } else if (n_primary < 1L || n_general < 1L) {
       "single_stage_only"
     } else {
       "enabled"
     }
 
-    if (isTRUE(stage_context_enabled) && isTRUE(warn_stage_imbalance)) {
+    if (isTRUE(observed_stage_context) && isTRUE(warn_stage_imbalance)) {
       warning(
         sprintf("Stage imbalance detected in neural training data (pct_primary=%.3f).", pct_primary),
         call. = FALSE
       )
     }
-    if (isTRUE(stage_context_enabled) && isTRUE(warn_sparse_cells)) {
+    if (isTRUE(observed_stage_context) && isTRUE(warn_sparse_cells)) {
       warning(
         sprintf("Sparse stage/resp-party cells detected (min cell n=%d).", min_cell_n),
         call. = FALSE
       )
     }
-    if (isTRUE(has_relation_context) && !isTRUE(stage_context_enabled)) {
+    if (isTRUE(has_relation_context) &&
+        !isTRUE(stage_context_enabled) &&
+        !isTRUE(force_stage_context)) {
       warning(
         "Stage indicator has no variation; fitting pairwise FM in stage-free mode.",
         call. = FALSE
@@ -7872,7 +7923,7 @@ generate_ModelOutcome_neural <- function(){
   }
   use_matchup_token <- isTRUE(pairwise_mode) &&
     isTRUE(stage_context_enabled) &&
-    !identical(cross_candidate_encoder_mode, "none")
+    (isTRUE(force_matchup_context) || !identical(cross_candidate_encoder_mode, "none"))
   n_matchup_levels <- if (isTRUE(use_matchup_token)) {
     as.integer(n_party_levels * (n_party_levels + 1L) / 2L)
   } else {
@@ -14645,6 +14696,16 @@ generate_ModelOutcome_neural <- function(){
     n_matchup_levels = ai(n_matchup_levels),
     resp_party_levels = resp_party_levels,
     n_resp_party_levels = ai(n_resp_party_levels),
+    group_context_tokenization = if (isTRUE(unified_group_context)) {
+      group_context_tokenization
+    } else {
+      NULL
+    },
+    group_context_schema = if (isTRUE(unified_group_context)) {
+      group_context_schema
+    } else {
+      NULL
+    },
     party_missing_label = party_missing_label,
     resp_party_missing_label = resp_party_missing_label,
     party_missing_index = as.integer(party_missing_index),
