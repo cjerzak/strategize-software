@@ -1645,7 +1645,8 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  time_context_enabled = FALSE,
                                                  time_feature_names = NULL,
                                                  default_time_embedding = NULL,
-                                                 default_time_present = FALSE) {
+                                                 default_time_present = FALSE,
+                                                 schema_dropout = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
     if (is.null(x)) {
@@ -1740,7 +1741,8 @@ neural_make_runtime_token_model_info <- function(model_dims,
     time_context_enabled = isTRUE(time_context_enabled),
     time_feature_names = as.character(time_feature_names %||% neural_time_feature_names()),
     default_time_embedding = text_matrix(default_time_embedding),
-    default_time_present = isTRUE(default_time_present)
+    default_time_present = isTRUE(default_time_present),
+    schema_dropout = neural_resolve_schema_dropout(schema_dropout)
   )
 }
 
@@ -2146,6 +2148,112 @@ neural_resolve_default_resp_cov_values <- function(model_info,
   out
 }
 
+neural_schema_dropout_keys <- function() {
+  c(
+    "experiment_token",
+    "schema_text",
+    "structural_metadata",
+    "context_token",
+    "factor_span",
+    "covariate_span"
+  )
+}
+
+neural_schema_dropout_defaults <- function() {
+  list(
+    experiment_token = 0.25,
+    schema_text = 0.10,
+    structural_metadata = 0.05,
+    context_token = 0.10,
+    factor_span = 0.03,
+    covariate_span = 0.05
+  )
+}
+
+neural_schema_dropout_zero <- function() {
+  stats::setNames(
+    as.list(rep(0, length(neural_schema_dropout_keys()))),
+    neural_schema_dropout_keys()
+  )
+}
+
+neural_schema_dropout_defaults_flag <- function(value) {
+  if (is.logical(value) && length(value) == 1L && !is.na(value)) {
+    return(isTRUE(value))
+  }
+  if (is.numeric(value) && length(value) == 1L &&
+      !is.na(value) && is.finite(value) && value %in% c(0, 1)) {
+    return(as.logical(value))
+  }
+  stop("'schema_dropout$defaults' must be TRUE or FALSE.", call. = FALSE)
+}
+
+neural_validate_schema_dropout_rate <- function(value, name) {
+  if (!is.numeric(value) || length(value) != 1L ||
+      is.na(value) || !is.finite(value) || value < 0 || value >= 1) {
+    stop(
+      sprintf("'schema_dropout$%s' must be a scalar numeric value in [0, 1).", name),
+      call. = FALSE
+    )
+  }
+  as.numeric(value)
+}
+
+neural_resolve_schema_dropout <- function(schema_dropout = NULL) {
+  if (is.null(schema_dropout) || identical(schema_dropout, FALSE)) {
+    return(neural_schema_dropout_zero())
+  }
+  if (identical(schema_dropout, TRUE)) {
+    return(neural_schema_dropout_defaults())
+  }
+  if (!is.list(schema_dropout) && !is.atomic(schema_dropout)) {
+    stop(
+      "'schema_dropout' must be TRUE, FALSE, NULL, or a named list/vector of rates.",
+      call. = FALSE
+    )
+  }
+
+  values <- as.list(schema_dropout)
+  value_names <- names(values)
+  if (is.null(value_names) || any(!nzchar(value_names))) {
+    stop("'schema_dropout' overrides must be named.", call. = FALSE)
+  }
+
+  use_defaults <- FALSE
+  if ("defaults" %in% value_names) {
+    use_defaults <- neural_schema_dropout_defaults_flag(values[["defaults"]])
+    values[["defaults"]] <- NULL
+    value_names <- names(values)
+  }
+
+  allowed <- neural_schema_dropout_keys()
+  unknown <- setdiff(value_names, allowed)
+  if (length(unknown) > 0L) {
+    stop(
+      sprintf("Unknown schema_dropout rate(s): %s.", paste(unknown, collapse = ", ")),
+      call. = FALSE
+    )
+  }
+
+  resolved <- if (isTRUE(use_defaults)) {
+    neural_schema_dropout_defaults()
+  } else {
+    neural_schema_dropout_zero()
+  }
+  for (rate_name in value_names) {
+    resolved[[rate_name]] <- neural_validate_schema_dropout_rate(
+      values[[rate_name]],
+      rate_name
+    )
+  }
+  resolved[allowed]
+}
+
+neural_schema_dropout_active <- function(schema_dropout = NULL) {
+  rates <- unlist(neural_resolve_schema_dropout(schema_dropout), use.names = FALSE)
+  any(rates > 0)
+}
+
 neural_resolve_token_runtime_config <- function(neural_token_info = NULL,
                                                 mcmc_control = NULL) {
   resolved <- neural_token_info %||% list()
@@ -2172,6 +2280,11 @@ neural_resolve_token_runtime_config <- function(neural_token_info = NULL,
   resolved$max_covariate_tokens <- neural_resolve_max_covariate_tokens(
     resolved$max_covariate_tokens %||%
       mcmc_control$max_covariate_tokens %||%
+      NULL
+  )
+  resolved$schema_dropout <- neural_resolve_schema_dropout(
+    resolved$schema_dropout %||%
+      mcmc_control$schema_dropout %||%
       NULL
   )
   resolved
@@ -3413,6 +3526,158 @@ neural_token_family_index <- function(model_info, family_name) {
   as.integer(idx - 1L)
 }
 
+neural_numpyro_prng_key <- function() {
+  if (reticulate::py_has_attr(strenv$numpyro, "prng_key")) {
+    return(strenv$numpyro$prng_key())
+  }
+  primitives <- tryCatch(strenv$numpyro$primitives, error = function(e) NULL)
+  if (!is.null(primitives) && reticulate::py_has_attr(primitives, "prng_key")) {
+    return(primitives$prng_key())
+  }
+  stop("Installed numpyro does not expose prng_key(); schema_dropout requires NumPyro model RNG access.",
+       call. = FALSE)
+}
+
+neural_schema_dropout_random_keep <- function(key,
+                                              rate,
+                                              n_batch,
+                                              n_units) {
+  rate <- as.numeric(rate %||% 0)
+  n_batch <- ai(n_batch)
+  n_units <- ai(n_units)
+  if (!is.finite(rate) || rate <= 0 || n_batch < 1L || n_units < 1L) {
+    return(NULL)
+  }
+  u <- strenv$jax$random$uniform(
+    key,
+    shape = reticulate::tuple(n_batch, n_units),
+    dtype = strenv$dtj
+  )
+  (u >= strenv$jnp$array(rate, dtype = strenv$dtj))$astype(strenv$dtj)
+}
+
+neural_sample_schema_dropout_masks <- function(model_info,
+                                               n_batch = 1L) {
+  rates <- neural_resolve_schema_dropout(model_info$schema_dropout %||% NULL)
+  if (!any(unlist(rates, use.names = FALSE) > 0)) {
+    return(NULL)
+  }
+  n_batch <- ai(n_batch)
+  n_factor_spans <- neural_max_factor_spans(model_info = model_info)
+  n_covariate_spans <- neural_max_covariate_spans(model_info = model_info)
+  key_count <- 11L
+  keys <- strenv$jax$random$split(neural_numpyro_prng_key(), ai(key_count))
+  key_at <- function(i) strenv$jnp$take(keys, ai(i - 1L), axis = 0L)
+  out <- list(
+    experiment_token = neural_schema_dropout_random_keep(
+      key_at(1L), rates$experiment_token, n_batch, 1L
+    ),
+    context_token = neural_schema_dropout_random_keep(
+      key_at(2L), rates$context_token, n_batch, 1L
+    ),
+    factor_span = neural_schema_dropout_random_keep(
+      key_at(3L), rates$factor_span, n_batch, n_factor_spans
+    ),
+    covariate_span = neural_schema_dropout_random_keep(
+      key_at(4L), rates$covariate_span, n_batch, n_covariate_spans
+    ),
+    schema_text_factor = neural_schema_dropout_random_keep(
+      key_at(5L), rates$schema_text, n_batch, n_factor_spans
+    ),
+    schema_text_level = neural_schema_dropout_random_keep(
+      key_at(6L), rates$schema_text, n_batch, n_factor_spans
+    ),
+    schema_text_covariate = neural_schema_dropout_random_keep(
+      key_at(7L), rates$schema_text, n_batch, n_covariate_spans
+    ),
+    schema_text_covariate_value = neural_schema_dropout_random_keep(
+      key_at(8L), rates$schema_text, n_batch, n_covariate_spans
+    ),
+    structural_factor = neural_schema_dropout_random_keep(
+      key_at(9L), rates$structural_metadata, n_batch, n_factor_spans
+    ),
+    structural_level = neural_schema_dropout_random_keep(
+      key_at(10L), rates$structural_metadata, n_batch, n_factor_spans
+    ),
+    structural_covariate_metadata = neural_schema_dropout_random_keep(
+      key_at(11L), rates$structural_metadata, n_batch, n_covariate_spans
+    )
+  )
+  out <- Filter(Negate(is.null), out)
+  if (!length(out)) NULL else out
+}
+
+neural_concat_schema_dropout_masks <- function(left_masks, right_masks) {
+  if (is.null(left_masks) && is.null(right_masks)) {
+    return(NULL)
+  }
+  mask_names <- union(names(left_masks %||% list()), names(right_masks %||% list()))
+  out <- setNames(vector("list", length(mask_names)), mask_names)
+  for (mask_name in mask_names) {
+    left <- left_masks[[mask_name]] %||% NULL
+    right <- right_masks[[mask_name]] %||% NULL
+    out[[mask_name]] <- if (is.null(left)) {
+      right
+    } else if (is.null(right)) {
+      left
+    } else {
+      strenv$jnp$concatenate(list(left, right), axis = 0L)
+    }
+  }
+  Filter(Negate(is.null), out)
+}
+
+neural_schema_dropout_keep <- function(schema_dropout_masks, name) {
+  if (is.null(schema_dropout_masks)) {
+    return(NULL)
+  }
+  schema_dropout_masks[[name]] %||% NULL
+}
+
+neural_schema_dropout_apply_unit <- function(tokens,
+                                             schema_dropout_masks,
+                                             name) {
+  keep <- neural_schema_dropout_keep(schema_dropout_masks, name)
+  if (is.null(tokens) || is.null(keep)) {
+    return(tokens)
+  }
+  tokens * strenv$jnp$reshape(
+    keep,
+    list(tokens$shape[[1]], tokens$shape[[2]], 1L)
+  )
+}
+
+neural_schema_dropout_apply_span_mask <- function(span_mask,
+                                                  schema_dropout_masks,
+                                                  name,
+                                                  preserve_one = FALSE) {
+  keep <- neural_schema_dropout_keep(schema_dropout_masks, name)
+  if (is.null(span_mask) || is.null(keep)) {
+    return(span_mask)
+  }
+  keep_bool <- keep > 0
+  dropped <- span_mask & keep_bool
+  if (!isTRUE(preserve_one)) {
+    return(dropped)
+  }
+  any_valid <- strenv$jnp$any(span_mask, axis = 1L, keepdims = TRUE)
+  any_kept <- strenv$jnp$any(dropped, axis = 1L, keepdims = TRUE)
+  first_idx <- strenv$jnp$argmax(
+    strenv$jnp$astype(span_mask, strenv$jnp$int32),
+    axis = 1L
+  )
+  span_axis <- strenv$jnp$reshape(
+    strenv$jnp$arange(ai(span_mask$shape[[2]])),
+    list(1L, ai(span_mask$shape[[2]]))
+  )
+  first_keep <- (span_axis == strenv$jnp$reshape(first_idx, list(-1L, 1L))) & span_mask
+  use_dropped <- strenv$jnp$logical_or(
+    any_kept,
+    strenv$jnp$logical_not(any_valid)
+  )
+  strenv$jnp$where(use_dropped, dropped, first_keep)
+}
+
 neural_text_matrix_jnp <- function(x) {
   if (is.null(x)) {
     return(NULL)
@@ -3765,7 +4030,8 @@ neural_build_covariate_span_tokens <- function(model_info,
                                                resp_cov_present_mat = NULL,
                                                resp_cov_order = NULL,
                                                experiment_idx = NULL,
-                                               n_batch = 1L) {
+                                               n_batch = 1L,
+                                               schema_dropout_masks = NULL) {
   n_covariates <- length(model_info$covariate_names %||% character(0))
   max_spans <- neural_max_covariate_spans(model_info = model_info)
   if (n_covariates < 1L || max_spans < 1L) {
@@ -3797,7 +4063,12 @@ neural_build_covariate_span_tokens <- function(model_info,
     idx_safe,
     axis = 1L
   ) * strenv$jnp$astype(idx_valid, strenv$dtj)
-  span_mask <- idx_valid
+  span_mask <- neural_schema_dropout_apply_span_mask(
+    idx_valid,
+    schema_dropout_masks,
+    "covariate_span",
+    preserve_one = FALSE
+  )
   observed_mask <- gathered_present > 0
 
   z_all <- neural_covariate_z_scores(resp_cov_mat, model_info)
@@ -3855,6 +4126,11 @@ neural_build_covariate_span_tokens <- function(model_info,
   if (!is.null(cov_text_proj)) {
     name_tok_base <- strenv$jnp$take(cov_text_proj, idx_safe, axis = 0L)
   }
+  name_tok_base <- neural_schema_dropout_apply_unit(
+    name_tok_base,
+    schema_dropout_masks,
+    "schema_text_covariate"
+  )
   name_tok <- (name_tok_base + role_name) * span_mask_expanded
 
   encoder_mode <- neural_shared_projection_value_encoder(model_info)
@@ -3898,6 +4174,11 @@ neural_build_covariate_span_tokens <- function(model_info,
         meta_lookup,
         meta_idx,
         axis = 1L
+      )
+      gathered_meta <- neural_schema_dropout_apply_unit(
+        gathered_meta,
+        schema_dropout_masks,
+        "structural_covariate_metadata"
       )
       phi <- neural_covariate_name_dist_basis(gathered_values, gathered_stats)
       cond_in <- strenv$jnp$concatenate(list(name_tok_base, gathered_meta), axis = 2L)
@@ -3976,6 +4257,11 @@ neural_build_covariate_span_tokens <- function(model_info,
           "nsd,dm->nsm",
           gathered_text,
           params$W_covariate_value_text
+        )
+        value_text_tok <- neural_schema_dropout_apply_unit(
+          value_text_tok,
+          schema_dropout_masks,
+          "schema_text_covariate_value"
         )
         type_lookup <- if (!is.null(model_info$covariate_value_type)) {
           neural_as_jnp_vector(model_info$covariate_value_type, dtype = strenv$jnp$int32)
@@ -4208,7 +4494,8 @@ add_context_tokens <- function(model_info,
                                params = NULL,
                                batch = FALSE,
                                return_mask = FALSE,
-                               context_present = NULL){
+                               context_present = NULL,
+                               schema_dropout_masks = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -4341,11 +4628,24 @@ add_context_tokens <- function(model_info,
       model_info,
       params
     )
-    token_list[[length(token_list) + 1L]] <- experiment_tok
-    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
-      list(N_batch, 1L),
-      dtype = strenv$dtj
+    experiment_tok <- neural_schema_dropout_apply_unit(
+      experiment_tok,
+      schema_dropout_masks,
+      "experiment_token"
     )
+    token_list[[length(token_list) + 1L]] <- experiment_tok
+    experiment_keep <- neural_schema_dropout_keep(
+      schema_dropout_masks,
+      "experiment_token"
+    )
+    token_mask_list[[length(token_mask_list) + 1L]] <- if (is.null(experiment_keep)) {
+      strenv$jnp$ones(
+        list(N_batch, 1L),
+        dtype = strenv$dtj
+      )
+    } else {
+      experiment_keep
+    }
   }
   place_proj <- neural_project_place_context(
     model_info = model_info,
@@ -4362,11 +4662,18 @@ add_context_tokens <- function(model_info,
       model_info,
       params
     )
-    token_list[[length(token_list) + 1L]] <- place_tok
-    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
-      list(N_batch, 1L),
-      dtype = strenv$dtj
+    place_tok <- neural_schema_dropout_apply_unit(
+      place_tok,
+      schema_dropout_masks,
+      "context_token"
     )
+    token_list[[length(token_list) + 1L]] <- place_tok
+    context_keep <- neural_schema_dropout_keep(schema_dropout_masks, "context_token")
+    token_mask_list[[length(token_mask_list) + 1L]] <- if (is.null(context_keep)) {
+      strenv$jnp$ones(list(N_batch, 1L), dtype = strenv$dtj)
+    } else {
+      context_keep
+    }
   }
   time_proj <- neural_project_time_context(
     model_info = model_info,
@@ -4383,11 +4690,18 @@ add_context_tokens <- function(model_info,
       model_info,
       params
     )
-    token_list[[length(token_list) + 1L]] <- time_tok
-    token_mask_list[[length(token_mask_list) + 1L]] <- strenv$jnp$ones(
-      list(N_batch, 1L),
-      dtype = strenv$dtj
+    time_tok <- neural_schema_dropout_apply_unit(
+      time_tok,
+      schema_dropout_masks,
+      "context_token"
     )
+    token_list[[length(token_list) + 1L]] <- time_tok
+    context_keep <- neural_schema_dropout_keep(schema_dropout_masks, "context_token")
+    token_mask_list[[length(token_mask_list) + 1L]] <- if (is.null(context_keep)) {
+      strenv$jnp$ones(list(N_batch, 1L), dtype = strenv$dtj)
+    } else {
+      context_keep
+    }
   }
   if (!is.null(params$E_stage) && !is.null(stage_idx_use)) {
     stage_vec <- params$E_stage[resp_party_idx_use, stage_idx_use]
@@ -4422,7 +4736,8 @@ add_context_tokens <- function(model_info,
       resp_cov_present_mat = resp_cov_present_mat,
       resp_cov_order = resp_cov_order,
       experiment_idx = experiment_idx_use,
-      n_batch = N_batch
+      n_batch = N_batch,
+      schema_dropout_masks = schema_dropout_masks
     )
     if (!is.null(cov_span$tokens)) {
       token_list[[length(token_list) + 1L]] <- cov_span$tokens
@@ -4513,7 +4828,8 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
                                                  model_info,
                                                  params,
                                                  factor_order = NULL,
-                                                 experiment_idx = NULL) {
+                                                 experiment_idx = NULL,
+                                                 schema_dropout_masks = NULL) {
   D_local <- ai(X_idx$shape[[2]])
   n_batch <- ai(X_idx$shape[[1]])
   max_spans <- neural_max_factor_spans(model_info = model_info)
@@ -4534,7 +4850,12 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
 
   idx_valid <- order_idx >= 0L
   idx_safe <- strenv$jnp$maximum(order_idx, ai(0L))
-  span_mask <- idx_valid
+  span_mask <- neural_schema_dropout_apply_span_mask(
+    idx_valid,
+    schema_dropout_masks,
+    "factor_span",
+    preserve_one = TRUE
+  )
   span_mask_expanded <- strenv$jnp$expand_dims(
     strenv$jnp$astype(span_mask, strenv$dtj),
     axis = 2L
@@ -4573,36 +4894,54 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
     axis = 2L
   )
 
-  factor_tok_all <- strenv$jnp$zeros(list(n_batch, D_local, dims), dtype = strenv$dtj)
+  factor_text_tok_all <- strenv$jnp$zeros(list(n_batch, D_local, dims), dtype = strenv$dtj)
   factor_text_proj <- neural_project_text_matrix(
     model_info$factor_name_text,
     params$W_factor_name_text
   )
   if (!is.null(factor_text_proj)) {
-    factor_tok_all <- strenv$jnp$reshape(
+    factor_text_tok_all <- strenv$jnp$reshape(
       factor_text_proj,
       list(1L, D_local, dims)
     ) * strenv$jnp$ones(list(n_batch, 1L, 1L), dtype = strenv$dtj)
   }
+  factor_struct_tok_all <- strenv$jnp$zeros(list(n_batch, D_local, dims), dtype = strenv$dtj)
   factor_struct_proj <- neural_project_text_matrix(
     model_info$factor_struct_matrix,
     params$W_factor_struct
   )
   if (!is.null(factor_struct_proj)) {
-    factor_tok_all <- factor_tok_all + strenv$jnp$reshape(
+    factor_struct_tok_all <- strenv$jnp$reshape(
       factor_struct_proj,
       list(1L, D_local, dims)
     ) * strenv$jnp$ones(list(n_batch, 1L, 1L), dtype = strenv$dtj)
   }
-  factor_tok <- strenv$jnp$take_along_axis(
-    factor_tok_all,
+  factor_text_tok <- strenv$jnp$take_along_axis(
+    factor_text_tok_all,
     gather_idx,
     axis = 1L
   )
+  factor_struct_tok <- strenv$jnp$take_along_axis(
+    factor_struct_tok_all,
+    gather_idx,
+    axis = 1L
+  )
+  factor_text_tok <- neural_schema_dropout_apply_unit(
+    factor_text_tok,
+    schema_dropout_masks,
+    "schema_text_factor"
+  )
+  factor_struct_tok <- neural_schema_dropout_apply_unit(
+    factor_struct_tok,
+    schema_dropout_masks,
+    "structural_factor"
+  )
+  factor_tok <- factor_text_tok + factor_struct_tok
 
-  level_token_list <- vector("list", D_local)
+  level_text_token_list <- vector("list", D_local)
+  level_struct_token_list <- vector("list", D_local)
   for (d_ in seq_len(D_local)) {
-    token_d <- strenv$jnp$zeros(list(n_batch, dims), dtype = strenv$dtj)
+    level_text_d <- strenv$jnp$zeros(list(n_batch, dims), dtype = strenv$dtj)
     if (!is.null(params$W_level_name_text) &&
         !is.null(model_info$level_name_text) &&
         length(model_info$level_name_text) >= d_) {
@@ -4612,9 +4951,10 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
       )
       if (!is.null(level_text_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-        token_d <- strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
+        level_text_d <- strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
       }
     }
+    level_struct_d <- strenv$jnp$zeros(list(n_batch, dims), dtype = strenv$dtj)
     if (!is.null(params$W_level_struct) &&
         !is.null(model_info$level_struct_matrices) &&
         length(model_info$level_struct_matrices) >= d_) {
@@ -4624,17 +4964,35 @@ neural_build_factor_span_tokens_hard <- function(X_idx,
       )
       if (!is.null(level_struct_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
-        token_d <- token_d + strenv$jnp$take(level_struct_proj, idx_d, axis = 0L)
+        level_struct_d <- strenv$jnp$take(level_struct_proj, idx_d, axis = 0L)
       }
     }
-    level_token_list[[d_]] <- token_d
+    level_text_token_list[[d_]] <- level_text_d
+    level_struct_token_list[[d_]] <- level_struct_d
   }
-  level_tok_all <- strenv$jnp$stack(level_token_list, axis = 1L)
-  level_tok <- strenv$jnp$take_along_axis(
-    level_tok_all,
+  level_text_tok_all <- strenv$jnp$stack(level_text_token_list, axis = 1L)
+  level_struct_tok_all <- strenv$jnp$stack(level_struct_token_list, axis = 1L)
+  level_text_tok <- strenv$jnp$take_along_axis(
+    level_text_tok_all,
     gather_idx,
     axis = 1L
   )
+  level_struct_tok <- strenv$jnp$take_along_axis(
+    level_struct_tok_all,
+    gather_idx,
+    axis = 1L
+  )
+  level_text_tok <- neural_schema_dropout_apply_unit(
+    level_text_tok,
+    schema_dropout_masks,
+    "schema_text_level"
+  )
+  level_struct_tok <- neural_schema_dropout_apply_unit(
+    level_struct_tok,
+    schema_dropout_masks,
+    "structural_level"
+  )
+  level_tok <- level_text_tok + level_struct_tok
 
   start_tok <- (start_tok + role_start) * span_mask_expanded
   factor_tok <- (factor_tok + role_factor) * span_mask_expanded
@@ -4673,7 +5031,8 @@ neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
                                                factor_order = NULL,
                                                params = NULL,
                                                return_mask = FALSE,
-                                               context_present = NULL){
+                                               context_present = NULL,
+                                               schema_dropout_masks = NULL){
   if (is.null(params)) {
     params <- model_info$params
   }
@@ -4685,7 +5044,8 @@ neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
       model_info = model_info,
       params = params,
       factor_order = factor_order,
-      experiment_idx = experiment_idx
+      experiment_idx = experiment_idx,
+      schema_dropout_masks = schema_dropout_masks
     )
     tokens <- cand_info$tokens %||% strenv$jnp$zeros(
       list(n_batch, 0L, ai(model_info$model_dims)),
@@ -4780,7 +5140,8 @@ neural_build_context_tokens_batch <- function(model_info,
                                               time_embedding = NULL,
                                               params = NULL,
                                               return_mask = FALSE,
-                                              context_present = NULL){
+                                              context_present = NULL,
+                                              schema_dropout_masks = NULL){
   add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
@@ -4794,7 +5155,8 @@ neural_build_context_tokens_batch <- function(model_info,
                      params = params,
                      batch = TRUE,
                      return_mask = return_mask,
-                     context_present = context_present)
+                     context_present = context_present,
+                     schema_dropout_masks = schema_dropout_masks)
 }
 
 neural_build_factor_span_tokens_soft <- function(pi_vec,
@@ -5089,7 +5451,8 @@ neural_build_context_tokens <- function(model_info,
                                         time_embedding = NULL,
                                         params = NULL,
                                         return_mask = FALSE,
-                                        context_present = NULL){
+                                        context_present = NULL,
+                                        schema_dropout_masks = NULL){
   add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
@@ -5103,7 +5466,8 @@ neural_build_context_tokens <- function(model_info,
                      params = params,
                      batch = FALSE,
                      return_mask = return_mask,
-                     context_present = context_present)
+                     context_present = context_present,
+                     schema_dropout_masks = schema_dropout_masks)
 }
 
 neural_build_choice_token <- function(model_info, params = NULL){
@@ -7202,6 +7566,9 @@ generate_ModelOutcome_neural <- function(){
   } else {
     NA_integer_
   }
+  schema_dropout <- neural_resolve_schema_dropout(
+    neural_token_info_use$schema_dropout %||% NULL
+  )
   universal_training <- neural_token_info_use$foundation_universal_training %||% NULL
   universal_enabled <- isTRUE(universal_training$enabled)
   universal_task_mode_all <- as.character(universal_training$task_mode_by_row %||% character(0))
@@ -9483,7 +9850,8 @@ generate_ModelOutcome_neural <- function(){
       time_context_enabled = time_context_enabled,
       time_feature_names = time_feature_names,
       default_time_embedding = default_time_embedding,
-      default_time_present = default_time_present
+      default_time_present = default_time_present,
+      schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
       info = model_info_local,
@@ -9502,14 +9870,16 @@ generate_ModelOutcome_neural <- function(){
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
-                                return_mask = FALSE, context_present = NULL) {
+                                return_mask = FALSE, context_present = NULL,
+                                schema_dropout_masks = NULL) {
       neural_build_candidate_tokens_hard(X_idx, party_idx,
                                          model_info = model_info_local,
                                          resp_party_idx = resp_p,
                                          experiment_idx = experiment_idx,
                                          params = params_view,
                                          return_mask = return_mask,
-                                         context_present = context_present)
+                                         context_present = context_present,
+                                         schema_dropout_masks = schema_dropout_masks)
     }
 
     add_segment_embedding <- function(tokens, segment_idx) {
@@ -9537,7 +9907,8 @@ generate_ModelOutcome_neural <- function(){
                                     experiment_idx = NULL,
                                     matchup_idx = NULL,
                                     return_mask = FALSE,
-                                    context_present = NULL) {
+                                    context_present = NULL,
+                                    schema_dropout_masks = NULL) {
       neural_build_context_tokens_batch(model_info = model_info_local,
                                         resp_party_idx = resp_p,
                                         stage_idx = stage_idx,
@@ -9547,7 +9918,8 @@ generate_ModelOutcome_neural <- function(){
                                         experiment_idx = experiment_idx,
                                         params = params_view,
                                         return_mask = return_mask,
-                                        context_present = context_present)
+                                        context_present = context_present,
+                                        schema_dropout_masks = schema_dropout_masks)
     }
 
     build_sep_token <- function(N_batch) {
@@ -9558,7 +9930,10 @@ generate_ModelOutcome_neural <- function(){
 
     encode_pair_cross <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
                                   experiment_idx = NULL, stage_idx, matchup_idx = NULL,
-                                  context_present = NULL) {
+                                  context_present = NULL,
+                                  schema_dropout_context = NULL,
+                                  schema_dropout_left = NULL,
+                                  schema_dropout_right = NULL) {
       N_batch <- ai(Xl$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -9571,16 +9946,19 @@ generate_ModelOutcome_neural <- function(){
         experiment_idx,
         matchup_idx,
         return_mask = TRUE,
-        context_present = context_present
+        context_present = context_present,
+        schema_dropout_masks = schema_dropout_context
       )
       ctx_tokens <- ctx_info$tokens %||% NULL
       ctx_mask <- ctx_info$mask %||% NULL
       left_info <- embed_candidate(Xl, pl, resp_p, experiment_idx,
                                    return_mask = TRUE,
-                                   context_present = context_present)
+                                   context_present = context_present,
+                                   schema_dropout_masks = schema_dropout_left)
       right_info <- embed_candidate(Xr, pr, resp_p, experiment_idx,
                                     return_mask = TRUE,
-                                    context_present = context_present)
+                                    context_present = context_present,
+                                    schema_dropout_masks = schema_dropout_right)
       left_tokens <- add_segment_embedding(left_info$tokens, 0L)
       right_tokens <- add_segment_embedding(right_info$tokens, 1L)
       sep_tok <- build_sep_token(N_batch)
@@ -9607,7 +9985,9 @@ generate_ModelOutcome_neural <- function(){
 
     encode_candidate <- function(Xa, pa, resp_p, resp_c, resp_c_present = NULL,
                                  experiment_idx = NULL, stage_idx, matchup_idx = NULL,
-                                 return_tokens = FALSE, context_present = NULL) {
+                                 return_tokens = FALSE, context_present = NULL,
+                                 schema_dropout_context = NULL,
+                                 schema_dropout_candidate = NULL) {
       N_batch <- ai(Xa$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -9620,13 +10000,15 @@ generate_ModelOutcome_neural <- function(){
         experiment_idx,
         matchup_idx,
         return_mask = TRUE,
-        context_present = context_present
+        context_present = context_present,
+        schema_dropout_masks = schema_dropout_context
       )
       ctx_tokens <- ctx_info$tokens %||% NULL
       ctx_mask <- ctx_info$mask %||% NULL
       cand_info <- embed_candidate(Xa, pa, resp_p, experiment_idx,
                                    return_mask = TRUE,
-                                   context_present = context_present)
+                                   context_present = context_present,
+                                   schema_dropout_masks = schema_dropout_candidate)
       cand_tokens <- cand_info$tokens
       cand_mask <- cand_info$mask
       seq_info <- neural_pack_candidate_sequence(
@@ -9656,7 +10038,10 @@ generate_ModelOutcome_neural <- function(){
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
                                       experiment_idx = NULL, stage_idx, matchup_idx = NULL,
-                                      context_present = NULL) {
+                                      context_present = NULL,
+                                      schema_dropout_context = NULL,
+                                      schema_dropout_left = NULL,
+                                      schema_dropout_right = NULL) {
       N_batch <- ai(Xl$shape[[1]])
       X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
       p_all <- strenv$jnp$concatenate(list(pl, pr), axis = 0L)
@@ -9669,18 +10054,30 @@ generate_ModelOutcome_neural <- function(){
       context_present_all <- if (is.null(context_present)) NULL else {
         strenv$jnp$concatenate(list(context_present, context_present), axis = 0L)
       }
+      schema_dropout_all <- neural_concat_schema_dropout_masks(
+        schema_dropout_left,
+        schema_dropout_right
+      )
+      schema_dropout_context_all <- neural_concat_schema_dropout_masks(
+        schema_dropout_context,
+        schema_dropout_context
+      )
       if (isTRUE(use_cross_attn)) {
         enc_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
                                     resp_c_present_all, experiment_idx_all,
                                     stage_all, matchup_all, return_tokens = TRUE,
-                                    context_present = context_present_all)
+                                    context_present = context_present_all,
+                                    schema_dropout_context = schema_dropout_context_all,
+                                    schema_dropout_candidate = schema_dropout_all)
         phi_all <- enc_all$phi
         cand_all <- enc_all$cand_tokens_out
       } else {
         phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
                                     resp_c_present_all, experiment_idx_all,
                                     stage_all, matchup_all,
-                                    context_present = context_present_all)
+                                    context_present = context_present_all,
+                                    schema_dropout_context = schema_dropout_context_all,
+                                    schema_dropout_candidate = schema_dropout_all)
         cand_all <- NULL
       }
       idx_left <- strenv$jnp$arange(N_batch)
@@ -9709,16 +10106,34 @@ generate_ModelOutcome_neural <- function(){
         matchup_idx <- compute_matchup_idx(pl, pr)
       }
       context_present <- neural_pair_context_present(pl, pr, resp_p, model_info_local)
+      schema_dropout_context <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = ai(Xl$shape[[1]])
+      )
+      schema_dropout_left <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = ai(Xl$shape[[1]])
+      )
+      schema_dropout_right <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = ai(Xr$shape[[1]])
+      )
       if (isTRUE(use_cross_encoder)) {
         logits <- encode_pair_cross(Xl, Xr, pl, pr, resp_p, resp_c,
                                     resp_c_present, experiment_idx,
                                     stage_idx, matchup_idx,
-                                    context_present = context_present)
+                                    context_present = context_present,
+                                    schema_dropout_context = schema_dropout_context,
+                                    schema_dropout_left = schema_dropout_left,
+                                    schema_dropout_right = schema_dropout_right)
       } else {
         phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c,
                                           resp_c_present, experiment_idx,
                                           stage_idx, matchup_idx,
-                                          context_present = context_present)
+                                          context_present = context_present,
+                                          schema_dropout_context = schema_dropout_context,
+                                          schema_dropout_left = schema_dropout_left,
+                                          schema_dropout_right = schema_dropout_right)
         phi_l <- phi_pair$phi_left
         phi_r <- phi_pair$phi_right
         if (isTRUE(use_cross_attn)) {
@@ -9890,7 +10305,8 @@ generate_ModelOutcome_neural <- function(){
       time_context_enabled = time_context_enabled,
       time_feature_names = time_feature_names,
       default_time_embedding = default_time_embedding,
-      default_time_present = default_time_present
+      default_time_present = default_time_present,
+      schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
       info = model_info_local,
@@ -9909,14 +10325,16 @@ generate_ModelOutcome_neural <- function(){
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
-                                return_mask = FALSE, context_present = NULL) {
+                                return_mask = FALSE, context_present = NULL,
+                                schema_dropout_masks = NULL) {
       neural_build_candidate_tokens_hard(X_idx, party_idx,
                                          model_info = model_info_local,
                                          resp_party_idx = resp_p,
                                          experiment_idx = experiment_idx,
                                          params = params_view,
                                          return_mask = return_mask,
-                                         context_present = context_present)
+                                         context_present = context_present,
+                                         schema_dropout_masks = schema_dropout_masks)
     }
 
     run_transformer <- function(tokens, token_mask = NULL, return_details = FALSE) {
@@ -9933,6 +10351,14 @@ generate_ModelOutcome_neural <- function(){
                                     n_outcomes_b = NULL,
                                     Yb) {
       N_batch <- ai(Xb$shape[[1]])
+      schema_dropout_context <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = N_batch
+      )
+      schema_dropout_candidate <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = N_batch
+      )
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
       choice_mask <- strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_)
@@ -9942,10 +10368,18 @@ generate_ModelOutcome_neural <- function(){
                                                     resp_cov_present = resp_c_present,
                                                     experiment_idx = experiment_idx,
                                                     params = params_view,
-                                                    return_mask = TRUE)
+                                                    return_mask = TRUE,
+                                                    schema_dropout_masks = schema_dropout_context)
       ctx_tokens <- ctx_info$tokens %||% NULL
       ctx_mask <- ctx_info$mask %||% NULL
-      cand_info <- embed_candidate(Xb, pb, resp_p, experiment_idx, return_mask = TRUE)
+      cand_info <- embed_candidate(
+        Xb,
+        pb,
+        resp_p,
+        experiment_idx,
+        return_mask = TRUE,
+        schema_dropout_masks = schema_dropout_candidate
+      )
       cand_tokens <- cand_info$tokens
       cand_mask <- cand_info$mask
       token_parts <- list(choice_tok)
@@ -14267,6 +14701,7 @@ generate_ModelOutcome_neural <- function(){
     experiment_token_mode = experiment_token_mode,
     covariate_value_encoding = covariate_value_encoding,
     shared_projection_value_encoder = shared_projection_value_encoder,
+    schema_dropout = schema_dropout,
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),
     level_struct_dim = as.integer(level_struct_dim),

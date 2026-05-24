@@ -2,6 +2,73 @@
 # Neural Outcome Model Tests
 # =============================================================================
 
+test_that("schema dropout resolver handles defaults and overrides", {
+  zero <- strategize:::neural_resolve_schema_dropout(NULL)
+  expect_equal(unlist(zero, use.names = FALSE), rep(0, 6))
+
+  defaults <- strategize:::neural_resolve_schema_dropout(TRUE)
+  expect_equal(defaults$experiment_token, 0.25)
+  expect_equal(defaults$covariate_span, 0.05)
+
+  custom <- strategize:::neural_resolve_schema_dropout(list(
+    schema_text = 0.2,
+    covariate_span = 0.08
+  ))
+  expect_equal(custom$schema_text, 0.2)
+  expect_equal(custom$covariate_span, 0.08)
+  expect_equal(custom$experiment_token, 0)
+
+  custom_defaults <- strategize:::neural_resolve_schema_dropout(list(
+    defaults = TRUE,
+    factor_span = 0.01
+  ))
+  expect_equal(custom_defaults$schema_text, 0.10)
+  expect_equal(custom_defaults$factor_span, 0.01)
+
+  expect_error(
+    strategize:::neural_resolve_schema_dropout(list(context_token = 1)),
+    "\\[0, 1\\)"
+  )
+  expect_error(
+    strategize:::neural_resolve_schema_dropout(list(context = 0.1)),
+    "Unknown schema_dropout"
+  )
+})
+
+test_that("schema dropout span masks preserve one factor span", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+
+  span_mask <- strategize:::strenv$jnp$array(
+    matrix(c(TRUE, TRUE, FALSE, TRUE, TRUE, TRUE), nrow = 2, byrow = TRUE)
+  )
+  keep <- strategize:::strenv$jnp$array(
+    matrix(c(0, 0, 0, 0, 1, 0), nrow = 2, byrow = TRUE)
+  )
+  factor_out <- strategize:::neural_schema_dropout_apply_span_mask(
+    span_mask,
+    list(factor_span = keep),
+    "factor_span",
+    preserve_one = TRUE
+  )
+  expect_equal(
+    matrix(as.logical(strategize:::cs2step_neural_to_r_array(factor_out)), nrow = 2),
+    matrix(c(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE), nrow = 2, byrow = TRUE)
+  )
+
+  cov_out <- strategize:::neural_schema_dropout_apply_span_mask(
+    span_mask,
+    list(covariate_span = keep),
+    "covariate_span",
+    preserve_one = FALSE
+  )
+  expect_equal(
+    matrix(as.logical(strategize:::cs2step_neural_to_r_array(cov_out)), nrow = 2),
+    matrix(c(FALSE, FALSE, FALSE, FALSE, TRUE, FALSE), nrow = 2, byrow = TRUE)
+  )
+})
+
 get_neural_fit <- local({
   cache <- NULL
   function() {

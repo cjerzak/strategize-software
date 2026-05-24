@@ -2396,6 +2396,9 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$covariate_value_encoding)) {
     out$covariate_value_encoding <- as.character(out$covariate_value_encoding)
   }
+  if (!is.null(out$schema_dropout)) {
+    out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
+  }
   if (!is.null(out$factor_levels)) {
     out$factor_levels <- as.integer(out$factor_levels)
   }
@@ -2531,6 +2534,11 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   }
   if (is.null(out$context_present_masking)) {
     out$context_present_masking <- TRUE
+  }
+  if (is.null(out$schema_dropout)) {
+    out$schema_dropout <- neural_schema_dropout_zero()
+  } else {
+    out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
   }
   if (is.null(out$n_resp_party_levels) && !is.null(out$resp_party_levels)) {
     out$n_resp_party_levels <- as.integer(length(out$resp_party_levels))

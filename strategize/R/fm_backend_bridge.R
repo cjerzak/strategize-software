@@ -29,6 +29,7 @@ strategize_fm_backend <- function() {
     neural_resolve_max_covariate_tokens = neural_resolve_max_covariate_tokens,
     neural_validate_covariate_token_budget = neural_validate_covariate_token_budget,
     neural_covariate_order_from_names = neural_covariate_order_from_names,
-    neural_resolve_shared_projection_value_encoder = neural_resolve_shared_projection_value_encoder
+    neural_resolve_shared_projection_value_encoder = neural_resolve_shared_projection_value_encoder,
+    neural_resolve_schema_dropout = neural_resolve_schema_dropout
   )
 }
