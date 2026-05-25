@@ -7987,6 +7987,10 @@ generate_ModelOutcome_neural <- function(){
       universal_global_out_dim <- max(1L, max(universal_n_outcomes_all, na.rm = TRUE))
     }
   }
+  universal_task_mode_levels <- unique(universal_task_mode_all)
+  universal_mixed_mode <- isTRUE(universal_enabled) &&
+    "pairwise" %in% universal_task_mode_levels &&
+    "single" %in% universal_task_mode_levels
   text_semantic_dim <- as.integer(neural_token_info_use$text_dim %||% 0L)
   factor_struct_dim <- if (!is.null(factor_struct_matrix)) {
     ncol(as.matrix(factor_struct_matrix))
@@ -8059,9 +8063,92 @@ generate_ModelOutcome_neural <- function(){
     strenv$jnp$concatenate(list(real_centered, missing_row), axis = 0L)
   }
 
-  # Build pairwise or single-candidate data
+  # Build pairwise, single-candidate, or mixed universal observation data.
   pair_mat <- NULL
-  if (pairwise_mode) {
+  universal_pair_rows <- integer(0)
+  universal_single_rows <- integer(0)
+  universal_pair_obs_rows <- integer(0)
+  n_universal_pair_obs <- 0L
+  n_universal_single_obs <- 0L
+  Y_pair_use <- NULL
+  Y_single_use <- NULL
+  resp_party_pair_use <- NULL
+  resp_party_single_use <- NULL
+  X_pair_use <- NULL
+  X_single_cov_use <- NULL
+  X_present_pair_use <- NULL
+  X_present_single_use <- NULL
+  experiment_index_pair_use <- NULL
+  experiment_index_single_use <- NULL
+  universal_likelihood_pair_use <- NULL
+  universal_likelihood_single_use <- NULL
+  universal_n_outcomes_pair_use <- NULL
+  universal_n_outcomes_single_use <- NULL
+
+  if (isTRUE(universal_mixed_mode)) {
+    universal_pair_rows <- which(universal_task_mode_all == "pairwise")
+    universal_single_rows <- which(universal_task_mode_all == "single")
+    if (length(universal_pair_rows) < 2L || length(universal_single_rows) < 1L) {
+      stop("Universal mixed-mode foundation training requires pairwise and single observation rows.", call. = FALSE)
+    }
+    pair_info <- cs2step_build_pair_mat(
+      pair_id = pair_id_[universal_pair_rows],
+      W = if (isTRUE(compact_training)) NULL else W_[universal_pair_rows, , drop = FALSE],
+      n_rows = length(universal_pair_rows),
+      profile_order = if (!is.null(profile_order_)) profile_order_[universal_pair_rows] else NULL,
+      competing_group_variable_candidate = if (!is.null(competing_group_variable_candidate_)) {
+        competing_group_variable_candidate_[universal_pair_rows]
+      } else {
+        NULL
+      }
+    )
+    if (is.null(pair_info) || is.null(pair_info$pair_sizes) ||
+        !all(pair_info$pair_sizes == 2L)) {
+      stop("Universal mixed-mode pairwise rows must define exactly 2 rows per pair_id.", call. = FALSE)
+    }
+    pair_mat <- matrix(universal_pair_rows[as.integer(pair_info$pair_mat)], ncol = 2L)
+    n_universal_pair_obs <- nrow(pair_mat)
+    n_universal_single_obs <- length(universal_single_rows)
+    universal_pair_obs_rows <- pair_mat[, 1L]
+
+    if (isTRUE(compact_training)) {
+      X_left <- NULL
+      X_right <- NULL
+      X_single <- NULL
+    } else {
+      X_left <- W_[pair_mat[, 1L], , drop = FALSE]
+      X_right <- W_[pair_mat[, 2L], , drop = FALSE]
+      X_single <- W_[universal_single_rows, , drop = FALSE]
+    }
+    Y_pair_use <- Y_[universal_pair_obs_rows]
+    Y_single_use <- Y_[universal_single_rows]
+    Y_use <- c(Y_pair_use, Y_single_use)
+    party_left <- party_index[pair_mat[, 1L]]
+    party_right <- party_index[pair_mat[, 2L]]
+    party_single <- party_index[universal_single_rows]
+    resp_party_pair_use <- resp_party_index[universal_pair_obs_rows]
+    resp_party_single_use <- resp_party_index[universal_single_rows]
+    resp_party_use <- c(resp_party_pair_use, resp_party_single_use)
+    if (!is.null(X_)) {
+      X_pair_use <- X_[universal_pair_obs_rows, , drop = FALSE]
+      X_single_cov_use <- X_[universal_single_rows, , drop = FALSE]
+      X_use <- rbind(X_pair_use, X_single_cov_use)
+    }
+    if (!is.null(X_present_)) {
+      X_present_pair_use <- X_present_[universal_pair_obs_rows, , drop = FALSE]
+      X_present_single_use <- X_present_[universal_single_rows, , drop = FALSE]
+      X_present_use <- rbind(X_present_pair_use, X_present_single_use)
+    } else {
+      X_present_use <- NULL
+    }
+    if (!is.null(experiment_index_all)) {
+      experiment_index_pair_use <- experiment_index_all[universal_pair_obs_rows]
+      experiment_index_single_use <- experiment_index_all[universal_single_rows]
+      experiment_index_use <- c(experiment_index_pair_use, experiment_index_single_use)
+    } else {
+      experiment_index_use <- NULL
+    }
+  } else if (pairwise_mode) {
     pair_info <- cs2step_build_pair_mat(
       pair_id = pair_id_,
       W = if (isTRUE(compact_training)) NULL else W_,
@@ -8076,54 +8163,75 @@ generate_ModelOutcome_neural <- function(){
     } else {
       pair_mat <- pair_info$pair_mat
     }
+    if (pairwise_mode) {
+      if (isTRUE(compact_training)) {
+        X_left <- NULL
+        X_right <- NULL
+      } else {
+        X_left <- W_[pair_mat[,1], , drop = FALSE]
+        X_right <- W_[pair_mat[,2], , drop = FALSE]
+      }
+      Y_use <- Y_[pair_mat[,1]]
+      party_left <- party_index[pair_mat[,1]]
+      party_right <- party_index[pair_mat[,2]]
+      resp_party_use <- resp_party_index[pair_mat[,1]]
+      resp_party_pair_use <- resp_party_use
+      if (!is.null(X_)) {
+        X_use <- X_[pair_mat[,1], , drop = FALSE]
+        X_pair_use <- X_use
+      }
+      if (!is.null(X_present_)) {
+        X_present_use <- X_present_[pair_mat[,1], , drop = FALSE]
+        X_present_pair_use <- X_present_use
+      } else {
+        X_present_use <- NULL
+      }
+      if (!is.null(experiment_index_all)) {
+        experiment_index_use <- experiment_index_all[pair_mat[,1]]
+        experiment_index_pair_use <- experiment_index_use
+      } else {
+        experiment_index_use <- NULL
+      }
+    }
   }
 
-  if (pairwise_mode) {
-    if (isTRUE(compact_training)) {
-      X_left <- NULL
-      X_right <- NULL
-    } else {
-      X_left <- W_[pair_mat[,1], , drop = FALSE]
-      X_right <- W_[pair_mat[,2], , drop = FALSE]
-    }
-    Y_use <- Y_[pair_mat[,1]]
-    party_left <- party_index[pair_mat[,1]]
-    party_right <- party_index[pair_mat[,2]]
-    resp_party_use <- resp_party_index[pair_mat[,1]]
-    if (!is.null(X_)) {
-      X_use <- X_[pair_mat[,1], , drop = FALSE]
-    }
-    if (!is.null(X_present_)) {
-      X_present_use <- X_present_[pair_mat[,1], , drop = FALSE]
-    } else {
-      X_present_use <- NULL
-    }
-    if (!is.null(experiment_index_all)) {
-      experiment_index_use <- experiment_index_all[pair_mat[,1]]
-    } else {
-      experiment_index_use <- NULL
-    }
-  } else {
+  if (!pairwise_mode) {
     X_single <- if (isTRUE(compact_training)) NULL else W_
     Y_use <- Y_
     party_single <- party_index
     resp_party_use <- resp_party_index
+    resp_party_single_use <- resp_party_use
     X_use <- X_
+    X_single_cov_use <- X_use
     X_present_use <- X_present_
+    X_present_single_use <- X_present_use
     experiment_index_use <- experiment_index_all
+    experiment_index_single_use <- experiment_index_use
   }
   universal_task_mode_use <- NULL
   universal_likelihood_use <- NULL
   universal_n_outcomes_use <- NULL
   if (isTRUE(universal_enabled)) {
-    if (pairwise_mode) {
+    if (isTRUE(universal_mixed_mode)) {
+      universal_task_mode_use <- c(rep.int("pairwise", n_universal_pair_obs), rep.int("single", n_universal_single_obs))
+      universal_likelihood_pair_use <- universal_likelihood_all[universal_pair_obs_rows]
+      universal_likelihood_single_use <- universal_likelihood_all[universal_single_rows]
+      universal_n_outcomes_pair_use <- universal_n_outcomes_all[universal_pair_obs_rows]
+      universal_n_outcomes_single_use <- universal_n_outcomes_all[universal_single_rows]
+      universal_likelihood_use <- c(universal_likelihood_pair_use, universal_likelihood_single_use)
+      universal_n_outcomes_use <- c(universal_n_outcomes_pair_use, universal_n_outcomes_single_use)
+    } else if (pairwise_mode) {
       universal_task_mode_use <- universal_task_mode_all[pair_mat[,1]]
       universal_likelihood_use <- universal_likelihood_all[pair_mat[,1]]
       universal_n_outcomes_use <- universal_n_outcomes_all[pair_mat[,1]]
+      universal_likelihood_pair_use <- universal_likelihood_use
+      universal_n_outcomes_pair_use <- universal_n_outcomes_use
     } else {
       universal_task_mode_use <- universal_task_mode_all
       universal_likelihood_use <- universal_likelihood_all
       universal_n_outcomes_use <- universal_n_outcomes_all
+      universal_likelihood_single_use <- universal_likelihood_use
+      universal_n_outcomes_single_use <- universal_n_outcomes_use
     }
   }
   if (!isTRUE(compact_training) &&
@@ -8167,17 +8275,20 @@ generate_ModelOutcome_neural <- function(){
   )
   if (pairwise_mode) {
     stage_is_primary <- party_left == party_right
-    pairwise_rows_use <- if (isTRUE(universal_enabled) && !is.null(universal_task_mode_use)) {
+    pairwise_rows_use <- if (isTRUE(universal_mixed_mode)) {
+      rep(TRUE, length(stage_is_primary))
+    } else if (isTRUE(universal_enabled) && !is.null(universal_task_mode_use)) {
       universal_task_mode_use == "pairwise"
     } else {
       rep(TRUE, length(stage_is_primary))
     }
+    resp_party_stage_use <- resp_party_pair_use %||% resp_party_use
     context_present_pair <- !is.na(party_left) &
       !is.na(party_right) &
-      !is.na(resp_party_use) &
+      !is.na(resp_party_stage_use) &
       party_left != party_missing_index &
       party_right != party_missing_index &
-      resp_party_use != resp_party_missing_index
+      resp_party_stage_use != resp_party_missing_index
     context_present_pair[is.na(context_present_pair)] <- FALSE
     n_context_present_pairs <- sum(pairwise_rows_use & context_present_pair, na.rm = TRUE)
     n_context_absent_pairs <- sum(pairwise_rows_use & !context_present_pair, na.rm = TRUE)
@@ -8196,11 +8307,11 @@ generate_ModelOutcome_neural <- function(){
     pct_primary <- if (n_total > 0L) n_primary / n_total else NA_real_
     stage_label <- ifelse(stage_is_primary[stage_rows_use], "primary", "general")
     resp_party_label <- if (!is.null(resp_party_levels)) {
-      idx <- as.integer(resp_party_use) + 1L
+      idx <- as.integer(resp_party_stage_use) + 1L
       idx[idx < 1L | idx > length(resp_party_levels)] <- NA_integer_
       resp_party_levels[idx][stage_rows_use]
     } else {
-      as.character(resp_party_use)[stage_rows_use]
+      as.character(resp_party_stage_use)[stage_rows_use]
     }
     stage_table <- table(resp_party_label, stage_label)
     cell_counts <- as.integer(stage_table)
@@ -8479,6 +8590,42 @@ generate_ModelOutcome_neural <- function(){
     as.integer(universal_n_outcomes_use)
   } else {
     NULL
+  }
+  universal_loss_weights <- NULL
+  universal_loss_weights_pair <- NULL
+  universal_loss_weights_single <- NULL
+  if (isTRUE(universal_enabled) &&
+      !is.null(universal_task_mode_use) &&
+      !is.null(universal_likelihood_code_use)) {
+    cell_label <- paste(
+      as.character(universal_task_mode_use),
+      as.character(universal_likelihood_code_use),
+      sep = "::"
+    )
+    cell_n <- table(cell_label)
+    n_obs_weight <- length(cell_label)
+    n_cells_weight <- length(cell_n)
+    raw_weight <- as.numeric(n_obs_weight) /
+      (as.numeric(n_cells_weight) * as.numeric(cell_n[cell_label]))
+    clip <- suppressWarnings(as.numeric(
+      (mcmc_control$universal_loss_weight_clip %||% c(0.25, 4.0))
+    ))
+    if (length(clip) < 2L || any(!is.finite(clip[seq_len(2L)])) ||
+        clip[[1L]] <= 0 || clip[[2L]] < clip[[1L]]) {
+      clip <- c(0.25, 4.0)
+    }
+    universal_loss_weights <- pmin(pmax(raw_weight, clip[[1L]]), clip[[2L]])
+    universal_loss_weights <- universal_loss_weights / mean(universal_loss_weights)
+    if (isTRUE(universal_mixed_mode)) {
+      universal_loss_weights_pair <- universal_loss_weights[seq_len(n_universal_pair_obs)]
+      universal_loss_weights_single <- universal_loss_weights[
+        n_universal_pair_obs + seq_len(n_universal_single_obs)
+      ]
+    } else if (pairwise_mode) {
+      universal_loss_weights_pair <- universal_loss_weights
+    } else {
+      universal_loss_weights_single <- universal_loss_weights
+    }
   }
 
   mixed_row_is_valid_r <- function(y,
@@ -10213,7 +10360,17 @@ generate_ModelOutcome_neural <- function(){
                                            n_outcomes_obs = NULL,
                                            Y_obs,
                                            obs_idx = NULL,
-                                           obs_scale = NULL) {
+                                           obs_scale = NULL,
+                                           X_single = NULL,
+                                           party_single = NULL,
+                                           resp_party_single = NULL,
+                                           resp_cov_single = NULL,
+                                           resp_cov_present_single = NULL,
+                                           experiment_index_single = NULL,
+                                           likelihood_code_single = NULL,
+                                           n_outcomes_single = NULL,
+                                           Y_single_obs = NULL,
+                                           obs_scale_single = NULL) {
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X_left <- subset_model_rows(X_left, obs_idx)
@@ -10550,7 +10707,8 @@ generate_ModelOutcome_neural <- function(){
                                     resp_c_present = NULL, experiment_idx = NULL,
                                     likelihood_code_b = NULL,
                                     n_outcomes_b = NULL,
-                                    Yb) {
+                                    Yb,
+                                    obs_scale_b = obs_scale) {
       stage_idx <- neural_stage_index(pl, pr, model_info_local)
       matchup_idx <- NULL
       if (isTRUE(use_matchup_token)) {
@@ -10619,8 +10777,69 @@ generate_ModelOutcome_neural <- function(){
         likelihood_code_obs = likelihood_code_b,
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
-        site_name = "obs",
-        obs_scale = obs_scale
+        site_name = "obs_pair",
+        obs_scale = obs_scale_b
+      )
+    }
+
+    do_forward_single_and_lik_ <- function(Xb, pb, resp_p, resp_c,
+                                           resp_c_present = NULL,
+                                           experiment_idx = NULL,
+                                           likelihood_code_b = NULL,
+                                           n_outcomes_b = NULL,
+                                           Yb,
+                                           obs_scale_b = NULL) {
+      N_batch <- ai(Xb$shape[[1]])
+      schema_dropout_context <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = N_batch
+      )
+      schema_dropout_candidate <- neural_sample_schema_dropout_masks(
+        model_info_local,
+        n_batch = N_batch
+      )
+      choice_tok <- neural_build_choice_token(model_info_local, params_view)
+      choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
+      choice_mask <- strenv$jnp$ones(list(N_batch, 1L), dtype = ddtype_)
+      ctx_info <- neural_build_context_tokens_batch(
+        model_info = model_info_local,
+        resp_party_idx = resp_p,
+        resp_cov = resp_c,
+        resp_cov_present = resp_c_present,
+        experiment_idx = experiment_idx,
+        params = params_view,
+        return_mask = TRUE,
+        schema_dropout_masks = schema_dropout_context
+      )
+      cand_info <- embed_candidate(
+        Xb,
+        pb,
+        resp_p,
+        experiment_idx,
+        return_mask = TRUE,
+        schema_dropout_masks = schema_dropout_candidate
+      )
+      seq_info <- neural_pack_candidate_sequence(
+        choice_tok = choice_tok,
+        choice_mask = choice_mask,
+        ctx_tokens = ctx_info$tokens %||% NULL,
+        ctx_mask = ctx_info$mask %||% NULL,
+        cand_tokens = cand_info$tokens,
+        cand_mask = cand_info$mask,
+        model_info = model_info_local,
+        preserve_candidate_tail = FALSE
+      )
+      transformer_out <- run_transformer(seq_info$tokens, token_mask = seq_info$mask, return_details = TRUE)
+      phi <- neural_extract_choice_representation(transformer_out)
+      logits <- neural_linear_head(phi, W_out, b_out)
+      apply_observation_likelihood(
+        logits = logits,
+        Yb = Yb,
+        likelihood_code_obs = likelihood_code_b,
+        n_outcomes_obs = n_outcomes_b,
+        sigma = sigma,
+        site_name = "obs_single",
+        obs_scale = obs_scale_b
       )
     }
 
@@ -10648,12 +10867,21 @@ generate_ModelOutcome_neural <- function(){
                                       strenv$jnp$take(n_outcomes_obs, idx, axis = 0L)
                                     }
                                     Yb <- if (is.null(Y_obs)) NULL else strenv$jnp$take(Y_obs, idx, axis = 0L)
+                                    obs_scale_b <- if (is.null(obs_scale) ||
+                                                       (!reticulate::is_py_object(obs_scale) && length(obs_scale) == 1L)) {
+                                      obs_scale
+                                    } else if (reticulate::is_py_object(obs_scale)) {
+                                      strenv$jnp$take(obs_scale, idx, axis = 0L)
+                                    } else {
+                                      strenv$jnp$take(strenv$jnp$array(obs_scale, dtype = ddtype_), idx, axis = 0L)
+                                    }
                                     do_forward_and_lik_(Xl_b, Xr_b, pl_b, pr_b, resp_p_b,
                                                         resp_c_b, resp_c_present_b,
                                                         experiment_idx_b,
                                                         likelihood_code_b,
                                                         n_outcomes_b,
-                                                        Yb)
+                                                        Yb,
+                                                        obs_scale_b = obs_scale_b)
                                   })
       } else {
         with(strenv$numpyro$plate("data", size = N_local, dim = -1L), {
@@ -10665,6 +10893,57 @@ generate_ModelOutcome_neural <- function(){
     }
 
     local_lik()
+    if (!is.null(X_single)) {
+      resp_cov_present_single <- normalize_resp_cov_present_for_model(
+        resp_cov = resp_cov_single,
+        resp_cov_present = resp_cov_present_single,
+        n_rows = ai(X_single$shape[[1]])
+      )
+      N_single_local <- ai(X_single$shape[[1]])
+      if (isTRUE(subsample_method_model %in% c("batch", "batch_vi"))) {
+        with(strenv$numpyro$plate("single_data", size = N_single_local,
+                                  subsample_size = ai(min(ai(mcmc_control$batch_size), N_single_local)),
+                                  dim = -1L) %as% "idx_single", {
+                                    Xb <- strenv$jnp$take(X_single, idx_single, axis = 0L)
+                                    pb <- strenv$jnp$take(party_single, idx_single, axis = 0L)
+                                    resp_p_b <- strenv$jnp$take(resp_party_single, idx_single, axis = 0L)
+                                    resp_c_b <- strenv$jnp$take(resp_cov_single, idx_single, axis = 0L)
+                                    resp_c_present_b <- strenv$jnp$take(resp_cov_present_single, idx_single, axis = 0L)
+                                    experiment_idx_b <- if (is.null(experiment_index_single)) NULL else {
+                                      strenv$jnp$take(experiment_index_single, idx_single, axis = 0L)
+                                    }
+                                    likelihood_code_b <- if (is.null(likelihood_code_single)) NULL else {
+                                      strenv$jnp$take(likelihood_code_single, idx_single, axis = 0L)
+                                    }
+                                    n_outcomes_b <- if (is.null(n_outcomes_single)) NULL else {
+                                      strenv$jnp$take(n_outcomes_single, idx_single, axis = 0L)
+                                    }
+                                    Yb <- if (is.null(Y_single_obs)) NULL else strenv$jnp$take(Y_single_obs, idx_single, axis = 0L)
+                                    obs_scale_b <- if (is.null(obs_scale_single) ||
+                                                       (!reticulate::is_py_object(obs_scale_single) && length(obs_scale_single) == 1L)) {
+                                      obs_scale_single
+                                    } else if (reticulate::is_py_object(obs_scale_single)) {
+                                      strenv$jnp$take(obs_scale_single, idx_single, axis = 0L)
+                                    } else {
+                                      strenv$jnp$take(strenv$jnp$array(obs_scale_single, dtype = ddtype_), idx_single, axis = 0L)
+                                    }
+                                    do_forward_single_and_lik_(
+                                      Xb, pb, resp_p_b, resp_c_b, resp_c_present_b,
+                                      experiment_idx_b, likelihood_code_b, n_outcomes_b,
+                                      Yb, obs_scale_b
+                                    )
+                                  })
+      } else {
+        with(strenv$numpyro$plate("single_data", size = N_single_local, dim = -1L), {
+          do_forward_single_and_lik_(
+            X_single, party_single, resp_party_single, resp_cov_single,
+            resp_cov_present_single, experiment_index_single,
+            likelihood_code_single, n_outcomes_single, Y_single_obs,
+            obs_scale_single
+          )
+        })
+      }
+    }
   }
 
   BayesianSingleTransformerModel <- function(X, party, resp_party, resp_cov,
@@ -10802,7 +11081,8 @@ generate_ModelOutcome_neural <- function(){
                                     resp_c_present = NULL, experiment_idx = NULL,
                                     likelihood_code_b = NULL,
                                     n_outcomes_b = NULL,
-                                    Yb) {
+                                    Yb,
+                                    obs_scale_b = obs_scale) {
       N_batch <- ai(Xb$shape[[1]])
       schema_dropout_context <- neural_sample_schema_dropout_masks(
         model_info_local,
@@ -10857,7 +11137,7 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
         site_name = "obs",
-        obs_scale = obs_scale
+        obs_scale = obs_scale_b
       )
     }
 
@@ -10883,9 +11163,18 @@ generate_ModelOutcome_neural <- function(){
                                       strenv$jnp$take(n_outcomes_obs, idx, axis = 0L)
                                     }
                                     Yb <- if (is.null(Y_obs)) NULL else strenv$jnp$take(Y_obs, idx, axis = 0L)
+                                    obs_scale_b <- if (is.null(obs_scale) ||
+                                                       (!reticulate::is_py_object(obs_scale) && length(obs_scale) == 1L)) {
+                                      obs_scale
+                                    } else if (reticulate::is_py_object(obs_scale)) {
+                                      strenv$jnp$take(obs_scale, idx, axis = 0L)
+                                    } else {
+                                      strenv$jnp$take(strenv$jnp$array(obs_scale, dtype = ddtype_), idx, axis = 0L)
+                                    }
                                     do_forward_and_lik_(Xb, pb, resp_p_b, resp_c_b,
                                                         resp_c_present_b, experiment_idx_b,
-                                                        likelihood_code_b, n_outcomes_b, Yb)
+                                                        likelihood_code_b, n_outcomes_b, Yb,
+                                                        obs_scale_b = obs_scale_b)
                                   })
       } else {
         with(strenv$numpyro$plate("data", size = N_local, dim = -1L), {
@@ -11756,11 +12045,28 @@ generate_ModelOutcome_neural <- function(){
   }
   if (isTRUE(compact_training)) {
     resp_party_jnp <- NULL
+    resp_party_pair_jnp <- NULL
+    resp_party_single_jnp <- NULL
     resp_cov_jnp <- NULL
+    resp_cov_pair_jnp <- NULL
+    resp_cov_single_jnp <- NULL
     resp_cov_present_jnp <- NULL
+    resp_cov_present_pair_jnp <- NULL
+    resp_cov_present_single_jnp <- NULL
     experiment_index_jnp <- NULL
+    experiment_index_pair_jnp <- NULL
+    experiment_index_single_jnp <- NULL
     likelihood_code_jnp <- NULL
+    likelihood_code_pair_jnp <- NULL
+    likelihood_code_single_jnp <- NULL
     n_outcomes_obs_jnp <- NULL
+    n_outcomes_pair_jnp <- NULL
+    n_outcomes_single_jnp <- NULL
+    obs_scale_jnp <- NULL
+    obs_scale_pair_jnp <- NULL
+    obs_scale_single_jnp <- NULL
+    Y_pair_jnp <- NULL
+    Y_single_jnp <- NULL
     X_left_jnp <- NULL
     X_right_jnp <- NULL
     party_left_jnp <- NULL
@@ -11797,12 +12103,84 @@ generate_ModelOutcome_neural <- function(){
     } else {
       NULL
     }
+    obs_scale_jnp <- if (!is.null(universal_loss_weights)) {
+      strenv$jnp$array(as.numeric(universal_loss_weights))$astype(ddtype_)
+    } else {
+      NULL
+    }
 
     if (pairwise_mode) {
       X_left_jnp <- strenv$jnp$array(to_index_matrix(X_left))$astype(strenv$jnp$int32)
       X_right_jnp <- strenv$jnp$array(to_index_matrix(X_right))$astype(strenv$jnp$int32)
       party_left_jnp <- strenv$jnp$array(as.integer(party_left))$astype(strenv$jnp$int32)
       party_right_jnp <- strenv$jnp$array(as.integer(party_right))$astype(strenv$jnp$int32)
+      if (isTRUE(universal_mixed_mode)) {
+        Y_pair_jnp <- strenv$jnp$array(as.numeric(Y_pair_use))$astype(ddtype_)
+        Y_single_jnp <- strenv$jnp$array(as.numeric(Y_single_use))$astype(ddtype_)
+        resp_party_pair_jnp <- strenv$jnp$array(as.integer(resp_party_pair_use))$astype(strenv$jnp$int32)
+        resp_party_single_jnp <- strenv$jnp$array(as.integer(resp_party_single_use))$astype(strenv$jnp$int32)
+        if (n_resp_covariates > 0L) {
+          resp_cov_pair_jnp <- strenv$jnp$array(as.matrix(X_pair_use))$astype(ddtype_)
+          resp_cov_single_jnp <- strenv$jnp$array(as.matrix(X_single_cov_use))$astype(ddtype_)
+          resp_cov_present_pair_jnp <- if (!is.null(X_present_pair_use)) {
+            strenv$jnp$array(as.matrix(X_present_pair_use))$astype(ddtype_)
+          } else {
+            strenv$jnp$ones(list(ai(length(Y_pair_use)), ai(n_resp_covariates)), dtype = ddtype_)
+          }
+          resp_cov_present_single_jnp <- if (!is.null(X_present_single_use)) {
+            strenv$jnp$array(as.matrix(X_present_single_use))$astype(ddtype_)
+          } else {
+            strenv$jnp$ones(list(ai(length(Y_single_use)), ai(n_resp_covariates)), dtype = ddtype_)
+          }
+        } else {
+          resp_cov_pair_jnp <- strenv$jnp$zeros(list(ai(length(Y_pair_use)), ai(0L)), dtype = ddtype_)
+          resp_cov_single_jnp <- strenv$jnp$zeros(list(ai(length(Y_single_use)), ai(0L)), dtype = ddtype_)
+          resp_cov_present_pair_jnp <- strenv$jnp$zeros(list(ai(length(Y_pair_use)), ai(0L)), dtype = ddtype_)
+          resp_cov_present_single_jnp <- strenv$jnp$zeros(list(ai(length(Y_single_use)), ai(0L)), dtype = ddtype_)
+        }
+        experiment_index_pair_jnp <- if (!is.null(experiment_index_pair_use)) {
+          strenv$jnp$array(as.integer(experiment_index_pair_use))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        }
+        experiment_index_single_jnp <- if (!is.null(experiment_index_single_use)) {
+          strenv$jnp$array(as.integer(experiment_index_single_use))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        }
+        likelihood_code_pair_jnp <- if (!is.null(universal_likelihood_pair_use)) {
+          strenv$jnp$array(as.integer(match(universal_likelihood_pair_use, universal_likelihood_levels) - 1L))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        }
+        likelihood_code_single_jnp <- if (!is.null(universal_likelihood_single_use)) {
+          strenv$jnp$array(as.integer(match(universal_likelihood_single_use, universal_likelihood_levels) - 1L))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        }
+        n_outcomes_pair_jnp <- if (!is.null(universal_n_outcomes_pair_use)) {
+          strenv$jnp$array(as.integer(universal_n_outcomes_pair_use))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        }
+        n_outcomes_single_jnp <- if (!is.null(universal_n_outcomes_single_use)) {
+          strenv$jnp$array(as.integer(universal_n_outcomes_single_use))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        }
+        obs_scale_pair_jnp <- if (!is.null(universal_loss_weights_pair)) {
+          strenv$jnp$array(as.numeric(universal_loss_weights_pair))$astype(ddtype_)
+        } else {
+          NULL
+        }
+        obs_scale_single_jnp <- if (!is.null(universal_loss_weights_single)) {
+          strenv$jnp$array(as.numeric(universal_loss_weights_single))$astype(ddtype_)
+        } else {
+          NULL
+        }
+        X_single_jnp <- strenv$jnp$array(to_index_matrix(X_single))$astype(strenv$jnp$int32)
+        party_single_jnp <- strenv$jnp$array(as.integer(party_single))$astype(strenv$jnp$int32)
+      }
     } else {
       X_single_jnp <- strenv$jnp$array(to_index_matrix(X_single))$astype(strenv$jnp$int32)
       party_single_jnp <- strenv$jnp$array(as.integer(party_single))$astype(strenv$jnp$int32)
@@ -11823,11 +12201,131 @@ generate_ModelOutcome_neural <- function(){
   } else {
     0L
   }
+  compact_sample_obs_idx <- function() {
+    if (!isTRUE(universal_mixed_mode)) {
+      if (compact_model_n_obs <= compact_svi_batch_size) {
+        return(seq_len(compact_model_n_obs))
+      }
+      return(sample.int(compact_model_n_obs, compact_svi_batch_size, replace = FALSE))
+    }
+    if (compact_svi_batch_size < 2L) {
+      stop("Universal mixed-mode compact SVI requires batch_size >= 2.", call. = FALSE)
+    }
+    pair_target <- max(1L, min(n_universal_pair_obs, as.integer(round(
+      compact_svi_batch_size * n_universal_pair_obs / compact_model_n_obs
+    ))))
+    single_target <- max(1L, min(n_universal_single_obs, compact_svi_batch_size - pair_target))
+    if (pair_target + single_target > compact_svi_batch_size) {
+      if (pair_target > single_target) {
+        pair_target <- pair_target - 1L
+      } else {
+        single_target <- single_target - 1L
+      }
+    }
+    pair_idx <- if (n_universal_pair_obs <= pair_target) {
+      seq_len(n_universal_pair_obs)
+    } else {
+      sample.int(n_universal_pair_obs, pair_target, replace = FALSE)
+    }
+    single_idx <- if (n_universal_single_obs <= single_target) {
+      seq_len(n_universal_single_obs)
+    } else {
+      sample.int(n_universal_single_obs, single_target, replace = FALSE)
+    }
+    c(pair_idx, n_universal_pair_obs + single_idx)
+  }
   compact_batch_args <- function(obs_idx) {
     obs_idx <- as.integer(obs_idx)
     obs_idx <- obs_idx[!is.na(obs_idx) & obs_idx >= 1L & obs_idx <= compact_model_n_obs]
     if (length(obs_idx) < 1L) {
       stop("Compact SVI batch has no valid observation rows.", call. = FALSE)
+    }
+    jnp_int_vector <- function(x) {
+      strenv$jnp$atleast_1d(strenv$jnp$array(as.integer(x))$astype(strenv$jnp$int32))
+    }
+    jnp_num_vector <- function(x) {
+      strenv$jnp$atleast_1d(strenv$jnp$array(as.numeric(x))$astype(ddtype_))
+    }
+    if (isTRUE(universal_mixed_mode)) {
+      pair_obs_idx <- obs_idx[obs_idx <= n_universal_pair_obs]
+      single_obs_idx <- obs_idx[obs_idx > n_universal_pair_obs] - n_universal_pair_obs
+      if (length(pair_obs_idx) < 1L || length(single_obs_idx) < 1L) {
+        stop("Universal compact SVI batches must include pairwise and single rows.", call. = FALSE)
+      }
+      pair_left_rows <- pair_mat[pair_obs_idx, 1L]
+      pair_right_rows <- pair_mat[pair_obs_idx, 2L]
+      single_rows <- universal_single_rows[single_obs_idx]
+      materialize_cov <- function(rows) {
+        if (n_resp_covariates < 1L) {
+          return(list(
+            values = strenv$jnp$zeros(list(ai(length(rows)), ai(0L)), dtype = ddtype_),
+            present = strenv$jnp$zeros(list(ai(length(rows)), ai(0L)), dtype = ddtype_)
+          ))
+        }
+        values <- cs2step_materialize_x_compact(X_compact_use, rows)
+        if (is.null(values)) {
+          values <- matrix(0, nrow = length(rows), ncol = n_resp_covariates)
+        }
+        present <- cs2step_materialize_x_present_compact(
+          X_present_compact_use %||% X_compact_use,
+          rows
+        )
+        if (is.null(present)) {
+          present <- matrix(1, nrow = length(rows), ncol = n_resp_covariates)
+        }
+        list(
+          values = strenv$jnp$array(as.matrix(values))$astype(ddtype_),
+          present = strenv$jnp$array(as.matrix(present))$astype(ddtype_)
+        )
+      }
+      cov_pair <- materialize_cov(pair_left_rows)
+      cov_single <- materialize_cov(single_rows)
+      pair_global_obs <- pair_obs_idx
+      single_global_obs <- n_universal_pair_obs + single_obs_idx
+      return(list(
+        X_left = strenv$jnp$array(to_index_matrix(
+          cs2step_materialize_w_idx_compact(W_idx_compact_use, pair_left_rows)
+        ))$astype(strenv$jnp$int32),
+        X_right = strenv$jnp$array(to_index_matrix(
+          cs2step_materialize_w_idx_compact(W_idx_compact_use, pair_right_rows)
+        ))$astype(strenv$jnp$int32),
+        party_left = jnp_int_vector(party_left[pair_obs_idx]),
+        party_right = jnp_int_vector(party_right[pair_obs_idx]),
+        resp_party = jnp_int_vector(resp_party_pair_use[pair_obs_idx]),
+        resp_cov = cov_pair$values,
+        resp_cov_present = cov_pair$present,
+        experiment_index = if (!is.null(experiment_index_pair_use)) {
+          jnp_int_vector(experiment_index_pair_use[pair_obs_idx])
+        } else {
+          NULL
+        },
+        likelihood_code = jnp_int_vector(universal_likelihood_code_use[pair_global_obs]),
+        n_outcomes_obs = jnp_int_vector(universal_n_outcomes_use_int[pair_global_obs]),
+        Y_obs = jnp_num_vector(Y_pair_use[pair_obs_idx]),
+        obs_scale = jnp_num_vector(
+          as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx)) *
+            as.numeric(universal_loss_weights[pair_global_obs] %||% rep(1, length(pair_global_obs)))
+        ),
+        X_single = strenv$jnp$array(to_index_matrix(
+          cs2step_materialize_w_idx_compact(W_idx_compact_use, single_rows)
+        ))$astype(strenv$jnp$int32),
+        party_single = jnp_int_vector(party_single[single_obs_idx]),
+        resp_party_single = jnp_int_vector(resp_party_single_use[single_obs_idx]),
+        resp_cov_single = cov_single$values,
+        resp_cov_present_single = cov_single$present,
+        experiment_index_single = if (!is.null(experiment_index_single_use)) {
+          jnp_int_vector(experiment_index_single_use[single_obs_idx])
+        } else {
+          NULL
+        },
+        likelihood_code_single = jnp_int_vector(universal_likelihood_code_use[single_global_obs]),
+        n_outcomes_single = jnp_int_vector(universal_n_outcomes_use_int[single_global_obs]),
+        Y_single_obs = jnp_num_vector(Y_single_use[single_obs_idx]),
+        obs_scale_single = jnp_num_vector(
+          as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx)) *
+            as.numeric(universal_loss_weights[single_global_obs] %||% rep(1, length(single_global_obs)))
+        )
+      ))
     }
     y_obs <- if (likelihood == "categorical") {
       strenv$jnp$array(as.integer(y_fac[obs_idx]))$astype(strenv$jnp$int32)
@@ -11873,7 +12371,14 @@ generate_ModelOutcome_neural <- function(){
     } else {
       NULL
     }
-    obs_scale <- as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx))
+    obs_scale <- if (!is.null(universal_loss_weights)) {
+      strenv$jnp$array(
+        as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx)) *
+          as.numeric(universal_loss_weights[obs_idx])
+      )$astype(ddtype_)
+    } else {
+      as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx))
+    }
     if (isTRUE(pairwise_mode)) {
       left_rows <- pair_mat[obs_idx, 1L]
       right_rows <- pair_mat[obs_idx, 2L]
@@ -12536,6 +13041,12 @@ generate_ModelOutcome_neural <- function(){
   }
   init_to_value <- neural_get_init_to_value()
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
+  if (isTRUE(universal_mixed_mode) && !isTRUE(use_svi)) {
+    stop(
+      "Universal mixed-mode foundation training requires SVI/batch_vi so pairwise and single losses share one optimizer run.",
+      call. = FALSE
+    )
+  }
   run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
   emit_transformer_structure_banner <- function() {
     message(sprintf(
@@ -12837,7 +13348,10 @@ generate_ModelOutcome_neural <- function(){
     }
     n_obs_svi <- length(Y_use)
     pairwise_scaling <- pairwise_mode
-    if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+    if (isTRUE(universal_mixed_mode)) {
+      n_obs_svi <- length(Y_use)
+      pairwise_scaling <- TRUE
+    } else if (isTRUE(pairwise_mode) && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
       n_obs_svi <- nrow(pair_mat)
       pairwise_scaling <- TRUE
     }
@@ -13032,7 +13546,32 @@ generate_ModelOutcome_neural <- function(){
       )
     )
     svi_model_args <- if (isTRUE(compact_training)) {
-      compact_batch_args(seq_len(compact_svi_batch_size))
+      compact_batch_args(compact_sample_obs_idx())
+    } else if (isTRUE(universal_mixed_mode)) {
+      list(
+        X_left = X_left_jnp,
+        X_right = X_right_jnp,
+        party_left = party_left_jnp,
+        party_right = party_right_jnp,
+        resp_party = resp_party_pair_jnp,
+        resp_cov = resp_cov_pair_jnp,
+        resp_cov_present = resp_cov_present_pair_jnp,
+        experiment_index = experiment_index_pair_jnp,
+        likelihood_code = likelihood_code_pair_jnp,
+        n_outcomes_obs = n_outcomes_pair_jnp,
+        Y_obs = Y_pair_jnp,
+        obs_scale = obs_scale_pair_jnp,
+        X_single = X_single_jnp,
+        party_single = party_single_jnp,
+        resp_party_single = resp_party_single_jnp,
+        resp_cov_single = resp_cov_single_jnp,
+        resp_cov_present_single = resp_cov_present_single_jnp,
+        experiment_index_single = experiment_index_single_jnp,
+        likelihood_code_single = likelihood_code_single_jnp,
+        n_outcomes_single = n_outcomes_single_jnp,
+        Y_single_obs = Y_single_jnp,
+        obs_scale_single = obs_scale_single_jnp
+      )
     } else if (pairwise_mode) {
       list(
         X_left = X_left_jnp,
@@ -13045,7 +13584,8 @@ generate_ModelOutcome_neural <- function(){
         experiment_index = experiment_index_jnp,
         likelihood_code = likelihood_code_jnp,
         n_outcomes_obs = n_outcomes_obs_jnp,
-        Y_obs = Y_jnp
+        Y_obs = Y_jnp,
+        obs_scale = obs_scale_jnp
       )
     } else {
       list(
@@ -13057,7 +13597,8 @@ generate_ModelOutcome_neural <- function(){
         experiment_index = experiment_index_jnp,
         likelihood_code = likelihood_code_jnp,
         n_outcomes_obs = n_outcomes_obs_jnp,
-        Y_obs = Y_jnp
+        Y_obs = Y_jnp,
+        obs_scale = obs_scale_jnp
       )
     }
     rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
@@ -13765,22 +14306,14 @@ generate_ModelOutcome_neural <- function(){
         }
       }, add = TRUE)
       set.seed(as.integer(compact_seed))
-      init_idx <- if (compact_model_n_obs <= compact_svi_batch_size) {
-        seq_len(compact_model_n_obs)
-      } else {
-        seq_len(compact_svi_batch_size)
-      }
+      init_idx <- compact_sample_obs_idx()
       svi_state <- do.call(svi$init, c(list(rng_key), compact_batch_args(init_idx)))
       svi_loss_curve <- rep(NA_real_, as.integer(svi_steps))
       svi_steps_completed <- 0L
       progress_every <- max(1L, as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L)))))
       last_gradient_checkpoint <- NULL
       for (step_idx in seq_len(as.integer(svi_steps))) {
-        obs_idx <- if (compact_model_n_obs <= compact_svi_batch_size) {
-          seq_len(compact_model_n_obs)
-        } else {
-          sample.int(compact_model_n_obs, compact_svi_batch_size, replace = FALSE)
-        }
+        obs_idx <- compact_sample_obs_idx()
         batch_args <- compact_batch_args(obs_idx)
         update_result <- do.call(svi$update, c(list(svi_state), batch_args))
         update_parts <- parse_svi_update_result(update_result)
@@ -14749,7 +15282,7 @@ generate_ModelOutcome_neural <- function(){
   } else {
     NULL
   }
-  predict_single_jit_response <- if (!isTRUE(pairwise_mode)) {
+  predict_single_jit_response <- if (!isTRUE(pairwise_mode) || isTRUE(universal_mixed_mode)) {
     neural_get_predict_jit(
       model_info = predict_model_info,
       pairwise = FALSE,
@@ -14758,7 +15291,7 @@ generate_ModelOutcome_neural <- function(){
   } else {
     NULL
   }
-  predict_single_jit_logits <- if (!isTRUE(pairwise_mode)) {
+  predict_single_jit_logits <- if (!isTRUE(pairwise_mode) || isTRUE(universal_mixed_mode)) {
     neural_get_predict_jit(
       model_info = predict_model_info,
       pairwise = FALSE,
@@ -14941,7 +15474,63 @@ generate_ModelOutcome_neural <- function(){
              })
   }
 
-  coerce_prediction_output <- function(pred) {
+  coerce_mixed_prediction_output <- function(pred,
+                                             target_likelihood = NULL,
+                                             target_n_outcomes = NULL) {
+    logits <- if (is.list(pred) && !is.null(pred$logits)) {
+      pred$logits
+    } else {
+      pred
+    }
+    logits <- as.matrix(to_r_array(logits))
+    if (ncol(logits) < 1L) {
+      stop("Mixed-family prediction requires at least one output logit.", call. = FALSE)
+    }
+    target_likelihood <- tolower(as.character(target_likelihood %||% "bernoulli"))
+    if (length(target_likelihood) != 1L || is.na(target_likelihood) || !nzchar(target_likelihood)) {
+      target_likelihood <- "bernoulli"
+    }
+    target_n_outcomes <- suppressWarnings(as.integer(target_n_outcomes %||% 1L))
+    if (length(target_n_outcomes) != 1L || is.na(target_n_outcomes) || target_n_outcomes < 1L) {
+      target_n_outcomes <- 1L
+    }
+    if (identical(target_likelihood, "bernoulli")) {
+      return(stats::plogis(logits[, 1L]))
+    }
+    if (identical(target_likelihood, "categorical")) {
+      k <- max(2L, min(as.integer(target_n_outcomes), ncol(logits)))
+      z <- logits[, seq_len(k), drop = FALSE]
+      z <- sweep(z, 1L, apply(z, 1L, max), "-")
+      p <- exp(z)
+      return(sweep(p, 1L, rowSums(p), "/"))
+    }
+    if (identical(target_likelihood, "normal")) {
+      sigma_source <- if (is.list(pred) && !is.null(pred$sigma)) {
+        pred$sigma
+      } else {
+        ParamsMean$sigma %||% NULL
+      }
+      return(list(
+        mu = as.numeric(logits[, 1L]),
+        sigma = mixed_sigma_vector_r(to_r_array(sigma_source), nrow(logits))
+      ))
+    }
+    stop(
+      sprintf("Unsupported target likelihood for mixed-family prediction: %s", target_likelihood),
+      call. = FALSE
+    )
+  }
+
+  coerce_prediction_output <- function(pred,
+                                       target_likelihood = NULL,
+                                       target_n_outcomes = NULL) {
+    if (likelihood == "mixed") {
+      return(coerce_mixed_prediction_output(
+        pred = pred,
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
+      ))
+    }
     if (likelihood == "bernoulli") {
       return(as.numeric(to_r_array(pred)))
     }
@@ -14958,22 +15547,40 @@ generate_ModelOutcome_neural <- function(){
   }
 
   my_model <- function(...) {
-    raw_output_requested <- isTRUE(list(...)$return_logits)
-    if (identical(likelihood, "mixed")) {
-      if (!isTRUE(raw_output_requested) || !isTRUE(neural_skip_oos_eval)) {
-        stop(
-          paste(
-            "Direct prediction from a universal mixed-family foundation fit is not supported.",
-            "Adapt the foundation model to a target study first."
-          ),
-          call. = FALSE
-        )
-      }
-    }
     args <- list(...)
     return_logits <- isTRUE(args$return_logits)
     args$return_logits <- NULL
-    if (pairwise_mode) {
+    target_likelihood <- tolower(as.character(
+      args$target_likelihood %||% args$likelihood %||% NULL
+    ))
+    if (length(target_likelihood) != 1L || is.na(target_likelihood) || !nzchar(target_likelihood)) {
+      target_likelihood <- if (identical(likelihood, "mixed")) "bernoulli" else likelihood
+    }
+    target_n_outcomes <- suppressWarnings(as.integer(
+      args$target_n_outcomes %||% args$n_outcomes %||% nOutcomes
+    ))
+    if (length(target_n_outcomes) != 1L || is.na(target_n_outcomes) || target_n_outcomes < 1L) {
+      target_n_outcomes <- as.integer(nOutcomes)
+    }
+    predict_mode <- tolower(as.character(args$mode %||% args$target_mode %||% NULL))
+    if (length(predict_mode) != 1L || is.na(predict_mode) || !nzchar(predict_mode)) {
+      predict_mode <- NULL
+    }
+    args$target_likelihood <- NULL
+    args$likelihood <- NULL
+    args$target_n_outcomes <- NULL
+    args$n_outcomes <- NULL
+    args$mode <- NULL
+    args$target_mode <- NULL
+
+    use_pair_prediction <- if (!is.null(predict_mode)) {
+      identical(predict_mode, "pairwise")
+    } else if (isTRUE(pairwise_mode) && !isTRUE(universal_mixed_mode)) {
+      TRUE
+    } else {
+      !is.null(args$X_left_new) || !is.null(args$X_right_new)
+    }
+    if (isTRUE(use_pair_prediction)) {
       X_left_new <- args$X_left_new
       X_right_new <- args$X_right_new
       party_left_new <- args$party_left_new
@@ -15017,7 +15624,20 @@ generate_ModelOutcome_neural <- function(){
                                       resp_party_new, resp_cov_new,
                                       resp_cov_present_new, resp_cov_order_new,
                                       experiment_idx_new, factor_order_new,
-                                      return_logits = return_logits)
+                                      return_logits = isTRUE(return_logits) || identical(likelihood, "mixed"))
+      if (identical(likelihood, "mixed")) {
+        logits <- as.matrix(to_r_array(pred))
+        sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
+        raw_pred <- list(logits = logits, sigma = sigma_vec)
+        if (isTRUE(return_logits)) {
+          return(raw_pred)
+        }
+        return(coerce_mixed_prediction_output(
+          pred = raw_pred,
+          target_likelihood = target_likelihood,
+          target_n_outcomes = target_n_outcomes
+        ))
+      }
       if (isTRUE(return_logits)) {
         logits <- as.matrix(to_r_array(pred))
         sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
@@ -15070,7 +15690,20 @@ generate_ModelOutcome_neural <- function(){
                                       resp_party_new, resp_cov_new,
                                       resp_cov_present_new, resp_cov_order_new,
                                       experiment_idx_new, factor_order_new,
-                                      return_logits = return_logits)
+                                      return_logits = isTRUE(return_logits) || identical(likelihood, "mixed"))
+    if (identical(likelihood, "mixed")) {
+      logits <- as.matrix(to_r_array(pred))
+      sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
+      raw_pred <- list(logits = logits, sigma = sigma_vec)
+      if (isTRUE(return_logits)) {
+        return(raw_pred)
+      }
+      return(coerce_mixed_prediction_output(
+        pred = raw_pred,
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
+      ))
+    }
     if (isTRUE(return_logits)) {
       logits <- as.matrix(to_r_array(pred))
       sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
@@ -15456,6 +16089,7 @@ generate_ModelOutcome_neural <- function(){
     choice_token_index = 0L,
     likelihood = likelihood,
     universal_foundation_training = isTRUE(universal_enabled),
+    universal_mixed_mode = isTRUE(universal_mixed_mode),
     supported_modes = if (isTRUE(universal_enabled)) {
       unique(universal_task_mode_all)
     } else if (isTRUE(pairwise_mode)) {

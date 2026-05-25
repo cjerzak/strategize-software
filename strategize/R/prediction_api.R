@@ -1637,7 +1637,55 @@ cs2step_neural_to_r_array <- function(x) {
   cs2step_py_to_r(x)
 }
 
-cs2step_neural_coerce_prediction_output <- function(pred, likelihood) {
+cs2step_neural_coerce_prediction_output <- function(pred,
+                                                    likelihood,
+                                                    target_likelihood = NULL,
+                                                    target_n_outcomes = NULL,
+                                                    sigma = NULL) {
+  if (identical(likelihood, "mixed")) {
+    logits <- if (is.list(pred) && !is.null(pred$logits)) {
+      pred$logits
+    } else {
+      pred
+    }
+    logits <- as.matrix(cs2step_neural_to_r_array(logits))
+    if (ncol(logits) < 1L) {
+      stop("Mixed-family prediction requires at least one output logit.", call. = FALSE)
+    }
+    target_likelihood <- tolower(as.character(target_likelihood %||% "bernoulli"))
+    if (length(target_likelihood) != 1L || is.na(target_likelihood) || !nzchar(target_likelihood)) {
+      target_likelihood <- "bernoulli"
+    }
+    target_n_outcomes <- suppressWarnings(as.integer(target_n_outcomes %||% 1L))
+    if (length(target_n_outcomes) != 1L || is.na(target_n_outcomes) || target_n_outcomes < 1L) {
+      target_n_outcomes <- 1L
+    }
+    if (identical(target_likelihood, "bernoulli")) {
+      return(stats::plogis(logits[, 1L]))
+    }
+    if (identical(target_likelihood, "categorical")) {
+      k <- max(2L, min(as.integer(target_n_outcomes), ncol(logits)))
+      z <- logits[, seq_len(k), drop = FALSE]
+      z <- sweep(z, 1L, apply(z, 1L, max), "-")
+      p <- exp(z)
+      return(sweep(p, 1L, rowSums(p), "/"))
+    }
+    if (identical(target_likelihood, "normal")) {
+      sigma_source <- if (is.list(pred) && !is.null(pred$sigma)) pred$sigma else sigma
+      sigma_value <- as.numeric(cs2step_neural_to_r_array(sigma_source %||% 1))
+      if (!length(sigma_value)) {
+        sigma_value <- 1
+      }
+      return(list(
+        mu = as.numeric(logits[, 1L]),
+        sigma = rep_len(sigma_value, nrow(logits))
+      ))
+    }
+    stop(
+      sprintf("Unsupported target likelihood for mixed-family prediction: %s", target_likelihood),
+      call. = FALSE
+    )
+  }
   if (likelihood == "bernoulli") {
     return(as.numeric(cs2step_neural_to_r_array(pred)))
   }
@@ -1661,35 +1709,84 @@ cs2step_neural_has_resp_covariates <- function(model_info) {
   length(model_info$covariate_names %||% character(0)) > 0L
 }
 
-cs2step_neural_predict_pair_prepared <- function(params, model_info, prep, return_logits = FALSE) {
+cs2step_neural_predict_pair_prepared <- function(params,
+                                                 model_info,
+                                                 prep,
+                                                 return_logits = FALSE,
+                                                 target_likelihood = NULL,
+                                                 target_n_outcomes = NULL) {
   if (!isTRUE(prep$pairwise)) {
     stop("Pairwise prepared prediction requires pairwise prep data.", call. = FALSE)
   }
-  neural_predict_prepared_jitted(
+  pred <- neural_predict_prepared_jitted(
     params = params,
     model_info = model_info,
     prep = prep,
-    return_logits = return_logits
+    return_logits = isTRUE(return_logits) || identical(model_info$likelihood, "mixed")
+  )
+  if (isTRUE(return_logits) || !identical(model_info$likelihood, "mixed")) {
+    return(pred)
+  }
+  cs2step_neural_coerce_prediction_output(
+    pred = pred,
+    likelihood = model_info$likelihood,
+    target_likelihood = target_likelihood,
+    target_n_outcomes = target_n_outcomes,
+    sigma = params$sigma %||% NULL
   )
 }
 
-cs2step_neural_predict_single_prepared <- function(params, model_info, prep, return_logits = FALSE) {
+cs2step_neural_predict_single_prepared <- function(params,
+                                                   model_info,
+                                                   prep,
+                                                   return_logits = FALSE,
+                                                   target_likelihood = NULL,
+                                                   target_n_outcomes = NULL) {
   if (isTRUE(prep$pairwise)) {
     stop("Single prepared prediction requires single-mode prep data.", call. = FALSE)
   }
-  neural_predict_prepared_jitted(
+  pred <- neural_predict_prepared_jitted(
     params = params,
     model_info = model_info,
     prep = prep,
-    return_logits = return_logits
+    return_logits = isTRUE(return_logits) || identical(model_info$likelihood, "mixed")
+  )
+  if (isTRUE(return_logits) || !identical(model_info$likelihood, "mixed")) {
+    return(pred)
+  }
+  cs2step_neural_coerce_prediction_output(
+    pred = pred,
+    likelihood = model_info$likelihood,
+    target_likelihood = target_likelihood,
+    target_n_outcomes = target_n_outcomes,
+    sigma = params$sigma %||% NULL
   )
 }
 
-cs2step_neural_predict_prepared <- function(params, model_info, prep, return_logits = FALSE) {
+cs2step_neural_predict_prepared <- function(params,
+                                            model_info,
+                                            prep,
+                                            return_logits = FALSE,
+                                            target_likelihood = NULL,
+                                            target_n_outcomes = NULL) {
   if (isTRUE(prep$pairwise)) {
-    return(cs2step_neural_predict_pair_prepared(params, model_info, prep, return_logits = return_logits))
+    return(cs2step_neural_predict_pair_prepared(
+      params,
+      model_info,
+      prep,
+      return_logits = return_logits,
+      target_likelihood = target_likelihood,
+      target_n_outcomes = target_n_outcomes
+    ))
   }
-  cs2step_neural_predict_single_prepared(params, model_info, prep, return_logits = return_logits)
+  cs2step_neural_predict_single_prepared(
+    params,
+    model_info,
+    prep,
+    return_logits = return_logits,
+    target_likelihood = target_likelihood,
+    target_n_outcomes = target_n_outcomes
+  )
 }
 
 cs2step_neural_predict_internal <- function(object,
@@ -1753,8 +1850,31 @@ cs2step_neural_predict_internal <- function(object,
     is.null(experiment_country) &&
     is.null(experiment_year)
   prep <- NULL
+  prediction_mode <- if (identical(object$mode, "pairwise") ||
+                         (identical(object$mode, "universal") && !is.null(pair_id))) {
+    "pairwise"
+  } else {
+    "single"
+  }
+  target_likelihood <- tolower(as.character(
+    object$metadata$target_likelihood %||%
+      object$metadata$likelihood %||%
+      if (identical(model_info$likelihood, "mixed")) "bernoulli" else model_info$likelihood
+  ))
+  if (length(target_likelihood) != 1L || is.na(target_likelihood) || !nzchar(target_likelihood)) {
+    target_likelihood <- if (identical(model_info$likelihood, "mixed")) "bernoulli" else model_info$likelihood
+  }
+  target_n_outcomes <- suppressWarnings(as.integer(
+    object$metadata$target_n_outcomes %||%
+      object$metadata$n_outcomes %||%
+      model_info$global_out_dim %||%
+      1L
+  ))
+  if (length(target_n_outcomes) != 1L || is.na(target_n_outcomes) || target_n_outcomes < 1L) {
+    target_n_outcomes <- 1L
+  }
 
-  if (identical(object$mode, "pairwise")) {
+  if (identical(prediction_mode, "pairwise")) {
     cs2step_validate_pairwise_ids(pair_id, nrow(W_idx))
     pair_info <- cs2step_build_pair_mat(
       pair_id = pair_id,
@@ -1828,7 +1948,10 @@ cs2step_neural_predict_internal <- function(object,
         resp_cov_present_new = resp_cov_prepped$present,
         resp_cov_order_new = resp_cov_prepped$order,
         experiment_idx_new = experiment_idx,
-        factor_order_new = factor_order_internal
+        factor_order_new = factor_order_internal,
+        mode = "pairwise",
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
       )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
@@ -1862,7 +1985,9 @@ cs2step_neural_predict_internal <- function(object,
         params = prep_params$params,
         model_info = model_info,
         prep = prep,
-        return_logits = identical(type, "link")
+        return_logits = identical(type, "link"),
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
       )
     }
   } else {
@@ -1891,7 +2016,10 @@ cs2step_neural_predict_internal <- function(object,
         resp_cov_present_new = resp_cov_prepped$present,
         resp_cov_order_new = resp_cov_prepped$order,
         experiment_idx_new = experiment_idx,
-        factor_order_new = factor_order_internal
+        factor_order_new = factor_order_internal,
+        mode = "single",
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
       )
     } else {
       prep_params <- cs2step_neural_prepare_params(object)
@@ -1923,7 +2051,9 @@ cs2step_neural_predict_internal <- function(object,
         params = prep_params$params,
         model_info = model_info,
         prep = prep,
-        return_logits = identical(type, "link")
+        return_logits = identical(type, "link"),
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
       )
     }
   }
@@ -1938,6 +2068,8 @@ cs2step_neural_predict_internal <- function(object,
     }
   } else if (identical(type, "link")) {
     pred <- as.numeric(cs2step_neural_to_r_array(p))
+  } else if (identical(model_info$likelihood, "mixed")) {
+    pred <- p
   } else {
     pred <- cs2step_neural_coerce_prediction_output(p, model_info$likelihood)
   }
@@ -1978,7 +2110,7 @@ cs2step_neural_predict_internal <- function(object,
       experiment_year = experiment_year,
       pair_id = pair_id,
       profile_order = profile_order,
-      mode = object$mode
+      mode = prediction_mode
     )
   }
 
