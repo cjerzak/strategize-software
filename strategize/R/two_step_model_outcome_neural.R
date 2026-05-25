@@ -14507,6 +14507,8 @@ generate_ModelOutcome_neural <- function(){
       svi_steps_completed <- 0L
       progress_every <- max(1L, as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L)))))
       last_gradient_checkpoint <- NULL
+      last_progress_step <- 0L
+      last_progress_elapsed <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
       compact_scan_error <- NULL
       compact_scan_message_emitted <- FALSE
       compact_scan_status <- if (compact_update_chunk_size > 1L) "pending" else "single_step"
@@ -14632,15 +14634,27 @@ generate_ModelOutcome_neural <- function(){
           )
           rss_mb_value <- current_process_rss_mb()
           elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
+          progress_step_delta <- as.integer(svi_steps_completed) - as.integer(last_progress_step)
+          progress_elapsed_delta <- elapsed_seconds - as.numeric(last_progress_elapsed)
+          iter_per_s_value <- if (is.finite(progress_elapsed_delta) &&
+                                  progress_elapsed_delta > 0 &&
+                                  progress_step_delta > 0L) {
+            as.numeric(progress_step_delta) / progress_elapsed_delta
+          } else {
+            NA_real_
+          }
           message(sprintf(
-            "Compact SVI step=%d/%d; train_elbo=%s; rss_mb=%s; elapsed=%ss%s.",
+            "Compact SVI step=%d/%d; train_elbo=%s; iter_per_s=%s; rss_mb=%s; elapsed=%ss%s.",
             as.integer(svi_steps_completed),
             as.integer(svi_steps),
             format_svi_diag_value(svi_loss_curve[[svi_steps_completed]], digits = 2L),
+            format_svi_diag_value(iter_per_s_value, digits = 3L),
             format_svi_diag_value(rss_mb_value, digits = 1L),
             format_svi_diag_value(elapsed_seconds, digits = 3L),
             format_svi_gradient_fields(last_gradient_checkpoint)
           ))
+          last_progress_step <- as.integer(svi_steps_completed)
+          last_progress_elapsed <- elapsed_seconds
         }
         step_cursor <- as.integer(svi_steps_completed) + 1L
       }
@@ -14934,6 +14948,7 @@ generate_ModelOutcome_neural <- function(){
       checkpoint_index <- max(0L, as.integer(ceiling(steps_completed / chunk_size)))
       while (steps_remaining > 0L) {
         chunk_steps <- min(chunk_size, steps_remaining)
+        chunk_started_at <- proc.time()[["elapsed"]]
         run_result <- checkpoint_run_chunk(
           chunk_steps = chunk_steps,
           model_args_current = svi_model_args,
@@ -14942,6 +14957,7 @@ generate_ModelOutcome_neural <- function(){
           progress_bar = FALSE
         )
         checkpoint_resume_params <- NULL
+        chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         run_parts <- parse_svi_run_result(run_result)
         if (is.null(run_parts$state)) {
           early_stopping_reason <- "update_failed"
@@ -14963,13 +14979,19 @@ generate_ModelOutcome_neural <- function(){
           model_args_current = svi_model_args,
           step_current = steps_completed
         )
+        iter_per_s_value <- if (is.finite(chunk_run_seconds) && chunk_run_seconds > 0) {
+          as.numeric(chunk_steps) / chunk_run_seconds
+        } else {
+          NA_real_
+        }
         message(sprintf(
-          "SVI checkpoint %d/%d: step=%d/%d; train_elbo=%s%s.",
+          "SVI checkpoint %d/%d: step=%d/%d; train_elbo=%s; iter_per_s=%s%s.",
           checkpoint_index,
           total_checks_planned,
           steps_completed,
           svi_steps,
           format_svi_diag_value(tail(chunk_losses, 1L), digits = 2L),
+          format_svi_diag_value(iter_per_s_value, digits = 3L),
           format_svi_gradient_fields(gradient_checkpoint)
         ))
         early_stopping_info$reason <- early_stopping_reason
