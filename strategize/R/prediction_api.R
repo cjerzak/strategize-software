@@ -266,6 +266,7 @@ cs2step_eval_outcome_model_glm <- function(Y,
 
 cs2step_eval_outcome_model_neural <- function(Y,
                                              W_idx,
+                                             W_idx_compact = NULL,
                                              names_list = NULL,
                                              factor_levels,
                                              diff,
@@ -274,7 +275,9 @@ cs2step_eval_outcome_model_neural <- function(Y,
                                              competing_group_variable_candidate = NULL,
                                              competing_group_variable_respondent = NULL,
                                              X = NULL,
+                                             X_compact = NULL,
                                              X_present = NULL,
+                                             X_present_compact = NULL,
                                              respondent_id = NULL,
                                              respondent_task_id = NULL,
                                              neural_token_info = NULL,
@@ -315,14 +318,20 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$diff <- isTRUE(diff)
   eval_env$glm_family <- "binomial"
 
+  n_training_rows <- if (!is.null(W_idx)) {
+    nrow(W_idx)
+  } else {
+    cs2step_compact_n_rows(W_idx_compact)
+  }
   eval_env$w_orig <- W_idx
   eval_env$W <- W_idx
   eval_env$W_ <- W_idx
+  eval_env$W_idx_compact <- W_idx_compact
   eval_env$Y <- Y
   eval_env$Y_ <- Y
   eval_env$names_list <- names_list
   eval_env$factor_levels <- factor_levels
-  eval_env$indi_ <- seq_len(nrow(W_idx))
+  eval_env$indi_ <- seq_len(n_training_rows)
 
   eval_env$pair_id <- pair_id
   eval_env$pair_id_ <- pair_id
@@ -337,8 +346,10 @@ cs2step_eval_outcome_model_neural <- function(Y,
   eval_env$nFolds_glm <- if (is.null(nFolds_glm)) NULL else as.integer(nFolds_glm)
   eval_env$X <- if (is.null(X)) NULL else as.matrix(X)
   eval_env$X_ <- if (is.null(X)) NULL else as.matrix(X)
+  eval_env$X_compact <- X_compact
   eval_env$X_present <- if (is.null(X_present)) NULL else as.matrix(X_present)
   eval_env$X_present_ <- if (is.null(X_present)) NULL else as.matrix(X_present)
+  eval_env$X_present_compact <- X_present_compact
   eval_env$respondent_id <- respondent_id
   eval_env$respondent_task_id <- respondent_task_id
   eval_env$neural_token_info <- neural_token_info

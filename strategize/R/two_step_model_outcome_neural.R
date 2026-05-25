@@ -6873,19 +6873,26 @@ neural_getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
 
 cs2step_build_pair_mat <- function(pair_id,
                                    W,
+                                   n_rows = NULL,
+                                   row_hash = NULL,
                                    profile_order = NULL,
                                    competing_group_variable_candidate = NULL) {
   if (is.null(pair_id) || !length(pair_id)) {
     return(NULL)
   }
-  if (is.null(W) || !length(W)) {
-    stop("cs2step_build_pair_mat requires a non-empty W.", call. = FALSE)
-  }
-  W <- as.matrix(W)
   pair_id <- as.vector(pair_id)
-  if (length(pair_id) != nrow(W)) {
+  if (is.null(n_rows)) {
+    if (is.null(W) || !length(W)) {
+      stop("cs2step_build_pair_mat requires a non-empty W or n_rows.", call. = FALSE)
+    }
+    W <- as.matrix(W)
+    n_rows <- nrow(W)
+  } else {
+    n_rows <- as.integer(n_rows)
+  }
+  if (length(pair_id) != n_rows) {
     stop(sprintf("pair_id has %d elements but W has %d rows.",
-                 length(pair_id), nrow(W)),
+                 length(pair_id), n_rows),
          call. = FALSE)
   }
 
@@ -6898,16 +6905,22 @@ cs2step_build_pair_mat <- function(pair_id,
   profile_order_present <- !is.null(profile_order) &&
     length(profile_order) == length(pair_id)
 
-  row_key <- apply(W, 1, function(row) {
-    paste(ifelse(is.na(row), "NA", as.character(row)), collapse = "|")
-  })
-  row_hash <- vapply(row_key, function(key) {
-    ints <- utf8ToInt(key)
-    if (!length(ints)) {
-      return(0)
+  if (is.null(row_hash)) {
+    row_hash <- if (!is.null(W) && length(W)) {
+      row_key <- apply(W, 1, function(row) {
+        paste(ifelse(is.na(row), "NA", as.character(row)), collapse = "|")
+      })
+      vapply(row_key, function(key) {
+        ints <- utf8ToInt(key)
+        if (!length(ints)) {
+          return(0)
+        }
+        sum(ints * seq_along(ints)) %% 2147483647
+      }, numeric(1))
+    } else {
+      seq_len(n_rows)
     }
-    sum(ints * seq_along(ints)) %% 2147483647
-  }, numeric(1))
+  }
 
   pair_mat <- do.call(rbind, lapply(pair_indices_list, function(idx){
     order_by_profile <- profile_order_present &&
@@ -6938,6 +6951,289 @@ cs2step_build_pair_mat <- function(pair_id,
     pair_mat = pair_mat,
     pair_sizes = lengths(pair_indices_list),
     profile_order_present = profile_order_present
+  )
+}
+
+cs2step_compact_n_rows <- function(x) {
+  if (is.null(x)) {
+    return(0L)
+  }
+  as.integer(x$n_rows %||% sum(vapply(x$blocks %||% list(), function(block) {
+    as.integer(block$n_rows %||% 0L)
+  }, integer(1))))
+}
+
+cs2step_compact_n_cols <- function(x, field = c("n_factors", "n_covariates")) {
+  field <- match.arg(field)
+  if (is.null(x)) {
+    return(0L)
+  }
+  as.integer(x[[field]] %||% {
+    blocks <- x$blocks %||% list()
+    if (length(blocks)) {
+      blocks[[1L]][[field]] %||% 0L
+    } else {
+      0L
+    }
+  })
+}
+
+cs2step_compact_block_ranges <- function(x) {
+  blocks <- x$blocks %||% list()
+  n_by_block <- vapply(blocks, function(block) as.integer(block$n_rows %||% 0L), integer(1))
+  starts <- cumsum(c(1L, head(n_by_block, -1L)))
+  ends <- cumsum(n_by_block)
+  data.frame(block = seq_along(blocks), start = starts, end = ends)
+}
+
+cs2step_compact_rows_by_block <- function(x, rows = NULL) {
+  total_rows <- cs2step_compact_n_rows(x)
+  if (is.null(rows)) {
+    rows <- seq_len(total_rows)
+  }
+  rows <- as.integer(rows)
+  if (length(rows) < 1L) {
+    return(list(rows = rows, split = list()))
+  }
+  if (any(is.na(rows) | rows < 1L | rows > total_rows)) {
+    stop("Compact row index out of bounds.", call. = FALSE)
+  }
+  ranges <- cs2step_compact_block_ranges(x)
+  block_id <- findInterval(rows, ranges$start)
+  block_id[block_id < 1L] <- 1L
+  block_id[block_id > nrow(ranges)] <- nrow(ranges)
+  split_idx <- split(seq_along(rows), block_id)
+  list(rows = rows, ranges = ranges, split = split_idx)
+}
+
+cs2step_materialize_w_idx_compact <- function(x, rows = NULL) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (is.matrix(x) || is.data.frame(x)) {
+    out <- as.matrix(x)
+    storage.mode(out) <- "integer"
+    if (!is.null(rows)) {
+      out <- out[rows, , drop = FALSE]
+    }
+    return(out)
+  }
+  n_cols <- cs2step_compact_n_cols(x, "n_factors")
+  rows_info <- cs2step_compact_rows_by_block(x, rows)
+  out <- matrix(
+    rep.int(as.integer(x$holdout_codes %||% integer(n_cols)), rep.int(length(rows_info$rows), n_cols)),
+    nrow = length(rows_info$rows),
+    ncol = n_cols
+  )
+  colnames(out) <- x$factor_names %||% character(n_cols)
+  for (block_name in names(rows_info$split)) {
+    block_idx <- as.integer(block_name)
+    block <- x$blocks[[block_idx]]
+    out_rows <- rows_info$split[[block_name]]
+    local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
+    present_cols <- as.integer(block$present_cols %||% integer(0))
+    if (length(present_cols) > 0L) {
+      vals <- as.matrix(block$values)[local_rows, , drop = FALSE]
+      storage.mode(vals) <- "integer"
+      out[out_rows, present_cols] <- vals
+    }
+  }
+  storage.mode(out) <- "integer"
+  out
+}
+
+cs2step_compact_missing_rows <- function(block, present_cols, n_rows) {
+  out <- setNames(vector("list", length(present_cols)), as.character(present_cols))
+  missing_rows <- block$missing_rows_by_col %||% list()
+  for (col_name in names(out)) {
+    vals <- as.integer(missing_rows[[col_name]] %||% integer(0))
+    vals <- vals[!is.na(vals) & vals >= 1L & vals <= n_rows]
+    out[[col_name]] <- vals
+  }
+  out
+}
+
+cs2step_materialize_x_compact <- function(x, rows = NULL) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (is.matrix(x) || is.data.frame(x)) {
+    out <- as.matrix(x)
+    storage.mode(out) <- "double"
+    if (!is.null(rows)) {
+      out <- out[rows, , drop = FALSE]
+    }
+    return(out)
+  }
+  n_cols <- cs2step_compact_n_cols(x, "n_covariates")
+  rows_info <- cs2step_compact_rows_by_block(x, rows)
+  out <- matrix(0, nrow = length(rows_info$rows), ncol = n_cols)
+  colnames(out) <- x$covariate_names %||% character(n_cols)
+  for (block_name in names(rows_info$split)) {
+    block_idx <- as.integer(block_name)
+    block <- x$blocks[[block_idx]]
+    out_rows <- rows_info$split[[block_name]]
+    local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
+    present_cols <- as.integer(block$present_cols %||% integer(0))
+    if (length(present_cols) > 0L) {
+      vals <- as.matrix(block$values)[local_rows, , drop = FALSE]
+      storage.mode(vals) <- "double"
+      vals[!is.finite(vals)] <- 0
+      out[out_rows, present_cols] <- vals
+    }
+  }
+  storage.mode(out) <- "double"
+  out
+}
+
+cs2step_materialize_x_present_compact <- function(x, rows = NULL) {
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (is.matrix(x) || is.data.frame(x)) {
+    out <- as.matrix(x)
+    storage.mode(out) <- "double"
+    if (!is.null(rows)) {
+      out <- out[rows, , drop = FALSE]
+    }
+    return(out)
+  }
+  n_cols <- cs2step_compact_n_cols(x, "n_covariates")
+  rows_info <- cs2step_compact_rows_by_block(x, rows)
+  out <- matrix(0, nrow = length(rows_info$rows), ncol = n_cols)
+  colnames(out) <- x$covariate_names %||% character(n_cols)
+  for (block_name in names(rows_info$split)) {
+    block_idx <- as.integer(block_name)
+    block <- x$blocks[[block_idx]]
+    out_rows <- rows_info$split[[block_name]]
+    local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
+    present_cols <- as.integer(block$present_cols %||% integer(0))
+    if (length(present_cols) > 0L) {
+      out[out_rows, present_cols] <- 1
+      missing_by_col <- cs2step_compact_missing_rows(block, present_cols, as.integer(block$n_rows %||% 0L))
+      for (col_name in names(missing_by_col)) {
+        missing_local <- missing_by_col[[col_name]]
+        if (length(missing_local) > 0L) {
+          hit <- match(missing_local, local_rows, nomatch = 0L)
+          hit <- hit[hit > 0L]
+          if (length(hit) > 0L) {
+            out[out_rows[hit], as.integer(col_name)] <- 0
+          }
+        }
+      }
+    }
+  }
+  storage.mode(out) <- "double"
+  out
+}
+
+cs2step_compact_covariate_profiles <- function(x,
+                                               rows = NULL,
+                                               experiment_index = NULL,
+                                               covariate_names = NULL,
+                                               default_experiment_index = NULL) {
+  covariate_names <- as.character(covariate_names %||% x$covariate_names %||% character(0))
+  n_covariates <- length(covariate_names)
+  default_stats_row <- neural_default_covariate_value_stats_row()
+  default_meta_row <- neural_default_covariate_value_metadata_row()
+  if (n_covariates < 1L || is.null(x)) {
+    empty <- neural_build_covariate_distribution_profiles(
+      X_mat = matrix(numeric(0), nrow = 0L, ncol = 0L),
+      covariate_names = covariate_names
+    )
+    return(list(
+      mean = NULL,
+      scale = NULL,
+      default_present = NULL,
+      distribution_profiles = empty
+    ))
+  }
+  rows_info <- cs2step_compact_rows_by_block(x, rows)
+  n_total <- length(rows_info$rows)
+  values_by_col <- setNames(vector("list", n_covariates), as.character(seq_len(n_covariates)))
+  values_by_exp <- list()
+  n_by_exp <- integer(0)
+  for (block_name in names(rows_info$split)) {
+    block_idx <- as.integer(block_name)
+    block <- x$blocks[[block_idx]]
+    exp_idx <- as.integer(block$experiment_index %||% (block_idx - 1L))
+    exp_key <- as.character(exp_idx)
+    out_rows <- rows_info$split[[block_name]]
+    local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
+    current_n <- n_by_exp[exp_key]
+    if (length(current_n) != 1L || is.na(current_n)) {
+      current_n <- 0L
+    }
+    n_by_exp[exp_key] <- as.integer(current_n) + length(local_rows)
+    if (is.null(values_by_exp[[exp_key]])) {
+      values_by_exp[[exp_key]] <- setNames(vector("list", n_covariates), as.character(seq_len(n_covariates)))
+    }
+    present_cols <- as.integer(block$present_cols %||% integer(0))
+    if (length(present_cols) < 1L) {
+      next
+    }
+    vals_mat <- as.matrix(block$values)[local_rows, , drop = FALSE]
+    storage.mode(vals_mat) <- "double"
+    for (j in seq_along(present_cols)) {
+      col_idx <- present_cols[[j]]
+      vals <- vals_mat[, j]
+      vals <- vals[is.finite(vals)]
+      if (length(vals) > 0L) {
+        key <- as.character(col_idx)
+        values_by_col[[key]] <- c(values_by_col[[key]], vals)
+        values_by_exp[[exp_key]][[key]] <- c(values_by_exp[[exp_key]][[key]], vals)
+      }
+    }
+  }
+  build_summary_mats <- function(values_list, rows_n) {
+    stats_mat <- neural_empty_covariate_distribution_matrix(
+      n_covariates = n_covariates,
+      colnames_use = covariate_names,
+      default_row = default_stats_row
+    )
+    meta_mat <- neural_empty_covariate_distribution_matrix(
+      n_covariates = n_covariates,
+      colnames_use = covariate_names,
+      default_row = default_meta_row
+    )
+    for (j in seq_len(n_covariates)) {
+      vals <- values_list[[as.character(j)]] %||% numeric(0)
+      present <- c(rep(1, length(vals)), rep(0, max(0L, rows_n - length(vals))))
+      x_col <- c(vals, rep(0, max(0L, rows_n - length(vals))))
+      summary_j <- neural_covariate_distribution_summary(x_col = x_col, present_col = present)
+      stats_mat[j, ] <- summary_j$stats
+      meta_mat[j, ] <- summary_j$metadata
+    }
+    list(stats = stats_mat, metadata = meta_mat)
+  }
+  global_summary <- build_summary_mats(values_by_col, n_total)
+  max_exp <- if (length(n_by_exp)) max(as.integer(names(n_by_exp)), na.rm = TRUE) else -1L
+  by_experiment <- if (is.finite(max_exp) && max_exp >= 0L) vector("list", max_exp + 1L) else list()
+  metadata_by_experiment <- if (is.finite(max_exp) && max_exp >= 0L) vector("list", max_exp + 1L) else list()
+  for (exp_key in names(values_by_exp)) {
+    exp_idx <- as.integer(exp_key)
+    summary_i <- build_summary_mats(values_by_exp[[exp_key]], as.integer(n_by_exp[[exp_key]] %||% 0L))
+    by_experiment[[exp_idx + 1L]] <- summary_i$stats
+    metadata_by_experiment[[exp_idx + 1L]] <- summary_i$metadata
+  }
+  default_stats <- global_summary$stats
+  default_metadata <- global_summary$metadata
+  if (!is.null(default_experiment_index) && !is.na(default_experiment_index) &&
+      length(by_experiment) >= (as.integer(default_experiment_index) + 1L)) {
+    idx <- as.integer(default_experiment_index) + 1L
+    default_stats <- by_experiment[[idx]] %||% default_stats
+    default_metadata <- metadata_by_experiment[[idx]] %||% default_metadata
+  }
+  list(
+    mean = as.numeric(global_summary$stats[, "mean"]),
+    scale = as.numeric(global_summary$stats[, "scale"]),
+    default_present = as.numeric(vapply(values_by_col, function(vals) length(vals) > 0L, logical(1))),
+    distribution_profiles = list(
+      by_experiment = by_experiment,
+      metadata_by_experiment = metadata_by_experiment,
+      default_stats = default_stats,
+      default_metadata = default_metadata
+    )
   )
 }
 
@@ -7231,6 +7527,45 @@ generate_ModelOutcome_neural <- function(){
     subsample_method <- "full"
   }
   mcmc_control$subsample_method <- subsample_method
+  W_idx_compact_use <- if (exists("W_idx_compact", inherits = TRUE) &&
+                           !is.null(W_idx_compact)) {
+    get("W_idx_compact", inherits = TRUE)
+  } else {
+    NULL
+  }
+  X_compact_use <- if (exists("X_compact", inherits = TRUE) &&
+                       !is.null(X_compact)) {
+    get("X_compact", inherits = TRUE)
+  } else {
+    NULL
+  }
+  X_present_compact_use <- if (exists("X_present_compact", inherits = TRUE) &&
+                               !is.null(X_present_compact)) {
+    get("X_present_compact", inherits = TRUE)
+  } else {
+    NULL
+  }
+  compact_training <- !is.null(W_idx_compact_use) || !is.null(X_compact_use)
+  subsample_method_model <- if (isTRUE(compact_training)) "full" else subsample_method
+  if (isTRUE(compact_training)) {
+    if (is.null(W_idx_compact_use)) {
+      stop("Compact neural training requires W_idx_compact.", call. = FALSE)
+    }
+    if (!identical(subsample_method, "batch_vi")) {
+      stop(
+        "Compact neural training currently requires neural_mcmc_control$subsample_method = 'batch_vi'.",
+        call. = FALSE
+      )
+    }
+    if (isTRUE(eval_control$enabled)) {
+      message("Disabling neural OOS evaluation for compact streaming training.")
+      eval_control$enabled <- FALSE
+    }
+    if (isTRUE(mcmc_control$early_stopping)) {
+      message("Disabling neural SVI early stopping for compact streaming training.")
+      mcmc_control$early_stopping <- FALSE
+    }
+  }
 
   if (!is.numeric(model_dims) || length(model_dims) != 1L || !is.finite(model_dims)) {
     stop("'neural_mcmc_control$ModelDims' must be a single finite numeric value.",
@@ -7469,11 +7804,11 @@ generate_ModelOutcome_neural <- function(){
   # Respondent covariates (optional)
   X_use <- NULL
   X_ <- NULL
-  if (exists("X", inherits = TRUE) && !is.null(X)) {
+  if (!isTRUE(compact_training) && exists("X", inherits = TRUE) && !is.null(X)) {
     X_ <- as.matrix(X[indi_, , drop = FALSE])
   }
   X_present_ <- NULL
-  if (exists("X_present", inherits = TRUE) && !is.null(X_present)) {
+  if (!isTRUE(compact_training) && exists("X_present", inherits = TRUE) && !is.null(X_present)) {
     X_present_ <- as.matrix(X_present[indi_, , drop = FALSE])
   } else if (!is.null(X_)) {
     X_present_ <- matrix(1, nrow = nrow(X_), ncol = ncol(X_))
@@ -7583,8 +7918,16 @@ generate_ModelOutcome_neural <- function(){
       mcmc_control$shared_projection_value_encoder %||%
       "name_dist_moe"
   )
+  compact_covariate_names <- as.character(
+    X_compact_use$covariate_names %||%
+      X_present_compact_use$covariate_names %||%
+      character(0)
+  )
   covariate_names_override <- as.character(
-    neural_token_info_use$covariate_names %||% colnames(X_) %||% character(0)
+    neural_token_info_use$covariate_names %||%
+      colnames(X_) %||%
+      compact_covariate_names %||%
+      character(0)
   )
   neural_token_info_use$covariate_names <- covariate_names_override
   if (length(default_factor_order) < 1L && length(factor_levels_int) > 0L) {
@@ -7721,7 +8064,8 @@ generate_ModelOutcome_neural <- function(){
   if (pairwise_mode) {
     pair_info <- cs2step_build_pair_mat(
       pair_id = pair_id_,
-      W = W_,
+      W = if (isTRUE(compact_training)) NULL else W_,
+      n_rows = if (isTRUE(compact_training)) length(Y_) else NULL,
       profile_order = profile_order_,
       competing_group_variable_candidate = competing_group_variable_candidate_
     )
@@ -7735,8 +8079,13 @@ generate_ModelOutcome_neural <- function(){
   }
 
   if (pairwise_mode) {
-    X_left <- W_[pair_mat[,1], , drop = FALSE]
-    X_right <- W_[pair_mat[,2], , drop = FALSE]
+    if (isTRUE(compact_training)) {
+      X_left <- NULL
+      X_right <- NULL
+    } else {
+      X_left <- W_[pair_mat[,1], , drop = FALSE]
+      X_right <- W_[pair_mat[,2], , drop = FALSE]
+    }
     Y_use <- Y_[pair_mat[,1]]
     party_left <- party_index[pair_mat[,1]]
     party_right <- party_index[pair_mat[,2]]
@@ -7755,7 +8104,7 @@ generate_ModelOutcome_neural <- function(){
       experiment_index_use <- NULL
     }
   } else {
-    X_single <- W_
+    X_single <- if (isTRUE(compact_training)) NULL else W_
     Y_use <- Y_
     party_single <- party_index
     resp_party_use <- resp_party_index
@@ -7777,7 +8126,10 @@ generate_ModelOutcome_neural <- function(){
       universal_n_outcomes_use <- universal_n_outcomes_all
     }
   }
-  if (identical(covariate_value_encoding, "shared_projection") && !is.null(X_use) && ncol(X_use) > 0L) {
+  if (!isTRUE(compact_training) &&
+      identical(covariate_value_encoding, "shared_projection") &&
+      !is.null(X_use) &&
+      ncol(X_use) > 0L) {
     present_mask <- if (!is.null(X_present_use) && ncol(X_present_use) == ncol(X_use)) {
       X_present_use > 0
     } else {
@@ -7947,13 +8299,41 @@ generate_ModelOutcome_neural <- function(){
     c(override_chr, setdiff(allowed_token_family_levels, override_chr))
   }
 
-  n_resp_covariates <- if (!is.null(X_use)) ai(ncol(X_use)) else ai(0L)
+  n_resp_covariates <- if (isTRUE(compact_training)) {
+    ai(length(covariate_names_override))
+  } else if (!is.null(X_use)) {
+    ai(ncol(X_use))
+  } else {
+    ai(0L)
+  }
   resp_cov_sd <- if (n_resp_covariates > 0L) {
     0.5 / sqrt(as.numeric(n_resp_covariates))
   } else {
     NULL
   }
-  resp_cov_mean <- if (!is.null(X_use) && n_resp_covariates > 0L) {
+  compact_covariate_rows <- if (isTRUE(compact_training) && n_resp_covariates > 0L) {
+    if (isTRUE(pairwise_mode)) {
+      pair_mat[, 1L]
+    } else {
+      seq_along(Y_)
+    }
+  } else {
+    NULL
+  }
+  compact_covariate_profiles <- if (isTRUE(compact_training) && n_resp_covariates > 0L) {
+    cs2step_compact_covariate_profiles(
+      x = X_compact_use,
+      rows = compact_covariate_rows,
+      experiment_index = experiment_index_use,
+      covariate_names = covariate_names_override,
+      default_experiment_index = default_experiment_index
+    )
+  } else {
+    NULL
+  }
+  resp_cov_mean <- if (!is.null(compact_covariate_profiles)) {
+    compact_covariate_profiles$mean
+  } else if (!is.null(X_use) && n_resp_covariates > 0L) {
     if (!is.null(X_present_use) && ncol(X_present_use) == ncol(X_use)) {
       means <- numeric(ncol(X_use))
       for (j in seq_len(ncol(X_use))) {
@@ -7971,7 +8351,9 @@ generate_ModelOutcome_neural <- function(){
   } else {
     NULL
   }
-  resp_cov_scale <- if (!is.null(X_use) && n_resp_covariates > 0L) {
+  resp_cov_scale <- if (!is.null(compact_covariate_profiles)) {
+    compact_covariate_profiles$scale
+  } else if (!is.null(X_use) && n_resp_covariates > 0L) {
     if (!is.null(X_present_use) && ncol(X_present_use) == ncol(X_use)) {
       sds <- numeric(ncol(X_use))
       for (j in seq_len(ncol(X_use))) {
@@ -7992,18 +8374,24 @@ generate_ModelOutcome_neural <- function(){
   } else {
     NULL
   }
-  resp_cov_default_present <- if (!is.null(X_present_use) && n_resp_covariates > 0L) {
+  resp_cov_default_present <- if (!is.null(compact_covariate_profiles)) {
+    compact_covariate_profiles$default_present
+  } else if (!is.null(X_present_use) && n_resp_covariates > 0L) {
     as.numeric(colMeans(X_present_use > 0, na.rm = TRUE) > 0)
   } else {
     NULL
   }
-  covariate_distribution_profiles <- neural_build_covariate_distribution_profiles(
-    X_mat = X_use,
-    X_present_mat = X_present_use,
-    experiment_index = experiment_index_use,
-    covariate_names = covariate_names_override,
-    default_experiment_index = default_experiment_index
-  )
+  covariate_distribution_profiles <- if (!is.null(compact_covariate_profiles)) {
+    compact_covariate_profiles$distribution_profiles
+  } else {
+    neural_build_covariate_distribution_profiles(
+      X_mat = X_use,
+      X_present_mat = X_present_use,
+      experiment_index = experiment_index_use,
+      covariate_names = covariate_names_override,
+      default_experiment_index = default_experiment_index
+    )
+  }
   covariate_value_stats_by_experiment <- covariate_distribution_profiles$by_experiment %||% list()
   default_covariate_value_stats <- covariate_distribution_profiles$default_stats %||% NULL
   covariate_value_metadata_by_experiment <- covariate_distribution_profiles$metadata_by_experiment %||% list()
@@ -8056,7 +8444,8 @@ generate_ModelOutcome_neural <- function(){
     nOutcomes <- ai(max(1L, universal_global_out_dim))
   } else if (is_binary) {
     likelihood <- "bernoulli"; nOutcomes <- ai(1L)
-  } else if (!is.na(K_classes) && K_classes >= 2L && K_classes <= max(50L, ncol(W_) + 1L)) {
+  } else if (!is.na(K_classes) && K_classes >= 2L &&
+             K_classes <= max(50L, length(factor_levels_int) + 1L)) {
     likelihood <- "categorical"; nOutcomes <- ai(K_classes)
   } else {
     likelihood <- "normal"; nOutcomes <- ai(1L)
@@ -9723,30 +10112,37 @@ generate_ModelOutcome_neural <- function(){
                                            likelihood_code_obs = NULL,
                                            n_outcomes_obs = NULL,
                                            sigma = NULL,
-                                           site_name = "obs") {
+                                           site_name = "obs",
+                                           obs_scale = NULL) {
+    scaled_observation_factor <- function(distribution, obs) {
+      if (is.null(obs_scale)) {
+        strenv$numpyro$sample(site_name, distribution, obs = obs)
+      } else {
+        scale_use <- strenv$jnp$array(obs_scale, dtype = ddtype_)
+        strenv$numpyro$factor(site_name, distribution$log_prob(obs) * scale_use)
+      }
+      invisible(NULL)
+    }
     if (!isTRUE(universal_enabled)) {
       if (likelihood == "bernoulli") {
         logits_vec <- strenv$jnp$take(logits, ai(0L), axis = 1L)
-        strenv$numpyro$sample(
-          site_name,
+        scaled_observation_factor(
           strenv$numpyro$distributions$Bernoulli(logits = logits_vec),
-          obs = Yb
+          Yb
         )
         return(invisible(NULL))
       }
       if (likelihood == "categorical") {
-        strenv$numpyro$sample(
-          site_name,
+        scaled_observation_factor(
           strenv$numpyro$distributions$Categorical(logits = logits),
-          obs = Yb
+          Yb
         )
         return(invisible(NULL))
       }
       mu <- strenv$jnp$take(logits, ai(0L), axis = 1L)
-      strenv$numpyro$sample(
-        site_name,
+      scaled_observation_factor(
         strenv$numpyro$distributions$Normal(mu, sigma),
-        obs = Yb
+        Yb
       )
       return(invisible(NULL))
     }
@@ -9761,6 +10157,9 @@ generate_ModelOutcome_neural <- function(){
       n_outcomes_obs = n_outcomes_obs,
       sigma = sigma
     )
+    if (!is.null(obs_scale)) {
+      total_logp <- total_logp * strenv$jnp$array(obs_scale, dtype = ddtype_)
+    }
     strenv$numpyro$factor(site_name, total_logp)
     invisible(NULL)
   }
@@ -9813,7 +10212,8 @@ generate_ModelOutcome_neural <- function(){
                                            likelihood_code = NULL,
                                            n_outcomes_obs = NULL,
                                            Y_obs,
-                                           obs_idx = NULL) {
+                                           obs_idx = NULL,
+                                           obs_scale = NULL) {
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X_left <- subset_model_rows(X_left, obs_idx)
@@ -10219,12 +10619,13 @@ generate_ModelOutcome_neural <- function(){
         likelihood_code_obs = likelihood_code_b,
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
-        site_name = "obs"
+        site_name = "obs",
+        obs_scale = obs_scale
       )
     }
 
     local_lik <- function() {
-      if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
+      if (isTRUE(subsample_method_model %in% c("batch", "batch_vi"))) {
         with(strenv$numpyro$plate("data", size = N_local,
                                   # Clamp subsample_size to the available data to avoid
                                   # plate() errors when batch_size > N_local.
@@ -10272,7 +10673,8 @@ generate_ModelOutcome_neural <- function(){
                                              likelihood_code = NULL,
                                              n_outcomes_obs = NULL,
                                              Y_obs,
-                                             obs_idx = NULL) {
+                                             obs_idx = NULL,
+                                             obs_scale = NULL) {
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X <- subset_model_rows(X, obs_idx)
@@ -10454,12 +10856,13 @@ generate_ModelOutcome_neural <- function(){
         likelihood_code_obs = likelihood_code_b,
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
-        site_name = "obs"
+        site_name = "obs",
+        obs_scale = obs_scale
       )
     }
 
     local_lik <- function() {
-      if (isTRUE(subsample_method %in% c("batch", "batch_vi"))) {
+      if (isTRUE(subsample_method_model %in% c("batch", "batch_vi"))) {
         with(strenv$numpyro$plate("data", size = N_local,
                                   # Clamp subsample_size to the available data to avoid
                                   # plate() errors when batch_size > N_local.
@@ -11324,6 +11727,7 @@ generate_ModelOutcome_neural <- function(){
   })
   }
 
+  y_fac <- NULL
   if (likelihood == "categorical") {
     y_levels_override <- NULL
     if (exists("neural_y_levels_override", inherits = TRUE)) {
@@ -11338,48 +11742,175 @@ generate_ModelOutcome_neural <- function(){
       stop("Categorical outcome contains unseen/NA levels after applying neural_y_levels_override.",
            call. = FALSE)
     }
-    Y_jnp <- strenv$jnp$array(ai(y_fac))$astype(strenv$jnp$int32)
-  } else {
-    Y_jnp <- strenv$jnp$array(as.numeric(Y_use))$astype(ddtype_)
-  }
-  resp_party_jnp <- strenv$jnp$array(as.integer(resp_party_use))$astype(strenv$jnp$int32)
-  if (n_resp_covariates > 0L) {
-    resp_cov_jnp <- strenv$jnp$array(as.matrix(X_use))$astype(ddtype_)
-    resp_cov_present_jnp <- if (!is.null(X_present_use)) {
-      strenv$jnp$array(as.matrix(X_present_use))$astype(ddtype_)
+    Y_jnp <- if (isTRUE(compact_training)) {
+      NULL
     } else {
-      strenv$jnp$ones(list(ai(length(Y_use)), ai(n_resp_covariates)), dtype = ddtype_)
+      strenv$jnp$array(ai(y_fac))$astype(strenv$jnp$int32)
     }
   } else {
-    resp_cov_jnp <- strenv$jnp$zeros(list(ai(length(Y_use)), ai(0L)), dtype = ddtype_)
-    resp_cov_present_jnp <- strenv$jnp$zeros(list(ai(length(Y_use)), ai(0L)), dtype = ddtype_)
+    Y_jnp <- if (isTRUE(compact_training)) {
+      NULL
+    } else {
+      strenv$jnp$array(as.numeric(Y_use))$astype(ddtype_)
+    }
   }
-  experiment_index_jnp <- if (!is.null(experiment_index_use)) {
-    strenv$jnp$array(as.integer(experiment_index_use))$astype(strenv$jnp$int32)
+  if (isTRUE(compact_training)) {
+    resp_party_jnp <- NULL
+    resp_cov_jnp <- NULL
+    resp_cov_present_jnp <- NULL
+    experiment_index_jnp <- NULL
+    likelihood_code_jnp <- NULL
+    n_outcomes_obs_jnp <- NULL
+    X_left_jnp <- NULL
+    X_right_jnp <- NULL
+    party_left_jnp <- NULL
+    party_right_jnp <- NULL
+    X_single_jnp <- NULL
+    party_single_jnp <- NULL
   } else {
-    NULL
-  }
-  likelihood_code_jnp <- if (isTRUE(universal_enabled) && !is.null(universal_likelihood_use)) {
-    strenv$jnp$array(
-      as.integer(match(universal_likelihood_use, universal_likelihood_levels) - 1L)
-    )$astype(strenv$jnp$int32)
-  } else {
-    NULL
-  }
-  n_outcomes_obs_jnp <- if (isTRUE(universal_enabled) && !is.null(universal_n_outcomes_use)) {
-    strenv$jnp$array(as.integer(universal_n_outcomes_use))$astype(strenv$jnp$int32)
-  } else {
-    NULL
+    resp_party_jnp <- strenv$jnp$array(as.integer(resp_party_use))$astype(strenv$jnp$int32)
+    if (n_resp_covariates > 0L) {
+      resp_cov_jnp <- strenv$jnp$array(as.matrix(X_use))$astype(ddtype_)
+      resp_cov_present_jnp <- if (!is.null(X_present_use)) {
+        strenv$jnp$array(as.matrix(X_present_use))$astype(ddtype_)
+      } else {
+        strenv$jnp$ones(list(ai(length(Y_use)), ai(n_resp_covariates)), dtype = ddtype_)
+      }
+    } else {
+      resp_cov_jnp <- strenv$jnp$zeros(list(ai(length(Y_use)), ai(0L)), dtype = ddtype_)
+      resp_cov_present_jnp <- strenv$jnp$zeros(list(ai(length(Y_use)), ai(0L)), dtype = ddtype_)
+    }
+    experiment_index_jnp <- if (!is.null(experiment_index_use)) {
+      strenv$jnp$array(as.integer(experiment_index_use))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+    likelihood_code_jnp <- if (isTRUE(universal_enabled) && !is.null(universal_likelihood_use)) {
+      strenv$jnp$array(
+        as.integer(match(universal_likelihood_use, universal_likelihood_levels) - 1L)
+      )$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+    n_outcomes_obs_jnp <- if (isTRUE(universal_enabled) && !is.null(universal_n_outcomes_use)) {
+      strenv$jnp$array(as.integer(universal_n_outcomes_use))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+
+    if (pairwise_mode) {
+      X_left_jnp <- strenv$jnp$array(to_index_matrix(X_left))$astype(strenv$jnp$int32)
+      X_right_jnp <- strenv$jnp$array(to_index_matrix(X_right))$astype(strenv$jnp$int32)
+      party_left_jnp <- strenv$jnp$array(as.integer(party_left))$astype(strenv$jnp$int32)
+      party_right_jnp <- strenv$jnp$array(as.integer(party_right))$astype(strenv$jnp$int32)
+    } else {
+      X_single_jnp <- strenv$jnp$array(to_index_matrix(X_single))$astype(strenv$jnp$int32)
+      party_single_jnp <- strenv$jnp$array(as.integer(party_single))$astype(strenv$jnp$int32)
+    }
   }
 
-  if (pairwise_mode) {
-    X_left_jnp <- strenv$jnp$array(to_index_matrix(X_left))$astype(strenv$jnp$int32)
-    X_right_jnp <- strenv$jnp$array(to_index_matrix(X_right))$astype(strenv$jnp$int32)
-    party_left_jnp <- strenv$jnp$array(as.integer(party_left))$astype(strenv$jnp$int32)
-    party_right_jnp <- strenv$jnp$array(as.integer(party_right))$astype(strenv$jnp$int32)
+  compact_model_n_obs <- if (isTRUE(compact_training)) {
+    as.integer(length(Y_use))
   } else {
-    X_single_jnp <- strenv$jnp$array(to_index_matrix(X_single))$astype(strenv$jnp$int32)
-    party_single_jnp <- strenv$jnp$array(as.integer(party_single))$astype(strenv$jnp$int32)
+    0L
+  }
+  compact_svi_batch_size <- if (isTRUE(compact_training)) {
+    batch_size_use <- suppressWarnings(as.integer(mcmc_control$batch_size))
+    if (length(batch_size_use) != 1L || is.na(batch_size_use) || batch_size_use < 1L) {
+      batch_size_use <- 1L
+    }
+    as.integer(min(batch_size_use, compact_model_n_obs))
+  } else {
+    0L
+  }
+  compact_batch_args <- function(obs_idx) {
+    obs_idx <- as.integer(obs_idx)
+    obs_idx <- obs_idx[!is.na(obs_idx) & obs_idx >= 1L & obs_idx <= compact_model_n_obs]
+    if (length(obs_idx) < 1L) {
+      stop("Compact SVI batch has no valid observation rows.", call. = FALSE)
+    }
+    y_obs <- if (likelihood == "categorical") {
+      strenv$jnp$array(as.integer(y_fac[obs_idx]))$astype(strenv$jnp$int32)
+    } else {
+      strenv$jnp$array(as.numeric(Y_use[obs_idx]))$astype(ddtype_)
+    }
+    resp_party_obs <- strenv$jnp$array(as.integer(resp_party_use[obs_idx]))$astype(strenv$jnp$int32)
+    cov_rows <- if (isTRUE(pairwise_mode)) {
+      pair_mat[obs_idx, 1L]
+    } else {
+      obs_idx
+    }
+    if (n_resp_covariates > 0L) {
+      resp_cov_mat <- cs2step_materialize_x_compact(X_compact_use, cov_rows)
+      if (is.null(resp_cov_mat)) {
+        resp_cov_mat <- matrix(0, nrow = length(obs_idx), ncol = n_resp_covariates)
+      }
+      resp_cov_present_mat <- cs2step_materialize_x_present_compact(
+        X_present_compact_use %||% X_compact_use,
+        cov_rows
+      )
+      if (is.null(resp_cov_present_mat)) {
+        resp_cov_present_mat <- matrix(1, nrow = length(obs_idx), ncol = n_resp_covariates)
+      }
+      resp_cov <- strenv$jnp$array(as.matrix(resp_cov_mat))$astype(ddtype_)
+      resp_cov_present <- strenv$jnp$array(as.matrix(resp_cov_present_mat))$astype(ddtype_)
+    } else {
+      resp_cov <- strenv$jnp$zeros(list(ai(length(obs_idx)), ai(0L)), dtype = ddtype_)
+      resp_cov_present <- strenv$jnp$zeros(list(ai(length(obs_idx)), ai(0L)), dtype = ddtype_)
+    }
+    experiment_idx <- if (!is.null(experiment_index_use)) {
+      strenv$jnp$array(as.integer(experiment_index_use[obs_idx]))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+    likelihood_code_obs <- if (isTRUE(universal_enabled) && !is.null(universal_likelihood_use)) {
+      strenv$jnp$array(as.integer(universal_likelihood_code_use[obs_idx]))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+    n_outcomes_obs <- if (isTRUE(universal_enabled) && !is.null(universal_n_outcomes_use_int)) {
+      strenv$jnp$array(as.integer(universal_n_outcomes_use_int[obs_idx]))$astype(strenv$jnp$int32)
+    } else {
+      NULL
+    }
+    obs_scale <- as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx))
+    if (isTRUE(pairwise_mode)) {
+      left_rows <- pair_mat[obs_idx, 1L]
+      right_rows <- pair_mat[obs_idx, 2L]
+      list(
+        X_left = strenv$jnp$array(to_index_matrix(
+          cs2step_materialize_w_idx_compact(W_idx_compact_use, left_rows)
+        ))$astype(strenv$jnp$int32),
+        X_right = strenv$jnp$array(to_index_matrix(
+          cs2step_materialize_w_idx_compact(W_idx_compact_use, right_rows)
+        ))$astype(strenv$jnp$int32),
+        party_left = strenv$jnp$array(as.integer(party_left[obs_idx]))$astype(strenv$jnp$int32),
+        party_right = strenv$jnp$array(as.integer(party_right[obs_idx]))$astype(strenv$jnp$int32),
+        resp_party = resp_party_obs,
+        resp_cov = resp_cov,
+        resp_cov_present = resp_cov_present,
+        experiment_index = experiment_idx,
+        likelihood_code = likelihood_code_obs,
+        n_outcomes_obs = n_outcomes_obs,
+        Y_obs = y_obs,
+        obs_scale = obs_scale
+      )
+    } else {
+      list(
+        X = strenv$jnp$array(to_index_matrix(
+          cs2step_materialize_w_idx_compact(W_idx_compact_use, obs_idx)
+        ))$astype(strenv$jnp$int32),
+        party = strenv$jnp$array(as.integer(party_single[obs_idx]))$astype(strenv$jnp$int32),
+        resp_party = resp_party_obs,
+        resp_cov = resp_cov,
+        resp_cov_present = resp_cov_present,
+        experiment_index = experiment_idx,
+        likelihood_code = likelihood_code_obs,
+        n_outcomes_obs = n_outcomes_obs,
+        Y_obs = y_obs,
+        obs_scale = obs_scale
+      )
+    }
   }
 
   model_fn_base <- if (pairwise_mode) BayesianPairTransformerModel else BayesianSingleTransformerModel
@@ -12500,7 +13031,9 @@ generate_ModelOutcome_neural <- function(){
         num_particles = n_particles
       )
     )
-    svi_model_args <- if (pairwise_mode) {
+    svi_model_args <- if (isTRUE(compact_training)) {
+      compact_batch_args(seq_len(compact_svi_batch_size))
+    } else if (pairwise_mode) {
       list(
         X_left = X_left_jnp,
         X_right = X_right_jnp,
@@ -12529,6 +13062,11 @@ generate_ModelOutcome_neural <- function(){
     }
     rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
     svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
+    if (isTRUE(compact_training) && isTRUE(svi_checkpoint$enabled)) {
+      message("Disabling neural SVI step checkpoints for compact streaming training.")
+      svi_checkpoint$enabled <- FALSE
+      svi_checkpoint$resume <- FALSE
+    }
     svi_checkpoint_fingerprint <- NULL
     svi_checkpoint_latest <- NULL
     svi_checkpoint_best <- NULL
@@ -12863,6 +13401,24 @@ generate_ModelOutcome_neural <- function(){
       }
       list(state = state, losses = losses)
     }
+    parse_svi_update_result <- function(update_result) {
+      parts <- tryCatch(as.list(update_result), error = function(e) NULL)
+      if (is.null(parts) || length(parts) < 2L) {
+        parts <- list(
+          tryCatch(update_result[[1L]], error = function(e) NULL),
+          tryCatch(update_result[[2L]], error = function(e) NULL)
+        )
+      }
+      state <- parts[[1L]]
+      loss <- tryCatch(
+        as.numeric(strenv$np$array(parts[[2L]])),
+        error = function(e) {
+          tryCatch(as.numeric(reticulate::py_to_r(parts[[2L]])), error = function(e2) NA_real_)
+        }
+      )
+      loss_value <- if (length(loss) > 0L) loss[[1L]] else NA_real_
+      list(state = state, loss = loss_value)
+    }
     format_svi_diag_value <- function(value, digits = 8L) {
       if (length(value) != 1L || !is.finite(value)) {
         return("NA")
@@ -13175,7 +13731,95 @@ generate_ModelOutcome_neural <- function(){
       }
     }
 
-    if (!isTRUE(checkpoint_training_complete) && isTRUE(early_stopping_running)) {
+    if (!isTRUE(checkpoint_training_complete) && isTRUE(compact_training)) {
+      if (!reticulate::py_has_attr(svi, "init") ||
+          !reticulate::py_has_attr(svi, "update") ||
+          !reticulate::py_has_attr(svi, "get_params")) {
+        stop("Compact streaming SVI requires numpyro SVI init/update/get_params APIs.", call. = FALSE)
+      }
+      if (compact_model_n_obs < 1L || compact_svi_batch_size < 1L) {
+        stop("Compact streaming SVI received no training observations.", call. = FALSE)
+      }
+      message(sprintf(
+        "Running compact streaming SVI: observations=%d, batch_size=%d, steps=%d.",
+        as.integer(compact_model_n_obs),
+        as.integer(compact_svi_batch_size),
+        as.integer(svi_steps)
+      ))
+      compact_seed <- eval_control$seed
+      if (length(compact_seed) != 1L || is.na(compact_seed) || !is.finite(compact_seed)) {
+        compact_seed <- 123L
+      }
+      old_seed_state <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+      } else {
+        NULL
+      }
+      on.exit({
+        if (is.null(old_seed_state)) {
+          if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+            rm(".Random.seed", envir = .GlobalEnv)
+          }
+        } else {
+          assign(".Random.seed", old_seed_state, envir = .GlobalEnv)
+        }
+      }, add = TRUE)
+      set.seed(as.integer(compact_seed))
+      init_idx <- if (compact_model_n_obs <= compact_svi_batch_size) {
+        seq_len(compact_model_n_obs)
+      } else {
+        seq_len(compact_svi_batch_size)
+      }
+      svi_state <- do.call(svi$init, c(list(rng_key), compact_batch_args(init_idx)))
+      svi_loss_curve <- rep(NA_real_, as.integer(svi_steps))
+      svi_steps_completed <- 0L
+      progress_every <- max(1L, as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L)))))
+      last_gradient_checkpoint <- NULL
+      for (step_idx in seq_len(as.integer(svi_steps))) {
+        obs_idx <- if (compact_model_n_obs <= compact_svi_batch_size) {
+          seq_len(compact_model_n_obs)
+        } else {
+          sample.int(compact_model_n_obs, compact_svi_batch_size, replace = FALSE)
+        }
+        batch_args <- compact_batch_args(obs_idx)
+        update_result <- do.call(svi$update, c(list(svi_state), batch_args))
+        update_parts <- parse_svi_update_result(update_result)
+        if (is.null(update_parts$state)) {
+          early_stopping_reason <- "update_failed"
+          break
+        }
+        svi_state <- update_parts$state
+        svi_loss_curve[[step_idx]] <- as.numeric(update_parts$loss)
+        svi_steps_completed <- as.integer(step_idx)
+        if (step_idx %% progress_every == 0L || step_idx == as.integer(svi_steps)) {
+          last_gradient_checkpoint <- record_svi_gradient_checkpoint(
+            svi_state_current = svi_state,
+            model_args_current = batch_args,
+            step_current = step_idx
+          )
+          rss_mb_value <- current_process_rss_mb()
+          elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
+          message(sprintf(
+            "Compact SVI step=%d/%d; train_elbo=%s; rss_mb=%s; elapsed=%ss%s.",
+            as.integer(step_idx),
+            as.integer(svi_steps),
+            format_svi_diag_value(svi_loss_curve[[step_idx]], digits = 2L),
+            format_svi_diag_value(rss_mb_value, digits = 1L),
+            format_svi_diag_value(elapsed_seconds, digits = 3L),
+            format_svi_gradient_fields(last_gradient_checkpoint)
+          ))
+        }
+      }
+      if (svi_steps_completed < length(svi_loss_curve)) {
+        svi_loss_curve <- if (svi_steps_completed > 0L) {
+          svi_loss_curve[seq_len(svi_steps_completed)]
+        } else {
+          numeric(0)
+        }
+      }
+      early_stopping_info$reason <- early_stopping_reason
+      early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+    } else if (!isTRUE(checkpoint_training_complete) && isTRUE(early_stopping_running)) {
       svi_state <- if (is.null(checkpoint_resume_params)) {
         do.call(svi$init, c(list(rng_key), svi_train_model_args))
       } else {
