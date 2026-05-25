@@ -1249,22 +1249,26 @@ neural_build_param_schema <- function(params,
   if (!is.null(params$W_cross_out)) {
     param_names <- c(param_names, "W_cross_out")
   }
-  for (l_ in 1L:model_depth) {
-    param_names <- c(param_names,
-                     paste0("pseudo_query_attn_l", l_),
-                     paste0("pseudo_query_ff_l", l_),
-                     paste0("alpha_attn_l", l_),
-                     paste0("alpha_ff_l", l_),
-                     paste0("RMS_attn_l", l_),
-                     paste0("RMS_q_l", l_),
-                     paste0("RMS_k_l", l_),
-                     paste0("RMS_ff_l", l_),
-                     paste0("W_q_l", l_),
-                     paste0("W_k_l", l_),
-                     paste0("W_v_l", l_),
-                     paste0("W_o_l", l_),
-                     paste0("W_ff1_l", l_),
-                     paste0("W_ff2_l", l_))
+  if (isTRUE(neural_has_stacked_standard_transformer(params))) {
+    param_names <- c(param_names, neural_standard_transformer_stack_names(params))
+  } else {
+    for (l_ in 1L:model_depth) {
+      param_names <- c(param_names,
+                       paste0("pseudo_query_attn_l", l_),
+                       paste0("pseudo_query_ff_l", l_),
+                       paste0("alpha_attn_l", l_),
+                       paste0("alpha_ff_l", l_),
+                       paste0("RMS_attn_l", l_),
+                       paste0("RMS_q_l", l_),
+                       paste0("RMS_k_l", l_),
+                       paste0("RMS_ff_l", l_),
+                       paste0("W_q_l", l_),
+                       paste0("W_k_l", l_),
+                       paste0("W_v_l", l_),
+                       paste0("W_o_l", l_),
+                       paste0("W_ff1_l", l_),
+                       paste0("W_ff2_l", l_))
+    }
   }
   param_names <- c(param_names,
                    "alpha_cross",
@@ -1316,6 +1320,74 @@ neural_flatten_params <- function(params, schema, dtype = NULL) {
     return(strenv$jnp$array(numeric(0), dtype = dtype))
   }
   strenv$jnp$concatenate(parts, axis = 0L)
+}
+
+neural_standard_transformer_stack_map <- function() {
+  c(
+    W_q_layers = "W_q_l",
+    W_k_layers = "W_k_l",
+    W_v_layers = "W_v_l",
+    W_o_layers = "W_o_l",
+    W_ff1_layers = "W_ff1_l",
+    W_ff2_layers = "W_ff2_l",
+    RMS_attn_layers = "RMS_attn_l",
+    RMS_ff_layers = "RMS_ff_l",
+    RMS_q_layers = "RMS_q_l",
+    RMS_k_layers = "RMS_k_l",
+    alpha_attn_layers = "alpha_attn_l",
+    alpha_ff_layers = "alpha_ff_l"
+  )
+}
+
+neural_standard_transformer_stack_names <- function(params = NULL) {
+  names_use <- names(neural_standard_transformer_stack_map())
+  if (is.null(params)) {
+    return(names_use)
+  }
+  names_use[names_use %in% names(params)]
+}
+
+neural_has_stacked_standard_transformer <- function(params) {
+  if (is.null(params) || !is.list(params)) {
+    return(FALSE)
+  }
+  required <- c(
+    "W_q_layers", "W_k_layers", "W_v_layers", "W_o_layers",
+    "W_ff1_layers", "W_ff2_layers",
+    "RMS_attn_layers", "RMS_ff_layers",
+    "alpha_attn_layers", "alpha_ff_layers"
+  )
+  all(required %in% names(params))
+}
+
+neural_stack_standard_transformer_layers <- function(params,
+                                                     model_depth,
+                                                     drop_legacy = FALSE) {
+  if (is.null(params) || !is.list(params)) {
+    return(params)
+  }
+  model_depth <- as.integer(model_depth)
+  if (is.na(model_depth) || model_depth < 1L) {
+    return(params)
+  }
+  out <- params
+  map <- neural_standard_transformer_stack_map()
+  for (stack_name in names(map)) {
+    legacy_base <- unname(map[[stack_name]])
+    legacy_names <- paste0(legacy_base, seq_len(model_depth))
+    if (!all(legacy_names %in% names(params))) {
+      next
+    }
+    values <- lapply(legacy_names, function(name) params[[name]])
+    if (any(vapply(values, is.null, logical(1)))) {
+      next
+    }
+    out[[stack_name]] <- strenv$jnp$stack(values, axis = 0L)
+    if (isTRUE(drop_legacy)) {
+      out[legacy_names] <- NULL
+    }
+  }
+  out
 }
 
 neural_normalize_cross_encoder_mode <- function(value) {
@@ -5483,6 +5555,44 @@ neural_build_choice_token <- function(model_info, params = NULL){
   neural_add_token_family_embedding(choice_tok, "choice", model_info, params)
 }
 
+neural_run_transformer_scan_standard <- function(tokens,
+                                                 model_info,
+                                                 params,
+                                                 token_mask = NULL) {
+  if (!isTRUE(neural_has_stacked_standard_transformer(params))) {
+    return(NULL)
+  }
+  if (is.null(strenv$jax_transformer_scan_standard)) {
+    registered <- tryCatch({
+      strategize_register_jax_transformer_helpers()
+      TRUE
+    }, error = function(e) FALSE)
+    if (!isTRUE(registered) || is.null(strenv$jax_transformer_scan_standard)) {
+      return(NULL)
+    }
+  }
+  strenv$jax_transformer_scan_standard(
+    tokens,
+    token_mask,
+    params$W_q_layers,
+    params$W_k_layers,
+    params$W_v_layers,
+    params$W_o_layers,
+    params$W_ff1_layers,
+    params$W_ff2_layers,
+    params$RMS_attn_layers,
+    params$RMS_ff_layers,
+    params$RMS_q_layers %||% NULL,
+    params$RMS_k_layers %||% NULL,
+    params$alpha_attn_layers,
+    params$alpha_ff_layers,
+    params$RMS_final,
+    ai(model_info$model_dims),
+    ai(model_info$n_heads),
+    ai(model_info$head_dim)
+  )
+}
+
 neural_run_transformer <- function(tokens,
                                    model_info,
                                    params = NULL,
@@ -5499,6 +5609,21 @@ neural_run_transformer <- function(tokens,
       params = params,
       context = "Neural transformer"
     )
+  }
+  if (!isTRUE(use_full_attn_residual) &&
+      isTRUE(neural_has_stacked_standard_transformer(params))) {
+    tokens_final <- neural_run_transformer_scan_standard(
+      tokens = tokens,
+      model_info = model_info,
+      params = params,
+      token_mask = token_mask
+    )
+    if (!is.null(tokens_final)) {
+      if (isTRUE(return_details)) {
+        return(list(tokens = tokens_final, readout_tokens = tokens_final))
+      }
+      return(tokens_final)
+    }
   }
   residual_history <- if (isTRUE(use_full_attn_residual)) {
     neural_init_residual_history(tokens)
@@ -7264,6 +7389,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_schedule = "warmup_cosine",
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01,
+    compact_update_chunk_size = 8L,
     checkpoint_path = NULL,
     checkpoint_resume = NULL,
     checkpoint_n_checks = 10L,
@@ -7547,6 +7673,19 @@ generate_ModelOutcome_neural <- function(){
   }
   compact_training <- !is.null(W_idx_compact_use) || !is.null(X_compact_use)
   subsample_method_model <- if (isTRUE(compact_training)) "full" else subsample_method
+  compact_update_chunk_size <- if (isTRUE(compact_training)) {
+    chunk_size <- suppressWarnings(as.integer(mcmc_control$compact_update_chunk_size))
+    if (length(chunk_size) != 1L || is.na(chunk_size) || chunk_size < 1L) {
+      stop(
+        "'neural_mcmc_control$compact_update_chunk_size' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+    chunk_size
+  } else {
+    1L
+  }
+  mcmc_control$compact_update_chunk_size <- as.integer(compact_update_chunk_size)
   if (isTRUE(compact_training)) {
     if (is.null(W_idx_compact_use)) {
       stop("Compact neural training requires W_idx_compact.", call. = FALSE)
@@ -9867,6 +10006,13 @@ generate_ModelOutcome_neural <- function(){
       if (!is.null(alpha_ff_l)) {
         layer_params[[paste0("alpha_ff_l", l_)]] <- alpha_ff_l
       }
+    }
+    if (!isTRUE(use_full_attn_residual)) {
+      layer_params <- neural_stack_standard_transformer_layers(
+        layer_params,
+        model_depth = ModelDepth,
+        drop_legacy = TRUE
+      )
     }
 
     alpha_cross <- NULL
@@ -12723,6 +12869,13 @@ generate_ModelOutcome_neural <- function(){
         params_out[[paste0(base, l_)]] <- get_loc_scale_site_value(paste0(base, l_), tau_name)
       }
     }
+    if (!isTRUE(use_full_attn_residual)) {
+      params_out <- neural_stack_standard_transformer_layers(
+        params_out,
+        model_depth = ModelDepth,
+        drop_legacy = TRUE
+      )
+    }
 
     for (name in c("W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
       params_out[[name]] <- get_loc_scale_site_value(name, "tau_cross_attn")
@@ -13960,6 +14113,47 @@ generate_ModelOutcome_neural <- function(){
       loss_value <- if (length(loss) > 0L) loss[[1L]] else NA_real_
       list(state = state, loss = loss_value)
     }
+    parse_svi_scan_update_result <- function(update_result) {
+      parts <- tryCatch(as.list(update_result), error = function(e) NULL)
+      if (is.null(parts) || length(parts) < 2L) {
+        parts <- list(
+          tryCatch(update_result[[1L]], error = function(e) NULL),
+          tryCatch(update_result[[2L]], error = function(e) NULL)
+        )
+      }
+      losses <- tryCatch(
+        as.numeric(strenv$np$array(parts[[2L]])),
+        error = function(e) {
+          tryCatch(as.numeric(reticulate::py_to_r(parts[[2L]])), error = function(e2) numeric(0))
+        }
+      )
+      list(state = parts[[1L]], losses = losses)
+    }
+    compact_stack_batch_arg_chunks <- function(batch_args_list) {
+      if (length(batch_args_list) < 1L) {
+        return(NULL)
+      }
+      arg_names <- names(batch_args_list[[1L]])
+      if (is.null(arg_names) || any(!nzchar(arg_names))) {
+        return(NULL)
+      }
+      out <- list()
+      for (arg_name in arg_names) {
+        values <- lapply(batch_args_list, function(args) args[[arg_name]])
+        all_null <- all(vapply(values, is.null, logical(1)))
+        if (isTRUE(all_null)) {
+          next
+        }
+        if (any(vapply(values, is.null, logical(1)))) {
+          return(NULL)
+        }
+        out[[arg_name]] <- strenv$jnp$stack(values, axis = 0L)
+      }
+      if (length(out) < 1L) {
+        return(NULL)
+      }
+      out
+    }
     format_svi_diag_value <- function(value, digits = 8L) {
       if (length(value) != 1L || !is.finite(value)) {
         return("NA")
@@ -14282,10 +14476,11 @@ generate_ModelOutcome_neural <- function(){
         stop("Compact streaming SVI received no training observations.", call. = FALSE)
       }
       message(sprintf(
-        "Running compact streaming SVI: observations=%d, batch_size=%d, steps=%d.",
+        "Running compact streaming SVI: observations=%d, batch_size=%d, steps=%d, update_chunk_size=%d.",
         as.integer(compact_model_n_obs),
         as.integer(compact_svi_batch_size),
-        as.integer(svi_steps)
+        as.integer(svi_steps),
+        as.integer(compact_update_chunk_size)
       ))
       compact_seed <- eval_control$seed
       if (length(compact_seed) != 1L || is.na(compact_seed) || !is.finite(compact_seed)) {
@@ -14312,36 +14507,142 @@ generate_ModelOutcome_neural <- function(){
       svi_steps_completed <- 0L
       progress_every <- max(1L, as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L)))))
       last_gradient_checkpoint <- NULL
-      for (step_idx in seq_len(as.integer(svi_steps))) {
-        obs_idx <- compact_sample_obs_idx()
-        batch_args <- compact_batch_args(obs_idx)
-        update_result <- do.call(svi$update, c(list(svi_state), batch_args))
-        update_parts <- parse_svi_update_result(update_result)
-        if (is.null(update_parts$state)) {
-          early_stopping_reason <- "update_failed"
-          break
+      compact_scan_error <- NULL
+      compact_scan_message_emitted <- FALSE
+      compact_scan_status <- if (compact_update_chunk_size > 1L) "pending" else "single_step"
+      compact_scan_available <- compact_update_chunk_size > 1L
+      compact_update_chunk_size_effective <- 1L
+      if (isTRUE(compact_scan_available)) {
+        compact_scan_available <- tryCatch({
+          strategize_register_jax_svi_helpers()
+          !is.null(strenv$jax_svi_update_scan)
+        }, error = function(e) {
+          compact_scan_error <<- conditionMessage(e)
+          FALSE
+        })
+        if (!isTRUE(compact_scan_available)) {
+          compact_scan_status <- "helper_unavailable"
         }
-        svi_state <- update_parts$state
-        svi_loss_curve[[step_idx]] <- as.numeric(update_parts$loss)
-        svi_steps_completed <- as.integer(step_idx)
-        if (step_idx %% progress_every == 0L || step_idx == as.integer(svi_steps)) {
+      }
+      optimizer_diagnostics$compact_update_chunk_size_requested <- as.integer(compact_update_chunk_size)
+      optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
+      optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
+      optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
+
+      step_cursor <- 1L
+      while (step_cursor <= as.integer(svi_steps)) {
+        batch_args <- NULL
+        chunk_completed <- FALSE
+        chunk_n <- min(
+          as.integer(compact_update_chunk_size),
+          as.integer(svi_steps) - as.integer(step_cursor) + 1L
+        )
+        if (chunk_n > 1L && isTRUE(compact_scan_available)) {
+          batch_args_list <- tryCatch(
+            lapply(seq_len(chunk_n), function(i) compact_batch_args(compact_sample_obs_idx())),
+            error = function(e) {
+              compact_scan_error <<- conditionMessage(e)
+              NULL
+            }
+          )
+          stacked_batch_args <- if (!is.null(batch_args_list)) {
+            tryCatch(
+              compact_stack_batch_arg_chunks(batch_args_list),
+              error = function(e) {
+                compact_scan_error <<- conditionMessage(e)
+                NULL
+              }
+            )
+          } else {
+            NULL
+          }
+          if (!is.null(stacked_batch_args)) {
+            scan_result <- tryCatch(
+              strenv$jax_svi_update_scan(svi, svi_state, stacked_batch_args),
+              error = function(e) {
+                compact_scan_error <<- conditionMessage(e)
+                NULL
+              }
+            )
+            if (!is.null(scan_result)) {
+              scan_parts <- parse_svi_scan_update_result(scan_result)
+              if (!is.null(scan_parts$state)) {
+                losses <- as.numeric(scan_parts$losses)
+                if (length(losses) < chunk_n) {
+                  losses <- c(losses, rep(NA_real_, chunk_n - length(losses)))
+                }
+                losses <- losses[seq_len(chunk_n)]
+                step_range <- seq.int(step_cursor, length.out = chunk_n)
+                svi_state <- scan_parts$state
+                svi_loss_curve[step_range] <- losses
+                svi_steps_completed <- as.integer(tail(step_range, 1L))
+                batch_args <- batch_args_list[[length(batch_args_list)]]
+                compact_scan_status <- "ok"
+                compact_update_chunk_size_effective <- max(
+                  as.integer(compact_update_chunk_size_effective),
+                  as.integer(chunk_n)
+                )
+                chunk_completed <- TRUE
+              } else if (is.null(compact_scan_error)) {
+                compact_scan_error <- "scanned SVI update returned no state"
+              }
+            }
+          } else if (is.null(compact_scan_error)) {
+            compact_scan_error <- "could not stack compact mini-batch arguments"
+          }
+          if (!isTRUE(chunk_completed)) {
+            compact_scan_available <- FALSE
+            compact_scan_status <- "fallback_single_step"
+            compact_update_chunk_size_effective <- 1L
+            if (!isTRUE(compact_scan_message_emitted)) {
+              message(sprintf(
+                "Compact SVI scanned updates unavailable; falling back to single-step updates%s.",
+                if (!is.null(compact_scan_error) && nzchar(compact_scan_error)) {
+                  paste0(" (", compact_scan_error, ")")
+                } else {
+                  ""
+                }
+              ))
+              compact_scan_message_emitted <- TRUE
+            }
+          }
+        }
+        if (!isTRUE(chunk_completed)) {
+          obs_idx <- compact_sample_obs_idx()
+          batch_args <- compact_batch_args(obs_idx)
+          update_result <- do.call(svi$update, c(list(svi_state), batch_args))
+          update_parts <- parse_svi_update_result(update_result)
+          if (is.null(update_parts$state)) {
+            early_stopping_reason <- "update_failed"
+            break
+          }
+          svi_state <- update_parts$state
+          svi_loss_curve[[step_cursor]] <- as.numeric(update_parts$loss)
+          svi_steps_completed <- as.integer(step_cursor)
+        }
+        optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
+        optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
+        optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
+        if (svi_steps_completed %% progress_every == 0L ||
+            svi_steps_completed == as.integer(svi_steps)) {
           last_gradient_checkpoint <- record_svi_gradient_checkpoint(
             svi_state_current = svi_state,
             model_args_current = batch_args,
-            step_current = step_idx
+            step_current = svi_steps_completed
           )
           rss_mb_value <- current_process_rss_mb()
           elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
           message(sprintf(
             "Compact SVI step=%d/%d; train_elbo=%s; rss_mb=%s; elapsed=%ss%s.",
-            as.integer(step_idx),
+            as.integer(svi_steps_completed),
             as.integer(svi_steps),
-            format_svi_diag_value(svi_loss_curve[[step_idx]], digits = 2L),
+            format_svi_diag_value(svi_loss_curve[[svi_steps_completed]], digits = 2L),
             format_svi_diag_value(rss_mb_value, digits = 1L),
             format_svi_diag_value(elapsed_seconds, digits = 3L),
             format_svi_gradient_fields(last_gradient_checkpoint)
           ))
         }
+        step_cursor <- as.integer(svi_steps_completed) + 1L
       }
       if (svi_steps_completed < length(svi_loss_curve)) {
         svi_loss_curve <- if (svi_steps_completed > 0L) {
@@ -14949,9 +15250,34 @@ generate_ModelOutcome_neural <- function(){
     trans_axes <- list(0L, 1L, 3L, 2L)
     0.5 * (raw_draws - strenv$jnp$transpose(raw_draws, trans_axes))
   }
+  get_stacked_layer_draws <- function(name) {
+    draws <- PosteriorDraws[[name]]
+    if (!is.null(draws)) {
+      return(draws)
+    }
+    map <- neural_standard_transformer_stack_map()
+    if (!name %in% names(map)) {
+      return(NULL)
+    }
+    legacy_base <- unname(map[[name]])
+    parts <- lapply(seq_len(ModelDepth), function(l_) {
+      legacy_name <- paste0(legacy_base, l_)
+      if (legacy_base %in% c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+        return(get_loc_scale_draws(legacy_name, paste0("tau_w_", l_)))
+      }
+      PosteriorDraws[[legacy_name]]
+    })
+    if (any(vapply(parts, is.null, logical(1)))) {
+      return(NULL)
+    }
+    strenv$jnp$stack(parts, axis = 2L)
+  }
   get_param_draws <- function(name) {
     if (grepl("^E_factor_[0-9]+$", name)) {
       return(get_centered_factor_draws(name))
+    }
+    if (name %in% names(neural_standard_transformer_stack_map())) {
+      return(get_stacked_layer_draws(name))
     }
     if (identical(name, "E_feature_id")) {
       draws <- PosteriorDraws$E_feature_id
@@ -15148,6 +15474,13 @@ generate_ModelOutcome_neural <- function(){
       }
     }
   }
+  if (!isTRUE(use_full_attn_residual)) {
+    ParamsMean <- neural_stack_standard_transformer_layers(
+      ParamsMean,
+      model_depth = ModelDepth,
+      drop_legacy = TRUE
+    )
+  }
   for (name in c("W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
     draws <- get_loc_scale_draws(name, "tau_cross_attn")
     if (!is.null(draws)) {
@@ -15162,7 +15495,7 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("pseudo_query_final")
   maybe_site("RMS_final")
 
-  has_qk_norm <- FALSE
+  has_qk_norm <- !is.null(ParamsMean$RMS_q_layers) || !is.null(ParamsMean$RMS_k_layers)
   for (l_ in 1L:ModelDepth) {
     if (!is.null(ParamsMean[[paste0("RMS_q_l", l_)]]) ||
         !is.null(ParamsMean[[paste0("RMS_k_l", l_)]])) {
@@ -16085,6 +16418,7 @@ generate_ModelOutcome_neural <- function(){
     has_cross_encoder = isTRUE(use_cross_encoder),
     has_cross_attn = !is.null(ParamsMean$W_q_cross),
     has_cross_term = !is.null(ParamsMean$M_cross),
+    has_stacked_transformer_layers = isTRUE(neural_has_stacked_standard_transformer(ParamsMean)),
     has_qk_norm = isTRUE(has_qk_norm),
     choice_token_index = 0L,
     likelihood = likelihood,

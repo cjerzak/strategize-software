@@ -2683,6 +2683,12 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   } else {
     out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
   }
+  if (is.null(out$has_stacked_transformer_layers)) {
+    out$has_stacked_transformer_layers <- isTRUE(
+      !is.null(out$param_names) &&
+        any(as.character(out$param_names) %in% neural_standard_transformer_stack_names())
+    )
+  }
   if (is.null(out$n_resp_party_levels) && !is.null(out$resp_party_levels)) {
     out$n_resp_party_levels <- as.integer(length(out$resp_party_levels))
   }
