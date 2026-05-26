@@ -684,7 +684,8 @@ compute_binary_null_metrics <- function(y) {
   )
 }
 
-local_strenv_bindings <- function(bindings) {
+local_strenv_bindings <- function(bindings, .local_envir = parent.frame()) {
+  force(.local_envir)
   binding_names <- as.character(bindings)
   had_binding <- setNames(logical(length(binding_names)), binding_names)
   old_values <- setNames(vector("list", length(binding_names)), binding_names)
@@ -704,7 +705,7 @@ local_strenv_bindings <- function(bindings) {
         rm(list = binding, envir = strategize:::strenv)
       }
     }
-  })
+  }, envir = .local_envir)
 }
 
 # pkgload::load_all() can error on strategize:::strenv$foo <- value and surface
@@ -714,6 +715,24 @@ set_strenv_bindings <- function(values) {
     assign(binding, values[[binding]], envir = strategize:::strenv)
   }
 }
+
+test_that("local_strenv_bindings cleans up bindings at caller scope", {
+  binding <- paste0(".test_local_strenv_binding_", Sys.getpid())
+  if (exists(binding, envir = strategize:::strenv, inherits = FALSE)) {
+    rm(list = binding, envir = strategize:::strenv)
+  }
+
+  local({
+    local_strenv_bindings(binding)
+    set_strenv_bindings(setNames(list("temporary"), binding))
+    expect_identical(
+      get(binding, envir = strategize:::strenv, inherits = FALSE),
+      "temporary"
+    )
+  })
+
+  expect_false(exists(binding, envir = strategize:::strenv, inherits = FALSE))
+})
 
 generate_average_case_neural_data <- function(n = 24, n_factors = 3, seed = 20260326) {
   withr::local_seed(seed)
