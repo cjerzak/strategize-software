@@ -11,7 +11,9 @@ test_that("stacked standard transformer scan matches legacy unrolled path", {
     model_dims = 2L,
     n_heads = 1L,
     head_dim = 2L,
-    residual_mode = "standard"
+    residual_mode = "standard",
+    attention_backend = "xla",
+    attention_dtype = "float32"
   )
 
   legacy_params <- list(
@@ -147,4 +149,37 @@ test_that("stacked transformer params flatten and unflatten as one schema block"
     c(2L, 2L, 2L)
   )
   expect_true(strategize:::neural_has_stacked_standard_transformer(roundtrip))
+})
+
+test_that("attention backend config is normalized and affects cache keys", {
+  info_xla <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 8L,
+    n_heads = 2L,
+    head_dim = 4L,
+    residual_mode = "standard",
+    attention_backend = "xla",
+    attention_dtype = "float32",
+    attention_padding_multiple = 8L
+  )
+  info_flash <- strategize:::neural_make_transformer_model_info(
+    model_depth = 1L,
+    model_dims = 8L,
+    n_heads = 2L,
+    head_dim = 4L,
+    residual_mode = "standard",
+    attention_backend = "flash",
+    attention_dtype = "bf16",
+    attention_padding_multiple = 16L
+  )
+
+  expect_identical(info_xla$attention_backend, "xla")
+  expect_identical(info_xla$attention_dtype, "float32")
+  expect_identical(info_flash$attention_backend, "cudnn")
+  expect_identical(info_flash$attention_dtype, "bfloat16")
+  expect_identical(info_flash$attention_padding_multiple, 16L)
+  expect_false(identical(
+    strategize:::neural_model_jit_cache_key(info_xla),
+    strategize:::neural_model_jit_cache_key(info_flash)
+  ))
 })

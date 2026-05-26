@@ -2548,6 +2548,18 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$schema_dropout)) {
     out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
   }
+  if (!is.null(out$attention_backend)) {
+    out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
+  }
+  if (!is.null(out$attention_dtype)) {
+    out$attention_dtype <- neural_normalize_attention_dtype(out$attention_dtype)
+  }
+  if (!is.null(out$attention_resolved_backend)) {
+    out$attention_resolved_backend <- as.character(out$attention_resolved_backend)
+  }
+  if (!is.null(out$attention_fallback_reason)) {
+    out$attention_fallback_reason <- as.character(out$attention_fallback_reason)
+  }
   if (!is.null(out$factor_levels)) {
     out$factor_levels <- as.integer(out$factor_levels)
   }
@@ -2567,7 +2579,7 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
                   "default_experiment_index", "text_semantic_dim", "factor_struct_dim",
                   "level_struct_dim", "place_context_dim", "time_context_dim", "max_factor_tokens",
-                  "max_covariate_tokens")
+                  "max_covariate_tokens", "attention_padding_multiple")
   for (field in int_fields) {
     if (!is.null(out[[field]])) {
       out[[field]] <- as.integer(out[[field]])
@@ -2688,6 +2700,27 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
     out$schema_dropout <- neural_schema_dropout_zero()
   } else {
     out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
+  }
+  if (is.null(out$attention_backend)) {
+    out$attention_backend <- "xla"
+  } else {
+    out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
+  }
+  if (is.null(out$attention_dtype)) {
+    out$attention_dtype <- "float32"
+  } else {
+    out$attention_dtype <- neural_normalize_attention_dtype(out$attention_dtype)
+  }
+  if (is.null(out$attention_padding_multiple)) {
+    out$attention_padding_multiple <- 8L
+  } else {
+    out$attention_padding_multiple <- as.integer(out$attention_padding_multiple)
+  }
+  if (is.null(out$attention_resolved_backend)) {
+    out$attention_resolved_backend <- out$attention_backend
+  }
+  if (is.null(out$attention_fallback_reason)) {
+    out$attention_fallback_reason <- NA_character_
   }
   if (is.null(out$has_stacked_transformer_layers)) {
     out$has_stacked_transformer_layers <- isTRUE(

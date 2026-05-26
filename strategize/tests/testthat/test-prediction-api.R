@@ -563,6 +563,16 @@ test_that("upgrade path strips legacy jit cache keys", {
   testthat::expect_null(upgraded$jit_cache_key)
 })
 
+test_that("legacy neural model upgrades use portable attention defaults", {
+  upgraded <- strategize:::cs2step_neural_upgrade_model_info(list())
+
+  testthat::expect_identical(upgraded$attention_backend, "xla")
+  testthat::expect_identical(upgraded$attention_dtype, "float32")
+  testthat::expect_identical(upgraded$attention_padding_multiple, 8L)
+  testthat::expect_identical(upgraded$attention_resolved_backend, "xla")
+  testthat::expect_true(is.na(upgraded$attention_fallback_reason))
+})
+
 test_that("neural jit wrapper cache reuses identical experiment descriptions", {
   skip_on_cran()
   skip_if_no_jax()

@@ -1552,17 +1552,306 @@ neural_transformer_residual_mode <- function(model_info) {
   "standard"
 }
 
+neural_normalize_attention_backend <- function(value) {
+  if (is.null(value)) {
+    return("auto")
+  }
+  mode <- tolower(as.character(value))
+  if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+    if (mode %in% c("auto", "default")) {
+      return("auto")
+    }
+    if (mode %in% c("xla", "jax", "standard")) {
+      return("xla")
+    }
+    if (mode %in% c("cudnn", "cuda", "flash", "flash_attention", "flash-attention")) {
+      return("cudnn")
+    }
+  }
+  NA_character_
+}
+
+neural_normalize_attention_dtype <- function(value) {
+  if (is.null(value)) {
+    return("auto")
+  }
+  mode <- tolower(as.character(value))
+  if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+    if (mode %in% c("auto", "default")) {
+      return("auto")
+    }
+    if (mode %in% c("float32", "fp32", "f32")) {
+      return("float32")
+    }
+    if (mode %in% c("bfloat16", "bf16")) {
+      return("bfloat16")
+    }
+    if (mode %in% c("float16", "fp16", "f16", "half")) {
+      return("float16")
+    }
+  }
+  NA_character_
+}
+
+neural_attention_backend <- function(model_info = NULL) {
+  mode <- neural_normalize_attention_backend(model_info$attention_backend %||% "auto")
+  if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+    return(mode)
+  }
+  "auto"
+}
+
+neural_attention_dtype_mode <- function(model_info = NULL) {
+  mode <- neural_normalize_attention_dtype(model_info$attention_dtype %||% "auto")
+  if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+    return(mode)
+  }
+  "auto"
+}
+
+neural_attention_padding_multiple <- function(model_info = NULL) {
+  value <- suppressWarnings(as.integer(model_info$attention_padding_multiple %||% 8L))
+  if (length(value) != 1L || is.na(value) || value < 1L) {
+    return(8L)
+  }
+  value
+}
+
+neural_attention_has_dpa <- function() {
+  tryCatch(
+    reticulate::py_has_attr(strenv$jax$nn, "dot_product_attention"),
+    error = function(e) FALSE
+  )
+}
+
+neural_attention_jax_backend <- function() {
+  tryCatch(as.character(strenv$jax$default_backend()), error = function(e) NA_character_)
+}
+
+neural_attention_cuda_available <- function() {
+  backend <- neural_attention_jax_backend()
+  if (identical(backend, "gpu")) {
+    return(TRUE)
+  }
+  devices <- tryCatch(strenv$jax$devices(), error = function(e) NULL)
+  if (is.null(devices) || length(devices) < 1L) {
+    return(FALSE)
+  }
+  any(vapply(devices, function(device) {
+    grepl("cuda", tolower(as.character(device)), fixed = TRUE)
+  }, logical(1)))
+}
+
+neural_attention_dtype_object <- function(dtype_mode, prefer_cudnn = FALSE) {
+  mode <- neural_normalize_attention_dtype(dtype_mode)
+  if (!is.character(mode) || length(mode) != 1L || is.na(mode) || !nzchar(mode)) {
+    mode <- "auto"
+  }
+  if (identical(mode, "auto")) {
+    mode <- if (isTRUE(prefer_cudnn)) "bfloat16" else "float32"
+  }
+  if (identical(mode, "bfloat16")) {
+    return(list(dtype = strenv$jnp$bfloat16, label = "bfloat16"))
+  }
+  if (identical(mode, "float16")) {
+    return(list(dtype = strenv$jnp$float16, label = "float16"))
+  }
+  list(dtype = strenv$jnp$float32, label = "float32")
+}
+
+neural_attention_resolve_backend <- function(model_info = NULL,
+                                             role = c("self", "cross"),
+                                             fail_on_forced = TRUE) {
+  role <- match.arg(role)
+  requested <- neural_attention_backend(model_info)
+  has_dpa <- neural_attention_has_dpa()
+  cuda_available <- neural_attention_cuda_available()
+  if (!isTRUE(has_dpa)) {
+    if (identical(requested, "cudnn") && isTRUE(fail_on_forced)) {
+      stop("attention_backend='cudnn' requires jax.nn.dot_product_attention.", call. = FALSE)
+    }
+    return(list(
+      requested = requested,
+      backend = "dense",
+      fallback_reason = "jax_dot_product_attention_unavailable",
+      cuda_available = isTRUE(cuda_available)
+    ))
+  }
+  if (identical(requested, "xla")) {
+    return(list(
+      requested = requested,
+      backend = "xla",
+      fallback_reason = NA_character_,
+      cuda_available = isTRUE(cuda_available)
+    ))
+  }
+  if (identical(requested, "cudnn")) {
+    if (!isTRUE(cuda_available)) {
+      if (isTRUE(fail_on_forced)) {
+        stop("attention_backend='cudnn' requires a CUDA-backed JAX device.", call. = FALSE)
+      }
+      return(list(
+        requested = requested,
+        backend = "xla",
+        fallback_reason = "cuda_unavailable",
+        cuda_available = FALSE
+      ))
+    }
+    if (identical(neural_attention_dtype_mode(model_info), "float32")) {
+      if (isTRUE(fail_on_forced)) {
+        stop("attention_backend='cudnn' requires attention_dtype='auto', 'bfloat16', or 'float16'.", call. = FALSE)
+      }
+      return(list(
+        requested = requested,
+        backend = "xla",
+        fallback_reason = "cudnn_requires_fp16_or_bf16",
+        cuda_available = TRUE
+      ))
+    }
+    if (!identical(role, "self")) {
+      return(list(
+        requested = requested,
+        backend = "xla",
+        fallback_reason = "cudnn_cross_attention_disabled",
+        cuda_available = TRUE
+      ))
+    }
+    return(list(
+      requested = requested,
+      backend = "cudnn",
+      fallback_reason = NA_character_,
+      cuda_available = TRUE
+    ))
+  }
+  if (isTRUE(cuda_available) && identical(role, "self")) {
+    if (identical(neural_attention_dtype_mode(model_info), "float32")) {
+      return(list(
+        requested = requested,
+        backend = "xla",
+        fallback_reason = "cudnn_requires_fp16_or_bf16",
+        cuda_available = TRUE
+      ))
+    }
+    return(list(
+      requested = requested,
+      backend = "cudnn",
+      fallback_reason = NA_character_,
+      cuda_available = TRUE
+    ))
+  }
+  list(
+    requested = requested,
+    backend = "xla",
+    fallback_reason = if (isTRUE(cuda_available)) "non_self_attention" else "cuda_unavailable",
+    cuda_available = isTRUE(cuda_available)
+  )
+}
+
+neural_next_multiple <- function(x, multiple) {
+  x <- ai(x)
+  multiple <- ai(multiple)
+  if (multiple <= 1L) {
+    return(x)
+  }
+  as.integer(ceiling(x / multiple) * multiple)
+}
+
+neural_self_attention_context <- function(Qh, Kh, Vh, token_mask, model_info) {
+  resolve <- neural_attention_resolve_backend(model_info, role = "self", fail_on_forced = TRUE)
+  if (identical(resolve$backend, "dense")) {
+    scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
+    scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
+    if (!is.null(token_mask)) {
+      mask_use <- strenv$jnp$reshape(
+        strenv$jnp$astype(token_mask > 0, scores$dtype),
+        list(token_mask$shape[[1]], 1L, 1L, token_mask$shape[[2]])
+      )
+      large_neg <- strenv$jnp$array(-1e9, dtype = scores$dtype)
+      scores <- strenv$jnp$where(mask_use > 0, scores, large_neg)
+    }
+    attn <- strenv$jax$nn$softmax(scores, axis = -1L)
+    return(strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh))
+  }
+
+  original_dtype <- Qh$dtype
+  n_batch <- ai(Qh$shape[[1]])
+  seq_len <- ai(Qh$shape[[2]])
+  n_heads <- ai(model_info$n_heads)
+  head_dim <- ai(model_info$head_dim)
+  backend <- resolve$backend
+  dtype_info <- neural_attention_dtype_object(
+    neural_attention_dtype_mode(model_info),
+    prefer_cudnn = identical(backend, "cudnn")
+  )
+  Q_use <- strenv$jnp$astype(Qh, dtype_info$dtype)
+  K_use <- strenv$jnp$astype(Kh, dtype_info$dtype)
+  V_use <- strenv$jnp$astype(Vh, dtype_info$dtype)
+
+  mask_use <- token_mask
+  if (is.null(mask_use)) {
+    mask_use <- strenv$jnp$ones(list(n_batch, seq_len), dtype = strenv$dtj)
+  }
+
+  seq_use <- seq_len
+  if (identical(backend, "cudnn")) {
+    pad_to <- neural_next_multiple(seq_len, neural_attention_padding_multiple(model_info))
+    pad_n <- ai(pad_to - seq_len)
+    if (pad_n > 0L) {
+      q_pad <- strenv$jnp$zeros(list(n_batch, pad_n, n_heads, head_dim), dtype = Q_use$dtype)
+      k_pad <- strenv$jnp$zeros(list(n_batch, pad_n, n_heads, head_dim), dtype = K_use$dtype)
+      v_pad <- strenv$jnp$zeros(list(n_batch, pad_n, n_heads, head_dim), dtype = V_use$dtype)
+      Q_use <- strenv$jnp$concatenate(list(Q_use, q_pad), axis = 1L)
+      K_use <- strenv$jnp$concatenate(list(K_use, k_pad), axis = 1L)
+      V_use <- strenv$jnp$concatenate(list(V_use, v_pad), axis = 1L)
+      mask_pad <- strenv$jnp$zeros(list(n_batch, pad_n), dtype = mask_use$dtype)
+      mask_use <- strenv$jnp$concatenate(list(mask_use, mask_pad), axis = 1L)
+      seq_use <- pad_to
+    }
+  }
+
+  key_mask <- strenv$jnp$reshape(mask_use > 0, list(n_batch, 1L, 1L, seq_use))
+  if (identical(backend, "cudnn")) {
+    attn_mask <- strenv$jnp$broadcast_to(key_mask, list(n_batch, 1L, seq_use, seq_use))
+  } else {
+    attn_mask <- key_mask
+  }
+  context_h <- strenv$jax$nn$dot_product_attention(
+    Q_use,
+    K_use,
+    V_use,
+    mask = attn_mask,
+    implementation = backend
+  )
+  if (seq_use != seq_len) {
+    keep_idx <- strenv$jnp$arange(seq_len)
+    context_h <- strenv$jnp$take(context_h, keep_idx, axis = 1L)
+  }
+  strenv$jnp$astype(context_h, original_dtype)
+}
+
 neural_make_transformer_model_info <- function(model_depth,
                                                model_dims,
                                                n_heads,
                                                head_dim,
-                                               residual_mode = "standard") {
+                                               residual_mode = "standard",
+                                               attention_backend = "auto",
+                                               attention_dtype = "auto",
+                                               attention_padding_multiple = 8L,
+                                               attention_resolved_backend = NULL,
+                                               attention_fallback_reason = NULL) {
   list(
     model_depth = model_depth,
     model_dims = model_dims,
     n_heads = n_heads,
     head_dim = head_dim,
-    residual_mode = neural_normalize_residual_mode(residual_mode)
+    residual_mode = neural_normalize_residual_mode(residual_mode),
+    attention_backend = neural_normalize_attention_backend(attention_backend),
+    attention_dtype = neural_normalize_attention_dtype(attention_dtype),
+    attention_padding_multiple = neural_attention_padding_multiple(
+      list(attention_padding_multiple = attention_padding_multiple)
+    ),
+    attention_resolved_backend = attention_resolved_backend,
+    attention_fallback_reason = attention_fallback_reason
   )
 }
 
@@ -1594,13 +1883,23 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        covariate_value_text_present = NULL,
                                                        covariate_value_type = NULL,
                                                        stage_mode = NULL,
+                                                       attention_backend = "auto",
+                                                       attention_dtype = "auto",
+                                                       attention_padding_multiple = 8L,
+                                                       attention_resolved_backend = NULL,
+                                                       attention_fallback_reason = NULL,
                                                        jit_cache_key = NULL) {
   info <- neural_make_transformer_model_info(
     model_depth = model_depth,
     model_dims = model_dims,
     n_heads = n_heads,
     head_dim = head_dim,
-    residual_mode = residual_mode
+    residual_mode = residual_mode,
+    attention_backend = attention_backend,
+    attention_dtype = attention_dtype,
+    attention_padding_multiple = attention_padding_multiple,
+    attention_resolved_backend = attention_resolved_backend,
+    attention_fallback_reason = attention_fallback_reason
   )
   info$cand_party_to_resp_idx <- cand_party_to_resp_idx
   info$n_party_levels <- n_party_levels
@@ -2492,6 +2791,10 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$n_heads), error = function(e) "na"),
     tryCatch(as.character(model_info$head_dim), error = function(e) "na"),
     neural_transformer_residual_mode(model_info),
+    neural_attention_backend(model_info),
+    neural_attention_dtype_mode(model_info),
+    tryCatch(as.character(neural_attention_padding_multiple(model_info)), error = function(e) "na"),
+    tryCatch(as.character(model_info$attention_resolved_backend), error = function(e) "na"),
     neural_cross_encoder_mode(model_info),
     tryCatch(as.character(model_info$likelihood), error = function(e) "na"),
     tryCatch(as.character(model_info$experiment_token_mode), error = function(e) "na"),
@@ -5658,6 +5961,11 @@ neural_run_transformer_scan_standard <- function(tokens,
       return(NULL)
     }
   }
+  attention_resolve <- neural_attention_resolve_backend(
+    model_info,
+    role = "self",
+    fail_on_forced = TRUE
+  )
   strenv$jax_transformer_scan_standard(
     tokens,
     token_mask,
@@ -5676,7 +5984,10 @@ neural_run_transformer_scan_standard <- function(tokens,
     params$RMS_final,
     ai(model_info$model_dims),
     ai(model_info$n_heads),
-    ai(model_info$head_dim)
+    ai(model_info$head_dim),
+    as.character(attention_resolve$backend),
+    neural_attention_dtype_mode(model_info),
+    ai(neural_attention_padding_multiple(model_info))
   )
 }
 
@@ -5753,18 +6064,7 @@ neural_run_transformer <- function(tokens,
                                     ai(model_info$n_heads), ai(model_info$head_dim)))
     Qh <- neural_rms_norm(Qh, RMS_q, model_info$head_dim)
     Kh <- neural_rms_norm(Kh, RMS_k, model_info$head_dim)
-    scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
-    scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
-    if (!is.null(token_mask)) {
-      mask_use <- strenv$jnp$reshape(
-        strenv$jnp$astype(token_mask > 0, scores$dtype),
-        list(token_mask$shape[[1]], 1L, 1L, token_mask$shape[[2]])
-      )
-      large_neg <- strenv$jnp$array(-1e9, dtype = scores$dtype)
-      scores <- strenv$jnp$where(mask_use > 0, scores, large_neg)
-    }
-    attn <- strenv$jax$nn$softmax(scores, axis = -1L)
-    context_h <- strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh)
+    context_h <- neural_self_attention_context(Qh, Kh, Vh, token_mask, model_info)
     context <- strenv$jnp$reshape(context_h, list(context_h$shape[[1]],
                                                   context_h$shape[[2]],
                                                   ai(model_info$model_dims)))
@@ -7481,7 +7781,10 @@ generate_ModelOutcome_neural <- function(){
     checkpoint_path = NULL,
     checkpoint_resume = NULL,
     checkpoint_n_checks = 10L,
-    checkpoint_compress = FALSE
+    checkpoint_compress = FALSE,
+    attention_backend = "auto",
+    attention_dtype = "auto",
+    attention_padding_multiple = 8L
   )
   RMS_scale = 0.5
   UsedRegularization <- FALSE
@@ -7492,6 +7795,9 @@ generate_ModelOutcome_neural <- function(){
   model_depth <- 2L
   qk_norm_enabled <- TRUE
   residual_mode <- "standard"
+  attention_backend <- "auto"
+  attention_dtype <- "auto"
+  attention_padding_multiple <- 8L
   cross_candidate_encoder_mode <- "none"
   cross_candidate_encoder_supplied <- FALSE
   warn_stage_imbalance_pct <- 0.10
@@ -7598,6 +7904,28 @@ generate_ModelOutcome_neural <- function(){
       call. = FALSE
     )
   }
+  normalize_attention_backend <- function(value) {
+    mode <- neural_normalize_attention_backend(value)
+    if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      return(mode)
+    }
+    stop(
+      "'neural_mcmc_control$attention_backend' must be one of ",
+      "'auto', 'xla', or 'cudnn'.",
+      call. = FALSE
+    )
+  }
+  normalize_attention_dtype <- function(value) {
+    mode <- neural_normalize_attention_dtype(value)
+    if (is.character(mode) && length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      return(mode)
+    }
+    stop(
+      "'neural_mcmc_control$attention_dtype' must be one of ",
+      "'auto', 'float32', 'bfloat16', or 'float16'.",
+      call. = FALSE
+    )
+  }
   if (exists("neural_mcmc_control", inherits = TRUE) &&
       !is.null(neural_mcmc_control)) {
     if (!is.list(neural_mcmc_control)) {
@@ -7645,6 +7973,20 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(neural_mcmc_control$residual_mode)) {
       residual_mode <- normalize_residual_mode(neural_mcmc_control$residual_mode)
     }
+    if (!is.null(neural_mcmc_control$attention_backend)) {
+      attention_backend <- normalize_attention_backend(neural_mcmc_control$attention_backend)
+    }
+    if (!is.null(neural_mcmc_control$attention_dtype)) {
+      attention_dtype <- normalize_attention_dtype(neural_mcmc_control$attention_dtype)
+    }
+    if (!is.null(neural_mcmc_control$attention_padding_multiple)) {
+      attention_padding_multiple <- suppressWarnings(as.integer(neural_mcmc_control$attention_padding_multiple))
+      if (length(attention_padding_multiple) != 1L ||
+          is.na(attention_padding_multiple) ||
+          attention_padding_multiple < 1L) {
+        stop("'neural_mcmc_control$attention_padding_multiple' must be an integer >= 1.", call. = FALSE)
+      }
+    }
     if (!is.null(neural_mcmc_control$cross_candidate_encoder)) {
       cross_candidate_encoder_supplied <- TRUE
       cross_candidate_encoder_mode <- normalize_cross_candidate_encoder(
@@ -7664,6 +8006,9 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$ModelDepth <- NULL
     mcmc_overrides$qk_norm <- NULL
     mcmc_overrides$residual_mode <- NULL
+    mcmc_overrides$attention_backend <- NULL
+    mcmc_overrides$attention_dtype <- NULL
+    mcmc_overrides$attention_padding_multiple <- NULL
     mcmc_overrides$cross_candidate_encoder <- NULL
   }
   uncertainty_scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
@@ -7820,6 +8165,39 @@ generate_ModelOutcome_neural <- function(){
   cand_heads <- (1:MD_int)[(MD_int %% (1:MD_int)) == 0L]
   TransformerHeads <- ai(cand_heads[which.min(abs(cand_heads - 8L))])
   head_dim <- ai(ai(MD_int / TransformerHeads))
+  attention_config_probe <- list(
+    attention_backend = attention_backend,
+    attention_dtype = attention_dtype,
+    attention_padding_multiple = attention_padding_multiple
+  )
+  attention_resolve <- neural_attention_resolve_backend(
+    attention_config_probe,
+    role = "self",
+    fail_on_forced = TRUE
+  )
+  attention_resolved_backend <- attention_resolve$backend
+  attention_fallback_reason <- attention_resolve$fallback_reason
+  attention_dtype_label <- neural_attention_dtype_object(
+    attention_dtype,
+    prefer_cudnn = identical(attention_resolved_backend, "cudnn")
+  )$label
+  message(sprintf(
+    paste0(
+      "Neural attention backend: requested=%s; resolved=%s; dtype=%s; ",
+      "jax_backend=%s; cuda_available=%s; padding_multiple=%s; fallback=%s."
+    ),
+    attention_backend,
+    attention_resolved_backend,
+    attention_dtype_label,
+    neural_attention_jax_backend(),
+    if (isTRUE(attention_resolve$cuda_available)) "TRUE" else "FALSE",
+    as.integer(attention_padding_multiple),
+    if (is.na(attention_fallback_reason) || !nzchar(attention_fallback_reason)) {
+      "none"
+    } else {
+      attention_fallback_reason
+    }
+  ))
   FFDim <- ai(ai(round(MD_int * WideMultiplicationFactor)))
   weight_sd_scale <- sqrt(2) / sqrt(as.numeric(ModelDims))
   #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
@@ -10643,7 +11021,12 @@ generate_ModelOutcome_neural <- function(){
       model_dims = ModelDims,
       n_heads = TransformerHeads,
       head_dim = head_dim,
-      residual_mode = residual_mode
+      residual_mode = residual_mode,
+      attention_backend = attention_backend,
+      attention_dtype = attention_dtype,
+      attention_padding_multiple = attention_padding_multiple,
+      attention_resolved_backend = attention_resolved_backend,
+      attention_fallback_reason = attention_fallback_reason
     )
     model_info_local <- neural_make_runtime_token_model_info(
       model_dims = ModelDims,
@@ -11222,7 +11605,12 @@ generate_ModelOutcome_neural <- function(){
       model_dims = ModelDims,
       n_heads = TransformerHeads,
       head_dim = head_dim,
-      residual_mode = residual_mode
+      residual_mode = residual_mode,
+      attention_backend = attention_backend,
+      attention_dtype = attention_dtype,
+      attention_padding_multiple = attention_padding_multiple,
+      attention_resolved_backend = attention_resolved_backend,
+      attention_fallback_reason = attention_fallback_reason
     )
     model_info_local <- neural_make_runtime_token_model_info(
       model_dims = ModelDims,
@@ -13006,6 +13394,11 @@ generate_ModelOutcome_neural <- function(){
     n_heads = TransformerHeads,
     head_dim = head_dim,
     residual_mode = residual_mode,
+    attention_backend = attention_backend,
+    attention_dtype = attention_dtype,
+    attention_padding_multiple = attention_padding_multiple,
+    attention_resolved_backend = attention_resolved_backend,
+    attention_fallback_reason = attention_fallback_reason,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     n_party_levels = ai(n_party_levels),
     n_candidate_tokens = n_candidate_tokens,
@@ -16235,6 +16628,11 @@ generate_ModelOutcome_neural <- function(){
     n_heads = TransformerHeads,
     head_dim = head_dim,
     residual_mode = residual_mode,
+    attention_backend = attention_backend,
+    attention_dtype = attention_dtype,
+    attention_padding_multiple = attention_padding_multiple,
+    attention_resolved_backend = attention_resolved_backend,
+    attention_fallback_reason = attention_fallback_reason,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     n_party_levels = ai(n_party_levels),
     n_candidate_tokens = n_candidate_tokens,
@@ -17180,7 +17578,12 @@ generate_ModelOutcome_neural <- function(){
     model_depth = ModelDepth,
     residual_mode = residual_mode,
     n_heads = TransformerHeads,
-    head_dim = head_dim
+    head_dim = head_dim,
+    attention_backend = attention_backend,
+    attention_dtype = attention_dtype,
+    attention_padding_multiple = as.integer(attention_padding_multiple),
+    attention_resolved_backend = attention_resolved_backend,
+    attention_fallback_reason = attention_fallback_reason
   )
 
   if (isTRUE(save_outcome_model) && !isTRUE(neural_oos_eval_internal_flag)) {
