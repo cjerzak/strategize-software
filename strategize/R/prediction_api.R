@@ -174,6 +174,9 @@ cs2step_py_to_r <- function(x) {
   if (is.null(x)) {
     return(NULL)
   }
+  if (exists("strategize_jax_block_until_ready", mode = "function")) {
+    strategize_jax_block_until_ready(x)
+  }
   if (!cs2step_has_reticulate()) {
     return(x)
   }
@@ -1724,6 +1727,7 @@ cs2step_neural_predict_pair_prepared <- function(params,
     prep = prep,
     return_logits = isTRUE(return_logits) || identical(model_info$likelihood, "mixed")
   )
+  strategize_jax_block_until_ready(pred)
   if (isTRUE(return_logits) || !identical(model_info$likelihood, "mixed")) {
     return(pred)
   }
@@ -1751,6 +1755,7 @@ cs2step_neural_predict_single_prepared <- function(params,
     prep = prep,
     return_logits = isTRUE(return_logits) || identical(model_info$likelihood, "mixed")
   )
+  strategize_jax_block_until_ready(pred)
   if (isTRUE(return_logits) || !identical(model_info$likelihood, "mixed")) {
     return(pred)
   }
@@ -2121,6 +2126,7 @@ cs2step_neural_predict_internal <- function(object,
     prep = prep,
     return_logits = identical(type, "link")
   )
+  strategize_jax_block_until_ready(batched_pred)
   batched_pred_r <- cs2step_neural_to_r_array(batched_pred)
   if (is.list(batched_pred_r) && !is.null(batched_pred_r$mu)) {
     batched_pred_r <- batched_pred_r$mu

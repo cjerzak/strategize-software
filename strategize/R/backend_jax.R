@@ -44,6 +44,51 @@ strategize_configure_jax_compilation_cache <- function(jax = NULL) {
   invisible(isTRUE(configured))
 }
 
+strategize_jax_block_until_ready <- function(x, max_depth = 20L) {
+  walk <- function(value, depth) {
+    if (is.null(value) || depth > max_depth) {
+      return(invisible(value))
+    }
+
+    blocked <- tryCatch({
+      block_fn <- value$block_until_ready
+      if (!is.null(block_fn)) {
+        block_fn()
+        TRUE
+      } else {
+        FALSE
+      }
+    }, error = function(e) FALSE)
+    if (isTRUE(blocked)) {
+      return(invisible(value))
+    }
+
+    if (is.list(value) && !is.data.frame(value)) {
+      for (item in value) {
+        walk(item, depth + 1L)
+      }
+      return(invisible(value))
+    }
+
+    if (requireNamespace("reticulate", quietly = TRUE)) {
+      is_py <- tryCatch(reticulate::is_py_object(value), error = function(e) FALSE)
+      if (isTRUE(is_py)) {
+        parts <- tryCatch(as.list(value), error = function(e) NULL)
+        if (is.list(parts) && length(parts) > 0L) {
+          for (item in parts) {
+            walk(item, depth + 1L)
+          }
+        }
+      }
+    }
+
+    invisible(value)
+  }
+
+  walk(x, 0L)
+  invisible(x)
+}
+
 strategize_register_jax_transformer_helpers <- function() {
   if (!is.null(strenv$jax_transformer_scan_standard)) {
     return(invisible(TRUE))

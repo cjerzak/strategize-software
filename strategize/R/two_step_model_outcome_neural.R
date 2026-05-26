@@ -862,6 +862,46 @@ neural_resolve_early_stopping_validation_batch_size <- function(validation_targe
   as.integer(max(1L, min(validation_target_n, validation_batch_size)))
 }
 
+neural_resolve_compact_update_scan <- function(compact_training,
+                                               compact_update_chunk_size,
+                                               compact_update_scan = NULL) {
+  chunk_size <- suppressWarnings(as.integer(compact_update_chunk_size))
+  if (length(chunk_size) != 1L || is.na(chunk_size) || chunk_size < 1L) {
+    chunk_size <- 1L
+  }
+  if (!isTRUE(compact_training) || chunk_size <= 1L) {
+    return("fallback")
+  }
+  if (is.null(compact_update_scan)) {
+    return("required")
+  }
+  mode <- tolower(as.character(compact_update_scan))
+  if (length(mode) != 1L || is.na(mode) || !mode %in% c("required", "fallback")) {
+    stop(
+      "'neural_mcmc_control$compact_update_scan' must be 'required' or 'fallback'.",
+      call. = FALSE
+    )
+  }
+  mode
+}
+
+neural_stop_compact_scan_required <- function(reason = NULL) {
+  reason <- as.character(reason %||% "unknown scan failure")
+  if (length(reason) != 1L || is.na(reason) || !nzchar(reason)) {
+    reason <- "unknown scan failure"
+  }
+  stop(
+    paste0(
+      "Compact streaming SVI requires scanned JAX updates because ",
+      "neural_mcmc_control$compact_update_scan = 'required', but the scan path failed: ",
+      reason,
+      ". Set neural_mcmc_control$compact_update_scan = 'fallback' or ",
+      "compact_update_chunk_size = 1 to use single-step updates."
+    ),
+    call. = FALSE
+  )
+}
+
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
   if (!neural_stage_context_enabled(model_info)) {
     return(NULL)
@@ -7390,6 +7430,7 @@ generate_ModelOutcome_neural <- function(){
     svi_lr_warmup_frac = 0.1,
     svi_lr_end_factor = 0.01,
     compact_update_chunk_size = 8L,
+    compact_update_scan = "required",
     checkpoint_path = NULL,
     checkpoint_resume = NULL,
     checkpoint_n_checks = 10L,
@@ -7686,6 +7727,12 @@ generate_ModelOutcome_neural <- function(){
     1L
   }
   mcmc_control$compact_update_chunk_size <- as.integer(compact_update_chunk_size)
+  compact_update_scan <- neural_resolve_compact_update_scan(
+    compact_training = compact_training,
+    compact_update_chunk_size = compact_update_chunk_size,
+    compact_update_scan = mcmc_control$compact_update_scan %||% NULL
+  )
+  mcmc_control$compact_update_scan <- compact_update_scan
   if (isTRUE(compact_training)) {
     if (is.null(W_idx_compact_use)) {
       stop("Compact neural training requires W_idx_compact.", call. = FALSE)
@@ -12987,6 +13034,7 @@ generate_ModelOutcome_neural <- function(){
       if (is.null(x) || is.numeric(x)) {
         return(x)
       }
+      strategize_jax_block_until_ready(x)
       tryCatch(reticulate::py_to_r(strenv$np$array(x)),
                error = function(e) {
                  tryCatch(reticulate::py_to_r(x), error = function(e2) x)
@@ -13064,6 +13112,7 @@ generate_ModelOutcome_neural <- function(){
         params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order,
         experiment_idx, NULL, NULL, factor_order
       )
+      strategize_jax_block_until_ready(pred)
       return(coerce_prediction_output_local(pred))
     }
 
@@ -13108,6 +13157,7 @@ generate_ModelOutcome_neural <- function(){
       params, Xb, pb, resp_p, resp_c, resp_c_present, resp_c_order,
       experiment_idx, NULL, NULL, factor_order
     )
+    strategize_jax_block_until_ready(pred)
     coerce_prediction_output_local(pred)
   }
   combine_svi_validation_predictions <- function(pred_chunks) {
@@ -13421,6 +13471,8 @@ generate_ModelOutcome_neural <- function(){
     validation_max_n = NULL,
     validation_batch_size = NA_integer_,
     validation_target_n = NA_integer_,
+    validation_prediction_mode = NA_character_,
+    validation_n_batches = NA_integer_,
     validation_loss_history = numeric(0)
   )
   if (isTRUE(use_svi)) {
@@ -13987,14 +14039,27 @@ generate_ModelOutcome_neural <- function(){
         set.seed(as.integer(split_seed) + 1L)
         validation_idx <- sort(sample(validation_idx, size = validation_target_n, replace = FALSE))
       }
-      validation_batch_size <- neural_resolve_early_stopping_validation_batch_size(
-        validation_target_n = length(validation_idx),
-        validation_batch_size = early_stopping_validation_batch_size
-      )
-      validation_batches <- split(
-        validation_idx,
-        ceiling(seq_along(validation_idx) / validation_batch_size)
-      )
+      validation_batch_size <- if (isTRUE(early_stopping_validation_batch_size_supplied)) {
+        neural_resolve_early_stopping_validation_batch_size(
+          validation_target_n = length(validation_idx),
+          validation_batch_size = early_stopping_validation_batch_size
+        )
+      } else {
+        as.integer(length(validation_idx))
+      }
+      validation_prediction_mode <- if (validation_batch_size < length(validation_idx)) {
+        "batched_fallback"
+      } else {
+        "single_jit_call"
+      }
+      validation_batches <- if (identical(validation_prediction_mode, "batched_fallback")) {
+        split(
+          validation_idx,
+          ceiling(seq_along(validation_idx) / validation_batch_size)
+        )
+      } else {
+        list(validation_idx)
+      }
 
       list(
         train_idx = as.integer(train_idx),
@@ -14003,6 +14068,7 @@ generate_ModelOutcome_neural <- function(){
         validation_batches = unname(lapply(validation_batches, as.integer)),
         validation_batch_size = as.integer(validation_batch_size),
         validation_target_n = as.integer(validation_target_n),
+        validation_prediction_mode = validation_prediction_mode,
         y_all = y_all,
         likelihood_code_all = likelihood_code_all,
         n_outcomes_all = n_outcomes_all
@@ -14043,15 +14109,24 @@ generate_ModelOutcome_neural <- function(){
       }
       param_sites <- extract_svi_param_sites(svi_params_current)
       validation_batches <- validation_split$validation_batches %||% list(validation_split$validation_idx)
-      pred_chunks <- vector("list", length(validation_batches))
-      for (batch_idx in seq_along(validation_batches)) {
-        pred_chunks[[batch_idx]] <- svi_validation_predict_chunk(
+      validation_prediction_mode <- validation_split$validation_prediction_mode %||% "batched_fallback"
+      pred_eval <- if (identical(validation_prediction_mode, "single_jit_call")) {
+        svi_validation_predict_chunk(
           param_sites,
-          validation_batches[[batch_idx]],
+          validation_split$validation_idx,
           fallback_params = svi_params_current
         )
+      } else {
+        pred_chunks <- vector("list", length(validation_batches))
+        for (batch_idx in seq_along(validation_batches)) {
+          pred_chunks[[batch_idx]] <- svi_validation_predict_chunk(
+            param_sites,
+            validation_batches[[batch_idx]],
+            fallback_params = svi_params_current
+          )
+        }
+        combine_svi_validation_predictions(pred_chunks)
       }
-      pred_eval <- combine_svi_validation_predictions(pred_chunks)
       if (is.null(pred_eval)) {
         return(NA_real_)
       }
@@ -14077,6 +14152,7 @@ generate_ModelOutcome_neural <- function(){
       as.numeric(metric_value)
     }
     parse_svi_run_result <- function(run_result) {
+      strategize_jax_block_until_ready(run_result)
       losses <- tryCatch({
         if (reticulate::py_has_attr(run_result, "losses")) {
           as.numeric(strenv$np$array(run_result$losses))
@@ -14096,6 +14172,7 @@ generate_ModelOutcome_neural <- function(){
       list(state = state, losses = losses)
     }
     parse_svi_update_result <- function(update_result) {
+      strategize_jax_block_until_ready(update_result)
       parts <- tryCatch(as.list(update_result), error = function(e) NULL)
       if (is.null(parts) || length(parts) < 2L) {
         parts <- list(
@@ -14114,6 +14191,7 @@ generate_ModelOutcome_neural <- function(){
       list(state = state, loss = loss_value)
     }
     parse_svi_scan_update_result <- function(update_result) {
+      strategize_jax_block_until_ready(update_result)
       parts <- tryCatch(as.list(update_result), error = function(e) NULL)
       if (is.null(parts) || length(parts) < 2L) {
         parts <- list(
@@ -14297,6 +14375,9 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_validation_batch_size <- 128L
       }
     }
+    early_stopping_validation_batch_size_supplied <- !is.null(mcmc_overrides) &&
+      "early_stopping_validation_batch_size" %in% names(mcmc_overrides) &&
+      !is.null(mcmc_overrides$early_stopping_validation_batch_size)
     early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
       "validation_split_unavailable"
     } else {
@@ -14321,6 +14402,9 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$n_validation <- length(validation_split$validation_idx)
         early_stopping_info$validation_batch_size <- as.integer(validation_split$validation_batch_size)
         early_stopping_info$validation_target_n <- as.integer(validation_split$validation_target_n)
+        early_stopping_info$validation_prediction_mode <- validation_split$validation_prediction_mode %||%
+          "single_jit_call"
+        early_stopping_info$validation_n_batches <- length(validation_split$validation_batches %||% list())
         svi_train_model_args <- c(
           svi_model_args,
           list(obs_idx = validation_split$train_idx_jnp)
@@ -14337,12 +14421,16 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$n_validation <- 0L
         early_stopping_info$validation_batch_size <- NA_integer_
         early_stopping_info$validation_target_n <- NA_integer_
+        early_stopping_info$validation_prediction_mode <- NA_character_
+        early_stopping_info$validation_n_batches <- NA_integer_
       }
     } else {
       early_stopping_info$n_train <- length(Y_use)
       early_stopping_info$n_validation <- 0L
       early_stopping_info$validation_batch_size <- NA_integer_
       early_stopping_info$validation_target_n <- NA_integer_
+      early_stopping_info$validation_prediction_mode <- NA_character_
+      early_stopping_info$validation_n_batches <- NA_integer_
     }
 
     checkpoint_context <- function() {
@@ -14512,6 +14600,8 @@ generate_ModelOutcome_neural <- function(){
       compact_scan_error <- NULL
       compact_scan_message_emitted <- FALSE
       compact_scan_status <- if (compact_update_chunk_size > 1L) "pending" else "single_step"
+      compact_scan_required <- compact_update_chunk_size > 1L &&
+        identical(compact_update_scan, "required")
       compact_scan_available <- compact_update_chunk_size > 1L
       compact_update_chunk_size_effective <- 1L
       if (isTRUE(compact_scan_available)) {
@@ -14523,11 +14613,19 @@ generate_ModelOutcome_neural <- function(){
           FALSE
         })
         if (!isTRUE(compact_scan_available)) {
-          compact_scan_status <- "helper_unavailable"
+          compact_scan_status <- if (isTRUE(compact_scan_required)) {
+            "helper_unavailable"
+          } else {
+            "fallback_single_step"
+          }
+          if (isTRUE(compact_scan_required)) {
+            neural_stop_compact_scan_required(compact_scan_error %||% "JAX SVI scan helper is unavailable")
+          }
         }
       }
       optimizer_diagnostics$compact_update_chunk_size_requested <- as.integer(compact_update_chunk_size)
       optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
+      optimizer_diagnostics$compact_update_scan_mode <- compact_update_scan
       optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
       optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
 
@@ -14567,6 +14665,7 @@ generate_ModelOutcome_neural <- function(){
               }
             )
             if (!is.null(scan_result)) {
+              strategize_jax_block_until_ready(scan_result)
               scan_parts <- parse_svi_scan_update_result(scan_result)
               if (!is.null(scan_parts$state)) {
                 losses <- as.numeric(scan_parts$losses)
@@ -14593,6 +14692,9 @@ generate_ModelOutcome_neural <- function(){
             compact_scan_error <- "could not stack compact mini-batch arguments"
           }
           if (!isTRUE(chunk_completed)) {
+            if (isTRUE(compact_scan_required)) {
+              neural_stop_compact_scan_required(compact_scan_error)
+            }
             compact_scan_available <- FALSE
             compact_scan_status <- "fallback_single_step"
             compact_update_chunk_size_effective <- 1L
@@ -14608,11 +14710,17 @@ generate_ModelOutcome_neural <- function(){
               compact_scan_message_emitted <- TRUE
             }
           }
+        } else if (chunk_n > 1L && !isTRUE(compact_scan_available) &&
+                   isTRUE(compact_scan_required)) {
+          neural_stop_compact_scan_required(compact_scan_error %||% "scanned updates are unavailable")
+        } else if (chunk_n <= 1L && identical(compact_scan_status, "pending")) {
+          compact_scan_status <- "single_step"
         }
         if (!isTRUE(chunk_completed)) {
           obs_idx <- compact_sample_obs_idx()
           batch_args <- compact_batch_args(obs_idx)
           update_result <- do.call(svi$update, c(list(svi_state), batch_args))
+          strategize_jax_block_until_ready(update_result)
           update_parts <- parse_svi_update_result(update_result)
           if (is.null(update_parts$state)) {
             early_stopping_reason <- "update_failed"
@@ -14715,6 +14823,7 @@ generate_ModelOutcome_neural <- function(){
           progress_bar = FALSE
         )
         checkpoint_resume_params <- NULL
+        strategize_jax_block_until_ready(run_result)
         chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         run_parts <- parse_svi_run_result(run_result)
         if (is.null(run_parts$state)) {
@@ -14957,6 +15066,7 @@ generate_ModelOutcome_neural <- function(){
           progress_bar = FALSE
         )
         checkpoint_resume_params <- NULL
+        strategize_jax_block_until_ready(run_result)
         chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         run_parts <- parse_svi_run_result(run_result)
         if (is.null(run_parts$state)) {
@@ -15021,6 +15131,7 @@ generate_ModelOutcome_neural <- function(){
           svi_model_args
         )
       )
+      strategize_jax_block_until_ready(svi_result)
       run_parts <- parse_svi_run_result(svi_result)
       svi_loss_curve <- run_parts$losses
       svi_state <- run_parts$state
@@ -15725,10 +15836,12 @@ generate_ModelOutcome_neural <- function(){
     } else {
       predict_pair_jit_response
     }
-    predict_fn(
+    pred <- predict_fn(
       params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present,
       resp_c_order, experiment_idx, NULL, NULL, factor_order
     )
+    strategize_jax_block_until_ready(pred)
+    pred
   }
 
   TransformerPredict_single <- function(params, X_new, party_new,
@@ -15798,10 +15911,12 @@ generate_ModelOutcome_neural <- function(){
     } else {
       predict_single_jit_response
     }
-    predict_fn(
+    pred <- predict_fn(
       params, Xb, pb, resp_p, resp_c, resp_c_present,
       resp_c_order, experiment_idx, NULL, NULL, factor_order
     )
+    strategize_jax_block_until_ready(pred)
+    pred
   }
 
   coerce_party_idx_base <- function(party_vec, n_rows, levels, missing_label) {
@@ -15823,6 +15938,7 @@ generate_ModelOutcome_neural <- function(){
     if (is.null(x) || is.numeric(x)) {
       return(x)
     }
+    strategize_jax_block_until_ready(x)
     tryCatch(reticulate::py_to_r(strenv$np$array(x)),
              error = function(e) {
                tryCatch(reticulate::py_to_r(x), error = function(e2) x)

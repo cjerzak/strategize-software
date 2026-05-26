@@ -923,6 +923,54 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       )
     }
   }
+  validation_batch_size <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["early_stopping_validation_batch_size"]]
+  } else {
+    NULL
+  }
+  if (!is.null(validation_batch_size)) {
+    if (!is.numeric(validation_batch_size) || length(validation_batch_size) != 1L ||
+        !is.finite(validation_batch_size) || validation_batch_size < 1 ||
+        validation_batch_size != round(validation_batch_size)) {
+      stop(
+        "'neural_mcmc_control$early_stopping_validation_batch_size' must be NULL or an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  compact_update_chunk_size <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["compact_update_chunk_size"]]
+  } else {
+    NULL
+  }
+  if (!is.null(compact_update_chunk_size)) {
+    if (!is.numeric(compact_update_chunk_size) ||
+        length(compact_update_chunk_size) != 1L ||
+        !is.finite(compact_update_chunk_size) ||
+        compact_update_chunk_size < 1 ||
+        compact_update_chunk_size != round(compact_update_chunk_size)) {
+      stop(
+        "'neural_mcmc_control$compact_update_chunk_size' must be an integer >= 1.",
+        call. = FALSE
+      )
+    }
+  }
+  compact_update_scan <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["compact_update_scan"]]
+  } else {
+    NULL
+  }
+  if (!is.null(compact_update_scan)) {
+    compact_update_scan <- tolower(as.character(compact_update_scan))
+    if (length(compact_update_scan) != 1L ||
+        is.na(compact_update_scan) ||
+        !compact_update_scan %in% c("required", "fallback")) {
+      stop(
+        "'neural_mcmc_control$compact_update_scan' must be 'required' or 'fallback'.",
+        call. = FALSE
+      )
+    }
+  }
 
   # ---- penalty_type validation ----
   valid_penalty_types <- c("KL", "L2", "LogMaxProb")

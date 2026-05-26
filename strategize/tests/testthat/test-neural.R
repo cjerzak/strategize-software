@@ -598,6 +598,80 @@ get_neural_model_info <- function(res) {
   model_info
 }
 
+compact_w_idx_from_matrix <- function(W_idx, factor_levels) {
+  factor_names <- colnames(W_idx)
+  holdout_codes <- as.integer(factor_levels)
+  block <- structure(
+    list(
+      n_rows = as.integer(nrow(W_idx)),
+      n_factors = as.integer(ncol(W_idx)),
+      factor_names = factor_names,
+      present_cols = seq_len(ncol(W_idx)),
+      values = W_idx,
+      holdout_codes = holdout_codes,
+      experiment_index = 0L
+    ),
+    class = c("cs_w_idx_block", "cs_w_idx_compact")
+  )
+  structure(
+    list(
+      blocks = list(block),
+      n_rows = as.integer(nrow(W_idx)),
+      n_factors = as.integer(ncol(W_idx)),
+      factor_names = factor_names,
+      holdout_codes = holdout_codes
+    ),
+    class = c("cs_w_idx_blocks", "cs_w_idx_compact")
+  )
+}
+
+run_compact_svi_fit <- function(compact_update_scan = "required",
+                                compact_update_chunk_size = 2L,
+                                svi_steps = 4L) {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+
+  W <- data.frame(feature = rep(c("A", "B"), 4L), stringsAsFactors = FALSE)
+  names_list <- strategize:::cs2step_build_names_list(W)
+  W_idx <- strategize:::cs2step_encode_W_indices(
+    W,
+    names_list = names_list,
+    unknown = "error",
+    pad_unknown = 0L
+  )
+  factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
+  W_idx_compact <- compact_w_idx_from_matrix(W_idx, factor_levels)
+
+  fit <- suppressWarnings(strategize:::cs2step_eval_outcome_model_neural(
+    Y = c(1, 0, 1, 0, 1, 0, 1, 0),
+    W_idx = NULL,
+    W_idx_compact = W_idx_compact,
+    names_list = names_list,
+    factor_levels = factor_levels,
+    diff = TRUE,
+    pair_id = rep(seq_len(4L), each = 2L),
+    profile_order = rep(1:2, 4L),
+    conda_env_required = TRUE,
+    neural_mcmc_control = list(
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      subsample_method = "batch_vi",
+      optimizer = "adam",
+      svi_steps = as.integer(svi_steps),
+      svi_num_draws = 1L,
+      batch_size = 4L,
+      compact_update_chunk_size = as.integer(compact_update_chunk_size),
+      compact_update_scan = compact_update_scan,
+      early_stopping = FALSE,
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  ))
+  get_neural_model_info(list(neural_model_info = list(ast = fit$neural_model_info)))
+}
+
 compute_binary_null_metrics <- function(y) {
   y <- as.numeric(y)
   y <- y[is.finite(y)]
@@ -2570,6 +2644,8 @@ test_that("output-only neural SVI enables early stopping by default", {
   expect_identical(model_info$early_stopping$metric, "log_loss")
   expect_gt(as.integer(model_info$early_stopping$n_train), 0L)
   expect_gt(as.integer(model_info$early_stopping$n_validation), 0L)
+  expect_identical(model_info$early_stopping$validation_prediction_mode, "single_jit_call")
+  expect_identical(as.integer(model_info$early_stopping$validation_n_batches), 1L)
   expect_true(as.integer(model_info$svi_steps_completed) <= as.integer(model_info$svi_steps))
   expect_length(model_info$svi_loss_curve, as.integer(model_info$svi_steps_completed))
   expect_false(identical(model_info$early_stopping$reason, "disabled"))
@@ -2704,6 +2780,122 @@ test_that("early stopping validation batch helper bounds prediction chunk size",
   )
 })
 
+test_that("compact SVI scan mode resolver defaults to required for chunked compact updates", {
+  expect_identical(
+    strategize:::neural_resolve_compact_update_scan(
+      compact_training = TRUE,
+      compact_update_chunk_size = 8L,
+      compact_update_scan = NULL
+    ),
+    "required"
+  )
+  expect_identical(
+    strategize:::neural_resolve_compact_update_scan(
+      compact_training = TRUE,
+      compact_update_chunk_size = 1L,
+      compact_update_scan = "required"
+    ),
+    "fallback"
+  )
+  expect_identical(
+    strategize:::neural_resolve_compact_update_scan(
+      compact_training = TRUE,
+      compact_update_chunk_size = 8L,
+      compact_update_scan = "fallback"
+    ),
+    "fallback"
+  )
+  expect_error(
+    strategize:::neural_resolve_compact_update_scan(
+      compact_training = TRUE,
+      compact_update_chunk_size = 8L,
+      compact_update_scan = "silent"
+    ),
+    "compact_update_scan"
+  )
+})
+
+test_that("required compact SVI scan failures are explicit", {
+  expect_error(
+    strategize:::neural_stop_compact_scan_required("synthetic scan failure"),
+    "synthetic scan failure"
+  )
+})
+
+test_that("compact SVI required scan mode errors when scan helper fails", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  local_strenv_bindings("jax_svi_update_scan")
+  set_strenv_bindings(list(
+    jax_svi_update_scan = function(...) stop("synthetic scan failure")
+  ))
+
+  expect_error(
+    run_compact_svi_fit(
+      compact_update_scan = "required",
+      compact_update_chunk_size = 2L,
+      svi_steps = 2L
+    ),
+    "synthetic scan failure"
+  )
+})
+
+test_that("compact SVI fallback mode records single-step fallback when scan helper fails", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  local_strenv_bindings("jax_svi_update_scan")
+  set_strenv_bindings(list(
+    jax_svi_update_scan = function(...) stop("synthetic scan failure")
+  ))
+
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 2L,
+    svi_steps = 2L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(diagnostics$compact_update_scan_mode, "fallback")
+  expect_identical(diagnostics$compact_update_scan_status, "fallback_single_step")
+  expect_match(diagnostics$compact_update_scan_error, "synthetic scan failure")
+  expect_identical(as.integer(diagnostics$compact_update_chunk_size_effective), 1L)
+})
+
+test_that("compact SVI required scan mode records ok for live scanned updates", {
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "required",
+    compact_update_chunk_size = 2L,
+    svi_steps = 4L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(diagnostics$compact_update_scan_mode, "required")
+  expect_identical(diagnostics$compact_update_scan_status, "ok")
+  expect_gte(as.integer(diagnostics$compact_update_chunk_size_effective), 2L)
+})
+
+test_that("JAX block helper accepts nested non-JAX values", {
+  x <- list(a = 1, b = list(c = "value"))
+
+  expect_no_error(strategize:::strategize_jax_block_until_ready(x))
+  expect_identical(x$a, 1)
+  expect_identical(x$b$c, "value")
+})
+
+test_that("JAX block helper walks nested JAX arrays", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+
+  arr <- strategize:::strenv$jnp$array(c(1, 2, 3)) + 1
+  nested <- list(arr = arr, inner = list(arr))
+
+  expect_no_error(strategize:::strategize_jax_block_until_ready(nested))
+  expect_equal(as.numeric(strategize:::cs2step_neural_to_r_array(arr)), c(2, 3, 4))
+})
+
 test_that("output-only neural early stopping exposes resolved validation size controls", {
   fit <- run_output_only_attn_vi_fit(
     seed = 20260410,
@@ -2712,14 +2904,16 @@ test_that("output-only neural early stopping exposes resolved validation size co
     neural_mcmc_control_overrides = list(
       early_stopping_validation_frac = 1,
       early_stopping_validation_max_n = 4L,
-      early_stopping_validation_batch_size = 3L
+      early_stopping_validation_batch_size = 1L
     )
   )
   model_info <- get_neural_model_info(fit)
 
   expect_identical(model_info$early_stopping$validation_frac, 1)
   expect_identical(as.integer(model_info$early_stopping$validation_max_n), 4L)
-  expect_identical(as.integer(model_info$early_stopping$validation_batch_size), 3L)
+  expect_identical(as.integer(model_info$early_stopping$validation_batch_size), 1L)
+  expect_identical(model_info$early_stopping$validation_prediction_mode, "batched_fallback")
+  expect_gte(as.integer(model_info$early_stopping$validation_n_batches), 2L)
   expect_lte(as.integer(model_info$early_stopping$validation_target_n), 4L)
   expect_identical(
     as.integer(model_info$early_stopping$validation_target_n),
