@@ -949,6 +949,21 @@ neural_stop_compact_scan_required <- function(reason = NULL) {
   )
 }
 
+neural_stop_compact_jit_required <- function(reason = NULL) {
+  reason <- as.character(reason %||% "unknown JIT update failure")
+  if (length(reason) != 1L || is.na(reason) || !nzchar(reason)) {
+    reason <- "unknown JIT update failure"
+  }
+  stop(
+    paste0(
+      "Compact streaming SVI requires cached jitted JAX updates, but the jitted update path failed: ",
+      reason,
+      ". Compact SVI has no unjitted update fallback."
+    ),
+    call. = FALSE
+  )
+}
+
 neural_stage_index <- function(party_left_idx, party_right_idx, model_info = NULL) {
   if (!neural_stage_context_enabled(model_info)) {
     return(NULL)
@@ -15284,29 +15299,68 @@ generate_ModelOutcome_neural <- function(){
       last_progress_step <- as.integer(svi_steps_completed)
       last_progress_elapsed <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
       compact_scan_error <- NULL
+      compact_jit_error <- NULL
       compact_scan_message_emitted <- FALSE
       compact_scan_status <- if (compact_update_chunk_size > 1L) "pending" else "single_step"
       compact_scan_required <- compact_update_chunk_size > 1L &&
         identical(compact_update_scan, "required")
-      compact_scan_available <- compact_update_chunk_size > 1L
       compact_update_chunk_size_effective <- 1L
-      if (isTRUE(compact_scan_available)) {
-        compact_scan_available <- tryCatch({
-          strategize_register_jax_svi_helpers()
-          !is.null(strenv$jax_svi_update_scan)
-        }, error = function(e) {
-          compact_scan_error <<- conditionMessage(e)
-          FALSE
-        })
-        if (!isTRUE(compact_scan_available)) {
-          compact_scan_status <- if (isTRUE(compact_scan_required)) {
-            "helper_unavailable"
-          } else {
-            "fallback_single_step"
-          }
-          if (isTRUE(compact_scan_required)) {
-            neural_stop_compact_scan_required(compact_scan_error %||% "JAX SVI scan helper is unavailable")
-          }
+      compact_update_jit_path <- if (compact_update_chunk_size > 1L) "pending" else "single"
+      compact_update_jit_status <- "pending"
+      compact_update_jit_cache_size <- NA_integer_
+      compact_update_jit_compile_count <- NA_integer_
+      read_compact_jit_cache_info <- function() {
+        info <- tryCatch(strenv$jax_svi_update_jit_cache_info(), error = function(e) NULL)
+        if (is.null(info)) {
+          return(list(size = NA_integer_, compile_count = NA_integer_))
+        }
+        info <- tryCatch(as.list(info), error = function(e) info)
+        list(
+          size = suppressWarnings(as.integer(info$size %||% NA_integer_)),
+          compile_count = suppressWarnings(as.integer(info$compile_count %||% NA_integer_))
+        )
+      }
+      refresh_compact_jit_diagnostics <- function() {
+        cache_info <- read_compact_jit_cache_info()
+        compact_update_jit_cache_size <<- cache_info$size
+        compact_update_jit_compile_count <<- cache_info$compile_count
+        optimizer_diagnostics$compact_update_jit_required <<- TRUE
+        optimizer_diagnostics$compact_update_jit_status <<- compact_update_jit_status
+        optimizer_diagnostics$compact_update_jit_path <<- compact_update_jit_path
+        optimizer_diagnostics$compact_update_jit_cache_size <<- compact_update_jit_cache_size
+        optimizer_diagnostics$compact_update_jit_compile_count <<- compact_update_jit_compile_count
+        optimizer_diagnostics$compact_update_jit_error <<- compact_jit_error
+        invisible(NULL)
+      }
+      compact_jit_available <- tryCatch({
+        strategize_register_jax_svi_helpers()
+        !is.null(strenv$jax_svi_update)
+      }, error = function(e) {
+        compact_jit_error <<- conditionMessage(e)
+        FALSE
+      })
+      compact_scan_available <- compact_update_chunk_size > 1L && !is.null(strenv$jax_svi_update_scan)
+      if (!isTRUE(compact_jit_available)) {
+        compact_update_jit_status <- "unavailable"
+        refresh_compact_jit_diagnostics()
+        neural_stop_compact_jit_required(compact_jit_error %||% "JAX SVI jitted update helper is unavailable")
+      }
+      compact_update_jit_status <- "ok"
+      if (compact_update_chunk_size > 1L && !isTRUE(compact_scan_available)) {
+        compact_scan_status <- if (isTRUE(compact_scan_required)) {
+          "helper_unavailable"
+        } else {
+          "fallback_single_step"
+        }
+        compact_update_jit_path <- if (isTRUE(compact_scan_required)) {
+          "scan"
+        } else {
+          "scan_to_single_fallback"
+        }
+        compact_scan_error <- compact_scan_error %||% "JAX SVI jitted scan helper is unavailable"
+        if (isTRUE(compact_scan_required)) {
+          refresh_compact_jit_diagnostics()
+          neural_stop_compact_scan_required(compact_scan_error)
         }
       }
       optimizer_diagnostics$compact_update_chunk_size_requested <- as.integer(compact_update_chunk_size)
@@ -15314,6 +15368,7 @@ generate_ModelOutcome_neural <- function(){
       optimizer_diagnostics$compact_update_scan_mode <- compact_update_scan
       optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
       optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
+      refresh_compact_jit_diagnostics()
 
       best_metric <- if (!is.null(svi_checkpoint_best) &&
                          is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
@@ -15572,6 +15627,7 @@ generate_ModelOutcome_neural <- function(){
               strenv$jax_svi_update_scan(svi, svi_state, stacked_batch_args),
               error = function(e) {
                 compact_scan_error <<- conditionMessage(e)
+                compact_update_jit_status <<- "scan_failed"
                 NULL
               }
             )
@@ -15590,6 +15646,8 @@ generate_ModelOutcome_neural <- function(){
                 svi_steps_completed <- as.integer(tail(step_range, 1L))
                 batch_args <- batch_args_list[[length(batch_args_list)]]
                 compact_scan_status <- "ok"
+                compact_update_jit_status <- "ok"
+                compact_update_jit_path <- "scan"
                 compact_update_chunk_size_effective <- max(
                   as.integer(compact_update_chunk_size_effective),
                   as.integer(chunk_n)
@@ -15608,6 +15666,7 @@ generate_ModelOutcome_neural <- function(){
             }
             compact_scan_available <- FALSE
             compact_scan_status <- "fallback_single_step"
+            compact_update_jit_path <- "scan_to_single_fallback"
             compact_update_chunk_size_effective <- 1L
             if (!isTRUE(compact_scan_message_emitted)) {
               message(sprintf(
@@ -15630,7 +15689,18 @@ generate_ModelOutcome_neural <- function(){
         if (!isTRUE(chunk_completed)) {
           obs_idx <- compact_sample_obs_idx()
           batch_args <- compact_batch_args(obs_idx)
-          update_result <- do.call(svi$update, c(list(svi_state), batch_args))
+          update_result <- tryCatch(
+            strenv$jax_svi_update(svi, svi_state, batch_args),
+            error = function(e) {
+              compact_jit_error <<- conditionMessage(e)
+              compact_update_jit_status <<- "single_failed"
+              NULL
+            }
+          )
+          if (is.null(update_result)) {
+            refresh_compact_jit_diagnostics()
+            neural_stop_compact_jit_required(compact_jit_error)
+          }
           strategize_jax_block_until_ready(update_result)
           update_parts <- parse_svi_update_result(update_result)
           if (is.null(update_parts$state)) {
@@ -15640,11 +15710,19 @@ generate_ModelOutcome_neural <- function(){
           svi_state <- update_parts$state
           svi_loss_curve[[step_cursor]] <- as.numeric(update_parts$loss)
           svi_steps_completed <- as.integer(step_cursor)
+          compact_update_jit_status <- "ok"
+          compact_update_jit_path <- if (identical(compact_scan_status, "fallback_single_step") &&
+                                          compact_update_chunk_size > 1L) {
+            "scan_to_single_fallback"
+          } else {
+            "single"
+          }
         }
         chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
         optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
         optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
+        refresh_compact_jit_diagnostics()
         validation_due <- isTRUE(compact_validation_active) &&
           (svi_steps_completed >= compact_next_validation_step ||
              svi_steps_completed == as.integer(svi_steps)) &&

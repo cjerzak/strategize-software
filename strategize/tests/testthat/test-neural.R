@@ -2891,6 +2891,22 @@ test_that("required compact SVI scan failures are explicit", {
   )
 })
 
+test_that("compact SVI jitted update helpers register cache diagnostics", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+
+  expect_false(is.null(strategize:::strenv$jax_svi_update))
+  expect_false(is.null(strategize:::strenv$jax_svi_update_scan))
+  expect_false(is.null(strategize:::strenv$jax_svi_update_jit_cache_info))
+  expect_false(is.null(strategize:::strenv$jax_svi_update_jit_cache_clear))
+
+  strategize:::strenv$jax_svi_update_jit_cache_clear()
+  cache_info <- as.list(strategize:::strenv$jax_svi_update_jit_cache_info())
+  expect_identical(as.integer(cache_info$size), 0L)
+  expect_identical(as.integer(cache_info$compile_count), 0L)
+})
+
 test_that("compact SVI required scan mode errors when scan helper fails", {
   skip_on_cran()
   skip_if_no_jax()
@@ -2930,6 +2946,46 @@ test_that("compact SVI fallback mode records single-step fallback when scan help
   expect_identical(diagnostics$compact_update_scan_status, "fallback_single_step")
   expect_match(diagnostics$compact_update_scan_error, "synthetic scan failure")
   expect_identical(as.integer(diagnostics$compact_update_chunk_size_effective), 1L)
+  expect_identical(diagnostics$compact_update_jit_required, TRUE)
+  expect_identical(diagnostics$compact_update_jit_status, "ok")
+  expect_identical(diagnostics$compact_update_jit_path, "scan_to_single_fallback")
+  expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
+})
+
+test_that("compact SVI single-step updates use cached jitted update", {
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 1L,
+    svi_steps = 2L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(diagnostics$compact_update_scan_status, "single_step")
+  expect_identical(as.integer(diagnostics$compact_update_chunk_size_effective), 1L)
+  expect_identical(diagnostics$compact_update_jit_required, TRUE)
+  expect_identical(diagnostics$compact_update_jit_status, "ok")
+  expect_identical(diagnostics$compact_update_jit_path, "single")
+  expect_gte(as.integer(diagnostics$compact_update_jit_cache_size), 1L)
+  expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
+})
+
+test_that("compact SVI errors when jitted single-step update fails", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  local_strenv_bindings("jax_svi_update")
+  set_strenv_bindings(list(
+    jax_svi_update = function(...) stop("synthetic jit failure")
+  ))
+
+  expect_error(
+    run_compact_svi_fit(
+      compact_update_scan = "fallback",
+      compact_update_chunk_size = 1L,
+      svi_steps = 2L
+    ),
+    "synthetic jit failure"
+  )
 })
 
 test_that("compact SVI required scan mode records ok for live scanned updates", {
@@ -2943,6 +2999,11 @@ test_that("compact SVI required scan mode records ok for live scanned updates", 
   expect_identical(diagnostics$compact_update_scan_mode, "required")
   expect_identical(diagnostics$compact_update_scan_status, "ok")
   expect_gte(as.integer(diagnostics$compact_update_chunk_size_effective), 2L)
+  expect_identical(diagnostics$compact_update_jit_required, TRUE)
+  expect_identical(diagnostics$compact_update_jit_status, "ok")
+  expect_identical(diagnostics$compact_update_jit_path, "scan")
+  expect_gte(as.integer(diagnostics$compact_update_jit_cache_size), 1L)
+  expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
 })
 
 test_that("compact SVI validation checkpoints write latest and best without early stopping", {

@@ -220,21 +220,84 @@ strategize_register_jax_transformer_helpers <- function() {
 }
 
 strategize_register_jax_svi_helpers <- function() {
-  if (!is.null(strenv$jax_svi_update_scan)) {
+  if (!is.null(strenv$jax_svi_update) &&
+      !is.null(strenv$jax_svi_update_scan) &&
+      !is.null(strenv$jax_svi_update_jit_cache_info) &&
+      !is.null(strenv$jax_svi_update_jit_cache_clear)) {
     return(invisible(TRUE))
   }
   helper_code <- paste(
     "import jax",
     "",
-    "def strategize_svi_update_scan(svi, svi_state, batch_args_chunks):",
-    "    def body(state, step_args):",
-    "        state, loss = svi.update(state, **step_args)",
-    "        return state, loss",
-    "    return jax.lax.scan(body, svi_state, batch_args_chunks)",
+    "_strategize_svi_update_jit_cache = {}",
+    "_strategize_svi_update_jit_compile_count = 0",
+    "",
+    "def _strategize_svi_update_arg_names(batch_args):",
+    "    if batch_args is None:",
+    "        return tuple()",
+    "    if not hasattr(batch_args, 'keys'):",
+    "        raise TypeError('SVI batch args must be a mapping with named arguments.')",
+    "    return tuple(batch_args.keys())",
+    "",
+    "def _strategize_svi_update_cache_key(mode, svi, names, forward_mode_differentiation):",
+    "    return (mode, id(svi), tuple(names), bool(forward_mode_differentiation))",
+    "",
+    "def strategize_svi_update_jit(svi, svi_state, batch_args, forward_mode_differentiation=False):",
+    "    global _strategize_svi_update_jit_compile_count",
+    "    names = _strategize_svi_update_arg_names(batch_args)",
+    "    args = {name: batch_args[name] for name in names}",
+    "    key = _strategize_svi_update_cache_key('single', svi, names, forward_mode_differentiation)",
+    "    fn = _strategize_svi_update_jit_cache.get(key)",
+    "    if fn is None:",
+    "        _strategize_svi_update_jit_compile_count += 1",
+    "        def _compiled(state, args_in):",
+    "            return svi.update(",
+    "                state,",
+    "                forward_mode_differentiation=forward_mode_differentiation,",
+    "                **args_in",
+    "            )",
+    "        fn = jax.jit(_compiled)",
+    "        _strategize_svi_update_jit_cache[key] = fn",
+    "    return fn(svi_state, args)",
+    "",
+    "def strategize_svi_update_scan_jit(svi, svi_state, batch_args_chunks, forward_mode_differentiation=False):",
+    "    global _strategize_svi_update_jit_compile_count",
+    "    names = _strategize_svi_update_arg_names(batch_args_chunks)",
+    "    chunks = {name: batch_args_chunks[name] for name in names}",
+    "    key = _strategize_svi_update_cache_key('scan', svi, names, forward_mode_differentiation)",
+    "    fn = _strategize_svi_update_jit_cache.get(key)",
+    "    if fn is None:",
+    "        _strategize_svi_update_jit_compile_count += 1",
+    "        def _compiled(state, chunks_in):",
+    "            def body(step_state, step_args):",
+    "                next_state, loss = svi.update(",
+    "                    step_state,",
+    "                    forward_mode_differentiation=forward_mode_differentiation,",
+    "                    **step_args",
+    "                )",
+    "                return next_state, loss",
+    "            return jax.lax.scan(body, state, chunks_in)",
+    "        fn = jax.jit(_compiled)",
+    "        _strategize_svi_update_jit_cache[key] = fn",
+    "    return fn(svi_state, chunks)",
+    "",
+    "def strategize_svi_update_jit_cache_info():",
+    "    return {",
+    "        'size': len(_strategize_svi_update_jit_cache),",
+    "        'compile_count': _strategize_svi_update_jit_compile_count,",
+    "    }",
+    "",
+    "def strategize_svi_update_jit_cache_clear():",
+    "    global _strategize_svi_update_jit_compile_count",
+    "    _strategize_svi_update_jit_cache.clear()",
+    "    _strategize_svi_update_jit_compile_count = 0",
     sep = "\n"
   )
   reticulate::py_run_string(helper_code)
-  strenv$jax_svi_update_scan <- reticulate::py$strategize_svi_update_scan
+  strenv$jax_svi_update <- reticulate::py$strategize_svi_update_jit
+  strenv$jax_svi_update_scan <- reticulate::py$strategize_svi_update_scan_jit
+  strenv$jax_svi_update_jit_cache_info <- reticulate::py$strategize_svi_update_jit_cache_info
+  strenv$jax_svi_update_jit_cache_clear <- reticulate::py$strategize_svi_update_jit_cache_clear
   invisible(TRUE)
 }
 
