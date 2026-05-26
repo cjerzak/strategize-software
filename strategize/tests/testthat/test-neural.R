@@ -2700,6 +2700,11 @@ test_that("output-only neural SVI without early stopping uses a single SVI.run c
 })
 
 test_that("output-only neural early stopping advances SVI through chunked run calls", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  strategize:::strenv$jax_svi_gradient_jit_cache_clear()
+
   counted <- count_svi_run_calls(
     run_output_only_attn_vi_fit(
       seed = 20260402,
@@ -2730,6 +2735,9 @@ test_that("output-only neural early stopping advances SVI through chunked run ca
   expect_true(is.finite(model_info$gradient_diagnostics$global_rms))
   expect_true(is.finite(model_info$gradient_diagnostics$global_max_abs))
   expect_gte(as.integer(tail(model_info$gradient_diagnostics$checkpoint_n_elements, 1L)), 1L)
+  gradient_cache_info <- as.list(strategize:::strenv$jax_svi_gradient_jit_cache_info())
+  expect_gte(as.integer(gradient_cache_info$size), 1L)
+  expect_gte(as.integer(gradient_cache_info$compile_count), 1L)
 })
 
 test_that("output-only neural checkpoint gradient diagnostics can be disabled", {
@@ -2891,7 +2899,7 @@ test_that("required compact SVI scan failures are explicit", {
   )
 })
 
-test_that("compact SVI jitted update helpers register cache diagnostics", {
+test_that("compact SVI jitted update and gradient helpers register cache diagnostics", {
   skip_on_cran()
   skip_if_no_jax()
   strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
@@ -2900,11 +2908,18 @@ test_that("compact SVI jitted update helpers register cache diagnostics", {
   expect_false(is.null(strategize:::strenv$jax_svi_update_scan))
   expect_false(is.null(strategize:::strenv$jax_svi_update_jit_cache_info))
   expect_false(is.null(strategize:::strenv$jax_svi_update_jit_cache_clear))
+  expect_false(is.null(strategize:::strenv$jax_svi_gradient_diagnostics))
+  expect_false(is.null(strategize:::strenv$jax_svi_gradient_jit_cache_info))
+  expect_false(is.null(strategize:::strenv$jax_svi_gradient_jit_cache_clear))
 
   strategize:::strenv$jax_svi_update_jit_cache_clear()
   cache_info <- as.list(strategize:::strenv$jax_svi_update_jit_cache_info())
   expect_identical(as.integer(cache_info$size), 0L)
   expect_identical(as.integer(cache_info$compile_count), 0L)
+  strategize:::strenv$jax_svi_gradient_jit_cache_clear()
+  gradient_cache_info <- as.list(strategize:::strenv$jax_svi_gradient_jit_cache_info())
+  expect_identical(as.integer(gradient_cache_info$size), 0L)
+  expect_identical(as.integer(gradient_cache_info$compile_count), 0L)
 })
 
 test_that("compact SVI required scan mode errors when scan helper fails", {

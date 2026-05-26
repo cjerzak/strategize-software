@@ -524,61 +524,11 @@ neural_svi_gradient_helper <- local({
     if (!requireNamespace("reticulate", quietly = TRUE)) {
       stop("reticulate is required for SVI gradient diagnostics.", call. = FALSE)
     }
-    reticulate::py_run_string(
-      paste(
-        "def _strategize_svi_checkpoint_gradient_diagnostics(svi_obj, svi_state, kwargs):",
-        "    import jax",
-        "    import jax.numpy as jnp",
-        "    import numpyro.infer.svi as _svi_mod",
-        "    kwargs = {} if kwargs is None else dict(kwargs)",
-        "    if not hasattr(_svi_mod, '_make_loss_fn'):",
-        "        raise RuntimeError('numpyro.infer.svi._make_loss_fn is unavailable')",
-        "    _, rng_key_eval = jax.random.split(svi_state.rng_key)",
-        "    params = svi_obj.optim.get_params(svi_state.optim_state)",
-        "    loss_fn = _svi_mod._make_loss_fn(",
-        "        svi_obj.loss,",
-        "        rng_key_eval,",
-        "        svi_obj.constrain_fn,",
-        "        svi_obj.model,",
-        "        svi_obj.guide,",
-        "        tuple(),",
-        "        kwargs,",
-        "        svi_obj.static_kwargs,",
-        "        mutable_state=svi_state.mutable_state,",
-        "    )",
-        "    (_, _), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)",
-        "    leaves = jax.tree_util.tree_leaves(grads)",
-        "    sq_sum = jnp.asarray(0.0)",
-        "    max_abs = jnp.asarray(0.0)",
-        "    n_nonfinite = jnp.asarray(0, dtype=jnp.int32)",
-        "    n_elements = jnp.asarray(0, dtype=jnp.int32)",
-        "    for leaf in leaves:",
-        "        arr = jnp.asarray(leaf)",
-        "        n_elements = n_elements + jnp.asarray(arr.size, dtype=jnp.int32)",
-        "        if arr.size == 0:",
-        "            continue",
-        "        finite = jnp.isfinite(arr)",
-        "        abs_finite = jnp.where(finite, jnp.abs(arr), 0.0)",
-        "        sq_sum = sq_sum + jnp.sum(jnp.square(abs_finite))",
-        "        max_abs = jnp.maximum(max_abs, jnp.max(abs_finite))",
-        "        n_nonfinite = n_nonfinite + jnp.sum(jnp.logical_not(finite)).astype(jnp.int32)",
-        "    grad_l2 = jnp.sqrt(sq_sum)",
-        "    grad_rms = jnp.where(",
-        "        n_elements > 0,",
-        "        jnp.sqrt(sq_sum / n_elements.astype(grad_l2.dtype)),",
-        "        jnp.asarray(float('nan'), dtype=grad_l2.dtype),",
-        "    )",
-        "    return {",
-        "        'grad_l2': float(jax.device_get(grad_l2)),",
-        "        'grad_rms': float(jax.device_get(grad_rms)),",
-        "        'grad_max_abs': float(jax.device_get(max_abs)),",
-        "        'grad_n_nonfinite': int(jax.device_get(n_nonfinite)),",
-        "        'grad_n_elements': int(jax.device_get(n_elements)),",
-        "    }",
-        sep = "\n"
-      )
-    )
-    helper <<- reticulate::py_eval("_strategize_svi_checkpoint_gradient_diagnostics")
+    strategize_register_jax_svi_helpers()
+    helper <<- strenv$jax_svi_gradient_diagnostics
+    if (is.null(helper)) {
+      stop("JAX SVI gradient diagnostic helper is unavailable.", call. = FALSE)
+    }
     helper
   }
 })
