@@ -175,12 +175,24 @@ neural_svi_checkpoint_params_to_r <- function(params) {
   }
   params_list <- as.list(params)
   lapply(params_list, function(x) {
+    jax_shape <- if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
+      tryCatch(as.integer(reticulate::py_to_r(x$shape)), error = function(e) NULL)
+    } else {
+      NULL
+    }
     out <- tryCatch(cs2step_neural_to_r_array(x), error = function(e) x)
     if (is.array(out) || is.matrix(out)) {
+      if (!is.null(jax_shape)) {
+        attr(out, "strategize_jax_shape") <- jax_shape
+      }
       return(out)
     }
     if (is.numeric(out) || is.integer(out) || is.logical(out)) {
-      return(as.array(out))
+      out_arr <- as.array(out)
+      if (!is.null(jax_shape)) {
+        attr(out_arr, "strategize_jax_shape") <- jax_shape
+      }
+      return(out_arr)
     }
     out
   })
@@ -195,7 +207,12 @@ neural_svi_checkpoint_params_to_jax <- function(params) {
     if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
       return(x)
     }
-    strenv$jnp$array(x)$astype(strenv$dtj)
+    arr <- strenv$jnp$array(x)$astype(strenv$dtj)
+    jax_shape <- attr(x, "strategize_jax_shape", exact = TRUE)
+    if (!is.null(jax_shape)) {
+      arr <- strenv$jnp$reshape(arr, as.list(as.integer(jax_shape)))
+    }
+    arr
   })
   param_names <- names(params_list)
   if (cs2step_has_reticulate() &&

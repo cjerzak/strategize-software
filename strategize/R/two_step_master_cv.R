@@ -152,7 +152,9 @@
 #'   \code{ceiling(svi_steps / early_stopping_n_checks)}. Use
 #'   \code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
 #'   control how many consecutive non-improving validation checks are tolerated
-#'   before stopping. Set
+#'   before stopping. For compact streaming SVI, \code{early_stopping = TRUE}
+#'   enables validation best-checkpoint selection but still runs the full
+#'   \code{svi_steps} budget. Set
 #'   \code{neural_mcmc_control$early_stopping_validation_frac} (default \code{0.05})
 #'   to retain approximately that fraction of evaluable observations in the
 #'   held-out validation split, and optionally

@@ -885,6 +885,37 @@ neural_resolve_compact_update_scan <- function(compact_training,
   mode
 }
 
+neural_compact_chunk_boundary_checks <- function(svi_steps,
+                                                 n_checks,
+                                                 chunk_size) {
+  svi_steps <- suppressWarnings(as.integer(svi_steps))
+  n_checks <- suppressWarnings(as.integer(n_checks))
+  chunk_size <- suppressWarnings(as.integer(chunk_size))
+  if (length(svi_steps) != 1L || is.na(svi_steps) || svi_steps < 1L) {
+    return(integer(0))
+  }
+  if (length(n_checks) != 1L || is.na(n_checks) || n_checks < 1L) {
+    n_checks <- 1L
+  }
+  if (length(chunk_size) != 1L || is.na(chunk_size) || chunk_size < 1L) {
+    chunk_size <- 1L
+  }
+
+  eval_every <- as.integer(max(1L, ceiling(svi_steps / n_checks)))
+  boundaries <- unique(c(seq.int(chunk_size, svi_steps, by = chunk_size), svi_steps))
+  next_target <- eval_every
+  checks <- integer(0)
+  for (boundary in boundaries) {
+    if (boundary >= next_target || boundary == svi_steps) {
+      checks <- c(checks, as.integer(boundary))
+      while (next_target <= boundary) {
+        next_target <- next_target + eval_every
+      }
+    }
+  }
+  unique(as.integer(checks))
+}
+
 neural_stop_compact_scan_required <- function(reason = NULL) {
   reason <- as.character(reason %||% "unknown scan failure")
   if (length(reason) != 1L || is.na(reason) || !nzchar(reason)) {
@@ -7747,10 +7778,6 @@ generate_ModelOutcome_neural <- function(){
       message("Disabling neural OOS evaluation for compact streaming training.")
       eval_control$enabled <- FALSE
     }
-    if (isTRUE(mcmc_control$early_stopping)) {
-      message("Disabling neural SVI early stopping for compact streaming training.")
-      mcmc_control$early_stopping <- FALSE
-    }
   }
 
   if (!is.numeric(model_dims) || length(model_dims) != 1L || !is.finite(model_dims)) {
@@ -12394,20 +12421,44 @@ generate_ModelOutcome_neural <- function(){
   } else {
     0L
   }
+  compact_sampling_obs_idx <- NULL
+  compact_sampling_pool <- function() {
+    if (!isTRUE(compact_training)) {
+      return(integer(0))
+    }
+    pool <- compact_sampling_obs_idx
+    if (is.null(pool)) {
+      pool <- seq_len(compact_model_n_obs)
+    }
+    pool <- as.integer(pool)
+    pool[!is.na(pool) & pool >= 1L & pool <= compact_model_n_obs]
+  }
+  compact_sampling_n_obs <- function() {
+    pool <- compact_sampling_pool()
+    as.integer(length(pool))
+  }
   compact_sample_obs_idx <- function() {
     if (!isTRUE(universal_mixed_mode)) {
-      if (compact_model_n_obs <= compact_svi_batch_size) {
-        return(seq_len(compact_model_n_obs))
+      pool <- compact_sampling_pool()
+      if (length(pool) <= compact_svi_batch_size) {
+        return(pool)
       }
-      return(sample.int(compact_model_n_obs, compact_svi_batch_size, replace = FALSE))
+      return(sample(pool, compact_svi_batch_size, replace = FALSE))
     }
     if (compact_svi_batch_size < 2L) {
       stop("Universal mixed-mode compact SVI requires batch_size >= 2.", call. = FALSE)
     }
-    pair_target <- max(1L, min(n_universal_pair_obs, as.integer(round(
-      compact_svi_batch_size * n_universal_pair_obs / compact_model_n_obs
+    pool <- compact_sampling_pool()
+    pair_pool <- pool[pool <= n_universal_pair_obs]
+    single_pool <- pool[pool > n_universal_pair_obs] - n_universal_pair_obs
+    if (length(pair_pool) < 1L || length(single_pool) < 1L) {
+      stop("Universal mixed-mode compact SVI batches must include pairwise and single rows.", call. = FALSE)
+    }
+    pool_n <- length(pool)
+    pair_target <- max(1L, min(length(pair_pool), as.integer(round(
+      compact_svi_batch_size * length(pair_pool) / pool_n
     ))))
-    single_target <- max(1L, min(n_universal_single_obs, compact_svi_batch_size - pair_target))
+    single_target <- max(1L, min(length(single_pool), compact_svi_batch_size - pair_target))
     if (pair_target + single_target > compact_svi_batch_size) {
       if (pair_target > single_target) {
         pair_target <- pair_target - 1L
@@ -12415,15 +12466,15 @@ generate_ModelOutcome_neural <- function(){
         single_target <- single_target - 1L
       }
     }
-    pair_idx <- if (n_universal_pair_obs <= pair_target) {
-      seq_len(n_universal_pair_obs)
+    pair_idx <- if (length(pair_pool) <= pair_target) {
+      pair_pool
     } else {
-      sample.int(n_universal_pair_obs, pair_target, replace = FALSE)
+      sample(pair_pool, pair_target, replace = FALSE)
     }
-    single_idx <- if (n_universal_single_obs <= single_target) {
-      seq_len(n_universal_single_obs)
+    single_idx <- if (length(single_pool) <= single_target) {
+      single_pool
     } else {
-      sample.int(n_universal_single_obs, single_target, replace = FALSE)
+      sample(single_pool, single_target, replace = FALSE)
     }
     c(pair_idx, n_universal_pair_obs + single_idx)
   }
@@ -12496,7 +12547,7 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_obs = jnp_int_vector(universal_n_outcomes_use_int[pair_global_obs]),
         Y_obs = jnp_num_vector(Y_pair_use[pair_obs_idx]),
         obs_scale = jnp_num_vector(
-          as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx)) *
+          as.numeric(compact_sampling_n_obs()) / as.numeric(length(obs_idx)) *
             as.numeric(universal_loss_weights[pair_global_obs] %||% rep(1, length(pair_global_obs)))
         ),
         X_single = strenv$jnp$array(to_index_matrix(
@@ -12515,7 +12566,7 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_single = jnp_int_vector(universal_n_outcomes_use_int[single_global_obs]),
         Y_single_obs = jnp_num_vector(Y_single_use[single_obs_idx]),
         obs_scale_single = jnp_num_vector(
-          as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx)) *
+          as.numeric(compact_sampling_n_obs()) / as.numeric(length(obs_idx)) *
             as.numeric(universal_loss_weights[single_global_obs] %||% rep(1, length(single_global_obs)))
         )
       ))
@@ -12566,11 +12617,11 @@ generate_ModelOutcome_neural <- function(){
     }
     obs_scale <- if (!is.null(universal_loss_weights)) {
       strenv$jnp$array(
-        as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx)) *
+        as.numeric(compact_sampling_n_obs()) / as.numeric(length(obs_idx)) *
           as.numeric(universal_loss_weights[obs_idx])
       )$astype(ddtype_)
     } else {
-      as.numeric(compact_model_n_obs) / as.numeric(length(obs_idx))
+      as.numeric(compact_sampling_n_obs()) / as.numeric(length(obs_idx))
     }
     if (isTRUE(pairwise_mode)) {
       left_rows <- pair_mat[obs_idx, 1L]
@@ -13015,11 +13066,24 @@ generate_ModelOutcome_neural <- function(){
   validation_model_info$default_time_present <- default_time_present
   validation_model_info$time_context_dim <- time_context_dim
   validation_return_logits <- identical(likelihood, "mixed")
-  validation_predict_jit <- neural_get_predict_jit(
-    model_info = validation_model_info,
-    pairwise = pairwise_mode,
-    return_logits = validation_return_logits
-  )
+  validation_predict_pair_jit <- if (isTRUE(pairwise_mode)) {
+    neural_get_predict_jit(
+      model_info = validation_model_info,
+      pairwise = TRUE,
+      return_logits = validation_return_logits
+    )
+  } else {
+    NULL
+  }
+  validation_predict_single_jit <- if (!isTRUE(pairwise_mode) || isTRUE(universal_mixed_mode)) {
+    neural_get_predict_jit(
+      model_info = validation_model_info,
+      pairwise = FALSE,
+      return_logits = validation_return_logits
+    )
+  } else {
+    NULL
+  }
 
   svi_validation_predict_chunk <- function(param_sites, idx, fallback_params = NULL) {
     params <- build_params_from_sites_for_svi_validation(
@@ -13068,97 +13132,236 @@ generate_ModelOutcome_neural <- function(){
       pred
     }
 
-    if (pairwise_mode) {
-      Xl <- strenv$jnp$array(to_index_matrix(X_left[idx, , drop = FALSE]))$astype(strenv$jnp$int32)
-      Xr <- strenv$jnp$array(to_index_matrix(X_right[idx, , drop = FALSE]))$astype(strenv$jnp$int32)
-      pl <- strenv$jnp$array(as.integer(party_left[idx]))$astype(strenv$jnp$int32)
-      pr <- strenv$jnp$array(as.integer(party_right[idx]))$astype(strenv$jnp$int32)
-      resp_p <- strenv$jnp$array(as.integer(resp_party_use[idx]))$astype(strenv$jnp$int32)
+    materialize_validation_resp_cov <- function(obs_idx, compact_rows) {
+      n_rows <- length(obs_idx)
       if (n_resp_covariates > 0L) {
-        resp_c <- strenv$jnp$array(as.matrix(X_use[idx, , drop = FALSE]))$astype(ddtype_)
-        resp_c_present <- if (!is.null(X_present_use)) {
-          strenv$jnp$array(as.matrix(X_present_use[idx, , drop = FALSE]))$astype(ddtype_)
+        if (isTRUE(compact_training)) {
+          resp_cov_mat <- if (!is.null(X_compact_use)) {
+            cs2step_materialize_x_compact(X_compact_use, compact_rows)
+          } else {
+            NULL
+          }
+          if (is.null(resp_cov_mat)) {
+            resp_cov_mat <- matrix(0, nrow = n_rows, ncol = n_resp_covariates)
+          }
+          resp_present_mat <- if (!is.null(X_present_compact_use) || !is.null(X_compact_use)) {
+            cs2step_materialize_x_present_compact(
+              X_present_compact_use %||% X_compact_use,
+              compact_rows
+            )
+          } else {
+            NULL
+          }
+          if (is.null(resp_present_mat)) {
+            resp_present_mat <- matrix(1, nrow = n_rows, ncol = n_resp_covariates)
+          }
         } else {
-          strenv$jnp$ones(list(ai(length(idx)), ai(n_resp_covariates)), dtype = ddtype_)
+          resp_cov_mat <- if (!is.null(X_use)) {
+            X_use[obs_idx, , drop = FALSE]
+          } else {
+            matrix(0, nrow = n_rows, ncol = n_resp_covariates)
+          }
+          resp_present_mat <- if (!is.null(X_present_use)) {
+            X_present_use[obs_idx, , drop = FALSE]
+          } else {
+            matrix(1, nrow = n_rows, ncol = n_resp_covariates)
+          }
         }
-      } else {
-        resp_c <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
-        resp_c_present <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
+        return(list(
+          values = strenv$jnp$array(as.matrix(resp_cov_mat))$astype(ddtype_),
+          present = strenv$jnp$array(as.matrix(resp_present_mat))$astype(ddtype_),
+          values_r = as.matrix(resp_cov_mat)
+        ))
       }
-      experiment_idx <- if (!is.null(experiment_index_use)) {
-        strenv$jnp$array(as.integer(experiment_index_use[idx]))$astype(strenv$jnp$int32)
+      list(
+        values = strenv$jnp$zeros(list(ai(n_rows), ai(0L)), dtype = ddtype_),
+        present = strenv$jnp$zeros(list(ai(n_rows), ai(0L)), dtype = ddtype_),
+        values_r = NULL
+      )
+    }
+
+    predict_validation_pair <- function(pair_idx) {
+      if (length(pair_idx) < 1L || is.null(validation_predict_pair_jit)) {
+        return(NULL)
+      }
+      left_rows <- pair_mat[pair_idx, 1L]
+      right_rows <- pair_mat[pair_idx, 2L]
+      Xl_r <- if (isTRUE(compact_training)) {
+        cs2step_materialize_w_idx_compact(W_idx_compact_use, left_rows)
+      } else {
+        X_left[pair_idx, , drop = FALSE]
+      }
+      Xr_r <- if (isTRUE(compact_training)) {
+        cs2step_materialize_w_idx_compact(W_idx_compact_use, right_rows)
+      } else {
+        X_right[pair_idx, , drop = FALSE]
+      }
+      if (is.null(Xl_r) || is.null(Xr_r)) {
+        return(NULL)
+      }
+      resp_cov <- materialize_validation_resp_cov(pair_idx, left_rows)
+      experiment_values <- if (!is.null(experiment_index_use)) {
+        experiment_index_use[pair_idx]
       } else {
         NULL
       }
       resp_c_order <- if (is.null(resp_cov_mean) || n_resp_covariates < 1L) {
         NULL
       } else {
-        strenv$jnp$array(as.matrix(build_resp_cov_order_new(
-          X_use[idx, , drop = FALSE],
-          length(idx),
-          experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
-        )))$astype(strenv$jnp$int32)
+        resp_order_r <- build_resp_cov_order_new(
+          resp_cov$values_r,
+          length(pair_idx),
+          experiment_idx_new = experiment_values
+        )
+        if (is.null(resp_order_r)) {
+          NULL
+        } else {
+          strenv$jnp$array(as.matrix(resp_order_r))$astype(strenv$jnp$int32)
+        }
       }
       factor_order <- if (identical(factor_tokenization, "language_span")) {
         strenv$jnp$array(as.matrix(build_factor_order_new(
-          X_left[idx, , drop = FALSE],
-          length(idx),
-          experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
+          Xl_r,
+          length(pair_idx),
+          experiment_idx_new = experiment_values
         )))$astype(strenv$jnp$int32)
       } else {
         NULL
       }
-      pred <- validation_predict_jit(
-        params, Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present, resp_c_order,
-        experiment_idx, NULL, NULL, factor_order
+      pred <- validation_predict_pair_jit(
+        params,
+        strenv$jnp$array(to_index_matrix(Xl_r))$astype(strenv$jnp$int32),
+        strenv$jnp$array(to_index_matrix(Xr_r))$astype(strenv$jnp$int32),
+        strenv$jnp$array(as.integer(party_left[pair_idx]))$astype(strenv$jnp$int32),
+        strenv$jnp$array(as.integer(party_right[pair_idx]))$astype(strenv$jnp$int32),
+        strenv$jnp$array(as.integer(resp_party_use[pair_idx]))$astype(strenv$jnp$int32),
+        resp_cov$values,
+        resp_cov$present,
+        resp_c_order,
+        if (!is.null(experiment_values)) {
+          strenv$jnp$array(as.integer(experiment_values))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        },
+        NULL,
+        NULL,
+        factor_order
       )
       strategize_jax_block_until_ready(pred)
-      return(coerce_prediction_output_local(pred))
+      coerce_prediction_output_local(pred)
     }
 
-    Xb <- strenv$jnp$array(to_index_matrix(X_single[idx, , drop = FALSE]))$astype(strenv$jnp$int32)
-    pb <- strenv$jnp$array(as.integer(party_single[idx]))$astype(strenv$jnp$int32)
-    resp_p <- strenv$jnp$array(as.integer(resp_party_use[idx]))$astype(strenv$jnp$int32)
-    if (n_resp_covariates > 0L) {
-      resp_c <- strenv$jnp$array(as.matrix(X_use[idx, , drop = FALSE]))$astype(ddtype_)
-      resp_c_present <- if (!is.null(X_present_use)) {
-        strenv$jnp$array(as.matrix(X_present_use[idx, , drop = FALSE]))$astype(ddtype_)
-      } else {
-        strenv$jnp$ones(list(ai(length(idx)), ai(n_resp_covariates)), dtype = ddtype_)
+    predict_validation_single <- function(obs_idx) {
+      if (length(obs_idx) < 1L || is.null(validation_predict_single_jit)) {
+        return(NULL)
       }
-    } else {
-      resp_c <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
-      resp_c_present <- strenv$jnp$zeros(list(ai(length(idx)), ai(0L)), dtype = ddtype_)
+      single_pos <- if (isTRUE(universal_mixed_mode)) {
+        obs_idx - n_universal_pair_obs
+      } else {
+        obs_idx
+      }
+      compact_rows <- if (isTRUE(universal_mixed_mode)) {
+        universal_single_rows[single_pos]
+      } else {
+        obs_idx
+      }
+      Xb_r <- if (isTRUE(compact_training)) {
+        cs2step_materialize_w_idx_compact(W_idx_compact_use, compact_rows)
+      } else {
+        X_single[single_pos, , drop = FALSE]
+      }
+      if (is.null(Xb_r)) {
+        return(NULL)
+      }
+      resp_cov <- materialize_validation_resp_cov(obs_idx, compact_rows)
+      experiment_values <- if (!is.null(experiment_index_use)) {
+        experiment_index_use[obs_idx]
+      } else {
+        NULL
+      }
+      resp_c_order <- if (is.null(resp_cov_mean) || n_resp_covariates < 1L) {
+        NULL
+      } else {
+        resp_order_r <- build_resp_cov_order_new(
+          resp_cov$values_r,
+          length(obs_idx),
+          experiment_idx_new = experiment_values
+        )
+        if (is.null(resp_order_r)) {
+          NULL
+        } else {
+          strenv$jnp$array(as.matrix(resp_order_r))$astype(strenv$jnp$int32)
+        }
+      }
+      factor_order <- if (identical(factor_tokenization, "language_span")) {
+        strenv$jnp$array(as.matrix(build_factor_order_new(
+          Xb_r,
+          length(obs_idx),
+          experiment_idx_new = experiment_values
+        )))$astype(strenv$jnp$int32)
+      } else {
+        NULL
+      }
+      pred <- validation_predict_single_jit(
+        params,
+        strenv$jnp$array(to_index_matrix(Xb_r))$astype(strenv$jnp$int32),
+        strenv$jnp$array(as.integer(party_single[single_pos]))$astype(strenv$jnp$int32),
+        strenv$jnp$array(as.integer(resp_party_use[obs_idx]))$astype(strenv$jnp$int32),
+        resp_cov$values,
+        resp_cov$present,
+        resp_c_order,
+        if (!is.null(experiment_values)) {
+          strenv$jnp$array(as.integer(experiment_values))$astype(strenv$jnp$int32)
+        } else {
+          NULL
+        },
+        NULL,
+        NULL,
+        factor_order
+      )
+      strategize_jax_block_until_ready(pred)
+      coerce_prediction_output_local(pred)
     }
-    experiment_idx <- if (!is.null(experiment_index_use)) {
-      strenv$jnp$array(as.integer(experiment_index_use[idx]))$astype(strenv$jnp$int32)
-    } else {
-      NULL
+
+    idx <- as.integer(idx)
+    if (isTRUE(universal_mixed_mode)) {
+      pair_pos <- which(idx <= n_universal_pair_obs)
+      single_pos <- which(idx > n_universal_pair_obs)
+      pred_pair <- if (length(pair_pos) > 0L) {
+        predict_validation_pair(idx[pair_pos])
+      } else {
+        NULL
+      }
+      pred_single <- if (length(single_pos) > 0L) {
+        predict_validation_single(idx[single_pos])
+      } else {
+        NULL
+      }
+      if (identical(likelihood, "mixed")) {
+        pred_nonnull <- Filter(Negate(is.null), list(pred_pair, pred_single))
+        if (length(pred_nonnull) < 1L) {
+          return(NULL)
+        }
+        n_logits <- ncol(as.matrix(pred_nonnull[[1L]]$logits))
+        logits <- matrix(NA_real_, nrow = length(idx), ncol = n_logits)
+        sigma <- rep(NA_real_, length(idx))
+        if (!is.null(pred_pair)) {
+          logits[pair_pos, ] <- as.matrix(pred_pair$logits)
+          sigma[pair_pos] <- as.numeric(pred_pair$sigma)
+        }
+        if (!is.null(pred_single)) {
+          logits[single_pos, ] <- as.matrix(pred_single$logits)
+          sigma[single_pos] <- as.numeric(pred_single$sigma)
+        }
+        return(list(logits = logits, sigma = sigma))
+      }
+      return(combine_svi_validation_predictions(list(pred_pair, pred_single)))
     }
-    resp_c_order <- if (is.null(resp_cov_mean) || n_resp_covariates < 1L) {
-      NULL
-    } else {
-      strenv$jnp$array(as.matrix(build_resp_cov_order_new(
-        X_use[idx, , drop = FALSE],
-        length(idx),
-        experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
-      )))$astype(strenv$jnp$int32)
+
+    if (isTRUE(pairwise_mode)) {
+      return(predict_validation_pair(idx))
     }
-    factor_order <- if (identical(factor_tokenization, "language_span")) {
-      strenv$jnp$array(as.matrix(build_factor_order_new(
-        X_single[idx, , drop = FALSE],
-        length(idx),
-        experiment_idx_new = if (!is.null(experiment_index_use)) experiment_index_use[idx] else NULL
-      )))$astype(strenv$jnp$int32)
-    } else {
-      NULL
-    }
-    pred <- validation_predict_jit(
-      params, Xb, pb, resp_p, resp_c, resp_c_present, resp_c_order,
-      experiment_idx, NULL, NULL, factor_order
-    )
-    strategize_jax_block_until_ready(pred)
-    coerce_prediction_output_local(pred)
+    predict_validation_single(idx)
   }
   combine_svi_validation_predictions <- function(pred_chunks) {
     pred_chunks <- Filter(Negate(is.null), pred_chunks)
@@ -13395,6 +13598,7 @@ generate_ModelOutcome_neural <- function(){
   }
   SVIParams <- NULL
   SVIInitValues <- NULL
+  SVIPosteriorDraws <- NULL
   svi_loss_curve <- NULL
   resolved_svi_steps <- NULL
   resolved_svi_num_draws <- NULL
@@ -13808,11 +14012,6 @@ generate_ModelOutcome_neural <- function(){
     }
     rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
     svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
-    if (isTRUE(compact_training) && isTRUE(svi_checkpoint$enabled)) {
-      message("Disabling neural SVI step checkpoints for compact streaming training.")
-      svi_checkpoint$enabled <- FALSE
-      svi_checkpoint$resume <- FALSE
-    }
     svi_checkpoint_fingerprint <- NULL
     svi_checkpoint_latest <- NULL
     svi_checkpoint_best <- NULL
@@ -13821,8 +14020,11 @@ generate_ModelOutcome_neural <- function(){
         data = list(
           Y = Y_use,
           W = W_,
+          W_idx_compact = if (isTRUE(compact_training)) W_idx_compact_use else NULL,
           X = X_use,
+          X_compact = if (isTRUE(compact_training)) X_compact_use else NULL,
           X_present = X_present_use,
+          X_present_compact = if (isTRUE(compact_training)) X_present_compact_use else NULL,
           pair_id = pair_id_ %||% NULL,
           profile_order = profile_order_ %||% NULL,
           competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
@@ -14393,7 +14595,7 @@ generate_ModelOutcome_neural <- function(){
           reticulate::py_has_attr(svi, "get_params")) {
         early_stopping_info$active <- TRUE
         early_stopping_info$metric <- if (likelihood %in% c("normal", "mixed")) "nll" else "log_loss"
-        early_stopping_info$min_delta <- 1e-4
+        early_stopping_info$min_delta <- if (isTRUE(compact_training)) 0 else 1e-4
         early_stopping_info$eval_every <- as.integer(max(
           1L,
           ceiling(svi_steps / early_stopping_n_checks)
@@ -14405,10 +14607,14 @@ generate_ModelOutcome_neural <- function(){
         early_stopping_info$validation_prediction_mode <- validation_split$validation_prediction_mode %||%
           "single_jit_call"
         early_stopping_info$validation_n_batches <- length(validation_split$validation_batches %||% list())
-        svi_train_model_args <- c(
-          svi_model_args,
-          list(obs_idx = validation_split$train_idx_jnp)
-        )
+        if (isTRUE(compact_training)) {
+          compact_sampling_obs_idx <- as.integer(validation_split$train_idx)
+        } else {
+          svi_train_model_args <- c(
+            svi_model_args,
+            list(obs_idx = validation_split$train_idx_jnp)
+          )
+        }
         early_stopping_running <- TRUE
         early_stopping_reason <- "completed_budget"
       } else {
@@ -14438,7 +14644,20 @@ generate_ModelOutcome_neural <- function(){
         likelihood = likelihood,
         pairwise_mode = isTRUE(pairwise_mode),
         subsample_method = subsample_method,
-        early_stopping_running = isTRUE(early_stopping_running)
+        early_stopping_running = isTRUE(early_stopping_running),
+        compact_training = isTRUE(compact_training),
+        compact_rng_state = if (isTRUE(compact_training) &&
+                                exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+          as.integer(get(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+        } else {
+          NULL
+        },
+        compact_sampling_obs_idx = if (isTRUE(compact_training) &&
+                                       !is.null(compact_sampling_obs_idx)) {
+          as.integer(compact_sampling_obs_idx)
+        } else {
+          NULL
+        }
       )
     }
     checkpoint_save <- function(type = c("latest", "best"),
@@ -14508,6 +14727,21 @@ generate_ModelOutcome_neural <- function(){
       }
       do.call(svi$run, c(run_args, model_args_current))
     }
+    checkpoint_prediction_params_to_draws <- function(prediction_params) {
+      if (is.null(prediction_params)) {
+        return(NULL)
+      }
+      params_jax <- neural_svi_checkpoint_params_to_jax(prediction_params)
+      params_list <- tryCatch(as.list(params_jax), error = function(e) NULL)
+      if (is.null(params_list) || length(params_list) < 1L) {
+        return(NULL)
+      }
+      out <- lapply(params_list, function(x) {
+        strenv$jnp$expand_dims(strenv$jnp$expand_dims(x, 0L), 0L)
+      })
+      names(out) <- names(params_list)
+      out
+    }
 
     checkpoint_resume_params <- NULL
     checkpoint_resume_completed <- 0L
@@ -14542,6 +14776,9 @@ generate_ModelOutcome_neural <- function(){
           svi_checkpoint_latest
         }
         SVIParams <- neural_svi_checkpoint_params_to_jax(checkpoint_final_snapshot$svi_params)
+        SVIPosteriorDraws <- checkpoint_prediction_params_to_draws(
+          checkpoint_final_snapshot$prediction_params
+        )
         svi_loss_curve <- as.numeric(svi_checkpoint_latest$loss_history %||% numeric(0))
         svi_steps_completed <- as.integer(checkpoint_resume_completed)
         early_stopping_info$reason <- early_stopping_info$reason %||% early_stopping_reason
@@ -14589,13 +14826,49 @@ generate_ModelOutcome_neural <- function(){
         }
       }, add = TRUE)
       set.seed(as.integer(compact_seed))
+      compact_saved_rng_state <- tryCatch(
+        as.integer(svi_checkpoint_latest$checkpoint_context$compact_rng_state),
+        error = function(e) NULL
+      )
+      if (!is.null(compact_saved_rng_state) && length(compact_saved_rng_state) > 1L) {
+        assign(".Random.seed", compact_saved_rng_state, envir = .GlobalEnv)
+      }
+      if (checkpoint_resume_completed > 0L && is.null(checkpoint_resume_params)) {
+        checkpoint_resume_completed <- 0L
+      }
       init_idx <- compact_sample_obs_idx()
-      svi_state <- do.call(svi$init, c(list(rng_key), compact_batch_args(init_idx)))
+      init_args <- c(list(rng_key), compact_batch_args(init_idx))
+      if (!is.null(checkpoint_resume_params)) {
+        init_args$init_params <- checkpoint_resume_params
+      }
+      svi_state <- do.call(svi$init, init_args)
+      checkpoint_resume_params <- NULL
+      if (!is.null(compact_saved_rng_state) && length(compact_saved_rng_state) > 1L) {
+        assign(".Random.seed", compact_saved_rng_state, envir = .GlobalEnv)
+      }
       svi_loss_curve <- rep(NA_real_, as.integer(svi_steps))
-      svi_steps_completed <- 0L
-      progress_every <- max(1L, as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L)))))
+      saved_loss_history <- as.numeric(svi_checkpoint_latest$loss_history %||% numeric(0))
+      if (length(saved_loss_history) > 0L) {
+        saved_n <- min(length(saved_loss_history), length(svi_loss_curve))
+        svi_loss_curve[seq_len(saved_n)] <- saved_loss_history[seq_len(saved_n)]
+      }
+      svi_steps_completed <- as.integer(checkpoint_resume_completed)
+      compact_validation_active <- isTRUE(early_stopping_running)
+      compact_validation_eval_every <- max(
+        1L,
+        as.integer(early_stopping_info$eval_every %||% ceiling(as.integer(svi_steps) / early_stopping_n_checks))
+      )
+      compact_checkpoint_eval_every <- max(
+        1L,
+        as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L))))
+      )
+      progress_every <- if (isTRUE(compact_validation_active)) {
+        compact_validation_eval_every
+      } else {
+        compact_checkpoint_eval_every
+      }
       last_gradient_checkpoint <- NULL
-      last_progress_step <- 0L
+      last_progress_step <- as.integer(svi_steps_completed)
       last_progress_elapsed <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
       compact_scan_error <- NULL
       compact_scan_message_emitted <- FALSE
@@ -14629,7 +14902,231 @@ generate_ModelOutcome_neural <- function(){
       optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
       optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
 
-      step_cursor <- 1L
+      best_metric <- if (!is.null(svi_checkpoint_best) &&
+                         is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
+        as.numeric(svi_checkpoint_best$best_metric)
+      } else if (is.finite(early_stopping_info$best_metric %||% NA_real_)) {
+        as.numeric(early_stopping_info$best_metric)
+      } else {
+        Inf
+      }
+      if (is.finite(best_metric)) {
+        early_stopping_info$best_metric <- best_metric
+        if (!is.null(svi_checkpoint_best)) {
+          early_stopping_info$best_step <- as.integer(
+            svi_checkpoint_best$best_step %||% early_stopping_info$best_step
+          )
+        }
+      }
+      no_improve_checks <- as.integer(svi_checkpoint_latest$no_improve_checks %||% 0L)
+      if (is.na(no_improve_checks) || no_improve_checks < 0L) {
+        no_improve_checks <- 0L
+      }
+      compact_best_svi_state <- NULL
+      compact_best_svi_params <- NULL
+      compact_validation_errors <- 0L
+      compact_metric_failures <- 0L
+      compact_last_validation_step <- if (length(early_stopping_info$validation_loss_history) > 0L) {
+        as.integer(early_stopping_info$stop_step %||% checkpoint_resume_completed)
+      } else {
+        NA_integer_
+      }
+      compact_last_checkpoint_step <- if (!is.null(svi_checkpoint_latest)) {
+        as.integer(checkpoint_resume_completed)
+      } else {
+        NA_integer_
+      }
+      compact_next_validation_step <- compact_validation_eval_every *
+        (length(early_stopping_info$validation_loss_history %||% numeric(0)) + 1L)
+      while (compact_next_validation_step <= svi_steps_completed) {
+        compact_next_validation_step <- compact_next_validation_step + compact_validation_eval_every
+      }
+      compact_next_checkpoint_step <- compact_checkpoint_eval_every *
+        (as.integer(floor(svi_steps_completed / compact_checkpoint_eval_every)) + 1L)
+      current_compact_loss_history <- function() {
+        if (svi_steps_completed > 0L) {
+          return(as.numeric(svi_loss_curve[seq_len(svi_steps_completed)]))
+        }
+        numeric(0)
+      }
+      advance_compact_target <- function(next_step, completed_step, every) {
+        while (next_step <= completed_step) {
+          next_step <- next_step + every
+        }
+        next_step
+      }
+      compact_validation_check <- function(batch_args_current, chunk_run_seconds) {
+        validation_metric_error <- NULL
+        metric_value <- tryCatch(
+          compute_svi_validation_metric(svi_state, validation_split),
+          error = function(e) {
+            validation_metric_error <<- conditionMessage(e)
+            NA_real_
+          }
+        )
+        previous_metric <- if (length(early_stopping_info$validation_loss_history) > 0L) {
+          tail(early_stopping_info$validation_loss_history, 1L)
+        } else {
+          NA_real_
+        }
+        early_stopping_info$validation_loss_history <<- c(
+          early_stopping_info$validation_loss_history,
+          as.numeric(metric_value)
+        )
+        early_stopping_info$stop_check <<- as.integer(length(early_stopping_info$validation_loss_history))
+        early_stopping_info$stop_step <<- as.integer(svi_steps_completed)
+
+        improved_metric <- FALSE
+        if (!is.null(validation_metric_error)) {
+          compact_validation_errors <<- compact_validation_errors + 1L
+          early_stopping_info$error_message <<- validation_metric_error
+          early_stopping_info$reason <<- "validation_error"
+        } else if (!is.finite(metric_value)) {
+          compact_metric_failures <<- compact_metric_failures + 1L
+          early_stopping_info$reason <<- "metric_failed"
+        } else {
+          improved_metric <- !is.finite(best_metric) || metric_value < best_metric
+          if (isTRUE(improved_metric)) {
+            best_metric <<- metric_value
+            compact_best_svi_state <<- svi_state
+            compact_best_svi_params <<- tryCatch(svi$get_params(svi_state), error = function(e) NULL)
+            early_stopping_info$best_step <<- as.integer(svi_steps_completed)
+            early_stopping_info$best_metric <<- metric_value
+            no_improve_checks <<- 0L
+          } else {
+            no_improve_checks <<- no_improve_checks + 1L
+          }
+          early_stopping_info$reason <<- "completed_budget"
+        }
+
+        gradient_checkpoint <- record_svi_gradient_checkpoint(
+          svi_state_current = svi_state,
+          model_args_current = batch_args_current,
+          step_current = svi_steps_completed
+        )
+        last_gradient_checkpoint <<- gradient_checkpoint
+        train_elbo_value <- if (svi_steps_completed > 0L) {
+          svi_loss_curve[[svi_steps_completed]]
+        } else {
+          NA_real_
+        }
+        iter_per_s_value <- if (is.finite(chunk_run_seconds) && chunk_run_seconds > 0) {
+          as.numeric(max(1L, as.integer(svi_steps_completed) - as.integer(last_progress_step))) /
+            chunk_run_seconds
+        } else {
+          NA_real_
+        }
+        rss_mb_value <- current_process_rss_mb()
+        elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
+        best_metric_for_message <- if (is.finite(early_stopping_info$best_metric)) {
+          early_stopping_info$best_metric
+        } else {
+          metric_value
+        }
+        best_step_for_message <- if (!is.na(early_stopping_info$best_step)) {
+          as.integer(early_stopping_info$best_step)
+        } else {
+          as.integer(svi_steps_completed)
+        }
+        delta_prev <- if (is.finite(previous_metric) && is.finite(metric_value)) {
+          metric_value - previous_metric
+        } else {
+          NA_real_
+        }
+        delta_prev_text <- if (is.finite(delta_prev)) {
+          sprintf("%+.6f", delta_prev)
+        } else {
+          "NA"
+        }
+        total_checks_planned <- max(
+          1L,
+          as.integer(length(neural_compact_chunk_boundary_checks(
+            svi_steps = svi_steps,
+            n_checks = early_stopping_n_checks,
+            chunk_size = compact_update_chunk_size_effective
+          )))
+        )
+        message(sprintf(
+          paste0(
+            "Compact SVI validation check %d/%d: step=%d/%d; validation %s=%s; ",
+            "train_elbo=%s; best=%s at step %d; delta_prev=%s; iter_per_s=%s; ",
+            "rss_mb=%s; elapsed=%ss%s."
+          ),
+          as.integer(early_stopping_info$stop_check),
+          total_checks_planned,
+          as.integer(svi_steps_completed),
+          as.integer(svi_steps),
+          early_stopping_info$metric,
+          format_svi_diag_value(metric_value, digits = 6L),
+          format_svi_diag_value(train_elbo_value, digits = 2L),
+          format_svi_diag_value(best_metric_for_message, digits = 6L),
+          best_step_for_message,
+          delta_prev_text,
+          format_svi_diag_value(iter_per_s_value, digits = 3L),
+          format_svi_diag_value(rss_mb_value, digits = 1L),
+          format_svi_diag_value(elapsed_seconds, digits = 3L),
+          format_svi_gradient_fields(gradient_checkpoint)
+        ))
+
+        if (isTRUE(improved_metric)) {
+          checkpoint_save(
+            type = "best",
+            svi_state_current = svi_state,
+            svi_params_current = compact_best_svi_params,
+            step_current = svi_steps_completed,
+            loss_history_current = current_compact_loss_history(),
+            best_metric_current = best_metric,
+            best_step_current = early_stopping_info$best_step,
+            no_improve_checks_current = no_improve_checks
+          )
+        }
+        checkpoint_save(
+          type = "latest",
+          svi_state_current = svi_state,
+          step_current = svi_steps_completed,
+          loss_history_current = current_compact_loss_history(),
+          best_metric_current = best_metric,
+          best_step_current = early_stopping_info$best_step,
+          no_improve_checks_current = no_improve_checks
+        )
+        compact_last_validation_step <<- as.integer(svi_steps_completed)
+        invisible(metric_value)
+      }
+      compact_latest_checkpoint <- function(batch_args_current, chunk_run_seconds) {
+        gradient_checkpoint <- record_svi_gradient_checkpoint(
+          svi_state_current = svi_state,
+          model_args_current = batch_args_current,
+          step_current = svi_steps_completed
+        )
+        last_gradient_checkpoint <<- gradient_checkpoint
+        iter_per_s_value <- if (is.finite(chunk_run_seconds) && chunk_run_seconds > 0) {
+          as.numeric(max(1L, as.integer(svi_steps_completed) - as.integer(last_progress_step))) /
+            chunk_run_seconds
+        } else {
+          NA_real_
+        }
+        message(sprintf(
+          "Compact SVI checkpoint: step=%d/%d; train_elbo=%s; iter_per_s=%s%s.",
+          as.integer(svi_steps_completed),
+          as.integer(svi_steps),
+          format_svi_diag_value(svi_loss_curve[[svi_steps_completed]], digits = 2L),
+          format_svi_diag_value(iter_per_s_value, digits = 3L),
+          format_svi_gradient_fields(gradient_checkpoint)
+        ))
+        checkpoint_save(
+          type = "latest",
+          svi_state_current = svi_state,
+          step_current = svi_steps_completed,
+          loss_history_current = current_compact_loss_history(),
+          best_metric_current = NA_real_,
+          best_step_current = NA_integer_,
+          no_improve_checks_current = 0L
+        )
+        compact_last_checkpoint_step <<- as.integer(svi_steps_completed)
+        invisible(NULL)
+      }
+
+      step_cursor <- as.integer(svi_steps_completed) + 1L
       while (step_cursor <= as.integer(svi_steps)) {
         batch_args <- NULL
         chunk_completed <- FALSE
@@ -14637,6 +15134,7 @@ generate_ModelOutcome_neural <- function(){
           as.integer(compact_update_chunk_size),
           as.integer(svi_steps) - as.integer(step_cursor) + 1L
         )
+        chunk_started_at <- proc.time()[["elapsed"]]
         if (chunk_n > 1L && isTRUE(compact_scan_available)) {
           batch_args_list <- tryCatch(
             lapply(seq_len(chunk_n), function(i) compact_batch_args(compact_sample_obs_idx())),
@@ -14730,16 +15228,44 @@ generate_ModelOutcome_neural <- function(){
           svi_loss_curve[[step_cursor]] <- as.numeric(update_parts$loss)
           svi_steps_completed <- as.integer(step_cursor)
         }
+        chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
         optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
         optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
         optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
+        validation_due <- isTRUE(compact_validation_active) &&
+          (svi_steps_completed >= compact_next_validation_step ||
+             svi_steps_completed == as.integer(svi_steps)) &&
+          !identical(as.integer(compact_last_validation_step), as.integer(svi_steps_completed))
+        if (isTRUE(validation_due)) {
+          compact_validation_check(batch_args, chunk_run_seconds)
+          compact_next_validation_step <- advance_compact_target(
+            compact_next_validation_step,
+            svi_steps_completed,
+            compact_validation_eval_every
+          )
+        }
+        checkpoint_due <- !isTRUE(compact_validation_active) &&
+          isTRUE(svi_checkpoint$enabled) &&
+          (svi_steps_completed >= compact_next_checkpoint_step ||
+             svi_steps_completed == as.integer(svi_steps)) &&
+          !identical(as.integer(compact_last_checkpoint_step), as.integer(svi_steps_completed))
+        if (isTRUE(checkpoint_due)) {
+          compact_latest_checkpoint(batch_args, chunk_run_seconds)
+          compact_next_checkpoint_step <- advance_compact_target(
+            compact_next_checkpoint_step,
+            svi_steps_completed,
+            compact_checkpoint_eval_every
+          )
+        }
         if (svi_steps_completed %% progress_every == 0L ||
             svi_steps_completed == as.integer(svi_steps)) {
-          last_gradient_checkpoint <- record_svi_gradient_checkpoint(
-            svi_state_current = svi_state,
-            model_args_current = batch_args,
-            step_current = svi_steps_completed
-          )
+          if (!isTRUE(validation_due) && !isTRUE(checkpoint_due)) {
+            last_gradient_checkpoint <- record_svi_gradient_checkpoint(
+              svi_state_current = svi_state,
+              model_args_current = batch_args,
+              step_current = svi_steps_completed
+            )
+          }
           rss_mb_value <- current_process_rss_mb()
           elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
           progress_step_delta <- as.integer(svi_steps_completed) - as.integer(last_progress_step)
@@ -14773,7 +15299,45 @@ generate_ModelOutcome_neural <- function(){
           numeric(0)
         }
       }
-      early_stopping_info$reason <- early_stopping_reason
+      if (isTRUE(compact_validation_active) &&
+          !identical(early_stopping_reason, "update_failed")) {
+        finite_validation_history <- early_stopping_info$validation_loss_history[
+          is.finite(early_stopping_info$validation_loss_history)
+        ]
+        if (length(finite_validation_history) > 0L && is.finite(best_metric)) {
+          early_stopping_reason <- "completed_budget"
+          early_stopping_info$reason <- early_stopping_reason
+          early_stopping_info$best_metric <- best_metric
+          early_stopping_info$final_metric <- best_metric
+          if (!is.null(compact_best_svi_params)) {
+            SVIParams <- compact_best_svi_params
+          } else if (!is.null(compact_best_svi_state)) {
+            SVIParams <- tryCatch(svi$get_params(compact_best_svi_state), error = function(e) NULL)
+          }
+          if (isTRUE(svi_checkpoint$enabled) && is.null(SVIParams)) {
+            svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
+              svi_checkpoint$path,
+              svi_checkpoint_fingerprint
+            )
+            if (!is.null(svi_checkpoint_best) &&
+                is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
+              SVIParams <- neural_svi_checkpoint_params_to_jax(svi_checkpoint_best$svi_params)
+              SVIPosteriorDraws <- checkpoint_prediction_params_to_draws(
+                svi_checkpoint_best$prediction_params
+              )
+            }
+          }
+        } else {
+          early_stopping_reason <- if (compact_validation_errors > 0L) {
+            "validation_error"
+          } else {
+            "metric_failed"
+          }
+          early_stopping_info$reason <- early_stopping_reason
+        }
+      } else {
+        early_stopping_info$reason <- early_stopping_reason
+      }
       early_stopping_info$stop_step <- as.integer(svi_steps_completed)
     } else if (!isTRUE(checkpoint_training_complete) && isTRUE(early_stopping_running)) {
       svi_state <- if (is.null(checkpoint_resume_params)) {
@@ -15041,6 +15605,9 @@ generate_ModelOutcome_neural <- function(){
         if (!is.null(svi_checkpoint_best) &&
             is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
           SVIParams <- neural_svi_checkpoint_params_to_jax(svi_checkpoint_best$svi_params)
+          SVIPosteriorDraws <- checkpoint_prediction_params_to_draws(
+            svi_checkpoint_best$prediction_params
+          )
         }
       }
     } else if (!isTRUE(checkpoint_training_complete) && isTRUE(svi_checkpoint$enabled)) {
@@ -15194,6 +15761,8 @@ generate_ModelOutcome_neural <- function(){
     sample_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
     if (isTRUE(run_mcmc_after_svi)) {
       SVIInitValues <- extract_svi_param_sites(params)
+    } else if (!is.null(SVIPosteriorDraws)) {
+      PosteriorDraws <- SVIPosteriorDraws
     } else {
       posterior_sample_args <- c(
         list(

@@ -627,7 +627,11 @@ compact_w_idx_from_matrix <- function(W_idx, factor_levels) {
 
 run_compact_svi_fit <- function(compact_update_scan = "required",
                                 compact_update_chunk_size = 2L,
-                                svi_steps = 4L) {
+                                svi_steps = 4L,
+                                early_stopping = FALSE,
+                                early_stopping_n_checks = 2L,
+                                checkpoint_path = NULL,
+                                checkpoint_n_checks = 2L) {
   skip_on_cran()
   skip_if_no_jax()
   withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
@@ -663,8 +667,13 @@ run_compact_svi_fit <- function(compact_update_scan = "required",
       batch_size = 4L,
       compact_update_chunk_size = as.integer(compact_update_chunk_size),
       compact_update_scan = compact_update_scan,
-      early_stopping = FALSE,
+      early_stopping = isTRUE(early_stopping),
+      early_stopping_n_checks = as.integer(early_stopping_n_checks),
+      early_stopping_validation_frac = 1,
+      early_stopping_validation_max_n = NULL,
       eval_enabled = FALSE,
+      checkpoint_path = checkpoint_path,
+      checkpoint_n_checks = as.integer(checkpoint_n_checks),
       warn_stage_imbalance_pct = 0,
       warn_min_cell_n = 0L
     )
@@ -2834,6 +2843,33 @@ test_that("compact SVI scan mode resolver defaults to required for chunked compa
   )
 })
 
+test_that("compact SVI validation cadence respects chunk boundaries and final step", {
+  expect_identical(
+    strategize:::neural_compact_chunk_boundary_checks(
+      svi_steps = 10L,
+      n_checks = 5L,
+      chunk_size = 2L
+    ),
+    c(2L, 4L, 6L, 8L, 10L)
+  )
+  expect_identical(
+    strategize:::neural_compact_chunk_boundary_checks(
+      svi_steps = 10L,
+      n_checks = 5L,
+      chunk_size = 4L
+    ),
+    c(4L, 8L, 10L)
+  )
+  expect_identical(
+    strategize:::neural_compact_chunk_boundary_checks(
+      svi_steps = 3L,
+      n_checks = 10L,
+      chunk_size = 8L
+    ),
+    3L
+  )
+})
+
 test_that("required compact SVI scan failures are explicit", {
   expect_error(
     strategize:::neural_stop_compact_scan_required("synthetic scan failure"),
@@ -2893,6 +2929,49 @@ test_that("compact SVI required scan mode records ok for live scanned updates", 
   expect_identical(diagnostics$compact_update_scan_mode, "required")
   expect_identical(diagnostics$compact_update_scan_status, "ok")
   expect_gte(as.integer(diagnostics$compact_update_chunk_size_effective), 2L)
+})
+
+test_that("compact SVI validation checkpoints write latest and best without early stopping", {
+  tmp <- tempfile()
+  metric_values <- c(0.1, 1)
+  metric_i <- 0L
+  local_strategize_binding(
+    "cs_compute_outcome_metrics",
+    function(...) {
+      metric_i <<- metric_i + 1L
+      value <- metric_values[[min(metric_i, length(metric_values))]]
+      list(log_loss = value, accuracy = 1, brier = 0)
+    },
+    env = environment()
+  )
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "required",
+    compact_update_chunk_size = 2L,
+    svi_steps = 4L,
+    early_stopping = TRUE,
+    early_stopping_n_checks = 2L,
+    checkpoint_path = tmp
+  )
+
+  expect_true(file.exists(file.path(tmp, "latest.rds")))
+  expect_true(file.exists(file.path(tmp, "best.rds")))
+  expect_identical(as.integer(model_info$svi_steps_completed), 4L)
+  expect_true(isTRUE(model_info$early_stopping$enabled))
+  expect_true(isTRUE(model_info$early_stopping$active))
+  expect_false(isTRUE(model_info$early_stopping$stopped_early))
+  expect_identical(model_info$early_stopping$reason, "completed_budget")
+  expect_gt(length(model_info$early_stopping$validation_loss_history), 0L)
+  expect_true(is.finite(model_info$early_stopping$best_metric))
+  expect_identical(as.integer(model_info$early_stopping$best_step), 2L)
+  expect_equal(model_info$early_stopping$best_metric, 0.1)
+  expect_equal(model_info$early_stopping$final_metric, 0.1)
+
+  latest <- strategize:::neural_svi_checkpoint_load_snapshot(tmp, "latest")
+  best <- strategize:::neural_svi_checkpoint_load_snapshot(tmp, "best")
+  expect_identical(as.integer(latest$completed_step), 4L)
+  expect_true(is.finite(best$best_metric))
+  expect_identical(as.integer(best$best_step), 2L)
+  expect_equal(best$best_metric, 0.1)
 })
 
 test_that("JAX block helper accepts nested non-JAX values", {
