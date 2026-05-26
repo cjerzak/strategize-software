@@ -15248,6 +15248,10 @@ generate_ModelOutcome_neural <- function(){
       last_gradient_checkpoint <- NULL
       last_progress_step <- as.integer(svi_steps_completed)
       last_progress_elapsed <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
+      window_steps <- 0L
+      window_chunks <- 0L
+      window_update_elapsed_s <- 0
+      window_sampled_train_obs <- 0
       compact_scan_error <- NULL
       compact_jit_error <- NULL
       compact_scan_message_emitted <- FALSE
@@ -15373,8 +15377,21 @@ generate_ModelOutcome_neural <- function(){
         }
         next_step
       }
-      compact_validation_check <- function(batch_args_current, chunk_run_seconds) {
+      compact_throughput_rate <- function(count, elapsed_s) {
+        count <- as.numeric(count)
+        elapsed_s <- as.numeric(elapsed_s)
+        if (length(count) != 1L || length(elapsed_s) != 1L ||
+            !is.finite(count) || !is.finite(elapsed_s) || count < 0 || elapsed_s <= 0) {
+          return(NA_real_)
+        }
+        count / elapsed_s
+      }
+      compact_validation_check <- function(batch_args_current,
+                                           chunk_steps,
+                                           chunk_elapsed_s,
+                                           chunk_step_per_s) {
         validation_metric_error <- NULL
+        validation_started_at <- proc.time()[["elapsed"]]
         metric_value <- tryCatch(
           compute_svi_validation_metric(svi_state, validation_split),
           error = function(e) {
@@ -15382,6 +15399,10 @@ generate_ModelOutcome_neural <- function(){
             NA_real_
           }
         )
+        strategize_jax_block_until_ready(metric_value)
+        validation_elapsed_s <- as.numeric(proc.time()[["elapsed"]] - validation_started_at)
+        validation_obs <- length(validation_split$validation_idx)
+        validation_obs_per_s <- compact_throughput_rate(validation_obs, validation_elapsed_s)
         previous_metric <- if (length(early_stopping_info$validation_loss_history) > 0L) {
           tail(early_stopping_info$validation_loss_history, 1L)
         } else {
@@ -15428,12 +15449,6 @@ generate_ModelOutcome_neural <- function(){
         } else {
           NA_real_
         }
-        iter_per_s_value <- if (is.finite(chunk_run_seconds) && chunk_run_seconds > 0) {
-          as.numeric(max(1L, as.integer(svi_steps_completed) - as.integer(last_progress_step))) /
-            chunk_run_seconds
-        } else {
-          NA_real_
-        }
         rss_mb_value <- current_process_rss_mb()
         elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
         best_metric_for_message <- if (is.finite(early_stopping_info$best_metric)) {
@@ -15467,7 +15482,9 @@ generate_ModelOutcome_neural <- function(){
         message(sprintf(
           paste0(
             "Compact SVI validation check %d/%d: step=%d/%d; validation %s=%s; ",
-            "train_elbo=%s; best=%s at step %d; delta_prev=%s; iter_per_s=%s; ",
+            "train_elbo=%s; best=%s at step %d; delta_prev=%s; ",
+            "chunk_steps=%d; chunk_elapsed_s=%s; chunk_step_per_s=%s; ",
+            "validation_obs=%d; validation_elapsed_s=%s; validation_obs_per_s=%s; ",
             "rss_mb=%s; elapsed=%ss%s."
           ),
           as.integer(early_stopping_info$stop_check),
@@ -15480,7 +15497,12 @@ generate_ModelOutcome_neural <- function(){
           format_svi_diag_value(best_metric_for_message, digits = 6L),
           best_step_for_message,
           delta_prev_text,
-          format_svi_diag_value(iter_per_s_value, digits = 3L),
+          as.integer(chunk_steps),
+          format_svi_diag_value(chunk_elapsed_s, digits = 3L),
+          format_svi_diag_value(chunk_step_per_s, digits = 3L),
+          as.integer(validation_obs),
+          format_svi_diag_value(validation_elapsed_s, digits = 3L),
+          format_svi_diag_value(validation_obs_per_s, digits = 1L),
           format_svi_diag_value(rss_mb_value, digits = 1L),
           format_svi_diag_value(elapsed_seconds, digits = 3L),
           format_svi_gradient_fields(gradient_checkpoint)
@@ -15510,25 +15532,24 @@ generate_ModelOutcome_neural <- function(){
         compact_last_validation_step <<- as.integer(svi_steps_completed)
         invisible(metric_value)
       }
-      compact_latest_checkpoint <- function(batch_args_current, chunk_run_seconds) {
+      compact_latest_checkpoint <- function(batch_args_current,
+                                            chunk_steps,
+                                            chunk_elapsed_s,
+                                            chunk_step_per_s) {
         gradient_checkpoint <- record_svi_gradient_checkpoint(
           svi_state_current = svi_state,
           model_args_current = batch_args_current,
           step_current = svi_steps_completed
         )
         last_gradient_checkpoint <<- gradient_checkpoint
-        iter_per_s_value <- if (is.finite(chunk_run_seconds) && chunk_run_seconds > 0) {
-          as.numeric(max(1L, as.integer(svi_steps_completed) - as.integer(last_progress_step))) /
-            chunk_run_seconds
-        } else {
-          NA_real_
-        }
         message(sprintf(
-          "Compact SVI checkpoint: step=%d/%d; train_elbo=%s; iter_per_s=%s%s.",
+          "Compact SVI checkpoint: step=%d/%d; train_elbo=%s; chunk_steps=%d; chunk_elapsed_s=%s; chunk_step_per_s=%s%s.",
           as.integer(svi_steps_completed),
           as.integer(svi_steps),
           format_svi_diag_value(svi_loss_curve[[svi_steps_completed]], digits = 2L),
-          format_svi_diag_value(iter_per_s_value, digits = 3L),
+          as.integer(chunk_steps),
+          format_svi_diag_value(chunk_elapsed_s, digits = 3L),
+          format_svi_diag_value(chunk_step_per_s, digits = 3L),
           format_svi_gradient_fields(gradient_checkpoint)
         ))
         checkpoint_save(
@@ -15552,6 +15573,7 @@ generate_ModelOutcome_neural <- function(){
           as.integer(compact_update_chunk_size),
           as.integer(svi_steps) - as.integer(step_cursor) + 1L
         )
+        chunk_start_step <- as.integer(svi_steps_completed)
         chunk_started_at <- proc.time()[["elapsed"]]
         if (chunk_n > 1L && isTRUE(compact_scan_available)) {
           batch_args_list <- tryCatch(
@@ -15668,7 +15690,19 @@ generate_ModelOutcome_neural <- function(){
             "single"
           }
         }
-        chunk_run_seconds <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
+        chunk_elapsed_s <- as.numeric(proc.time()[["elapsed"]] - chunk_started_at)
+        chunk_steps <- as.integer(svi_steps_completed) - as.integer(chunk_start_step)
+        if (length(chunk_steps) != 1L || is.na(chunk_steps) || chunk_steps < 0L) {
+          chunk_steps <- 0L
+        }
+        chunk_step_per_s <- compact_throughput_rate(chunk_steps, chunk_elapsed_s)
+        if (chunk_steps > 0L) {
+          window_steps <- as.integer(window_steps + chunk_steps)
+          window_chunks <- as.integer(window_chunks + 1L)
+          window_update_elapsed_s <- as.numeric(window_update_elapsed_s) + as.numeric(chunk_elapsed_s)
+          window_sampled_train_obs <- as.numeric(window_sampled_train_obs) +
+            as.numeric(chunk_steps) * as.numeric(compact_svi_batch_size)
+        }
         optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
         optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
         optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
@@ -15678,7 +15712,7 @@ generate_ModelOutcome_neural <- function(){
              svi_steps_completed == as.integer(svi_steps)) &&
           !identical(as.integer(compact_last_validation_step), as.integer(svi_steps_completed))
         if (isTRUE(validation_due)) {
-          compact_validation_check(batch_args, chunk_run_seconds)
+          compact_validation_check(batch_args, chunk_steps, chunk_elapsed_s, chunk_step_per_s)
           compact_next_validation_step <- advance_compact_target(
             compact_next_validation_step,
             svi_steps_completed,
@@ -15691,15 +15725,17 @@ generate_ModelOutcome_neural <- function(){
              svi_steps_completed == as.integer(svi_steps)) &&
           !identical(as.integer(compact_last_checkpoint_step), as.integer(svi_steps_completed))
         if (isTRUE(checkpoint_due)) {
-          compact_latest_checkpoint(batch_args, chunk_run_seconds)
+          compact_latest_checkpoint(batch_args, chunk_steps, chunk_elapsed_s, chunk_step_per_s)
           compact_next_checkpoint_step <- advance_compact_target(
             compact_next_checkpoint_step,
             svi_steps_completed,
             compact_checkpoint_eval_every
           )
         }
-        if (svi_steps_completed %% progress_every == 0L ||
-            svi_steps_completed == as.integer(svi_steps)) {
+        progress_due <- window_steps > 0L &&
+          (as.integer(svi_steps_completed) - as.integer(last_progress_step) >= as.integer(progress_every) ||
+             svi_steps_completed == as.integer(svi_steps))
+        if (isTRUE(progress_due)) {
           if (!isTRUE(validation_due) && !isTRUE(checkpoint_due)) {
             last_gradient_checkpoint <- record_svi_gradient_checkpoint(
               svi_state_current = svi_state,
@@ -15709,27 +15745,43 @@ generate_ModelOutcome_neural <- function(){
           }
           rss_mb_value <- current_process_rss_mb()
           elapsed_seconds <- as.numeric(difftime(Sys.time(), t0_, units = "secs"))
-          progress_step_delta <- as.integer(svi_steps_completed) - as.integer(last_progress_step)
-          progress_elapsed_delta <- elapsed_seconds - as.numeric(last_progress_elapsed)
-          iter_per_s_value <- if (is.finite(progress_elapsed_delta) &&
-                                  progress_elapsed_delta > 0 &&
-                                  progress_step_delta > 0L) {
-            as.numeric(progress_step_delta) / progress_elapsed_delta
-          } else {
-            NA_real_
-          }
+          progress_elapsed_s <- elapsed_seconds - as.numeric(last_progress_elapsed)
+          step_per_s_value <- compact_throughput_rate(window_steps, progress_elapsed_s)
+          sampled_train_obs_per_s_value <- compact_throughput_rate(window_sampled_train_obs, progress_elapsed_s)
+          update_step_per_s_value <- compact_throughput_rate(window_steps, window_update_elapsed_s)
+          update_sampled_train_obs_per_s_value <- compact_throughput_rate(
+            window_sampled_train_obs,
+            window_update_elapsed_s
+          )
           message(sprintf(
-            "Compact SVI step=%d/%d; train_elbo=%s; iter_per_s=%s; rss_mb=%s; elapsed=%ss%s.",
+            paste0(
+              "Compact SVI progress: step=%d/%d; train_elbo=%s; ",
+              "step_per_s=%s; sampled_train_obs_per_s=%s; ",
+              "update_step_per_s=%s; update_sampled_train_obs_per_s=%s; ",
+              "window_steps=%d; window_chunks=%d; progress_elapsed_s=%s; ",
+              "window_update_elapsed_s=%s; rss_mb=%s; elapsed=%ss%s."
+            ),
             as.integer(svi_steps_completed),
             as.integer(svi_steps),
             format_svi_diag_value(svi_loss_curve[[svi_steps_completed]], digits = 2L),
-            format_svi_diag_value(iter_per_s_value, digits = 3L),
+            format_svi_diag_value(step_per_s_value, digits = 3L),
+            format_svi_diag_value(sampled_train_obs_per_s_value, digits = 3L),
+            format_svi_diag_value(update_step_per_s_value, digits = 3L),
+            format_svi_diag_value(update_sampled_train_obs_per_s_value, digits = 3L),
+            as.integer(window_steps),
+            as.integer(window_chunks),
+            format_svi_diag_value(progress_elapsed_s, digits = 3L),
+            format_svi_diag_value(window_update_elapsed_s, digits = 3L),
             format_svi_diag_value(rss_mb_value, digits = 1L),
             format_svi_diag_value(elapsed_seconds, digits = 3L),
             format_svi_gradient_fields(last_gradient_checkpoint)
           ))
           last_progress_step <- as.integer(svi_steps_completed)
           last_progress_elapsed <- elapsed_seconds
+          window_steps <- 0L
+          window_chunks <- 0L
+          window_update_elapsed_s <- 0
+          window_sampled_train_obs <- 0
         }
         step_cursor <- as.integer(svi_steps_completed) + 1L
       }

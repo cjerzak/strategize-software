@@ -531,6 +531,32 @@ capture_messages <- function(expr) {
   list(value = value, messages = messages)
 }
 
+extract_log_numeric_field <- function(line, field) {
+  pattern <- paste0("(?:^|; )", field, "=([^;]+)")
+  hit <- regmatches(line, regexpr(pattern, line, perl = TRUE))
+  if (!length(hit) || identical(hit, "")) {
+    stop(sprintf("Field '%s' not found in log line: %s", field, line), call. = FALSE)
+  }
+  value <- sub(paste0("^.*", field, "="), "", hit)
+  value <- sub("\\.$", "", value)
+  value <- sub("s$", "", value)
+  if (identical(value, "NA")) {
+    return(NA_real_)
+  }
+  as.numeric(value)
+}
+
+expect_log_rate <- function(line, rate_field, count_field, elapsed_field, tolerance = 0.05) {
+  rate <- extract_log_numeric_field(line, rate_field)
+  count <- extract_log_numeric_field(line, count_field)
+  elapsed <- extract_log_numeric_field(line, elapsed_field)
+  expect_true(is.finite(rate))
+  expect_true(is.finite(count))
+  expect_true(is.finite(elapsed))
+  expect_gt(elapsed, 0)
+  expect_equal(rate, count / elapsed, tolerance = tolerance)
+}
+
 run_output_only_attn_vi_fit <- function(seed,
                                         early_stopping = TRUE,
                                         svi_steps = 25L,
@@ -3019,6 +3045,156 @@ test_that("compact SVI required scan mode records ok for live scanned updates", 
   expect_identical(diagnostics$compact_update_jit_path, "scan")
   expect_gte(as.integer(diagnostics$compact_update_jit_cache_size), 1L)
   expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
+})
+
+test_that("compact SVI validation logs scanned chunk throughput from completed steps", {
+  captured <- capture_messages(run_compact_svi_fit(
+    compact_update_scan = "required",
+    compact_update_chunk_size = 4L,
+    svi_steps = 4L,
+    early_stopping = TRUE,
+    early_stopping_n_checks = 1L
+  ))
+  validation_lines <- grep("^Compact SVI validation check [0-9]+/[0-9]+: ", captured$messages, value = TRUE)
+
+  expect_gt(length(validation_lines), 0L)
+  expect_false(any(grepl("iter_per_s", validation_lines)))
+  line <- validation_lines[[1L]]
+  expect_identical(as.integer(extract_log_numeric_field(line, "chunk_steps")), 4L)
+  expect_log_rate(line, "chunk_step_per_s", "chunk_steps", "chunk_elapsed_s")
+})
+
+test_that("compact SVI validation logs fallback chunks as one completed step", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  local_strenv_bindings("jax_svi_update_scan")
+  set_strenv_bindings(list(
+    jax_svi_update_scan = function(...) stop("synthetic scan failure")
+  ))
+
+  captured <- capture_messages(run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 4L,
+    svi_steps = 2L,
+    early_stopping = TRUE,
+    early_stopping_n_checks = 2L
+  ))
+  validation_lines <- grep("^Compact SVI validation check [0-9]+/[0-9]+: ", captured$messages, value = TRUE)
+
+  expect_gt(length(validation_lines), 0L)
+  expect_false(any(grepl("iter_per_s", validation_lines)))
+  expect_false(any(grepl("chunk_steps=4", validation_lines, fixed = TRUE)))
+  line <- validation_lines[[1L]]
+  expect_identical(as.integer(extract_log_numeric_field(line, "chunk_steps")), 1L)
+  expect_log_rate(line, "chunk_step_per_s", "chunk_steps", "chunk_elapsed_s")
+})
+
+test_that("compact SVI progress logs window and sampled-observation throughput", {
+  captured <- capture_messages(run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 1L,
+    svi_steps = 2L,
+    early_stopping = FALSE
+  ))
+  progress_lines <- grep("^Compact SVI progress: ", captured$messages, value = TRUE)
+
+  expect_gt(length(progress_lines), 0L)
+  expect_false(any(grepl("iter_per_s", progress_lines)))
+  line <- progress_lines[[1L]]
+  window_steps <- extract_log_numeric_field(line, "window_steps")
+  progress_elapsed_s <- extract_log_numeric_field(line, "progress_elapsed_s")
+  window_update_elapsed_s <- extract_log_numeric_field(line, "window_update_elapsed_s")
+
+  expect_identical(as.integer(window_steps), 1L)
+  expect_identical(as.integer(extract_log_numeric_field(line, "window_chunks")), 1L)
+  expect_gt(progress_elapsed_s, 0)
+  expect_gt(window_update_elapsed_s, 0)
+  expect_equal(
+    extract_log_numeric_field(line, "step_per_s"),
+    window_steps / progress_elapsed_s,
+    tolerance = 0.05
+  )
+  expect_equal(
+    extract_log_numeric_field(line, "sampled_train_obs_per_s"),
+    window_steps * 4 / progress_elapsed_s,
+    tolerance = 0.05
+  )
+  expect_equal(
+    extract_log_numeric_field(line, "update_step_per_s"),
+    window_steps / window_update_elapsed_s,
+    tolerance = 0.05
+  )
+  expect_equal(
+    extract_log_numeric_field(line, "update_sampled_train_obs_per_s"),
+    window_steps * 4 / window_update_elapsed_s,
+    tolerance = 0.05
+  )
+})
+
+test_that("compact SVI validation logs validation observation throughput", {
+  captured <- capture_messages(run_compact_svi_fit(
+    compact_update_scan = "required",
+    compact_update_chunk_size = 4L,
+    svi_steps = 4L,
+    early_stopping = TRUE,
+    early_stopping_n_checks = 1L
+  ))
+  validation_lines <- grep("^Compact SVI validation check [0-9]+/[0-9]+: ", captured$messages, value = TRUE)
+
+  expect_gt(length(validation_lines), 0L)
+  line <- validation_lines[[1L]]
+  expect_true(grepl("validation_obs_per_s=", line, fixed = TRUE))
+  expect_false(grepl("(^|; )step_per_s=", line, perl = TRUE))
+  expect_log_rate(line, "validation_obs_per_s", "validation_obs", "validation_elapsed_s", tolerance = 0.2)
+})
+
+test_that("compact SVI progress windows start from resumed process deltas", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  tmp <- tempfile()
+  local_strenv_bindings("jax_svi_update")
+  original_update <- strategize:::strenv$jax_svi_update
+  update_calls <- 0L
+  set_strenv_bindings(list(
+    jax_svi_update = function(...) {
+      update_calls <<- update_calls + 1L
+      if (update_calls > 2L) {
+        stop("synthetic interruption")
+      }
+      original_update(...)
+    }
+  ))
+
+  expect_error(
+    run_compact_svi_fit(
+      compact_update_scan = "fallback",
+      compact_update_chunk_size = 1L,
+      svi_steps = 4L,
+      early_stopping = FALSE,
+      checkpoint_path = tmp,
+      checkpoint_n_checks = 2L
+    ),
+    "synthetic interruption"
+  )
+
+  set_strenv_bindings(list(jax_svi_update = original_update))
+  captured <- capture_messages(run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 1L,
+    svi_steps = 4L,
+    early_stopping = FALSE,
+    checkpoint_path = tmp,
+    checkpoint_n_checks = 2L
+  ))
+  progress_lines <- grep("^Compact SVI progress: ", captured$messages, value = TRUE)
+
+  expect_true(any(grepl("^Resuming neural SVI checkpoint from .+ at step 2/4\\.$", captured$messages)))
+  expect_gt(length(progress_lines), 0L)
+  expect_match(progress_lines[[1L]], "step=4/4")
+  expect_identical(as.integer(extract_log_numeric_field(progress_lines[[1L]], "window_steps")), 2L)
+  expect_identical(as.integer(extract_log_numeric_field(progress_lines[[1L]], "window_chunks")), 2L)
 })
 
 test_that("compact SVI validation checkpoints write latest and best without early stopping", {
