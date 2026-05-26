@@ -2845,6 +2845,20 @@ test_that("compact SVI scan mode resolver defaults to required for chunked compa
 
 test_that("compact SVI validation cadence respects chunk boundaries and final step", {
   expect_identical(
+    strategize:::neural_resolve_positive_int(
+      NA_integer_,
+      ceiling(3L / 10L)
+    ),
+    1L
+  )
+  expect_identical(
+    strategize:::neural_resolve_positive_int(
+      NaN,
+      4L
+    ),
+    4L
+  )
+  expect_identical(
     strategize:::neural_compact_chunk_boundary_checks(
       svi_steps = 10L,
       n_checks = 5L,

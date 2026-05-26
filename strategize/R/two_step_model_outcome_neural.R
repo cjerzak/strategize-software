@@ -885,6 +885,17 @@ neural_resolve_compact_update_scan <- function(compact_training,
   mode
 }
 
+neural_resolve_positive_int <- function(value, fallback = 1L) {
+  out <- suppressWarnings(as.integer(value))
+  if (length(out) != 1L || is.na(out) || !is.finite(out) || out < 1L) {
+    out <- suppressWarnings(as.integer(fallback))
+  }
+  if (length(out) != 1L || is.na(out) || !is.finite(out) || out < 1L) {
+    out <- 1L
+  }
+  as.integer(out)
+}
+
 neural_compact_chunk_boundary_checks <- function(svi_steps,
                                                  n_checks,
                                                  chunk_size) {
@@ -902,7 +913,12 @@ neural_compact_chunk_boundary_checks <- function(svi_steps,
   }
 
   eval_every <- as.integer(max(1L, ceiling(svi_steps / n_checks)))
-  boundaries <- unique(c(seq.int(chunk_size, svi_steps, by = chunk_size), svi_steps))
+  chunk_boundaries <- if (chunk_size <= svi_steps) {
+    seq.int(chunk_size, svi_steps, by = chunk_size)
+  } else {
+    integer(0)
+  }
+  boundaries <- unique(c(chunk_boundaries, svi_steps))
   next_target <- eval_every
   checks <- integer(0)
   for (boundary in boundaries) {
@@ -14854,13 +14870,17 @@ generate_ModelOutcome_neural <- function(){
       }
       svi_steps_completed <- as.integer(checkpoint_resume_completed)
       compact_validation_active <- isTRUE(early_stopping_running)
-      compact_validation_eval_every <- max(
-        1L,
-        as.integer(early_stopping_info$eval_every %||% ceiling(as.integer(svi_steps) / early_stopping_n_checks))
+      compact_validation_eval_every <- neural_resolve_positive_int(
+        early_stopping_info$eval_every,
+        ceiling(as.integer(svi_steps) / early_stopping_n_checks)
       )
-      compact_checkpoint_eval_every <- max(
-        1L,
-        as.integer(ceiling(as.integer(svi_steps) / max(1L, as.integer(svi_checkpoint$n_checks %||% 10L))))
+      compact_checkpoint_n_checks <- neural_resolve_positive_int(
+        svi_checkpoint$n_checks %||% 10L,
+        10L
+      )
+      compact_checkpoint_eval_every <- neural_resolve_positive_int(
+        ceiling(as.integer(svi_steps) / compact_checkpoint_n_checks),
+        1L
       )
       progress_every <- if (isTRUE(compact_validation_active)) {
         compact_validation_eval_every
