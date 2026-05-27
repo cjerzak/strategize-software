@@ -11,7 +11,9 @@ cs_compute_auc <- function(y_true, y_score) {
   n_neg <- sum(neg)
   if (n_pos == 0L || n_neg == 0L) return(NA_real_)
   ranks <- rank(y_score, ties.method = "average")
-  (sum(ranks[pos]) - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+  n_pos_d <- as.double(n_pos)
+  n_neg_d <- as.double(n_neg)
+  (sum(ranks[pos]) - n_pos_d * (n_pos_d + 1) / 2) / (n_pos_d * n_neg_d)
 }
 
 cs_make_stratified_folds <- function(n, n_folds, y = NULL, cluster = NULL, seed = 123L) {
