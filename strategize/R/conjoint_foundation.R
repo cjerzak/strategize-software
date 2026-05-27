@@ -55,6 +55,7 @@ cs_foundation_default_control <- function() {
       subsample_method = "batch_vi",
       uncertainty_scope = "output",
       optimizer = "muon",
+      low_rank_interaction_rank = 16L,
       svi_lr_schedule = "warmup_cosine"
     )
   )

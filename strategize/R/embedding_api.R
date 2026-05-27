@@ -28,6 +28,7 @@ cs2step_build_embeddings_result <- function(mode,
                                             right = NULL,
                                             joint = NULL,
                                             respondent_context = NULL,
+                                            readouts = NULL,
                                             metadata = NULL) {
   out <- list(mode = mode)
   dims <- integer(0)
@@ -51,6 +52,11 @@ cs2step_build_embeddings_result <- function(mode,
   if (!is.null(respondent_context)) {
     out$respondent_context <- respondent_context
     dims <- c(dims, respondent_context = as.integer(ncol(respondent_context)))
+  }
+  if (!is.null(readouts) && length(readouts) > 0L) {
+    out$readouts <- readouts
+    readout_dims <- vapply(readouts, function(x) as.integer(ncol(x)), integer(1))
+    dims <- c(dims, readout_dims)
   }
   meta_default <- list(
     source_class = as.character(source_class),
@@ -168,6 +174,124 @@ cs2step_neural_extract_context_prepared <- function(params,
     return_details = TRUE
   )
   neural_extract_choice_representation(transformer_out)
+}
+
+cs2step_neural_extract_respondent_readouts_prepared <- function(params,
+                                                                model_info,
+                                                                prep) {
+  if (isTRUE(prep$pairwise)) {
+    stage_idx <- neural_stage_index(prep$party_left, prep$party_right, model_info)
+    matchup_idx <- NULL
+    if (!is.null(params$E_matchup)) {
+      matchup_idx <- neural_matchup_index(prep$party_left, prep$party_right, model_info)
+    }
+    context_present <- neural_pair_context_present(
+      prep$party_left,
+      prep$party_right,
+      prep$resp_party,
+      model_info
+    )
+  } else {
+    stage_idx <- NULL
+    matchup_idx <- NULL
+    context_present <- NULL
+  }
+  readout <- neural_encode_respondent_tower_prepared(
+    params = params,
+    model_info = model_info,
+    resp_party_idx = prep$resp_party,
+    resp_cov = prep$resp_cov,
+    resp_cov_present = prep$resp_cov_present %||% NULL,
+    resp_cov_order = prep$resp_cov_order %||% NULL,
+    experiment_idx = prep$experiment_idx %||% NULL,
+    place_embedding = prep$place_embedding %||% NULL,
+    time_embedding = prep$time_embedding %||% NULL,
+    stage_idx = stage_idx,
+    matchup_idx = matchup_idx,
+    context_present = context_present
+  )
+  list(
+    respondent_cls = readout$cls,
+    respondent_pool = readout$pool,
+    respondent_mean = readout$mean,
+    respondent_final = readout$final
+  )
+}
+
+cs2step_neural_extract_candidate_readouts_prepared <- function(params,
+                                                               model_info,
+                                                               prep) {
+  if (!isTRUE(prep$pairwise)) {
+    readout <- neural_encode_candidate_profile_tower_hard(
+      params = params,
+      model_info = model_info,
+      X_idx = prep$X_single,
+      party_idx = prep$party_single,
+      resp_party_idx = prep$resp_party,
+      experiment_idx = prep$experiment_idx %||% NULL,
+      factor_order = prep$factor_order %||% NULL
+    )
+    return(list(
+      candidate_cls = readout$cls,
+      candidate_pool = readout$pool,
+      candidate_mean = readout$mean,
+      candidate_final = readout$final
+    ))
+  }
+
+  stage_idx <- neural_stage_index(prep$party_left, prep$party_right, model_info)
+  context_present <- neural_pair_context_present(
+    prep$party_left,
+    prep$party_right,
+    prep$resp_party,
+    model_info
+  )
+  n_batch <- ai(prep$X_left$shape[[1]])
+  X_all <- strenv$jnp$concatenate(list(prep$X_left, prep$X_right), axis = 0L)
+  p_all <- strenv$jnp$concatenate(list(prep$party_left, prep$party_right), axis = 0L)
+  resp_p_all <- strenv$jnp$concatenate(list(prep$resp_party, prep$resp_party), axis = 0L)
+  experiment_idx_all <- if (is.null(prep$experiment_idx)) NULL else {
+    strenv$jnp$concatenate(list(prep$experiment_idx, prep$experiment_idx), axis = 0L)
+  }
+  factor_order_all <- if (is.null(prep$factor_order)) NULL else {
+    strenv$jnp$concatenate(list(prep$factor_order, prep$factor_order), axis = 0L)
+  }
+  context_present_all <- strenv$jnp$concatenate(
+    list(context_present, context_present),
+    axis = 0L
+  )
+  readout <- neural_encode_candidate_profile_tower_hard(
+    params = params,
+    model_info = model_info,
+    X_idx = X_all,
+    party_idx = p_all,
+    resp_party_idx = resp_p_all,
+    experiment_idx = experiment_idx_all,
+    factor_order = factor_order_all,
+    context_present = context_present_all
+  )
+  idx_left <- strenv$jnp$arange(n_batch)
+  idx_right <- strenv$jnp$arange(n_batch, ai(2L * n_batch))
+  split_component <- function(x) {
+    list(
+      left = strenv$jnp$take(x, idx_left, axis = 0L),
+      right = strenv$jnp$take(x, idx_right, axis = 0L)
+    )
+  }
+  cls <- split_component(readout$cls)
+  pool <- split_component(readout$pool)
+  mean <- split_component(readout$mean)
+  final <- split_component(readout$final)
+  list(
+    candidate_left_cls = cls$left,
+    candidate_right_cls = cls$right,
+    candidate_left_pool = pool$left,
+    candidate_right_pool = pool$right,
+    candidate_left_mean = mean$left,
+    candidate_right_mean = mean$right,
+    candidate_left_final = final$left,
+    candidate_right_final = final$right
+  )
 }
 
 cs2step_neural_extract_pair_prepared <- function(params,
@@ -424,6 +548,18 @@ cs2step_neural_extract_prepared <- function(params,
       prep = prep
     )
   }
+  if (identical(level, "all") && isTRUE(neural_has_readout_cls(model_info))) {
+    out <- c(out, cs2step_neural_extract_respondent_readouts_prepared(
+      params = params,
+      model_info = model_info,
+      prep = prep
+    ))
+    out <- c(out, cs2step_neural_extract_candidate_readouts_prepared(
+      params = params,
+      model_info = model_info,
+      prep = prep
+    ))
+  }
   out
 }
 
@@ -539,6 +675,19 @@ cs2step_neural_extract_internal <- function(object,
     ),
     extra_metadata %||% list()
   )
+  primary_embedding_names <- c(
+    "embeddings",
+    "left",
+    "right",
+    "joint",
+    "respondent_context"
+  )
+  readout_names <- setdiff(names(extracted), primary_embedding_names)
+  readouts <- if (length(readout_names) > 0L) {
+    lapply(extracted[readout_names], cs2step_embeddings_as_matrix)
+  } else {
+    NULL
+  }
 
   if (!isTRUE(prep$pairwise)) {
     return(cs2step_build_embeddings_result(
@@ -556,6 +705,7 @@ cs2step_neural_extract_internal <- function(object,
       } else {
         NULL
       },
+      readouts = readouts,
       metadata = metadata
     ))
   }
@@ -571,6 +721,7 @@ cs2step_neural_extract_internal <- function(object,
       } else {
         NULL
       },
+      readouts = readouts,
       metadata = metadata
     ))
   }
@@ -586,6 +737,7 @@ cs2step_neural_extract_internal <- function(object,
     } else {
       NULL
     },
+    readouts = readouts,
     metadata = metadata
   )
 }

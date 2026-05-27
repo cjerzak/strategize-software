@@ -2,6 +2,25 @@
 # Pairwise Utility Consistency Tests
 # =============================================================================
 
+test_that("readout cls token families are gated by low-rank rank", {
+  legacy_levels <- strategize:::neural_token_family_levels()
+  readout_levels <- strategize:::neural_token_family_levels(include_readout_cls = TRUE)
+
+  expect_false("respondent_cls" %in% legacy_levels)
+  expect_false("candidate_cls" %in% legacy_levels)
+  expect_true("respondent_cls" %in% readout_levels)
+  expect_true("candidate_cls" %in% readout_levels)
+  expect_lt(match("candidate_cls", readout_levels), match("choice", readout_levels))
+  expect_identical(
+    strategize:::neural_readout_embedding_families(low_rank_interaction_rank = 0L),
+    "choice"
+  )
+  expect_identical(
+    strategize:::neural_readout_embedding_families(low_rank_interaction_rank = 4L),
+    c("choice", "respondent_cls", "candidate_cls")
+  )
+})
+
 context_head_language_span_fixture <- function(cross_mode = "attn",
                                                residual_mode = "standard") {
   strenv <- strategize:::strenv
@@ -1026,4 +1045,38 @@ test_that("pairwise full mode handles packed language-span candidate blocks", {
     0,
     tolerance = 1e-6
   )
+})
+
+test_that("low-rank respondent-candidate interaction produces utility logits", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  params <- list(
+    alpha_rc = strenv$jnp$array(2, dtype = strenv$dtj),
+    W_rc_r = strenv$jnp$eye(2L, dtype = strenv$dtj),
+    W_rc_c = strenv$jnp$eye(2L, dtype = strenv$dtj),
+    W_rc_out = strenv$jnp$array(matrix(c(2, -1), nrow = 2L), dtype = strenv$dtj)
+  )
+  respondent <- strenv$jnp$array(rbind(c(1, 0), c(0, 1)), dtype = strenv$dtj)
+  candidate <- strenv$jnp$array(rbind(c(1, 0), c(1, 0)), dtype = strenv$dtj)
+  utility <- strenv$jnp$zeros(list(2L, 1L), dtype = strenv$dtj)
+
+  logits <- strategize:::neural_low_rank_interaction_logits(
+    respondent_final = respondent,
+    candidate_final = candidate,
+    params = params,
+    out_dim = 1L,
+    dtype = strenv$dtj
+  )
+  adjusted <- strategize:::neural_apply_low_rank_interaction(
+    utility,
+    respondent,
+    candidate,
+    params
+  )
+
+  expect_equal(as.numeric(strenv$np$array(logits)), c(4, 0), tolerance = 1e-6)
+  expect_equal(as.numeric(strenv$np$array(adjusted)), c(4, 0), tolerance = 1e-6)
 })

@@ -2536,6 +2536,9 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$token_family_levels)) {
     out$token_family_levels <- as.character(out$token_family_levels)
   }
+  if (!is.null(out$readout_embedding_families)) {
+    out$readout_embedding_families <- as.character(out$readout_embedding_families)
+  }
   if (!is.null(out$experiment_token_mode)) {
     out$experiment_token_mode <- as.character(out$experiment_token_mode)
   }
@@ -2547,6 +2550,11 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   }
   if (!is.null(out$schema_dropout)) {
     out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
+  }
+  if (!is.null(out$low_rank_interaction_rank)) {
+    out$low_rank_interaction_rank <- neural_resolve_low_rank_interaction_rank(
+      out$low_rank_interaction_rank
+    )
   }
   if (!is.null(out$attention_backend)) {
     out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
@@ -2579,10 +2587,46 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
                   "n_heads", "head_dim", "choice_token_index", "n_experiment_levels",
                   "default_experiment_index", "text_semantic_dim", "factor_struct_dim",
                   "level_struct_dim", "place_context_dim", "time_context_dim", "max_factor_tokens",
-                  "max_covariate_tokens", "attention_padding_multiple")
+                  "max_covariate_tokens", "attention_padding_multiple", "low_rank_interaction_rank")
   for (field in int_fields) {
     if (!is.null(out[[field]])) {
       out[[field]] <- as.integer(out[[field]])
+    }
+  }
+
+  out$low_rank_interaction_rank <- neural_resolve_low_rank_interaction_rank(
+    out$low_rank_interaction_rank %||% 0L
+  )
+  if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
+    out$token_family_levels <- setdiff(
+      as.character(out$token_family_levels),
+      c("respondent_cls", "candidate_cls")
+    )
+  }
+  if (out$low_rank_interaction_rank <= 0L) {
+    out$has_respondent_cls <- FALSE
+    out$has_candidate_cls <- FALSE
+    out$has_low_rank_interaction <- FALSE
+    out$readout_embedding_families <- neural_readout_embedding_families(
+      low_rank_interaction_rank = 0L
+    )
+  } else {
+    if (is.null(out$has_respondent_cls)) {
+      out$has_respondent_cls <- !is.null((out$params %||% list())$E_respondent_cls)
+    }
+    if (is.null(out$has_candidate_cls)) {
+      out$has_candidate_cls <- !is.null((out$params %||% list())$E_candidate_cls)
+    }
+    if (is.null(out$has_low_rank_interaction)) {
+      out$has_low_rank_interaction <- isTRUE(neural_has_low_rank_interaction(
+        out$params %||% list(),
+        out
+      ))
+    }
+    if (is.null(out$readout_embedding_families)) {
+      out$readout_embedding_families <- neural_readout_embedding_families(
+        low_rank_interaction_rank = out$low_rank_interaction_rank
+      )
     }
   }
 
@@ -2700,6 +2744,45 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
     out$schema_dropout <- neural_schema_dropout_zero()
   } else {
     out$schema_dropout <- neural_resolve_schema_dropout(out$schema_dropout)
+  }
+  if (is.null(out$low_rank_interaction_rank)) {
+    out$low_rank_interaction_rank <- 0L
+  } else {
+    out$low_rank_interaction_rank <- neural_resolve_low_rank_interaction_rank(
+      out$low_rank_interaction_rank
+    )
+  }
+  if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
+    out$token_family_levels <- setdiff(
+      as.character(out$token_family_levels),
+      c("respondent_cls", "candidate_cls")
+    )
+  }
+  if (out$low_rank_interaction_rank <= 0L) {
+    out$has_respondent_cls <- FALSE
+    out$has_candidate_cls <- FALSE
+    out$has_low_rank_interaction <- FALSE
+    out$readout_embedding_families <- neural_readout_embedding_families(
+      low_rank_interaction_rank = 0L
+    )
+  } else {
+    if (is.null(out$has_respondent_cls)) {
+      out$has_respondent_cls <- !is.null((out$params %||% list())$E_respondent_cls)
+    }
+    if (is.null(out$has_candidate_cls)) {
+      out$has_candidate_cls <- !is.null((out$params %||% list())$E_candidate_cls)
+    }
+    if (is.null(out$has_low_rank_interaction)) {
+      out$has_low_rank_interaction <- isTRUE(neural_has_low_rank_interaction(
+        out$params %||% list(),
+        out
+      ))
+    }
+    if (is.null(out$readout_embedding_families)) {
+      out$readout_embedding_families <- neural_readout_embedding_families(
+        low_rank_interaction_rank = out$low_rank_interaction_rank
+      )
+    }
   }
   if (is.null(out$attention_backend)) {
     out$attention_backend <- "xla"

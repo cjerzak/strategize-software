@@ -571,6 +571,55 @@ test_that("legacy neural model upgrades use portable attention defaults", {
   testthat::expect_identical(upgraded$attention_padding_multiple, 8L)
   testthat::expect_identical(upgraded$attention_resolved_backend, "xla")
   testthat::expect_true(is.na(upgraded$attention_fallback_reason))
+  testthat::expect_identical(upgraded$low_rank_interaction_rank, 0L)
+  testthat::expect_false(upgraded$has_respondent_cls)
+  testthat::expect_false(upgraded$has_candidate_cls)
+  testthat::expect_false(upgraded$has_low_rank_interaction)
+  testthat::expect_identical(
+    upgraded$readout_embedding_families,
+    "choice"
+  )
+})
+
+test_that("neural model packing preserves readout and low-rank metadata", {
+  rank_zero <- strategize:::cs2step_neural_pack_model_info(
+    list(
+      low_rank_interaction_rank = 0L,
+      has_respondent_cls = TRUE,
+      has_candidate_cls = TRUE,
+      has_low_rank_interaction = TRUE,
+      token_family_levels = c("factor_candidate", "respondent_cls", "candidate_cls", "choice"),
+      readout_embedding_families = c("choice", "respondent_cls", "candidate_cls")
+    ),
+    drop_params = TRUE
+  )
+
+  testthat::expect_identical(rank_zero$low_rank_interaction_rank, 0L)
+  testthat::expect_false(rank_zero$has_respondent_cls)
+  testthat::expect_false(rank_zero$has_candidate_cls)
+  testthat::expect_false(rank_zero$has_low_rank_interaction)
+  testthat::expect_false("respondent_cls" %in% rank_zero$token_family_levels)
+  testthat::expect_false("candidate_cls" %in% rank_zero$token_family_levels)
+  testthat::expect_identical(rank_zero$readout_embedding_families, "choice")
+
+  model_info <- list(
+    low_rank_interaction_rank = 8L,
+    has_respondent_cls = TRUE,
+    has_candidate_cls = TRUE,
+    has_low_rank_interaction = TRUE,
+    readout_embedding_families = c("choice", "respondent_cls", "candidate_cls")
+  )
+
+  packed <- strategize:::cs2step_neural_pack_model_info(model_info, drop_params = TRUE)
+
+  testthat::expect_identical(packed$low_rank_interaction_rank, 8L)
+  testthat::expect_true(packed$has_respondent_cls)
+  testthat::expect_true(packed$has_candidate_cls)
+  testthat::expect_true(packed$has_low_rank_interaction)
+  testthat::expect_identical(
+    packed$readout_embedding_families,
+    c("choice", "respondent_cls", "candidate_cls")
+  )
 })
 
 test_that("neural jit wrapper cache reuses identical experiment descriptions", {
