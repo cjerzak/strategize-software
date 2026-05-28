@@ -396,7 +396,10 @@ test_that("validate_strategize_inputs accepts low-rank logit control options", {
     neural_mcmc_control = list(
       low_rank_logit_transform = "softclip",
       low_rank_logit_bound = 1.5,
-      low_rank_logit_softness = 0.25
+      low_rank_logit_softness = 0.25,
+      low_rank_logit_normalization = "rms",
+      low_rank_head_weight_target_rms = 0.1,
+      low_rank_rc_out_target_rms = 0.25
     )
   ))
   expect_true(validate_strategize_inputs(
@@ -431,6 +434,27 @@ test_that("validate_strategize_inputs rejects invalid low-rank logit controls", 
       neural_mcmc_control = list(low_rank_logit_softness = 0)
     ),
     "low_rank_logit_softness"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(low_rank_logit_normalization = "batchnorm")
+    ),
+    "low_rank_logit_normalization"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(low_rank_head_weight_target_rms = 0)
+    ),
+    "low_rank_head_weight_target_rms"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(low_rank_rc_out_target_rms = -1)
+    ),
+    "low_rank_rc_out_target_rms"
   )
 })
 

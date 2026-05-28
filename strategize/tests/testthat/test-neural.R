@@ -2247,9 +2247,12 @@ test_that("low-rank pairwise default disables the implicit cross term", {
   expect_identical(model_info$cross_candidate_encoder_mode, "none")
   expect_false(isTRUE(model_info$cross_candidate_encoder))
   expect_false(isTRUE(model_info$has_cross_term))
-  expect_identical(model_info$low_rank_logit_transform, "softclip")
-  expect_equal(model_info$low_rank_logit_bound, 1.5)
-  expect_equal(model_info$low_rank_logit_softness, 0.25)
+  expect_identical(model_info$low_rank_logit_transform, "none")
+  expect_null(model_info$low_rank_logit_bound)
+  expect_null(model_info$low_rank_logit_softness)
+  expect_identical(model_info$low_rank_logit_normalization, "rms")
+  expect_equal(model_info$low_rank_head_weight_target_rms, 1 / (sqrt(2) * 8))
+  expect_equal(model_info$low_rank_rc_out_target_rms, 1 / (sqrt(2) * 2))
 })
 
 test_that("explicit term override remains honored with low-rank pairwise interaction", {
@@ -2262,6 +2265,77 @@ test_that("explicit term override remains honored with low-rank pairwise interac
   expect_true(isTRUE(model_info$cross_candidate_encoder))
   expect_true(isTRUE(model_info$has_cross_term))
   expect_match(model_info$cross_candidate_encoder_note, "low_rank_interaction_rank")
+})
+
+test_that("low-rank RMS logit normalization resolves defaults and column scales", {
+  expect_identical(
+    strategize:::neural_resolve_low_rank_logit_normalization(
+      low_rank_interaction_rank = 2L,
+      pairwise_mode = TRUE,
+      likelihood = "bernoulli"
+    ),
+    "rms"
+  )
+  expect_identical(
+    strategize:::neural_resolve_low_rank_logit_normalization(
+      low_rank_interaction_rank = 0L,
+      pairwise_mode = TRUE,
+      likelihood = "bernoulli"
+    ),
+    "none"
+  )
+  expect_identical(
+    strategize:::neural_resolve_low_rank_logit_normalization(
+      low_rank_interaction_rank = 2L,
+      pairwise_mode = TRUE,
+      likelihood = "mixed"
+    ),
+    "rms"
+  )
+  expect_identical(
+    strategize:::neural_resolve_low_rank_logit_normalization(
+      value = "none",
+      supplied = TRUE,
+      low_rank_interaction_rank = 2L,
+      pairwise_mode = TRUE,
+      likelihood = "bernoulli"
+    ),
+    "none"
+  )
+  expect_true(strategize:::neural_low_rank_logit_normalization_enabled(
+    list(
+      likelihood = "mixed",
+      low_rank_interaction_rank = 2L,
+      low_rank_logit_normalization = "rms",
+      low_rank_head_weight_target_rms = 0.1,
+      low_rank_rc_out_target_rms = 0.25
+    ),
+    pairwise_obs = TRUE
+  ))
+  expect_equal(
+    strategize:::neural_resolve_low_rank_head_weight_target_rms(
+      model_dims = 8L,
+      normalization = "rms"
+    ),
+    1 / (sqrt(2) * 8)
+  )
+  expect_equal(
+    strategize:::neural_resolve_low_rank_rc_out_target_rms(
+      low_rank_interaction_rank = 2L,
+      normalization = "rms"
+    ),
+    1 / (sqrt(2) * 2)
+  )
+
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  W <- strenv$jnp$array(matrix(c(1, 2, 3, 4, 5, 6), nrow = 3L), dtype = strenv$dtj)
+  target <- 0.125
+  scaled <- strategize:::neural_column_rms_normalize(W, target)
+  scaled_r <- as.matrix(strenv$np$array(scaled))
+  expect_equal(sqrt(colMeans(scaled_r ^ 2)), rep(target, 2L), tolerance = 1e-5)
 })
 
 test_that("full attention residual mode exposes depth-attention metadata", {
@@ -4334,7 +4408,8 @@ test_that("neural pairwise OOS fit beats an intercept-only observable baseline",
   expect_false(isTRUE(info$stage_diagnostics$sparse_cells), info = diag_info)
   expect_gt(as.integer(info$low_rank_interaction_rank), 0L)
   expect_identical(info$cross_candidate_encoder_mode, "none")
-  expect_identical(info$low_rank_logit_transform, "softclip")
+  expect_identical(info$low_rank_logit_transform, "none")
+  expect_identical(info$low_rank_logit_normalization, "rms")
   expect_equal(metrics$n_eval, length(y_eval))
   expect_true(is.finite(metrics$auc), info = diag_info)
   expect_true(metrics$auc > 0.5, info = diag_info)

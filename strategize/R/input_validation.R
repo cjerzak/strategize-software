@@ -56,9 +56,10 @@ NULL
 #'   all prior layer outputs plus a final depth-attentive readout; use
 #'   \code{"standard"} (default) to keep the
 #'   existing residual formulation. Rank-positive low-rank Bernoulli pairwise
-#'   logits use a smooth softclip bound by default; set
-#'   \code{neural_mcmc_control$low_rank_logit_transform = "none"} or
-#'   \code{low_rank_logit_bound = NULL} to disable it.
+#'   logits use RMS logit normalization by default; set
+#'   \code{neural_mcmc_control$low_rank_logit_normalization = "none"} to
+#'   disable it. Explicit \code{low_rank_logit_transform = "softclip"} remains
+#'   supported for compatibility.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 #'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
@@ -738,6 +739,42 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         !is.finite(softness) || softness <= 0) {
       stop(
         "'neural_mcmc_control$low_rank_logit_softness' must be a positive scalar numeric value.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$low_rank_logit_normalization)) {
+    normalization <- neural_normalize_low_rank_logit_normalization(
+      neural_mcmc_control$low_rank_logit_normalization
+    )
+    if (length(normalization) != 1L ||
+        is.na(normalization) ||
+        !normalization %in% c("rms", "none")) {
+      stop(
+        "'neural_mcmc_control$low_rank_logit_normalization' must be 'rms' or 'none'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$low_rank_head_weight_target_rms)) {
+    target <- suppressWarnings(as.numeric(neural_mcmc_control$low_rank_head_weight_target_rms))
+    if (length(target) != 1L || is.na(target) ||
+        !is.finite(target) || target <= 0) {
+      stop(
+        "'neural_mcmc_control$low_rank_head_weight_target_rms' must be a positive scalar numeric value.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$low_rank_rc_out_target_rms)) {
+    target <- suppressWarnings(as.numeric(neural_mcmc_control$low_rank_rc_out_target_rms))
+    if (length(target) != 1L || is.na(target) ||
+        !is.finite(target) || target <= 0) {
+      stop(
+        "'neural_mcmc_control$low_rank_rc_out_target_rms' must be a positive scalar numeric value.",
         call. = FALSE
       )
     }

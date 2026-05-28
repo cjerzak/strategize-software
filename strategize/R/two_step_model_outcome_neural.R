@@ -1855,6 +1855,9 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        low_rank_logit_transform = "none",
                                                        low_rank_logit_bound = NULL,
                                                        low_rank_logit_softness = NULL,
+                                                       low_rank_logit_normalization = "none",
+                                                       low_rank_head_weight_target_rms = NULL,
+                                                       low_rank_rc_out_target_rms = NULL,
                                                        stage_mode = NULL,
                                                        attention_backend = "auto",
                                                        attention_dtype = "auto",
@@ -1904,6 +1907,11 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   )
   info$low_rank_logit_bound <- low_rank_logit_bound
   info$low_rank_logit_softness <- low_rank_logit_softness
+  info$low_rank_logit_normalization <- neural_normalize_low_rank_logit_normalization(
+    low_rank_logit_normalization %||% "none"
+  )
+  info$low_rank_head_weight_target_rms <- low_rank_head_weight_target_rms
+  info$low_rank_rc_out_target_rms <- low_rank_rc_out_target_rms
   if (!is.null(stage_mode)) {
     info$stage_mode <- stage_mode
   }
@@ -2089,6 +2097,9 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  low_rank_logit_transform = "none",
                                                  low_rank_logit_bound = NULL,
                                                  low_rank_logit_softness = NULL,
+                                                 low_rank_logit_normalization = "none",
+                                                 low_rank_head_weight_target_rms = NULL,
+                                                 low_rank_rc_out_target_rms = NULL,
                                                  schema_dropout = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
@@ -2193,6 +2204,11 @@ neural_make_runtime_token_model_info <- function(model_dims,
     ),
     low_rank_logit_bound = low_rank_logit_bound,
     low_rank_logit_softness = low_rank_logit_softness,
+    low_rank_logit_normalization = neural_normalize_low_rank_logit_normalization(
+      low_rank_logit_normalization %||% "none"
+    ),
+    low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     schema_dropout = neural_resolve_schema_dropout(schema_dropout)
   )
 }
@@ -2276,7 +2292,7 @@ neural_resolve_low_rank_interaction_rank <- function(value = NULL) {
 
 neural_normalize_low_rank_logit_transform <- function(value = NULL) {
   if (is.null(value)) {
-    return("softclip")
+    return("none")
   }
   if (isTRUE(value)) {
     return("softclip")
@@ -2348,6 +2364,104 @@ neural_resolve_low_rank_logit_softness <- function(value = NULL,
   as.numeric(softness)
 }
 
+neural_normalize_low_rank_logit_normalization <- function(value = NULL) {
+  if (is.null(value)) {
+    return("none")
+  }
+  if (isTRUE(value)) {
+    return("rms")
+  }
+  if (identical(value, FALSE)) {
+    return("none")
+  }
+  if (is.character(value)) {
+    mode <- tolower(as.character(value))
+    if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      if (mode %in% c("rms", "rmsnorm", "rms_norm", "rms-normalize", "rms_normalize")) {
+        return("rms")
+      }
+      if (mode %in% c("none", "identity", "off", "false")) {
+        return("none")
+      }
+    }
+  }
+  NA_character_
+}
+
+neural_resolve_low_rank_logit_normalization <- function(value = NULL,
+                                                        supplied = FALSE,
+                                                        low_rank_interaction_rank = 0L,
+                                                        pairwise_mode = FALSE,
+                                                        likelihood = "bernoulli") {
+  rank <- neural_resolve_low_rank_interaction_rank(low_rank_interaction_rank)
+  likelihood_use <- tolower(as.character(likelihood %||% "bernoulli"))
+  eligible <- rank > 0L &&
+    isTRUE(pairwise_mode) &&
+    likelihood_use %in% c("bernoulli", "mixed")
+  mode <- if (isTRUE(supplied)) {
+    neural_normalize_low_rank_logit_normalization(value)
+  } else if (isTRUE(eligible)) {
+    "rms"
+  } else {
+    "none"
+  }
+  if (length(mode) != 1L || is.na(mode) || !mode %in% c("rms", "none")) {
+    stop(
+      "'neural_mcmc_control$low_rank_logit_normalization' must be 'rms' or 'none'.",
+      call. = FALSE
+    )
+  }
+  if (!isTRUE(eligible)) {
+    return("none")
+  }
+  mode
+}
+
+neural_resolve_low_rank_head_weight_target_rms <- function(value = NULL,
+                                                           model_dims = NULL,
+                                                           normalization = "none",
+                                                           supplied = FALSE) {
+  if (!identical(normalization, "rms")) {
+    return(NULL)
+  }
+  if (!isTRUE(supplied) || is.null(value)) {
+    dims <- suppressWarnings(as.numeric(model_dims))
+    if (length(dims) != 1L || !is.finite(dims) || dims <= 0) {
+      dims <- 1
+    }
+    return(1 / (sqrt(2) * dims))
+  }
+  if (length(value) != 1L) {
+    stop("'low_rank_head_weight_target_rms' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  target <- suppressWarnings(as.numeric(value))
+  if (is.na(target) || !is.finite(target) || target <= 0) {
+    stop("'low_rank_head_weight_target_rms' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  as.numeric(target)
+}
+
+neural_resolve_low_rank_rc_out_target_rms <- function(value = NULL,
+                                                      low_rank_interaction_rank = 0L,
+                                                      normalization = "none",
+                                                      supplied = FALSE) {
+  if (!identical(normalization, "rms")) {
+    return(NULL)
+  }
+  if (!isTRUE(supplied) || is.null(value)) {
+    rank <- max(1L, neural_resolve_low_rank_interaction_rank(low_rank_interaction_rank))
+    return(1 / (sqrt(2) * rank))
+  }
+  if (length(value) != 1L) {
+    stop("'low_rank_rc_out_target_rms' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  target <- suppressWarnings(as.numeric(value))
+  if (is.na(target) || !is.finite(target) || target <= 0) {
+    stop("'low_rank_rc_out_target_rms' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  as.numeric(target)
+}
+
 neural_low_rank_logit_transform_enabled <- function(model_info = NULL) {
   if (is.null(model_info)) {
     return(FALSE)
@@ -2362,6 +2476,25 @@ neural_low_rank_logit_transform_enabled <- function(model_info = NULL) {
     identical(transform, "softclip") &&
     length(bound) == 1L && is.finite(bound) && bound > 0 &&
     length(softness) == 1L && is.finite(softness) && softness > 0
+}
+
+neural_low_rank_logit_normalization_enabled <- function(model_info = NULL,
+                                                        pairwise_obs = FALSE) {
+  if (is.null(model_info) || !isTRUE(pairwise_obs)) {
+    return(FALSE)
+  }
+  rank <- neural_low_rank_interaction_rank(model_info)
+  normalization <- neural_normalize_low_rank_logit_normalization(
+    model_info$low_rank_logit_normalization %||% "none"
+  )
+  likelihood <- tolower(as.character(model_info$likelihood %||% "bernoulli"))
+  head_target <- suppressWarnings(as.numeric(model_info$low_rank_head_weight_target_rms %||% NA_real_))
+  rc_target <- suppressWarnings(as.numeric(model_info$low_rank_rc_out_target_rms %||% NA_real_))
+  rank > 0L &&
+    identical(normalization, "rms") &&
+    likelihood %in% c("bernoulli", "mixed") &&
+    length(head_target) == 1L && is.finite(head_target) && head_target > 0 &&
+    length(rc_target) == 1L && is.finite(rc_target) && rc_target > 0
 }
 
 neural_softclip_jnp <- function(x, low, high, softness) {
@@ -3027,6 +3160,9 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$low_rank_logit_transform %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$low_rank_logit_bound %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$low_rank_logit_softness %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$low_rank_logit_normalization %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$low_rank_head_weight_target_rms %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$low_rank_rc_out_target_rms %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$max_covariate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_candidate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
@@ -3051,6 +3187,13 @@ neural_rms_norm_no_scale <- function(x, eps = 1e-6) {
   mean_sq <- strenv$jnp$mean(x * x, axis = -1L, keepdims = TRUE)
   inv_rms <- strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps))
   x * inv_rms
+}
+
+neural_column_rms_normalize <- function(W, target_rms, eps = 1e-6) {
+  W <- strenv$jnp$array(W)
+  target <- strenv$jnp$array(as.numeric(target_rms), dtype = W$dtype)
+  mean_sq <- strenv$jnp$mean(W * W, axis = 0L, keepdims = TRUE)
+  W * strenv$jnp$reciprocal(strenv$jnp$sqrt(mean_sq + eps)) * target
 }
 
 neural_full_attn_residual_core <- function(sources,
@@ -3762,17 +3905,30 @@ neural_build_muon_dimension_numbers_tree <- function(params) {
   muon_callable(params)
 }
 
-neural_linear_head <- function(phi, W_out, b_out = NULL, dtype = NULL) {
-  logits <- strenv$jnp$einsum("nm,mo->no", phi, W_out)
+neural_linear_head <- function(phi,
+                               W_out,
+                               b_out = NULL,
+                               dtype = NULL,
+                               model_info = NULL,
+                               pairwise_obs = FALSE) {
+  W_use <- W_out
+  if (isTRUE(neural_low_rank_logit_normalization_enabled(model_info, pairwise_obs = pairwise_obs))) {
+    phi <- neural_rms_norm_no_scale(phi)
+    W_use <- neural_column_rms_normalize(
+      W_out,
+      target_rms = as.numeric(model_info$low_rank_head_weight_target_rms)
+    )
+  }
+  logits <- strenv$jnp$einsum("nm,mo->no", phi, W_use)
   if (is.null(b_out)) {
     dtype_use <- dtype
     if (is.null(dtype_use)) {
-      dtype_use <- tryCatch(W_out$dtype, error = function(e) NULL)
+      dtype_use <- tryCatch(W_use$dtype, error = function(e) NULL)
     }
     if (is.null(dtype_use)) {
       dtype_use <- strenv$dtj
     }
-    b_out <- strenv$jnp$zeros(list(ai(W_out$shape[[2]])), dtype = dtype_use)
+    b_out <- strenv$jnp$zeros(list(ai(W_use$shape[[2]])), dtype = dtype_use)
   }
   logits + b_out
 }
@@ -6491,7 +6647,9 @@ neural_low_rank_interaction_logits <- function(respondent_final,
                                                candidate_final,
                                                params,
                                                out_dim = NULL,
-                                               dtype = NULL) {
+                                               dtype = NULL,
+                                               model_info = NULL,
+                                               pairwise_obs = FALSE) {
   if (is.null(params$W_rc_r) ||
       is.null(params$W_rc_c) ||
       is.null(params$W_rc_out)) {
@@ -6502,7 +6660,18 @@ neural_low_rank_interaction_logits <- function(respondent_final,
   }
   r_proj <- strenv$jnp$einsum("nm,mk->nk", respondent_final, params$W_rc_r)
   c_proj <- strenv$jnp$einsum("nm,mk->nk", candidate_final, params$W_rc_c)
-  raw <- strenv$jnp$einsum("nk,nk,ko->no", r_proj, c_proj, params$W_rc_out)
+  prod <- r_proj * c_proj
+  W_rc_out_use <- params$W_rc_out
+  if (isTRUE(neural_low_rank_logit_normalization_enabled(model_info, pairwise_obs = pairwise_obs))) {
+    r_proj <- neural_rms_norm_no_scale(r_proj)
+    c_proj <- neural_rms_norm_no_scale(c_proj)
+    prod <- neural_rms_norm_no_scale(r_proj * c_proj)
+    W_rc_out_use <- neural_column_rms_normalize(
+      params$W_rc_out,
+      target_rms = as.numeric(model_info$low_rank_rc_out_target_rms)
+    )
+  }
+  raw <- strenv$jnp$einsum("nk,ko->no", prod, W_rc_out_use)
   alpha <- neural_param_or_default(params, "alpha_rc", 1.0)
   alpha * raw
 }
@@ -6612,14 +6781,18 @@ neural_low_rank_pair_delta_prepared <- function(params,
     candidate_final = cand_left_final,
     params = params,
     out_dim = out_dim_use,
-    dtype = dtype
+    dtype = dtype,
+    model_info = model_info,
+    pairwise_obs = TRUE
   )
   right_logits <- neural_low_rank_interaction_logits(
     respondent_final = resp_readout$final,
     candidate_final = cand_right_final,
     params = params,
     out_dim = out_dim_use,
-    dtype = dtype
+    dtype = dtype,
+    model_info = model_info,
+    pairwise_obs = TRUE
   )
   left_logits - right_logits
 }
@@ -7163,7 +7336,13 @@ neural_predict_pair_cross_core_prepared <- function(params,
     return_details = TRUE
   )
   cls_out <- neural_extract_choice_representation(transformer_out)
-  neural_linear_head(cls_out, params$W_out, params$b_out)
+  neural_linear_head(
+    cls_out,
+    params$W_out,
+    params$b_out,
+    model_info = model_info,
+    pairwise_obs = TRUE
+  )
 }
 
 neural_predict_pair_core_prepared <- function(params,
@@ -7382,8 +7561,20 @@ neural_predict_pair_core_prepared <- function(params,
       )
     }
 
-    u_l <- neural_linear_head(phi_l, params$W_out, params$b_out)
-    u_r <- neural_linear_head(phi_r, params$W_out, params$b_out)
+    u_l <- neural_linear_head(
+      phi_l,
+      params$W_out,
+      params$b_out,
+      model_info = model_info,
+      pairwise_obs = TRUE
+    )
+    u_r <- neural_linear_head(
+      phi_r,
+      params$W_out,
+      params$b_out,
+      model_info = model_info,
+      pairwise_obs = TRUE
+    )
     logits <- u_l - u_r
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
       logits <- logits + neural_low_rank_pair_delta_prepared(
@@ -8065,7 +8256,13 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
       return_details = TRUE
     )
     cls_out <- neural_extract_choice_representation(transformer_out)
-    logits <- neural_linear_head(cls_out, params$W_out, params$b_out)
+    logits <- neural_linear_head(
+      cls_out,
+      params$W_out,
+      params$b_out,
+      model_info = model_info,
+      pairwise_obs = TRUE
+    )
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
       resp_readout <- neural_encode_respondent_tower_prepared(
         params = params,
@@ -8098,14 +8295,18 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
           candidate_final = left_readout$final,
           params = params,
           out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype
+          dtype = logits$dtype,
+          model_info = model_info,
+          pairwise_obs = TRUE
         ) -
         neural_low_rank_interaction_logits(
           respondent_final = resp_readout$final,
           candidate_final = right_readout$final,
           params = params,
           out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype
+          dtype = logits$dtype,
+          model_info = model_info,
+          pairwise_obs = TRUE
         )
     }
   } else {
@@ -8137,8 +8338,20 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
         phi_right, ctx_right, params, model_info$model_dims
       )
     }
-    u_left <- neural_linear_head(phi_left, params$W_out, params$b_out)
-    u_right <- neural_linear_head(phi_right, params$W_out, params$b_out)
+    u_left <- neural_linear_head(
+      phi_left,
+      params$W_out,
+      params$b_out,
+      model_info = model_info,
+      pairwise_obs = TRUE
+    )
+    u_right <- neural_linear_head(
+      phi_right,
+      params$W_out,
+      params$b_out,
+      model_info = model_info,
+      pairwise_obs = TRUE
+    )
     logits <- u_left - u_right
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
       resp_readout <- neural_encode_respondent_tower_prepared(
@@ -8172,14 +8385,18 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
           candidate_final = left_readout$final,
           params = params,
           out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype
+          dtype = logits$dtype,
+          model_info = model_info,
+          pairwise_obs = TRUE
         ) -
         neural_low_rank_interaction_logits(
           respondent_final = resp_readout$final,
           candidate_final = right_readout$final,
           params = params,
           out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype
+          dtype = logits$dtype,
+          model_info = model_info,
+          pairwise_obs = TRUE
         )
     }
     if (isTRUE(use_cross_term)) {
@@ -8737,6 +8954,15 @@ generate_ModelOutcome_neural <- function(){
   low_rank_logit_bound_supplied <- FALSE
   low_rank_logit_softness_control <- NULL
   low_rank_logit_softness_supplied <- FALSE
+  low_rank_logit_normalization_control <- NULL
+  low_rank_logit_normalization_supplied <- FALSE
+  low_rank_head_weight_target_rms_control <- NULL
+  low_rank_head_weight_target_rms_supplied <- FALSE
+  low_rank_rc_out_target_rms_control <- NULL
+  low_rank_rc_out_target_rms_supplied <- FALSE
+  low_rank_logit_normalization <- "none"
+  low_rank_head_weight_target_rms <- NULL
+  low_rank_rc_out_target_rms <- NULL
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
   neural_oos_eval_internal_flag <- exists("neural_oos_eval_internal", inherits = TRUE) &&
@@ -8942,6 +9168,18 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_softness_supplied <- TRUE
       low_rank_logit_softness_control <- neural_mcmc_control$low_rank_logit_softness
     }
+    if ("low_rank_logit_normalization" %in% names(neural_mcmc_control)) {
+      low_rank_logit_normalization_supplied <- TRUE
+      low_rank_logit_normalization_control <- neural_mcmc_control$low_rank_logit_normalization
+    }
+    if ("low_rank_head_weight_target_rms" %in% names(neural_mcmc_control)) {
+      low_rank_head_weight_target_rms_supplied <- TRUE
+      low_rank_head_weight_target_rms_control <- neural_mcmc_control$low_rank_head_weight_target_rms
+    }
+    if ("low_rank_rc_out_target_rms" %in% names(neural_mcmc_control)) {
+      low_rank_rc_out_target_rms_supplied <- TRUE
+      low_rank_rc_out_target_rms_control <- neural_mcmc_control$low_rank_rc_out_target_rms
+    }
     if (!is.null(neural_mcmc_control$warn_stage_imbalance_pct)) {
       warn_stage_imbalance_pct <- as.numeric(neural_mcmc_control$warn_stage_imbalance_pct)
     }
@@ -8962,6 +9200,9 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$low_rank_logit_transform <- NULL
     mcmc_overrides$low_rank_logit_bound <- NULL
     mcmc_overrides$low_rank_logit_softness <- NULL
+    mcmc_overrides$low_rank_logit_normalization <- NULL
+    mcmc_overrides$low_rank_head_weight_target_rms <- NULL
+    mcmc_overrides$low_rank_rc_out_target_rms <- NULL
   }
   uncertainty_scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
   if (nzchar(uncertainty_scope_env)) {
@@ -9521,7 +9762,7 @@ generate_ModelOutcome_neural <- function(){
   low_rank_logit_transform <- if (isTRUE(low_rank_logit_transform_supplied)) {
     neural_normalize_low_rank_logit_transform(low_rank_logit_transform_control)
   } else {
-    "softclip"
+    "none"
   }
   if (length(low_rank_logit_transform) != 1L ||
       is.na(low_rank_logit_transform) ||
@@ -9551,7 +9792,10 @@ generate_ModelOutcome_neural <- function(){
     low_rank_interaction_rank = low_rank_interaction_rank,
     low_rank_logit_transform = low_rank_logit_transform,
     low_rank_logit_bound = low_rank_logit_bound,
-    low_rank_logit_softness = low_rank_logit_softness
+    low_rank_logit_softness = low_rank_logit_softness,
+    low_rank_logit_normalization = low_rank_logit_normalization,
+    low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
   )
   universal_training <- neural_token_info_use$foundation_universal_training %||% NULL
   universal_enabled <- isTRUE(universal_training$enabled)
@@ -10178,6 +10422,38 @@ generate_ModelOutcome_neural <- function(){
     likelihood <- "normal"; nOutcomes <- ai(1L)
   }
   low_rank_logit_model_info$likelihood <- likelihood
+  low_rank_logit_normalization <- neural_resolve_low_rank_logit_normalization(
+    value = low_rank_logit_normalization_control,
+    supplied = low_rank_logit_normalization_supplied,
+    low_rank_interaction_rank = low_rank_interaction_rank,
+    pairwise_mode = pairwise_mode,
+    likelihood = likelihood
+  )
+  low_rank_head_weight_target_rms <- neural_resolve_low_rank_head_weight_target_rms(
+    value = low_rank_head_weight_target_rms_control,
+    model_dims = ModelDims,
+    normalization = low_rank_logit_normalization,
+    supplied = low_rank_head_weight_target_rms_supplied
+  )
+  low_rank_rc_out_target_rms <- neural_resolve_low_rank_rc_out_target_rms(
+    value = low_rank_rc_out_target_rms_control,
+    low_rank_interaction_rank = low_rank_interaction_rank,
+    normalization = low_rank_logit_normalization,
+    supplied = low_rank_rc_out_target_rms_supplied
+  )
+  if (identical(low_rank_logit_normalization, "rms") &&
+      identical(low_rank_logit_transform, "softclip") &&
+      isTRUE(low_rank_logit_transform_supplied) &&
+      !isTRUE(neural_oos_eval_internal_flag)) {
+    message(
+      "neural_mcmc_control$low_rank_logit_transform='softclip' was honored, ",
+      "but low_rank_logit_normalization='rms' already normalizes low-rank ",
+      "pairwise Bernoulli logits."
+    )
+  }
+  low_rank_logit_model_info$low_rank_logit_normalization <- low_rank_logit_normalization
+  low_rank_logit_model_info$low_rank_head_weight_target_rms <- low_rank_head_weight_target_rms
+  low_rank_logit_model_info$low_rank_rc_out_target_rms <- low_rank_rc_out_target_rms
   sigma_prior_scale <- 1.0
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     y_numeric <- if (isTRUE(universal_enabled) && any(universal_likelihood_use == "normal")) {
@@ -12244,6 +12520,9 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_transform = low_rank_logit_transform,
       low_rank_logit_bound = low_rank_logit_bound,
       low_rank_logit_softness = low_rank_logit_softness,
+      low_rank_logit_normalization = low_rank_logit_normalization,
+      low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+      low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
       schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
@@ -12373,7 +12652,13 @@ generate_ModelOutcome_neural <- function(){
       token_mask <- seq_info$mask
       transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       cls_out <- neural_extract_choice_representation(transformer_out)
-      neural_linear_head(cls_out, W_out, b_out)
+      neural_linear_head(
+        cls_out,
+        W_out,
+        b_out,
+        model_info = model_info_local,
+        pairwise_obs = TRUE
+      )
     }
 
     encode_candidate <- function(Xa, pa, resp_p, resp_c, resp_c_present = NULL,
@@ -12569,8 +12854,20 @@ generate_ModelOutcome_neural <- function(){
             phi_r, ctx_right, params_view, transformer_model_info$model_dims
           )
         }
-        u_l <- neural_linear_head(phi_l, W_out, b_out)
-        u_r <- neural_linear_head(phi_r, W_out, b_out)
+        u_l <- neural_linear_head(
+          phi_l,
+          W_out,
+          b_out,
+          model_info = model_info_local,
+          pairwise_obs = TRUE
+        )
+        u_r <- neural_linear_head(
+          phi_r,
+          W_out,
+          b_out,
+          model_info = model_info_local,
+          pairwise_obs = TRUE
+        )
         logits <- u_l - u_r
         if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
           logits <- logits + neural_low_rank_pair_delta_prepared(
@@ -12897,6 +13194,9 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_transform = low_rank_logit_transform,
       low_rank_logit_bound = low_rank_logit_bound,
       low_rank_logit_softness = low_rank_logit_softness,
+      low_rank_logit_normalization = low_rank_logit_normalization,
+      low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+      low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
       schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
@@ -14690,7 +14990,10 @@ generate_ModelOutcome_neural <- function(){
     low_rank_interaction_rank = low_rank_interaction_rank,
     low_rank_logit_transform = low_rank_logit_transform,
     low_rank_logit_bound = low_rank_logit_bound,
-    low_rank_logit_softness = low_rank_logit_softness
+    low_rank_logit_softness = low_rank_logit_softness,
+    low_rank_logit_normalization = low_rank_logit_normalization,
+    low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
   )
   validation_model_info <- neural_set_pairwise_context_model_info(
     info = validation_model_info,
@@ -18057,7 +18360,10 @@ generate_ModelOutcome_neural <- function(){
     low_rank_interaction_rank = low_rank_interaction_rank,
     low_rank_logit_transform = low_rank_logit_transform,
     low_rank_logit_bound = low_rank_logit_bound,
-    low_rank_logit_softness = low_rank_logit_softness
+    low_rank_logit_softness = low_rank_logit_softness,
+    low_rank_logit_normalization = low_rank_logit_normalization,
+    low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
   )
   predict_model_info <- neural_set_pairwise_context_model_info(
     info = predict_model_info,
@@ -18913,6 +19219,9 @@ generate_ModelOutcome_neural <- function(){
     low_rank_logit_transform = low_rank_logit_transform,
     low_rank_logit_bound = low_rank_logit_bound,
     low_rank_logit_softness = low_rank_logit_softness,
+    low_rank_logit_normalization = low_rank_logit_normalization,
+    low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     schema_dropout = schema_dropout,
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),

@@ -2579,6 +2579,17 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$low_rank_logit_softness)) {
     out$low_rank_logit_softness <- as.numeric(out$low_rank_logit_softness)
   }
+  if (!is.null(out$low_rank_logit_normalization)) {
+    out$low_rank_logit_normalization <- neural_normalize_low_rank_logit_normalization(
+      out$low_rank_logit_normalization
+    )
+  }
+  if (!is.null(out$low_rank_head_weight_target_rms)) {
+    out$low_rank_head_weight_target_rms <- as.numeric(out$low_rank_head_weight_target_rms)
+  }
+  if (!is.null(out$low_rank_rc_out_target_rms)) {
+    out$low_rank_rc_out_target_rms <- as.numeric(out$low_rank_rc_out_target_rms)
+  }
   if (!is.null(out$attention_backend)) {
     out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
   }
@@ -2641,6 +2652,31 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     out$low_rank_logit_transform <- "none"
     out$low_rank_logit_bound <- NULL
     out$low_rank_logit_softness <- NULL
+  }
+  if (is.null(out$low_rank_logit_normalization)) {
+    out$low_rank_logit_normalization <- "none"
+  } else {
+    out$low_rank_logit_normalization <- neural_normalize_low_rank_logit_normalization(
+      out$low_rank_logit_normalization
+    )
+    if (is.na(out$low_rank_logit_normalization)) {
+      out$low_rank_logit_normalization <- "none"
+    }
+  }
+  if (out$low_rank_interaction_rank <= 0L ||
+      !identical(out$low_rank_logit_normalization, "rms") ||
+      is.null(out$low_rank_head_weight_target_rms) ||
+      is.null(out$low_rank_rc_out_target_rms) ||
+      !is.finite(as.numeric(out$low_rank_head_weight_target_rms)) ||
+      !is.finite(as.numeric(out$low_rank_rc_out_target_rms)) ||
+      as.numeric(out$low_rank_head_weight_target_rms) <= 0 ||
+      as.numeric(out$low_rank_rc_out_target_rms) <= 0) {
+    out$low_rank_logit_normalization <- "none"
+    out$low_rank_head_weight_target_rms <- NULL
+    out$low_rank_rc_out_target_rms <- NULL
+  } else {
+    out$low_rank_head_weight_target_rms <- as.numeric(out$low_rank_head_weight_target_rms)
+    out$low_rank_rc_out_target_rms <- as.numeric(out$low_rank_rc_out_target_rms)
   }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(
@@ -2821,6 +2857,31 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   } else {
     out$low_rank_logit_bound <- as.numeric(out$low_rank_logit_bound)
     out$low_rank_logit_softness <- as.numeric(out$low_rank_logit_softness)
+  }
+  if (is.null(out$low_rank_logit_normalization)) {
+    out$low_rank_logit_normalization <- "none"
+  } else {
+    out$low_rank_logit_normalization <- neural_normalize_low_rank_logit_normalization(
+      out$low_rank_logit_normalization
+    )
+    if (is.na(out$low_rank_logit_normalization)) {
+      out$low_rank_logit_normalization <- "none"
+    }
+  }
+  if (out$low_rank_interaction_rank <= 0L ||
+      !identical(out$low_rank_logit_normalization, "rms") ||
+      is.null(out$low_rank_head_weight_target_rms) ||
+      is.null(out$low_rank_rc_out_target_rms) ||
+      !is.finite(as.numeric(out$low_rank_head_weight_target_rms)) ||
+      !is.finite(as.numeric(out$low_rank_rc_out_target_rms)) ||
+      as.numeric(out$low_rank_head_weight_target_rms) <= 0 ||
+      as.numeric(out$low_rank_rc_out_target_rms) <= 0) {
+    out$low_rank_logit_normalization <- "none"
+    out$low_rank_head_weight_target_rms <- NULL
+    out$low_rank_rc_out_target_rms <- NULL
+  } else {
+    out$low_rank_head_weight_target_rms <- as.numeric(out$low_rank_head_weight_target_rms)
+    out$low_rank_rc_out_target_rms <- as.numeric(out$low_rank_rc_out_target_rms)
   }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(

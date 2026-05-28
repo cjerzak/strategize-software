@@ -301,11 +301,15 @@ cs2step_python_module_probe <- function(python, modules) {
 }
 
 cs2step_backend_core_modules <- function() {
-  c("jax", "numpyro", "optax", "equinox", "numpy", "orbax.checkpoint")
+  modules <- c("jax", "numpyro", "optax", "equinox", "numpy", "orbax.checkpoint")
+  if (isTRUE(cs2step_backend_host_info()$is_macos)) {
+    modules <- c(modules, "mlx_embeddings", "mlx.core")
+  }
+  modules
 }
 
 cs2step_backend_core_pip_packages <- function() {
-  c(
+  packages <- c(
     jax = "jax",
     numpyro = "numpyro",
     optax = "optax",
@@ -313,6 +317,10 @@ cs2step_backend_core_pip_packages <- function() {
     numpy = "numpy",
     "orbax.checkpoint" = "orbax-checkpoint"
   )
+  if (isTRUE(cs2step_backend_host_info()$is_macos)) {
+    packages <- c(packages, mlx_embeddings = "mlx-embeddings")
+  }
+  packages
 }
 
 cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "auto") {

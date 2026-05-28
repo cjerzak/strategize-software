@@ -575,6 +575,9 @@ test_that("legacy neural model upgrades use portable attention defaults", {
   testthat::expect_identical(upgraded$low_rank_logit_transform, "none")
   testthat::expect_null(upgraded$low_rank_logit_bound)
   testthat::expect_null(upgraded$low_rank_logit_softness)
+  testthat::expect_identical(upgraded$low_rank_logit_normalization, "none")
+  testthat::expect_null(upgraded$low_rank_head_weight_target_rms)
+  testthat::expect_null(upgraded$low_rank_rc_out_target_rms)
   testthat::expect_false(upgraded$has_respondent_cls)
   testthat::expect_false(upgraded$has_candidate_cls)
   testthat::expect_false(upgraded$has_low_rank_interaction)
@@ -610,6 +613,9 @@ test_that("neural model packing preserves readout and low-rank metadata", {
     low_rank_logit_transform = "softclip",
     low_rank_logit_bound = 1.5,
     low_rank_logit_softness = 0.25,
+    low_rank_logit_normalization = "rms",
+    low_rank_head_weight_target_rms = 1 / (sqrt(2) * 16),
+    low_rank_rc_out_target_rms = 1 / (sqrt(2) * 8),
     has_respondent_cls = TRUE,
     has_candidate_cls = TRUE,
     has_low_rank_interaction = TRUE,
@@ -622,6 +628,9 @@ test_that("neural model packing preserves readout and low-rank metadata", {
   testthat::expect_identical(packed$low_rank_logit_transform, "softclip")
   testthat::expect_equal(packed$low_rank_logit_bound, 1.5)
   testthat::expect_equal(packed$low_rank_logit_softness, 0.25)
+  testthat::expect_identical(packed$low_rank_logit_normalization, "rms")
+  testthat::expect_equal(packed$low_rank_head_weight_target_rms, 1 / (sqrt(2) * 16))
+  testthat::expect_equal(packed$low_rank_rc_out_target_rms, 1 / (sqrt(2) * 8))
   testthat::expect_true(packed$has_respondent_cls)
   testthat::expect_true(packed$has_candidate_cls)
   testthat::expect_true(packed$has_low_rank_interaction)
