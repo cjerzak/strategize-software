@@ -220,9 +220,10 @@ default additive/ReZero residual path with full depth-wise attention over
 all prior layer outputs plus a final depth-attentive readout; use
 \code{"standard"} (default) to keep the
 existing residual formulation. Rank-positive low-rank Bernoulli pairwise
-logits use a smooth softclip bound by default; set
-\code{neural_mcmc_control$low_rank_logit_transform = "none"} or
-\code{low_rank_logit_bound = NULL} to disable it.
+logits use RMS logit normalization by default; set
+\code{neural_mcmc_control$low_rank_logit_normalization = "none"} to
+disable it. Explicit \code{low_rank_logit_transform = "softclip"} remains
+supported for compatibility.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
