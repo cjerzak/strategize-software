@@ -385,6 +385,55 @@ test_that("validate_strategize_inputs rejects invalid cross_candidate_encoder va
   )
 })
 
+test_that("validate_strategize_inputs accepts low-rank logit control options", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_true(validate_strategize_inputs(
+    Y = Y, W = W, lambda = 0.1,
+    neural_mcmc_control = list(
+      low_rank_logit_transform = "softclip",
+      low_rank_logit_bound = 1.5,
+      low_rank_logit_softness = 0.25
+    )
+  ))
+  expect_true(validate_strategize_inputs(
+    Y = Y, W = W, lambda = 0.1,
+    neural_mcmc_control = list(low_rank_logit_transform = "none")
+  ))
+})
+
+test_that("validate_strategize_inputs rejects invalid low-rank logit controls", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(low_rank_logit_transform = "clip")
+    ),
+    "low_rank_logit_transform"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(low_rank_logit_bound = "wide")
+    ),
+    "low_rank_logit_bound"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(low_rank_logit_softness = 0)
+    ),
+    "low_rank_logit_softness"
+  )
+})
+
 test_that("validate_strategize_inputs accepts qk_norm options", {
   skip_on_cran()
 

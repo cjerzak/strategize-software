@@ -1644,7 +1644,9 @@ cs2step_neural_coerce_prediction_output <- function(pred,
                                                     likelihood,
                                                     target_likelihood = NULL,
                                                     target_n_outcomes = NULL,
-                                                    sigma = NULL) {
+                                                    sigma = NULL,
+                                                    model_info = NULL,
+                                                    pairwise_prediction = FALSE) {
   if (identical(likelihood, "mixed")) {
     logits <- if (is.list(pred) && !is.null(pred$logits)) {
       pred$logits
@@ -1664,6 +1666,12 @@ cs2step_neural_coerce_prediction_output <- function(pred,
       target_n_outcomes <- 1L
     }
     if (identical(target_likelihood, "bernoulli")) {
+      if (isTRUE(pairwise_prediction)) {
+        logits[, 1L] <- neural_apply_low_rank_logit_transform_r(
+          logits[, 1L],
+          model_info
+        )
+      }
       return(stats::plogis(logits[, 1L]))
     }
     if (identical(target_likelihood, "categorical")) {
@@ -1736,7 +1744,9 @@ cs2step_neural_predict_pair_prepared <- function(params,
     likelihood = model_info$likelihood,
     target_likelihood = target_likelihood,
     target_n_outcomes = target_n_outcomes,
-    sigma = params$sigma %||% NULL
+    sigma = params$sigma %||% NULL,
+    model_info = model_info,
+    pairwise_prediction = TRUE
   )
 }
 
@@ -1764,7 +1774,9 @@ cs2step_neural_predict_single_prepared <- function(params,
     likelihood = model_info$likelihood,
     target_likelihood = target_likelihood,
     target_n_outcomes = target_n_outcomes,
-    sigma = params$sigma %||% NULL
+    sigma = params$sigma %||% NULL,
+    model_info = model_info,
+    pairwise_prediction = FALSE
   )
 }
 
@@ -2556,6 +2568,17 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
       out$low_rank_interaction_rank
     )
   }
+  if (!is.null(out$low_rank_logit_transform)) {
+    out$low_rank_logit_transform <- neural_normalize_low_rank_logit_transform(
+      out$low_rank_logit_transform
+    )
+  }
+  if (!is.null(out$low_rank_logit_bound)) {
+    out$low_rank_logit_bound <- as.numeric(out$low_rank_logit_bound)
+  }
+  if (!is.null(out$low_rank_logit_softness)) {
+    out$low_rank_logit_softness <- as.numeric(out$low_rank_logit_softness)
+  }
   if (!is.null(out$attention_backend)) {
     out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
   }
@@ -2597,6 +2620,28 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   out$low_rank_interaction_rank <- neural_resolve_low_rank_interaction_rank(
     out$low_rank_interaction_rank %||% 0L
   )
+  if (is.null(out$low_rank_logit_transform)) {
+    out$low_rank_logit_transform <- "none"
+  } else {
+    out$low_rank_logit_transform <- neural_normalize_low_rank_logit_transform(
+      out$low_rank_logit_transform
+    )
+    if (is.na(out$low_rank_logit_transform)) {
+      out$low_rank_logit_transform <- "none"
+    }
+  }
+  if (out$low_rank_interaction_rank <= 0L ||
+      !identical(out$low_rank_logit_transform, "softclip") ||
+      is.null(out$low_rank_logit_bound) ||
+      is.null(out$low_rank_logit_softness) ||
+      !is.finite(as.numeric(out$low_rank_logit_bound)) ||
+      !is.finite(as.numeric(out$low_rank_logit_softness)) ||
+      as.numeric(out$low_rank_logit_bound) <= 0 ||
+      as.numeric(out$low_rank_logit_softness) <= 0) {
+    out$low_rank_logit_transform <- "none"
+    out$low_rank_logit_bound <- NULL
+    out$low_rank_logit_softness <- NULL
+  }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(
       as.character(out$token_family_levels),
@@ -2751,6 +2796,31 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
     out$low_rank_interaction_rank <- neural_resolve_low_rank_interaction_rank(
       out$low_rank_interaction_rank
     )
+  }
+  if (is.null(out$low_rank_logit_transform)) {
+    out$low_rank_logit_transform <- "none"
+  } else {
+    out$low_rank_logit_transform <- neural_normalize_low_rank_logit_transform(
+      out$low_rank_logit_transform
+    )
+    if (is.na(out$low_rank_logit_transform)) {
+      out$low_rank_logit_transform <- "none"
+    }
+  }
+  if (out$low_rank_interaction_rank <= 0L ||
+      !identical(out$low_rank_logit_transform, "softclip") ||
+      is.null(out$low_rank_logit_bound) ||
+      is.null(out$low_rank_logit_softness) ||
+      !is.finite(as.numeric(out$low_rank_logit_bound)) ||
+      !is.finite(as.numeric(out$low_rank_logit_softness)) ||
+      as.numeric(out$low_rank_logit_bound) <= 0 ||
+      as.numeric(out$low_rank_logit_softness) <= 0) {
+    out$low_rank_logit_transform <- "none"
+    out$low_rank_logit_bound <- NULL
+    out$low_rank_logit_softness <- NULL
+  } else {
+    out$low_rank_logit_bound <- as.numeric(out$low_rank_logit_bound)
+    out$low_rank_logit_softness <- as.numeric(out$low_rank_logit_softness)
   }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(

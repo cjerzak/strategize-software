@@ -1852,6 +1852,9 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        covariate_value_text_present = NULL,
                                                        covariate_value_type = NULL,
                                                        low_rank_interaction_rank = 0L,
+                                                       low_rank_logit_transform = "none",
+                                                       low_rank_logit_bound = NULL,
+                                                       low_rank_logit_softness = NULL,
                                                        stage_mode = NULL,
                                                        attention_backend = "auto",
                                                        attention_dtype = "auto",
@@ -1896,6 +1899,11 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   info$low_rank_interaction_rank <- neural_resolve_low_rank_interaction_rank(
     low_rank_interaction_rank
   )
+  info$low_rank_logit_transform <- neural_normalize_low_rank_logit_transform(
+    low_rank_logit_transform %||% "none"
+  )
+  info$low_rank_logit_bound <- low_rank_logit_bound
+  info$low_rank_logit_softness <- low_rank_logit_softness
   if (!is.null(stage_mode)) {
     info$stage_mode <- stage_mode
   }
@@ -2078,6 +2086,9 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  default_time_embedding = NULL,
                                                  default_time_present = FALSE,
                                                  low_rank_interaction_rank = 0L,
+                                                 low_rank_logit_transform = "none",
+                                                 low_rank_logit_bound = NULL,
+                                                 low_rank_logit_softness = NULL,
                                                  schema_dropout = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
@@ -2177,6 +2188,11 @@ neural_make_runtime_token_model_info <- function(model_dims,
     low_rank_interaction_rank = neural_resolve_low_rank_interaction_rank(
       low_rank_interaction_rank
     ),
+    low_rank_logit_transform = neural_normalize_low_rank_logit_transform(
+      low_rank_logit_transform %||% "none"
+    ),
+    low_rank_logit_bound = low_rank_logit_bound,
+    low_rank_logit_softness = low_rank_logit_softness,
     schema_dropout = neural_resolve_schema_dropout(schema_dropout)
   )
 }
@@ -2256,6 +2272,169 @@ neural_resolve_low_rank_interaction_rank <- function(value = NULL) {
     )
   }
   as.integer(rank)
+}
+
+neural_normalize_low_rank_logit_transform <- function(value = NULL) {
+  if (is.null(value)) {
+    return("softclip")
+  }
+  if (isTRUE(value)) {
+    return("softclip")
+  }
+  if (identical(value, FALSE)) {
+    return("none")
+  }
+  if (is.character(value)) {
+    mode <- tolower(as.character(value))
+    if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      if (mode %in% c("softclip", "soft_clip", "soft-clip")) {
+        return("softclip")
+      }
+      if (mode %in% c("none", "identity", "off", "false")) {
+        return("none")
+      }
+    }
+  }
+  NA_character_
+}
+
+neural_resolve_low_rank_logit_bound <- function(value = NULL,
+                                                low_rank_interaction_rank = 0L,
+                                                supplied = FALSE,
+                                                transform = "softclip") {
+  transform <- neural_normalize_low_rank_logit_transform(transform)
+  if (!identical(transform, "softclip")) {
+    return(NULL)
+  }
+  rank <- neural_resolve_low_rank_interaction_rank(low_rank_interaction_rank)
+  if (rank <= 0L) {
+    return(NULL)
+  }
+  if (!isTRUE(supplied)) {
+    return(1.5)
+  }
+  if (is.null(value)) {
+    return(NULL)
+  }
+  if (length(value) != 1L) {
+    stop("'low_rank_logit_bound' must be a scalar numeric value.", call. = FALSE)
+  }
+  bound <- suppressWarnings(as.numeric(value))
+  if (is.na(bound)) {
+    stop("'low_rank_logit_bound' must be a scalar numeric value.", call. = FALSE)
+  }
+  if (!is.finite(bound) || bound <= 0) {
+    return(NULL)
+  }
+  as.numeric(bound)
+}
+
+neural_resolve_low_rank_logit_softness <- function(value = NULL,
+                                                   bound = NULL,
+                                                   supplied = FALSE) {
+  if (is.null(bound)) {
+    return(NULL)
+  }
+  if (!isTRUE(supplied) || is.null(value)) {
+    return(as.numeric(bound) / 6)
+  }
+  if (length(value) != 1L) {
+    stop("'low_rank_logit_softness' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  softness <- suppressWarnings(as.numeric(value))
+  if (is.na(softness) || !is.finite(softness) || softness <= 0) {
+    stop("'low_rank_logit_softness' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  as.numeric(softness)
+}
+
+neural_low_rank_logit_transform_enabled <- function(model_info = NULL) {
+  if (is.null(model_info)) {
+    return(FALSE)
+  }
+  rank <- neural_low_rank_interaction_rank(model_info)
+  transform <- neural_normalize_low_rank_logit_transform(
+    model_info$low_rank_logit_transform %||% "none"
+  )
+  bound <- suppressWarnings(as.numeric(model_info$low_rank_logit_bound %||% NA_real_))
+  softness <- suppressWarnings(as.numeric(model_info$low_rank_logit_softness %||% NA_real_))
+  rank > 0L &&
+    identical(transform, "softclip") &&
+    length(bound) == 1L && is.finite(bound) && bound > 0 &&
+    length(softness) == 1L && is.finite(softness) && softness > 0
+}
+
+neural_softclip_jnp <- function(x, low, high, softness) {
+  s <- strenv$jnp$array(as.numeric(softness), dtype = x$dtype %||% strenv$dtj)
+  low_j <- strenv$jnp$array(as.numeric(low), dtype = x$dtype %||% strenv$dtj)
+  high_j <- strenv$jnp$array(as.numeric(high), dtype = x$dtype %||% strenv$dtj)
+  clipped <- low_j + s * strenv$jax$nn$softplus((x - low_j) / s) -
+    s * strenv$jax$nn$softplus((x - high_j) / s)
+  # Keep the bounded forward value while avoiding near-zero tail gradients for
+  # already-saturated low-rank logits.
+  x + strenv$jax$lax$stop_gradient(clipped - x)
+}
+
+neural_apply_low_rank_logit_transform <- function(logits, model_info = NULL) {
+  if (!isTRUE(neural_low_rank_logit_transform_enabled(model_info))) {
+    return(logits)
+  }
+  bound <- as.numeric(model_info$low_rank_logit_bound)
+  softness <- as.numeric(model_info$low_rank_logit_softness)
+  neural_softclip_jnp(
+    logits,
+    low = -bound,
+    high = bound,
+    softness = softness
+  )
+}
+
+neural_apply_pairwise_classification_logit_transform <- function(logits,
+                                                                 model_info = NULL,
+                                                                 likelihood_code_obs = NULL,
+                                                                 pairwise_obs = FALSE) {
+  if (!isTRUE(pairwise_obs) ||
+      !isTRUE(neural_low_rank_logit_transform_enabled(model_info))) {
+    return(logits)
+  }
+  likelihood <- tolower(as.character(model_info$likelihood %||% "bernoulli"))
+  if (identical(likelihood, "bernoulli")) {
+    return(neural_apply_low_rank_logit_transform(logits, model_info))
+  }
+  if (!identical(likelihood, "mixed") || is.null(likelihood_code_obs)) {
+    return(logits)
+  }
+
+  out_dim <- ai(logits$shape[[2]])
+  if (out_dim < 1L) {
+    return(logits)
+  }
+  first <- strenv$jnp$take(logits, ai(0L), axis = 1L)
+  first_soft <- neural_apply_low_rank_logit_transform(first, model_info)
+  bern_mask <- strenv$jnp$equal(likelihood_code_obs, ai(0L))
+  first_use <- strenv$jnp$where(bern_mask, first_soft, first)
+  first_col <- strenv$jnp$reshape(first_use, list(-1L, 1L))
+  if (out_dim == 1L) {
+    return(first_col)
+  }
+  rest <- strenv$jnp$take(logits, strenv$jnp$arange(ai(1L), ai(out_dim)), axis = 1L)
+  strenv$jnp$concatenate(list(first_col, rest), axis = 1L)
+}
+
+neural_softplus_numeric <- function(x) {
+  pmax(x, 0) + log1p(exp(-abs(x)))
+}
+
+neural_apply_low_rank_logit_transform_r <- function(logits, model_info = NULL) {
+  if (!isTRUE(neural_low_rank_logit_transform_enabled(model_info))) {
+    return(logits)
+  }
+  bound <- as.numeric(model_info$low_rank_logit_bound)
+  softness <- as.numeric(model_info$low_rank_logit_softness)
+  low <- -bound
+  high <- bound
+  low + softness * neural_softplus_numeric((logits - low) / softness) -
+    softness * neural_softplus_numeric((logits - high) / softness)
 }
 
 neural_low_rank_interaction_rank <- function(model_info = NULL) {
@@ -2845,6 +3024,9 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$covariate_value_encoding), error = function(e) "na"),
     tryCatch(as.character(model_info$shared_projection_value_encoder), error = function(e) "na"),
     tryCatch(as.character(neural_low_rank_interaction_rank(model_info)), error = function(e) "na"),
+    tryCatch(as.character(model_info$low_rank_logit_transform %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$low_rank_logit_bound %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$low_rank_logit_softness %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$max_covariate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_candidate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
@@ -7238,6 +7420,11 @@ neural_predict_pair_core_prepared <- function(params,
     }
   }
 
+  logits <- neural_apply_pairwise_classification_logit_transform(
+    logits,
+    model_info = model_info,
+    pairwise_obs = TRUE
+  )
   if (isTRUE(return_logits)) {
     return(logits)
   }
@@ -8001,6 +8188,11 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                         out_dim = ai(params$W_out$shape[[2]]))
     }
   }
+  logits <- neural_apply_pairwise_classification_logit_transform(
+    logits,
+    model_info = model_info,
+    pairwise_obs = TRUE
+  )
   if (return_logits) {
     return(logits)
   }
@@ -8538,6 +8730,13 @@ generate_ModelOutcome_neural <- function(){
   attention_padding_multiple <- 8L
   cross_candidate_encoder_mode <- "none"
   cross_candidate_encoder_supplied <- FALSE
+  cross_candidate_encoder_note <- NULL
+  low_rank_logit_transform_control <- NULL
+  low_rank_logit_transform_supplied <- FALSE
+  low_rank_logit_bound_control <- NULL
+  low_rank_logit_bound_supplied <- FALSE
+  low_rank_logit_softness_control <- NULL
+  low_rank_logit_softness_supplied <- FALSE
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
   neural_oos_eval_internal_flag <- exists("neural_oos_eval_internal", inherits = TRUE) &&
@@ -8731,6 +8930,18 @@ generate_ModelOutcome_neural <- function(){
         neural_mcmc_control$cross_candidate_encoder
       )
     }
+    if ("low_rank_logit_transform" %in% names(neural_mcmc_control)) {
+      low_rank_logit_transform_supplied <- TRUE
+      low_rank_logit_transform_control <- neural_mcmc_control$low_rank_logit_transform
+    }
+    if ("low_rank_logit_bound" %in% names(neural_mcmc_control)) {
+      low_rank_logit_bound_supplied <- TRUE
+      low_rank_logit_bound_control <- neural_mcmc_control$low_rank_logit_bound
+    }
+    if ("low_rank_logit_softness" %in% names(neural_mcmc_control)) {
+      low_rank_logit_softness_supplied <- TRUE
+      low_rank_logit_softness_control <- neural_mcmc_control$low_rank_logit_softness
+    }
     if (!is.null(neural_mcmc_control$warn_stage_imbalance_pct)) {
       warn_stage_imbalance_pct <- as.numeric(neural_mcmc_control$warn_stage_imbalance_pct)
     }
@@ -8748,6 +8959,9 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$attention_dtype <- NULL
     mcmc_overrides$attention_padding_multiple <- NULL
     mcmc_overrides$cross_candidate_encoder <- NULL
+    mcmc_overrides$low_rank_logit_transform <- NULL
+    mcmc_overrides$low_rank_logit_bound <- NULL
+    mcmc_overrides$low_rank_logit_softness <- NULL
   }
   uncertainty_scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
   if (nzchar(uncertainty_scope_env)) {
@@ -8961,12 +9175,7 @@ generate_ModelOutcome_neural <- function(){
   pairwise_mode <- isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0
   if (!isTRUE(pairwise_mode)) {
     cross_candidate_encoder_mode <- "none"
-  } else if (!isTRUE(cross_candidate_encoder_supplied)) {
-    cross_candidate_encoder_mode <- "term"
   }
-  use_cross_term <- identical(cross_candidate_encoder_mode, "term")
-  use_cross_attn <- identical(cross_candidate_encoder_mode, "attn")
-  use_cross_encoder <- identical(cross_candidate_encoder_mode, "full")
   use_full_attn_residual <- identical(residual_mode, "full_attn")
   use_matchup_token <- FALSE
 
@@ -9309,6 +9518,41 @@ generate_ModelOutcome_neural <- function(){
       0L
   )
   neural_token_info_use$low_rank_interaction_rank <- low_rank_interaction_rank
+  low_rank_logit_transform <- if (isTRUE(low_rank_logit_transform_supplied)) {
+    neural_normalize_low_rank_logit_transform(low_rank_logit_transform_control)
+  } else {
+    "softclip"
+  }
+  if (length(low_rank_logit_transform) != 1L ||
+      is.na(low_rank_logit_transform) ||
+      !low_rank_logit_transform %in% c("softclip", "none")) {
+    stop(
+      "'neural_mcmc_control$low_rank_logit_transform' must be 'softclip' or 'none'.",
+      call. = FALSE
+    )
+  }
+  low_rank_logit_bound <- neural_resolve_low_rank_logit_bound(
+    value = low_rank_logit_bound_control,
+    low_rank_interaction_rank = low_rank_interaction_rank,
+    supplied = low_rank_logit_bound_supplied,
+    transform = low_rank_logit_transform
+  )
+  low_rank_logit_softness <- neural_resolve_low_rank_logit_softness(
+    value = low_rank_logit_softness_control,
+    bound = low_rank_logit_bound,
+    supplied = low_rank_logit_softness_supplied
+  )
+  if (is.null(low_rank_logit_bound)) {
+    low_rank_logit_transform <- "none"
+    low_rank_logit_softness <- NULL
+  }
+  low_rank_logit_model_info <- list(
+    likelihood = "bernoulli",
+    low_rank_interaction_rank = low_rank_interaction_rank,
+    low_rank_logit_transform = low_rank_logit_transform,
+    low_rank_logit_bound = low_rank_logit_bound,
+    low_rank_logit_softness = low_rank_logit_softness
+  )
   universal_training <- neural_token_info_use$foundation_universal_training %||% NULL
   universal_enabled <- isTRUE(universal_training$enabled)
   universal_task_mode_all <- as.character(universal_training$task_mode_by_row %||% character(0))
@@ -9560,6 +9804,25 @@ generate_ModelOutcome_neural <- function(){
     experiment_index_use <- experiment_index_all
     experiment_index_single_use <- experiment_index_use
   }
+
+  if (!isTRUE(pairwise_mode)) {
+    cross_candidate_encoder_mode <- "none"
+  } else if (!isTRUE(cross_candidate_encoder_supplied)) {
+    cross_candidate_encoder_mode <- if (low_rank_interaction_rank > 0L) "none" else "term"
+  } else if (identical(cross_candidate_encoder_mode, "term") &&
+             low_rank_interaction_rank > 0L) {
+    cross_candidate_encoder_note <- paste(
+      "Explicit cross_candidate_encoder='term' was honored with",
+      "low_rank_interaction_rank > 0; this combination can be unstable."
+    )
+    if (!isTRUE(neural_oos_eval_internal_flag)) {
+      message(cross_candidate_encoder_note)
+    }
+  }
+  use_cross_term <- identical(cross_candidate_encoder_mode, "term")
+  use_cross_attn <- identical(cross_candidate_encoder_mode, "attn")
+  use_cross_encoder <- identical(cross_candidate_encoder_mode, "full")
+
   universal_task_mode_use <- NULL
   universal_likelihood_use <- NULL
   universal_n_outcomes_use <- NULL
@@ -9914,6 +10177,7 @@ generate_ModelOutcome_neural <- function(){
   } else {
     likelihood <- "normal"; nOutcomes <- ai(1L)
   }
+  low_rank_logit_model_info$likelihood <- likelihood
   sigma_prior_scale <- 1.0
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     y_numeric <- if (isTRUE(universal_enabled) && any(universal_likelihood_use == "normal")) {
@@ -10087,11 +10351,36 @@ generate_ModelOutcome_neural <- function(){
     sigma_vec
   }
 
+  mixed_pairwise_bernoulli_logit_r <- function(logits, row_idx, task_mode_obs = NULL) {
+    z <- as.numeric(logits[row_idx, 1L])
+    if (!length(z)) {
+      return(z)
+    }
+    pairwise_idx <- if (is.null(task_mode_obs)) {
+      rep(isTRUE(pairwise_mode), length(row_idx))
+    } else {
+      task_mode_chr <- tolower(as.character(task_mode_obs))
+      if (length(task_mode_chr) == nrow(logits)) {
+        task_mode_chr <- task_mode_chr[row_idx]
+      }
+      rep_len(task_mode_chr == "pairwise", length(row_idx))
+    }
+    pairwise_idx[is.na(pairwise_idx)] <- FALSE
+    if (any(pairwise_idx)) {
+      z[pairwise_idx] <- neural_apply_low_rank_logit_transform_r(
+        z[pairwise_idx],
+        low_rank_logit_model_info
+      )
+    }
+    z
+  }
+
   mixed_row_log_prob_r <- function(logits,
                                    y,
                                    likelihood_code_obs,
                                    n_outcomes_obs,
-                                   sigma = NULL) {
+                                   sigma = NULL,
+                                   task_mode_obs = NULL) {
     logits <- as.matrix(logits)
     n <- nrow(logits)
     if (n < 1L) {
@@ -10105,7 +10394,11 @@ generate_ModelOutcome_neural <- function(){
 
     bern_idx <- which(code == 0L)
     if (length(bern_idx) > 0L) {
-      z <- as.numeric(logits[bern_idx, 1L])
+      z <- mixed_pairwise_bernoulli_logit_r(
+        logits,
+        bern_idx,
+        task_mode_obs = task_mode_obs
+      )
       yb <- y_num[bern_idx]
       keep <- is.finite(z) & is.finite(yb) & yb %in% c(0, 1)
       if (any(keep)) {
@@ -10163,6 +10456,7 @@ generate_ModelOutcome_neural <- function(){
                                               pred_eval,
                                               likelihood_code_obs,
                                               n_outcomes_obs,
+                                              task_mode_obs = NULL,
                                               threshold = 0.5) {
     logits <- as.matrix(pred_eval$logits %||% pred_eval)
     sigma_vec <- mixed_sigma_vector_r(pred_eval$sigma %||% NULL, nrow(logits))
@@ -10174,7 +10468,8 @@ generate_ModelOutcome_neural <- function(){
       y = y_num,
       likelihood_code_obs = code,
       n_outcomes_obs = n_outcomes_obs,
-      sigma = sigma_vec
+      sigma = sigma_vec,
+      task_mode_obs = task_mode_obs
     )
     keep <- is.finite(log_prob)
     out <- list(
@@ -10187,7 +10482,11 @@ generate_ModelOutcome_neural <- function(){
 
     bern_idx <- which(code == 0L)
     if (length(bern_idx) > 0L) {
-      prob <- stats::plogis(as.numeric(logits[bern_idx, 1L]))
+      prob <- stats::plogis(mixed_pairwise_bernoulli_logit_r(
+        logits,
+        bern_idx,
+        task_mode_obs = task_mode_obs
+      ))
       metrics_bern <- cs_compute_outcome_metrics(
         y_eval = y_num[bern_idx],
         pred_eval = prob,
@@ -11730,7 +12029,14 @@ generate_ModelOutcome_neural <- function(){
                                            n_outcomes_obs = NULL,
                                            sigma = NULL,
                                            site_name = "obs",
-                                           obs_scale = NULL) {
+                                           obs_scale = NULL,
+                                           pairwise_obs = FALSE) {
+    logits <- neural_apply_pairwise_classification_logit_transform(
+      logits,
+      model_info = low_rank_logit_model_info,
+      likelihood_code_obs = likelihood_code_obs,
+      pairwise_obs = pairwise_obs
+    )
     scaled_observation_factor <- function(distribution, obs) {
       if (is.null(obs_scale)) {
         strenv$numpyro$sample(site_name, distribution, obs = obs)
@@ -11935,6 +12241,9 @@ generate_ModelOutcome_neural <- function(){
       default_time_embedding = default_time_embedding,
       default_time_present = default_time_present,
       low_rank_interaction_rank = low_rank_interaction_rank,
+      low_rank_logit_transform = low_rank_logit_transform,
+      low_rank_logit_bound = low_rank_logit_bound,
+      low_rank_logit_softness = low_rank_logit_softness,
       schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
@@ -12300,7 +12609,8 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
         site_name = "obs_pair",
-        obs_scale = obs_scale_b
+        obs_scale = obs_scale_b,
+        pairwise_obs = TRUE
       )
     }
 
@@ -12378,7 +12688,8 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
         site_name = "obs_single",
-        obs_scale = obs_scale_b
+        obs_scale = obs_scale_b,
+        pairwise_obs = FALSE
       )
     }
 
@@ -12583,6 +12894,9 @@ generate_ModelOutcome_neural <- function(){
       default_time_embedding = default_time_embedding,
       default_time_present = default_time_present,
       low_rank_interaction_rank = low_rank_interaction_rank,
+      low_rank_logit_transform = low_rank_logit_transform,
+      low_rank_logit_bound = low_rank_logit_bound,
+      low_rank_logit_softness = low_rank_logit_softness,
       schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
@@ -12944,7 +13258,12 @@ generate_ModelOutcome_neural <- function(){
                 y_eval = y_eval,
                 pred_eval = pred_eval,
                 likelihood_code_obs = likelihood_code_all[idx_use],
-                n_outcomes_obs = n_outcomes_all[idx_use]
+                n_outcomes_obs = n_outcomes_all[idx_use],
+                task_mode_obs = if (!is.null(universal_task_mode_use)) {
+                  universal_task_mode_use[idx_use]
+                } else {
+                  NULL
+                }
               ))
             }
             cs_compute_outcome_metrics(
@@ -14368,7 +14687,10 @@ generate_ModelOutcome_neural <- function(){
     level_struct_feature_names = level_struct_feature_names,
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens,
-    low_rank_interaction_rank = low_rank_interaction_rank
+    low_rank_interaction_rank = low_rank_interaction_rank,
+    low_rank_logit_transform = low_rank_logit_transform,
+    low_rank_logit_bound = low_rank_logit_bound,
+    low_rank_logit_softness = low_rank_logit_softness
   )
   validation_model_info <- neural_set_pairwise_context_model_info(
     info = validation_model_info,
@@ -15694,7 +16016,12 @@ generate_ModelOutcome_neural <- function(){
           y_eval = validation_split$y_all[validation_split$validation_idx],
           pred_eval = pred_eval,
           likelihood_code_obs = validation_split$likelihood_code_all[validation_split$validation_idx],
-          n_outcomes_obs = validation_split$n_outcomes_all[validation_split$validation_idx]
+          n_outcomes_obs = validation_split$n_outcomes_all[validation_split$validation_idx],
+          task_mode_obs = if (!is.null(universal_task_mode_use)) {
+            universal_task_mode_use[validation_split$validation_idx]
+          } else {
+            NULL
+          }
         )
       } else {
         cs_compute_outcome_metrics(
@@ -17727,7 +18054,10 @@ generate_ModelOutcome_neural <- function(){
     level_struct_feature_names = level_struct_feature_names,
     factor_tokenization = factor_tokenization,
     max_factor_tokens = max_factor_tokens,
-    low_rank_interaction_rank = low_rank_interaction_rank
+    low_rank_interaction_rank = low_rank_interaction_rank,
+    low_rank_logit_transform = low_rank_logit_transform,
+    low_rank_logit_bound = low_rank_logit_bound,
+    low_rank_logit_softness = low_rank_logit_softness
   )
   predict_model_info <- neural_set_pairwise_context_model_info(
     info = predict_model_info,
@@ -18007,7 +18337,8 @@ generate_ModelOutcome_neural <- function(){
 
   coerce_mixed_prediction_output <- function(pred,
                                              target_likelihood = NULL,
-                                             target_n_outcomes = NULL) {
+                                             target_n_outcomes = NULL,
+                                             pairwise_prediction = FALSE) {
     logits <- if (is.list(pred) && !is.null(pred$logits)) {
       pred$logits
     } else {
@@ -18026,6 +18357,12 @@ generate_ModelOutcome_neural <- function(){
       target_n_outcomes <- 1L
     }
     if (identical(target_likelihood, "bernoulli")) {
+      if (isTRUE(pairwise_prediction)) {
+        logits[, 1L] <- neural_apply_low_rank_logit_transform_r(
+          logits[, 1L],
+          low_rank_logit_model_info
+        )
+      }
       return(stats::plogis(logits[, 1L]))
     }
     if (identical(target_likelihood, "categorical")) {
@@ -18166,7 +18503,8 @@ generate_ModelOutcome_neural <- function(){
         return(coerce_mixed_prediction_output(
           pred = raw_pred,
           target_likelihood = target_likelihood,
-          target_n_outcomes = target_n_outcomes
+          target_n_outcomes = target_n_outcomes,
+          pairwise_prediction = TRUE
         ))
       }
       if (isTRUE(return_logits)) {
@@ -18232,7 +18570,8 @@ generate_ModelOutcome_neural <- function(){
       return(coerce_mixed_prediction_output(
         pred = raw_pred,
         target_likelihood = target_likelihood,
-        target_n_outcomes = target_n_outcomes
+        target_n_outcomes = target_n_outcomes,
+        pairwise_prediction = FALSE
       ))
     }
     if (isTRUE(return_logits)) {
@@ -18571,6 +18910,9 @@ generate_ModelOutcome_neural <- function(){
     covariate_value_encoding = covariate_value_encoding,
     shared_projection_value_encoder = shared_projection_value_encoder,
     low_rank_interaction_rank = as.integer(low_rank_interaction_rank),
+    low_rank_logit_transform = low_rank_logit_transform,
+    low_rank_logit_bound = low_rank_logit_bound,
+    low_rank_logit_softness = low_rank_logit_softness,
     schema_dropout = schema_dropout,
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),
@@ -18622,6 +18964,7 @@ generate_ModelOutcome_neural <- function(){
     ),
     cross_candidate_encoder = !identical(cross_candidate_encoder_mode, "none"),
     cross_candidate_encoder_mode = cross_candidate_encoder_mode,
+    cross_candidate_encoder_note = cross_candidate_encoder_note,
     has_cross_encoder = isTRUE(use_cross_encoder),
     has_cross_attn = !is.null(ParamsMean$W_q_cross),
     has_cross_term = !is.null(ParamsMean$M_cross),

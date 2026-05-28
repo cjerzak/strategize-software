@@ -152,6 +152,7 @@ get_neural_fit_perf <- local({
         batch_size = 32L,
         ModelDims = 16L,
         ModelDepth = 1L,
+        low_rank_interaction_rank = 4L,
         svi_lr = 0.005,
         early_stopping_n_checks = 20L
       )
@@ -2193,6 +2194,74 @@ test_that("logical TRUE override normalizes to the term interaction mode", {
   expect_true(isTRUE(model_info$cross_candidate_encoder))
   expect_true(isTRUE(model_info$has_cross_term))
   expect_false(isTRUE(model_info$has_cross_attn))
+})
+
+run_low_rank_pairwise_fit <- function(cross_candidate_encoder = NULL) {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_SKIP_EVAL = "1"
+  ))
+
+  data <- generate_test_data(n = 24, seed = 20260411)
+  params <- default_strategize_params(fast = TRUE)
+  params$outcome_model_type <- "neural"
+  control <- modifyList(
+    params$neural_mcmc_control,
+    list(
+      subsample_method = "batch_vi",
+      batch_size = 16L,
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      low_rank_interaction_rank = 2L,
+      optimizer = "adam",
+      svi_steps = 4L,
+      svi_num_draws = 1L,
+      eval_enabled = FALSE,
+      early_stopping = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )
+  if (!is.null(cross_candidate_encoder)) {
+    control$cross_candidate_encoder <- cross_candidate_encoder
+  }
+  params$neural_mcmc_control <- control
+  p_list <- generate_test_p_list(data$W)
+
+  suppressMessages(suppressWarnings(do.call(strategize, c(
+    list(Y = data$Y, W = data$W, p_list = p_list),
+    data[c("pair_id", "respondent_id", "respondent_task_id", "profile_order")],
+    params
+  ))))
+}
+
+test_that("low-rank pairwise default disables the implicit cross term", {
+  res <- run_low_rank_pairwise_fit()
+  model_info <- get_neural_model_info(res)
+
+  expect_false(is.null(model_info))
+  expect_identical(model_info$low_rank_interaction_rank, 2L)
+  expect_identical(model_info$cross_candidate_encoder_mode, "none")
+  expect_false(isTRUE(model_info$cross_candidate_encoder))
+  expect_false(isTRUE(model_info$has_cross_term))
+  expect_identical(model_info$low_rank_logit_transform, "softclip")
+  expect_equal(model_info$low_rank_logit_bound, 1.5)
+  expect_equal(model_info$low_rank_logit_softness, 0.25)
+})
+
+test_that("explicit term override remains honored with low-rank pairwise interaction", {
+  res <- run_low_rank_pairwise_fit(cross_candidate_encoder = "term")
+  model_info <- get_neural_model_info(res)
+
+  expect_false(is.null(model_info))
+  expect_identical(model_info$low_rank_interaction_rank, 2L)
+  expect_identical(model_info$cross_candidate_encoder_mode, "term")
+  expect_true(isTRUE(model_info$cross_candidate_encoder))
+  expect_true(isTRUE(model_info$has_cross_term))
+  expect_match(model_info$cross_candidate_encoder_note, "low_rank_interaction_rank")
 })
 
 test_that("full attention residual mode exposes depth-attention metadata", {
@@ -4263,6 +4332,9 @@ test_that("neural pairwise OOS fit beats an intercept-only observable baseline",
   expect_true(all(data$pair_margin > 0))
   expect_false(isTRUE(info$stage_diagnostics$single_stage_only), info = diag_info)
   expect_false(isTRUE(info$stage_diagnostics$sparse_cells), info = diag_info)
+  expect_gt(as.integer(info$low_rank_interaction_rank), 0L)
+  expect_identical(info$cross_candidate_encoder_mode, "none")
+  expect_identical(info$low_rank_logit_transform, "softclip")
   expect_equal(metrics$n_eval, length(y_eval))
   expect_true(is.finite(metrics$auc), info = diag_info)
   expect_true(metrics$auc > 0.5, info = diag_info)

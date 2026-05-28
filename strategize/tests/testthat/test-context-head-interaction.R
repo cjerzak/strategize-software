@@ -1080,3 +1080,40 @@ test_that("low-rank respondent-candidate interaction produces utility logits", {
   expect_equal(as.numeric(strenv$np$array(logits)), c(4, 0), tolerance = 1e-6)
   expect_equal(as.numeric(strenv$np$array(adjusted)), c(4, 0), tolerance = 1e-6)
 })
+
+test_that("low-rank pairwise logit softclip only bounds Bernoulli classification rows", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  info_active <- list(
+    likelihood = "mixed",
+    low_rank_interaction_rank = 2L,
+    low_rank_logit_transform = "softclip",
+    low_rank_logit_bound = 1.5,
+    low_rank_logit_softness = 0.25
+  )
+  logits <- strenv$jnp$array(matrix(c(100, 100), ncol = 1L), dtype = strenv$dtj)
+  codes <- strenv$jnp$array(as.integer(c(0L, 2L)))
+
+  bounded <- strategize:::neural_apply_pairwise_classification_logit_transform(
+    logits,
+    model_info = info_active,
+    likelihood_code_obs = codes,
+    pairwise_obs = TRUE
+  )
+  bounded_r <- as.numeric(strenv$np$array(bounded))
+  expect_lt(bounded_r[[1L]], 1.6)
+  expect_equal(bounded_r[[2L]], 100, tolerance = 1e-6)
+
+  info_rank_zero <- info_active
+  info_rank_zero$low_rank_interaction_rank <- 0L
+  unchanged <- strategize:::neural_apply_pairwise_classification_logit_transform(
+    logits,
+    model_info = info_rank_zero,
+    likelihood_code_obs = codes,
+    pairwise_obs = TRUE
+  )
+  expect_equal(as.numeric(strenv$np$array(unchanged)), c(100, 100), tolerance = 1e-6)
+})

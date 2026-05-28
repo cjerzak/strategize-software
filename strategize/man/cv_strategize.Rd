@@ -203,7 +203,9 @@ uncertainty to output-layer parameters. In adversarial neural mode, set
 (default is 1 for a single differential model). Use
 \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth}
 to override the Transformer hidden width and depth. Pairwise neural fits default to
-\code{neural_mcmc_control$cross_candidate_encoder = "term"} when unspecified. Set
+\code{neural_mcmc_control$cross_candidate_encoder = "term"} when unspecified,
+except rank-positive low-rank respondent-candidate interaction defaults to
+\code{"none"} to avoid duplicating pairwise interaction capacity. Set
 \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
 the opponent-dependent cross-candidate term in pairwise mode, set
 \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
@@ -217,7 +219,10 @@ to enable a full cross-encoder that jointly encodes both candidates. Use
 default additive/ReZero residual path with full depth-wise attention over
 all prior layer outputs plus a final depth-attentive readout; use
 \code{"standard"} (default) to keep the
-existing residual formulation.
+existing residual formulation. Rank-positive low-rank Bernoulli pairwise
+logits use a smooth softclip bound by default; set
+\code{neural_mcmc_control$low_rank_logit_transform = "none"} or
+\code{low_rank_logit_bound = NULL} to disable it.
 For variational inference (subsample_method = "batch_vi"), set
 \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).

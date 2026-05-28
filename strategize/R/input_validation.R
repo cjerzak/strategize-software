@@ -37,7 +37,9 @@ NULL
 #'   models (default is 1 for a single differential model). Set
 #'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override
 #'   the Transformer hidden width and depth. Pairwise neural fits default to
-#'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} when unspecified. Set
+#'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} when unspecified,
+#'   except rank-positive low-rank respondent-candidate interaction defaults to
+#'   \code{"none"} to avoid duplicating pairwise interaction capacity. Set
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "term"} (or \code{TRUE}) to include
 #'   the opponent-dependent cross-candidate term in pairwise mode, set
 #'   \code{neural_mcmc_control$cross_candidate_encoder = "attn"} to add a lightweight
@@ -53,7 +55,10 @@ NULL
 #'   default additive/ReZero residual path with full depth-wise attention over
 #'   all prior layer outputs plus a final depth-attentive readout; use
 #'   \code{"standard"} (default) to keep the
-#'   existing residual formulation.
+#'   existing residual formulation. Rank-positive low-rank Bernoulli pairwise
+#'   logits use a smooth softclip bound by default; set
+#'   \code{neural_mcmc_control$low_rank_logit_transform = "none"} or
+#'   \code{low_rank_logit_bound = NULL} to disable it.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 #'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
@@ -704,6 +709,38 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       call. = FALSE
     )
   }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$low_rank_logit_transform)) {
+    transform <- neural_mcmc_control$low_rank_logit_transform
+    mode <- neural_normalize_low_rank_logit_transform(transform)
+    if (length(mode) != 1L || is.na(mode) || !mode %in% c("softclip", "none")) {
+      stop(
+        "'neural_mcmc_control$low_rank_logit_transform' must be 'softclip' or 'none'.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$low_rank_logit_bound)) {
+    bound <- suppressWarnings(as.numeric(neural_mcmc_control$low_rank_logit_bound))
+    if (length(bound) != 1L || is.na(bound)) {
+      stop(
+        "'neural_mcmc_control$low_rank_logit_bound' must be a scalar numeric value.",
+        call. = FALSE
+      )
+    }
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$low_rank_logit_softness)) {
+    softness <- suppressWarnings(as.numeric(neural_mcmc_control$low_rank_logit_softness))
+    if (length(softness) != 1L || is.na(softness) ||
+        !is.finite(softness) || softness <= 0) {
+      stop(
+        "'neural_mcmc_control$low_rank_logit_softness' must be a positive scalar numeric value.",
+        call. = FALSE
+      )
+    }
   }
   if (!is.null(neural_mcmc_control) &&
       !is.null(neural_mcmc_control$optimizer)) {
