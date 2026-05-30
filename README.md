@@ -81,6 +81,25 @@ fit$Q_se
 
 The return object retains backward-compatible aliases for older code, but the current documentation uses `Q_point` and `Q_se` as the primary public result fields.
 
+For pairwise forced-choice binomial GLM analyses, set `crossfit_q = TRUE` to add an out-of-fold policy-value diagnostic for the final learned policy:
+
+```r
+fit_cf <- strategize(
+  Y = Y,
+  W = W,
+  p_list = p_list,
+  lambda = fit$lambda,
+  pair_id = pair_id,
+  profile_order = profile_order,
+  diff = TRUE,
+  crossfit_q = TRUE,
+  crossfit_q_control = list(folds = 3)
+)
+
+fit_cf$Q_gain_crossfit
+fit_cf$Q_crossfit_info$summary
+```
+
 # Other Workflows
 
 ## Prediction-only API

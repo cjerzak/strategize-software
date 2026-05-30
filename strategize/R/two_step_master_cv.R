@@ -27,6 +27,12 @@
 #'   supplied. 
 #' @param folds An integer or user-specified partitioning indicating the number of 
 #'   cross-validation folds. Defaults to 2. See Details for how data splitting is done.
+#' @param crossfit_q Logical. If \code{TRUE}, compute \code{Q_crossfit},
+#'   \code{Q_reference_crossfit}, \code{Q_gain_crossfit}, and
+#'   \code{Q_crossfit_info} on the final refit after lambda selection. Currently
+#'   supported for non-adversarial pairwise average-case binomial GLM runs.
+#' @param crossfit_q_control Optional list passed to \code{\link{strategize}} to
+#'   control cross-fitted Q evaluation.
 #' @param varcov_cluster_variable An optional clustering variable for robust standard 
 #'   errors. For instance, if the data is from multiple respondents, specify respondent 
 #'   IDs here for cluster-robust inference (via sandwich estimation). If \code{NULL}, no 
@@ -263,6 +269,9 @@
 #'   \item{CVInfo}{A data frame or matrix summarizing cross-validation results, 
 #'   e.g., in-sample and out-of-sample estimates for each candidate \eqn{\lambda}.}
 #'
+#'   \item{Q_crossfit, Q_reference_crossfit, Q_gain_crossfit, Q_crossfit_info}{Optional
+#'   final-refit cross-fitted policy-value diagnostics when \code{crossfit_q = TRUE}.}
+#'
 #'   \item{Other components}{Various additional objects useful for inference and 
 #'   debugging (e.g., final model fits, standard error estimates, weighting 
 #'   details).}
@@ -332,6 +341,8 @@ cv_strategize       <-          function(
                                             lambda_seq = NULL,
                                             lambda = NULL,
                                             folds = 2L,
+                                            crossfit_q = FALSE,
+                                            crossfit_q_control = NULL,
                                             varcov_cluster_variable = NULL,
                                             competing_group_variable_respondent = NULL,
                                             competing_group_variable_candidate = NULL,
@@ -392,6 +403,9 @@ cv_strategize       <-          function(
   }
   if (!is.logical(force_reinforce) || length(force_reinforce) != 1L || is.na(force_reinforce)) {
     stop("'force_reinforce' must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(crossfit_q) || length(crossfit_q) != 1L || is.na(crossfit_q)) {
+    stop("'crossfit_q' must be TRUE or FALSE.", call. = FALSE)
   }
 
   autoscale_rain_gamma <- missing(rain_gamma)
@@ -589,6 +603,8 @@ cv_strategize       <-          function(
     slate_list = slate_list, 
     use_optax = use_optax, 
     lambda = lambda__, # this lambda is the one chosen via CV
+    crossfit_q = crossfit_q,
+    crossfit_q_control = crossfit_q_control,
 
     # hyperparameters
     outcome_model_type = outcome_model_type,

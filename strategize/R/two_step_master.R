@@ -239,6 +239,20 @@
 #' @param folds An optional user-supplied partitioning or CV scheme, overriding \code{nFolds_glm}.
 #'   Defaults to \code{NULL}.
 #'
+#' @param crossfit_q Logical. If \code{TRUE}, compute a cross-fitted policy-value
+#'   diagnostic for non-adversarial pairwise average-case binomial GLM runs. The returned
+#'   fields \code{Q_crossfit}, \code{Q_reference_crossfit}, and
+#'   \code{Q_gain_crossfit} summarize out-of-fold value for the learned policy
+#'   relative to the assignment-policy baseline.
+#'
+#' @param crossfit_q_control Optional list controlling cross-fitted Q evaluation.
+#'   Supported entries include \code{folds}, \code{seed}, \code{split_by},
+#'   \code{estimators}, \code{headline}, \code{weight_clip},
+#'   \code{n_policy_draws}, \code{chunk_size}, and
+#'   \code{return_fold_results}. The default headline estimator is doubly robust
+#'   (\code{"dr"}), with IPS, SNIPS, and model-only diagnostics returned in
+#'   \code{Q_crossfit_info}.
+#'
 #' @param nMonte_adversarial Integer specifying the number of Monte Carlo samples used in adversarial
 #'   or max-min steps, e.g., sampling from the opposing candidate's distribution to approximate
 #'   expected payoffs. Defaults to \code{5L}.
@@ -348,6 +362,13 @@
 #' Includes main-effect tables and top interactions for AST/DAG primary/general submodels when available.}
 #'
 #' \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
+#'
+#' \item{\code{Q_crossfit}, \code{Q_reference_crossfit}, \code{Q_gain_crossfit}}{Optional
+#' cross-fitted policy-value diagnostics returned when \code{crossfit_q = TRUE}.}
+#'
+#' \item{\code{Q_crossfit_info}}{Optional fold-level and estimator-level diagnostics
+#' for cross-fitted Q evaluation, including IPS/SNIPS/model/DR summaries and
+#' importance-weight effective sample size.}
 #'
 #' \item{\code{estimationType}}{String indicating the approach used by the active estimator, \code{"TwoStep"}.}
 #'
@@ -486,7 +507,9 @@ strategize       <-          function(
                                             conda_env_required = FALSE,
                                             conf_level = 0.90,
                                             nFolds_glm = 3L,
-                                            folds = NULL, 
+                                            folds = NULL,
+                                            crossfit_q = FALSE,
+                                            crossfit_q_control = NULL,
                                             nMonte_adversarial = 5L,
                                             primary_pushforward = "mc",
                                             primary_strength = 1.0,
@@ -519,6 +542,9 @@ strategize       <-          function(
 
   if (!is.logical(force_reinforce) || length(force_reinforce) != 1L || is.na(force_reinforce)) {
     stop("'force_reinforce' must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(crossfit_q) || length(crossfit_q) != 1L || is.na(crossfit_q)) {
+    stop("'crossfit_q' must be TRUE or FALSE.", call. = FALSE)
   }
 
   autoscale_rain_gamma <- missing(rain_gamma)
@@ -2290,10 +2316,73 @@ strategize       <-          function(
     dag = get_neural_info("neural_model_info_dag_jnp"),
     dag0 = get_neural_info("neural_model_info_dag0_jnp")
   )
+
+  crossfit_q_result <- NULL
+  if (isTRUE(crossfit_q)) {
+    crossfit_q_result <- cs_crossfit_q_strategize(
+      Y = Y,
+      W = w_orig,
+      X = X,
+      lambda = lambda,
+      varcov_cluster_variable = varcov_cluster_variable,
+      competing_group_variable_respondent = competing_group_variable_respondent,
+      competing_group_variable_candidate = competing_group_variable_candidate,
+      competing_group_competition_variable_candidate = competing_group_competition_variable_candidate,
+      competing_group_variable_respondent_proportions = competing_group_variable_respondent_proportions,
+      pair_id = pair_id,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id,
+      profile_order = profile_order,
+      p_list = p_list,
+      slate_list = slate_list,
+      K = K,
+      nSGD = nSGD,
+      diff = diff,
+      adversarial = adversarial,
+      adversarial_model_strategy = adversarial_model_strategy,
+      include_stage_interactions = include_stage_interactions,
+      partial_pooling = partial_pooling,
+      partial_pooling_strength = partial_pooling_strength,
+      use_regularization = use_regularization_ORIG,
+      force_gaussian = force_gaussian,
+      force_reinforce = force_reinforce,
+      a_init_sd = a_init_sd,
+      outcome_model_type = outcome_model_type,
+      neural_mcmc_control = neural_mcmc_control,
+      penalty_type = penalty_type,
+      se_method = se_method,
+      conda_env = conda_env,
+      conda_env_required = conda_env_required,
+      conf_level = conf_level,
+      nFolds_glm = nFolds_glm,
+      folds = folds,
+      nMonte_adversarial = nMonte_adversarial,
+      primary_pushforward = primary_pushforward,
+      primary_strength = primary_strength,
+      primary_n_entrants = primary_n_entrants,
+      primary_n_field = primary_n_field,
+      nMonte_Qglm = nMonte_Qglm,
+      learning_rate_max = learning_rate_max,
+      temperature = temperature,
+      save_outcome_model = save_outcome_model,
+      presaved_outcome_model = presaved_outcome_model,
+      outcome_model_key = outcome_model_key,
+      use_optax = use_optax,
+      optim_type = optim_type,
+      optimism = optimism,
+      optimism_coef = optimism_coef,
+      rain_lambda = rain_lambda,
+      rain_gamma = rain_gamma,
+      rain_L = rain_L,
+      rain_eta = rain_eta,
+      rain_variant = rain_variant,
+      rain_output = rain_output,
+      control = crossfit_q_control
+    )
+  }
   
   message("strategize() call has finished...\n-------------")
-  return( 
-          list(   "pi_star_point" = pi_star_list,
+  result_out <- list(   "pi_star_point" = pi_star_list,
                   "pi_star_se" = pi_star_se_list,
                   
                   "Q_point" = q_star,
@@ -2533,6 +2622,13 @@ strategize       <-          function(
                       "rain_anchor_bar_norm_dag" = rep(NA_real_, nSGD)
                     )
                   })
-                  )  # end outout list 
-          )
+                  )  # end output list
+
+  if (!is.null(crossfit_q_result)) {
+    result_out$Q_crossfit <- crossfit_q_result$Q_crossfit
+    result_out$Q_reference_crossfit <- crossfit_q_result$Q_reference_crossfit
+    result_out$Q_gain_crossfit <- crossfit_q_result$Q_gain_crossfit
+    result_out$Q_crossfit_info <- crossfit_q_result
+  }
+  return(result_out)
 }

@@ -42,6 +42,8 @@ strategize(
   conf_level = 0.9,
   nFolds_glm = 3L,
   folds = NULL,
+  crossfit_q = FALSE,
+  crossfit_q_control = NULL,
   nMonte_adversarial = 5L,
   primary_pushforward = "mc",
   primary_strength = 1,
@@ -291,6 +293,20 @@ cross-validation used in certain outcome model or regularization steps. Defaults
 \item{folds}{An optional user-supplied partitioning or CV scheme, overriding \code{nFolds_glm}.
 Defaults to \code{NULL}.}
 
+\item{crossfit_q}{Logical. If \code{TRUE}, compute a cross-fitted policy-value
+diagnostic for non-adversarial pairwise average-case binomial GLM runs. The returned
+fields \code{Q_crossfit}, \code{Q_reference_crossfit}, and
+\code{Q_gain_crossfit} summarize out-of-fold value for the learned policy
+relative to the assignment-policy baseline.}
+
+\item{crossfit_q_control}{Optional list controlling cross-fitted Q evaluation.
+Supported entries include \code{folds}, \code{seed}, \code{split_by},
+\code{estimators}, \code{headline}, \code{weight_clip},
+\code{n_policy_draws}, \code{chunk_size}, and
+\code{return_fold_results}. The default headline estimator is doubly robust
+(\code{"dr"}), with IPS, SNIPS, and model-only diagnostics returned in
+\code{Q_crossfit_info}.}
+
 \item{nMonte_adversarial}{Integer specifying the number of Monte Carlo samples used in adversarial
 or max-min steps, e.g., sampling from the opposing candidate's distribution to approximate
 expected payoffs. Defaults to \code{5L}.}
@@ -416,6 +432,13 @@ Structure depends on parameters:
 Includes main-effect tables and top interactions for AST/DAG primary/general submodels when available.}
 
 \item{\code{CVInfo}}{Cross-validation performance data (if applicable). Typically a \code{data.frame} or list.}
+
+\item{\code{Q_crossfit}, \code{Q_reference_crossfit}, \code{Q_gain_crossfit}}{Optional
+cross-fitted policy-value diagnostics returned when \code{crossfit_q = TRUE}.}
+
+\item{\code{Q_crossfit_info}}{Optional fold-level and estimator-level diagnostics
+for cross-fitted Q evaluation, including IPS/SNIPS/model/DR summaries and
+importance-weight effective sample size.}
 
 \item{\code{estimationType}}{String indicating the approach used by the active estimator, \code{"TwoStep"}.}
 
