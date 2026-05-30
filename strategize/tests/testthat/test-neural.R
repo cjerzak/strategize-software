@@ -35,6 +35,50 @@ test_that("schema dropout resolver handles defaults and overrides", {
   )
 })
 
+test_that("balanced compact sampler draws studies and respondents hierarchically", {
+  config <- strategize:::neural_resolve_balanced_sampling(list(
+    scheme = "study_equal_respondent",
+    within_respondent = "uniform_observation",
+    replacement = TRUE
+  ))
+  expect_true(isTRUE(config$enabled))
+
+  obs_idx <- seq_len(9L)
+  study_index <- c(rep(0L, 6L), rep(1L, 3L))
+  respondent_id <- c("a", "a", "b", "b", "b", "c", "d", "e", "e")
+  state <- strategize:::neural_build_balanced_sampling_state(
+    obs_idx = obs_idx,
+    study_index = study_index,
+    respondent_id = respondent_id,
+    config = config
+  )
+
+  expect_identical(as.integer(state$n_studies), 2L)
+  expect_equal(unname(state$respondent_counts_by_study), c(3L, 2L))
+  expect_equal(unname(state$observation_counts_by_study), c(6L, 3L))
+
+  set.seed(42)
+  draws <- strategize:::neural_sample_balanced_obs_idx(state, batch_size = 20000L)
+  study_tab <- prop.table(table(study_index[draws]))
+  expect_lt(abs(unname(study_tab[["0"]]) - 0.5), 0.03)
+  expect_lt(abs(unname(study_tab[["1"]]) - 0.5), 0.03)
+
+  respondent_tab_0 <- prop.table(table(respondent_id[draws[study_index[draws] == 0L]]))
+  expect_lt(max(abs(unname(respondent_tab_0[c("a", "b", "c")]) - 1 / 3)), 0.04)
+  respondent_tab_1 <- prop.table(table(respondent_id[draws[study_index[draws] == 1L]]))
+  expect_lt(max(abs(unname(respondent_tab_1[c("d", "e")]) - 1 / 2)), 0.04)
+
+  expect_error(
+    strategize:::neural_build_balanced_sampling_state(
+      obs_idx = obs_idx,
+      study_index = study_index,
+      respondent_id = c(respondent_id[-1L], NA_character_),
+      config = config
+    ),
+    "non-missing respondent_id"
+  )
+})
+
 test_that("schema dropout span masks preserve one factor span", {
   skip_on_cran()
   skip_if_no_jax()

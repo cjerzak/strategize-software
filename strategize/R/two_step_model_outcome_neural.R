@@ -1041,6 +1041,168 @@ neural_context_present_mask <- function(party_idx = NULL,
   present
 }
 
+neural_resolve_balanced_sampling <- function(config = NULL) {
+  if (is.null(config) || identical(config, FALSE)) {
+    return(list(enabled = FALSE))
+  }
+  if (isTRUE(config)) {
+    config <- list(enabled = TRUE)
+  } else if (is.character(config)) {
+    config <- list(enabled = TRUE, scheme = config[[1L]])
+  }
+  if (!is.list(config)) {
+    stop("'neural_mcmc_control$balanced_sampling' must be TRUE, FALSE, a scheme string, or a list.",
+         call. = FALSE)
+  }
+  enabled <- isTRUE(config$enabled %||% TRUE)
+  if (!isTRUE(enabled)) {
+    return(list(enabled = FALSE))
+  }
+  scheme <- tolower(as.character(config$scheme %||% "study_equal_respondent"))
+  if (length(scheme) != 1L || is.na(scheme) || !identical(scheme, "study_equal_respondent")) {
+    stop("'neural_mcmc_control$balanced_sampling$scheme' must be 'study_equal_respondent'.",
+         call. = FALSE)
+  }
+  within_respondent <- tolower(as.character(
+    config$within_respondent %||% "uniform_observation"
+  ))
+  if (length(within_respondent) != 1L || is.na(within_respondent) ||
+      !identical(within_respondent, "uniform_observation")) {
+    stop("'neural_mcmc_control$balanced_sampling$within_respondent' must be 'uniform_observation'.",
+         call. = FALSE)
+  }
+  replacement <- isTRUE(config$replacement %||% TRUE)
+  if (!isTRUE(replacement)) {
+    stop("'neural_mcmc_control$balanced_sampling$replacement' must be TRUE for compact SVI.",
+         call. = FALSE)
+  }
+  effective_likelihood_mass <- tolower(as.character(
+    config$effective_likelihood_mass %||% "training_observation_count"
+  ))
+  if (length(effective_likelihood_mass) != 1L ||
+      is.na(effective_likelihood_mass) ||
+      !identical(effective_likelihood_mass, "training_observation_count")) {
+    stop(
+      "'neural_mcmc_control$balanced_sampling$effective_likelihood_mass' must be 'training_observation_count'.",
+      call. = FALSE
+    )
+  }
+  list(
+    enabled = TRUE,
+    scheme = scheme,
+    within_respondent = within_respondent,
+    replacement = TRUE,
+    require_respondent_id = isTRUE(config$require_respondent_id %||% TRUE),
+    effective_likelihood_mass = effective_likelihood_mass
+  )
+}
+
+neural_sample_one <- function(x) {
+  if (length(x) < 1L) {
+    stop("Cannot sample from an empty vector.", call. = FALSE)
+  }
+  if (length(x) == 1L) {
+    return(x[[1L]])
+  }
+  sample(x, size = 1L)
+}
+
+neural_build_balanced_sampling_state <- function(obs_idx,
+                                                 study_index,
+                                                 respondent_id,
+                                                 config,
+                                                 context = "compact SVI") {
+  config <- neural_resolve_balanced_sampling(config)
+  if (!isTRUE(config$enabled)) {
+    return(NULL)
+  }
+  obs_idx <- as.integer(obs_idx)
+  obs_idx <- obs_idx[!is.na(obs_idx) & obs_idx >= 1L]
+  if (length(obs_idx) < 1L) {
+    stop(sprintf("%s balanced sampling received no observations.", context), call. = FALSE)
+  }
+  max_idx <- max(obs_idx)
+  if (is.null(study_index) || length(study_index) < max_idx) {
+    stop(sprintf(
+      "%s balanced sampling requires row-aligned experiment/study indices.",
+      context
+    ), call. = FALSE)
+  }
+  study_index <- as.character(study_index[obs_idx])
+  if (any(is.na(study_index) | !nzchar(study_index))) {
+    stop(sprintf(
+      "%s balanced sampling requires non-missing experiment/study indices.",
+      context
+    ), call. = FALSE)
+  }
+  if (is.null(respondent_id) || length(respondent_id) < max_idx) {
+    if (isTRUE(config$require_respondent_id)) {
+      stop(sprintf(
+        "%s balanced sampling requires row-aligned respondent_id values.",
+        context
+      ), call. = FALSE)
+    }
+    respondent_id <- as.character(seq_len(max_idx))
+  }
+  respondent_id <- as.character(respondent_id[obs_idx])
+  if (any(is.na(respondent_id) | !nzchar(respondent_id))) {
+    if (isTRUE(config$require_respondent_id)) {
+      stop(sprintf(
+        "%s balanced sampling requires non-missing respondent_id values.",
+        context
+      ), call. = FALSE)
+    }
+    missing <- is.na(respondent_id) | !nzchar(respondent_id)
+    respondent_id[missing] <- paste0("row::", obs_idx[missing])
+  }
+
+  unit_key <- paste(study_index, respondent_id, sep = "\r")
+  unit_levels <- unique(unit_key)
+  unit_index <- match(unit_key, unit_levels)
+  obs_by_unit <- split(obs_idx, unit_index)
+  unit_study <- vapply(seq_along(obs_by_unit), function(i) {
+    study_index[match(i, unit_index)]
+  }, character(1))
+  units_by_study <- split(seq_along(obs_by_unit), unit_study)
+  study_levels <- names(units_by_study)
+  respondent_counts <- vapply(units_by_study, length, integer(1))
+  obs_counts <- vapply(units_by_study, function(units) {
+    sum(vapply(obs_by_unit[units], length, integer(1)))
+  }, integer(1))
+  list(
+    enabled = TRUE,
+    scheme = config$scheme,
+    within_respondent = config$within_respondent,
+    replacement = TRUE,
+    effective_likelihood_mass = config$effective_likelihood_mass,
+    study_levels = study_levels,
+    units_by_study = units_by_study,
+    obs_by_unit = obs_by_unit,
+    n_observations = length(obs_idx),
+    n_studies = length(study_levels),
+    n_respondent_units = length(obs_by_unit),
+    respondent_counts_by_study = respondent_counts,
+    observation_counts_by_study = obs_counts
+  )
+}
+
+neural_sample_balanced_obs_idx <- function(state, batch_size) {
+  if (is.null(state) || !isTRUE(state$enabled)) {
+    stop("Balanced sampling state is not enabled.", call. = FALSE)
+  }
+  batch_size <- as.integer(batch_size)
+  if (length(batch_size) != 1L || is.na(batch_size) || batch_size < 1L) {
+    stop("'batch_size' must be a positive integer.", call. = FALSE)
+  }
+  out <- integer(batch_size)
+  for (i in seq_len(batch_size)) {
+    study <- neural_sample_one(state$study_levels)
+    unit <- neural_sample_one(state$units_by_study[[study]])
+    out[[i]] <- neural_sample_one(state$obs_by_unit[[unit]])
+  }
+  out
+}
+
 neural_context_present_float <- function(party_idx = NULL,
                                          other_party_idx = NULL,
                                          resp_party_idx = NULL,
@@ -8931,7 +9093,8 @@ generate_ModelOutcome_neural <- function(){
     checkpoint_compress = FALSE,
     attention_backend = "auto",
     attention_dtype = "auto",
-    attention_padding_multiple = 8L
+    attention_padding_multiple = 8L,
+    balanced_sampling = NULL
   )
   RMS_scale = 0.5
   UsedRegularization <- FALSE
@@ -9743,6 +9906,26 @@ generate_ModelOutcome_neural <- function(){
       experiment_index_all <- NULL
     }
   }
+  respondent_id_all <- if (exists("respondent_id", inherits = TRUE) &&
+                           !is.null(respondent_id)) {
+    as.character(respondent_id)
+  } else {
+    NULL
+  }
+  if (!is.null(respondent_id_all) &&
+      length(respondent_id_all) != length(Y_)) {
+    respondent_id_all <- NULL
+  }
+  respondent_task_id_all <- if (exists("respondent_task_id", inherits = TRUE) &&
+                                !is.null(respondent_task_id)) {
+    as.character(respondent_task_id)
+  } else {
+    NULL
+  }
+  if (!is.null(respondent_task_id_all) &&
+      length(respondent_task_id_all) != length(Y_)) {
+    respondent_task_id_all <- NULL
+  }
   default_experiment_index <- if (!is.null(neural_token_info_use$default_experiment_index) &&
                                   !is.na(neural_token_info_use$default_experiment_index)) {
     as.integer(neural_token_info_use$default_experiment_index)
@@ -10091,6 +10274,26 @@ generate_ModelOutcome_neural <- function(){
       universal_n_outcomes_use <- universal_n_outcomes_all
       universal_likelihood_single_use <- universal_likelihood_use
       universal_n_outcomes_single_use <- universal_n_outcomes_use
+    }
+  }
+  respondent_id_use <- NULL
+  respondent_task_id_use <- NULL
+  if (!is.null(respondent_id_all)) {
+    respondent_id_use <- if (isTRUE(universal_enabled) && isTRUE(universal_mixed_mode)) {
+      c(respondent_id_all[universal_pair_obs_rows], respondent_id_all[universal_single_rows])
+    } else if (isTRUE(pairwise_mode)) {
+      respondent_id_all[pair_mat[, 1L]]
+    } else {
+      respondent_id_all
+    }
+  }
+  if (!is.null(respondent_task_id_all)) {
+    respondent_task_id_use <- if (isTRUE(universal_enabled) && isTRUE(universal_mixed_mode)) {
+      c(respondent_task_id_all[universal_pair_obs_rows], respondent_task_id_all[universal_single_rows])
+    } else if (isTRUE(pairwise_mode)) {
+      respondent_task_id_all[pair_mat[, 1L]]
+    } else {
+      respondent_task_id_all
     }
   }
   if (!isTRUE(compact_training) &&
@@ -14398,16 +14601,89 @@ generate_ModelOutcome_neural <- function(){
     pool <- compact_sampling_pool()
     as.integer(length(pool))
   }
+  compact_balanced_sampling <- neural_resolve_balanced_sampling(
+    mcmc_control$balanced_sampling %||% NULL
+  )
+  if (isTRUE(compact_balanced_sampling$enabled) && !isTRUE(compact_training)) {
+    stop("Balanced study/respondent sampling currently requires compact batch_vi training.",
+         call. = FALSE)
+  }
+  compact_balanced_state <- NULL
+  compact_balanced_pool_key <- NULL
+  compact_balanced_sampling_state <- function() {
+    if (!isTRUE(compact_balanced_sampling$enabled)) {
+      return(NULL)
+    }
+    balanced_respondent_id_use <- respondent_id_use
+    respondent_missing <- if (is.null(balanced_respondent_id_use)) {
+      rep(TRUE, length(Y_use))
+    } else {
+      is.na(balanced_respondent_id_use) |
+        !nzchar(as.character(balanced_respondent_id_use))
+    }
+    if (any(respondent_missing) && !is.null(respondent_task_id_use)) {
+      if (is.null(balanced_respondent_id_use)) {
+        balanced_respondent_id_use <- respondent_task_id_use
+      } else {
+        balanced_respondent_id_use[respondent_missing] <- respondent_task_id_use[respondent_missing]
+      }
+    }
+    pool <- compact_sampling_pool()
+    pool_key <- if (length(pool) < 1L) {
+      "empty"
+    } else {
+      paste(
+        length(pool),
+        pool[[1L]],
+        pool[[length(pool)]],
+        format(sum(as.numeric(pool)), scientific = FALSE),
+        sep = ":"
+      )
+    }
+    if (is.null(compact_balanced_state) ||
+        !identical(compact_balanced_pool_key, pool_key)) {
+      compact_balanced_state <<- neural_build_balanced_sampling_state(
+        obs_idx = pool,
+        study_index = experiment_index_use,
+        respondent_id = balanced_respondent_id_use,
+        config = compact_balanced_sampling,
+        context = "compact SVI"
+      )
+      compact_balanced_pool_key <<- pool_key
+    }
+    compact_balanced_state
+  }
+  compact_balanced_sampling_summary <- function() {
+    if (!isTRUE(compact_balanced_sampling$enabled)) {
+      return(NULL)
+    }
+    state <- compact_balanced_sampling_state()
+    list(
+      enabled = TRUE,
+      scheme = state$scheme,
+      within_respondent = state$within_respondent,
+      replacement = TRUE,
+      effective_likelihood_mass = state$effective_likelihood_mass,
+      n_studies = as.integer(state$n_studies),
+      n_respondent_units = as.integer(state$n_respondent_units),
+      n_observations = as.integer(state$n_observations),
+      respondent_counts_by_study = state$respondent_counts_by_study,
+      observation_counts_by_study = state$observation_counts_by_study
+    )
+  }
   compact_sample_obs_idx <- function() {
+    if (isTRUE(compact_balanced_sampling$enabled)) {
+      return(neural_sample_balanced_obs_idx(
+        compact_balanced_sampling_state(),
+        compact_svi_batch_size
+      ))
+    }
     if (!isTRUE(universal_mixed_mode)) {
       pool <- compact_sampling_pool()
       if (length(pool) <= compact_svi_batch_size) {
         return(pool)
       }
       return(sample(pool, compact_svi_batch_size, replace = FALSE))
-    }
-    if (compact_svi_batch_size < 2L) {
-      stop("Universal mixed-mode compact SVI requires batch_size >= 2.", call. = FALSE)
     }
     pool <- compact_sampling_pool()
     pair_pool <- pool[pool <= n_universal_pair_obs]
@@ -14452,11 +14728,13 @@ generate_ModelOutcome_neural <- function(){
       strenv$jnp$atleast_1d(strenv$jnp$array(as.numeric(x))$astype(ddtype_))
     }
     if (isTRUE(universal_mixed_mode)) {
-      pair_obs_idx <- obs_idx[obs_idx <= n_universal_pair_obs]
-      single_obs_idx <- obs_idx[obs_idx > n_universal_pair_obs] - n_universal_pair_obs
-      if (length(pair_obs_idx) < 1L || length(single_obs_idx) < 1L) {
-        stop("Universal compact SVI batches must include pairwise and single rows.", call. = FALSE)
-      }
+      obs_idx_n <- length(obs_idx)
+      pair_obs_idx_active <- obs_idx[obs_idx <= n_universal_pair_obs]
+      single_obs_idx_active <- obs_idx[obs_idx > n_universal_pair_obs] - n_universal_pair_obs
+      pair_active <- length(pair_obs_idx_active) > 0L
+      single_active <- length(single_obs_idx_active) > 0L
+      pair_obs_idx <- if (isTRUE(pair_active)) pair_obs_idx_active else 1L
+      single_obs_idx <- if (isTRUE(single_active)) single_obs_idx_active else 1L
       pair_left_rows <- pair_mat[pair_obs_idx, 1L]
       pair_right_rows <- pair_mat[pair_obs_idx, 2L]
       single_rows <- universal_single_rows[single_obs_idx]
@@ -14487,6 +14765,18 @@ generate_ModelOutcome_neural <- function(){
       cov_single <- materialize_cov(single_rows)
       pair_global_obs <- pair_obs_idx
       single_global_obs <- n_universal_pair_obs + single_obs_idx
+      pair_obs_scale <- if (isTRUE(pair_active)) {
+        as.numeric(compact_sampling_n_obs()) / as.numeric(obs_idx_n) *
+          as.numeric(universal_loss_weights[pair_global_obs] %||% rep(1, length(pair_global_obs)))
+      } else {
+        rep(0, length(pair_global_obs))
+      }
+      single_obs_scale <- if (isTRUE(single_active)) {
+        as.numeric(compact_sampling_n_obs()) / as.numeric(obs_idx_n) *
+          as.numeric(universal_loss_weights[single_global_obs] %||% rep(1, length(single_global_obs)))
+      } else {
+        rep(0, length(single_global_obs))
+      }
       return(list(
         X_left = strenv$jnp$array(to_index_matrix(
           cs2step_materialize_w_idx_compact(W_idx_compact_use, pair_left_rows)
@@ -14507,10 +14797,7 @@ generate_ModelOutcome_neural <- function(){
         likelihood_code = jnp_int_vector(universal_likelihood_code_use[pair_global_obs]),
         n_outcomes_obs = jnp_int_vector(universal_n_outcomes_use_int[pair_global_obs]),
         Y_obs = jnp_num_vector(Y_pair_use[pair_obs_idx]),
-        obs_scale = jnp_num_vector(
-          as.numeric(compact_sampling_n_obs()) / as.numeric(length(obs_idx)) *
-            as.numeric(universal_loss_weights[pair_global_obs] %||% rep(1, length(pair_global_obs)))
-        ),
+        obs_scale = jnp_num_vector(pair_obs_scale),
         X_single = strenv$jnp$array(to_index_matrix(
           cs2step_materialize_w_idx_compact(W_idx_compact_use, single_rows)
         ))$astype(strenv$jnp$int32),
@@ -14526,10 +14813,7 @@ generate_ModelOutcome_neural <- function(){
         likelihood_code_single = jnp_int_vector(universal_likelihood_code_use[single_global_obs]),
         n_outcomes_single = jnp_int_vector(universal_n_outcomes_use_int[single_global_obs]),
         Y_single_obs = jnp_num_vector(Y_single_use[single_obs_idx]),
-        obs_scale_single = jnp_num_vector(
-          as.numeric(compact_sampling_n_obs()) / as.numeric(length(obs_idx)) *
-            as.numeric(universal_loss_weights[single_global_obs] %||% rep(1, length(single_global_obs)))
-        )
+        obs_scale_single = jnp_num_vector(single_obs_scale)
       ))
     }
     y_obs <- if (likelihood == "categorical") {
@@ -19301,6 +19585,7 @@ generate_ModelOutcome_neural <- function(){
     svi_steps = resolved_svi_steps,
     svi_steps_completed = svi_steps_completed,
     svi_num_draws = resolved_svi_num_draws,
+    balanced_sampling = compact_balanced_sampling_summary(),
     early_stopping = early_stopping_info,
     svi_budget_info = svi_budget_info,
     convergence_diagnostics = convergence_diagnostics,
