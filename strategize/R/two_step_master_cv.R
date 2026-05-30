@@ -29,10 +29,12 @@
 #'   cross-validation folds. Defaults to 2. See Details for how data splitting is done.
 #' @param crossfit_q Logical. If \code{TRUE}, compute \code{Q_crossfit},
 #'   \code{Q_reference_crossfit}, \code{Q_gain_crossfit}, and
-#'   \code{Q_crossfit_info} on the final refit after lambda selection. Currently
-#'   supported for non-adversarial pairwise average-case binomial GLM runs.
+#'   \code{Q_crossfit_info} on the final refit after lambda selection. Supported
+#'   for non-adversarial pairwise average-case binomial GLM runs and adversarial
+#'   pairwise binomial GLM runs with \code{adversarial_model_strategy = "four"}.
 #' @param crossfit_q_control Optional list passed to \code{\link{strategize}} to
-#'   control cross-fitted Q evaluation.
+#'   control cross-fitted Q evaluation, including the optional adversarial
+#'   \code{perspective_group} entry.
 #' @param varcov_cluster_variable An optional clustering variable for robust standard 
 #'   errors. For instance, if the data is from multiple respondents, specify respondent 
 #'   IDs here for cluster-robust inference (via sandwich estimation). If \code{NULL}, no 

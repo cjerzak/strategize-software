@@ -81,7 +81,7 @@ fit$Q_se
 
 The return object retains backward-compatible aliases for older code, but the current documentation uses `Q_point` and `Q_se` as the primary public result fields.
 
-For pairwise forced-choice binomial GLM analyses, set `crossfit_q = TRUE` to add an out-of-fold policy-value diagnostic for the final learned policy:
+For supported pairwise forced-choice binomial GLM analyses, set `crossfit_q = TRUE` to add an out-of-fold policy-value diagnostic for the final learned policy. This covers non-adversarial average-case runs and the two-party adversarial `adversarial_model_strategy = "four"` case:
 
 ```r
 fit_cf <- strategize(
@@ -99,6 +99,8 @@ fit_cf <- strategize(
 fit_cf$Q_gain_crossfit
 fit_cf$Q_crossfit_info$summary
 ```
+
+For adversarial runs, `crossfit_q_control = list(perspective_group = "...")` selects the candidate group whose win probability is reported. If omitted, the first sorted group label is used. Adversarial cross-fit weights use the independent product assignment implied by `p_list`.
 
 # Other Workflows
 

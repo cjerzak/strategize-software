@@ -294,7 +294,10 @@ cross-validation used in certain outcome model or regularization steps. Defaults
 Defaults to \code{NULL}.}
 
 \item{crossfit_q}{Logical. If \code{TRUE}, compute a cross-fitted policy-value
-diagnostic for non-adversarial pairwise average-case binomial GLM runs. The returned
+diagnostic for supported pairwise forced-choice binomial GLM runs. This currently
+includes non-adversarial average-case runs and adversarial
+\code{adversarial_model_strategy = "four"} runs with exactly two respondent
+and candidate groups. The returned
 fields \code{Q_crossfit}, \code{Q_reference_crossfit}, and
 \code{Q_gain_crossfit} summarize out-of-fold value for the learned policy
 relative to the assignment-policy baseline.}
@@ -302,8 +305,12 @@ relative to the assignment-policy baseline.}
 \item{crossfit_q_control}{Optional list controlling cross-fitted Q evaluation.
 Supported entries include \code{folds}, \code{seed}, \code{split_by},
 \code{estimators}, \code{headline}, \code{weight_clip},
-\code{n_policy_draws}, \code{chunk_size}, and
-\code{return_fold_results}. The default headline estimator is doubly robust
+\code{n_policy_draws}, \code{chunk_size}, \code{return_fold_results}, and
+\code{perspective_group}. For adversarial runs, \code{perspective_group}
+selects the candidate group whose win probability is reported; if omitted,
+the first sorted group label is used. The adversarial estimator assumes
+independent group-specific profile assignment under \code{p_list}. The
+default headline estimator is doubly robust
 (\code{"dr"}), with IPS, SNIPS, and model-only diagnostics returned in
 \code{Q_crossfit_info}.}
 
@@ -438,7 +445,9 @@ cross-fitted policy-value diagnostics returned when \code{crossfit_q = TRUE}.}
 
 \item{\code{Q_crossfit_info}}{Optional fold-level and estimator-level diagnostics
 for cross-fitted Q evaluation, including IPS/SNIPS/model/DR summaries and
-importance-weight effective sample size.}
+importance-weight effective sample size. For adversarial runs this also records
+the perspective/opponent groups, target and reference summaries, and the
+independent-product assignment assumption used for profile weights.}
 
 \item{\code{estimationType}}{String indicating the approach used by the active estimator, \code{"TwoStep"}.}
 

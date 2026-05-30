@@ -1,3 +1,41 @@
+make_crossfit_adversarial_fixture <- function(blocks = 4L, seed = 2026L) {
+  withr::local_seed(seed)
+  n_pairs <- as.integer(blocks) * 4L
+  pair_types <- rep(c("cross_A", "cross_B", "same_A", "same_B"),
+                    length.out = n_pairs)
+  respondent_pair <- ifelse(pair_types %in% c("cross_A", "same_A"), "A", "B")
+  left_group <- ifelse(pair_types == "same_B", "B", "A")
+  right_group <- ifelse(pair_types == "same_A", "A", "B")
+  competition_pair <- ifelse(pair_types %in% c("cross_A", "cross_B"),
+                             "Different", "Same")
+  W_left <- data.frame(
+    female = sample(c(0L, 1L), n_pairs, replace = TRUE),
+    stringsAsFactors = FALSE
+  )
+  W_right <- data.frame(
+    female = sample(c(0L, 1L), n_pairs, replace = TRUE),
+    stringsAsFactors = FALSE
+  )
+  y_left <- stats::rbinom(n_pairs, size = 1L, prob = 0.5)
+
+  list(
+    Y = c(y_left, 1L - y_left),
+    W = rbind(W_left, W_right),
+    pair_id = c(seq_len(n_pairs), seq_len(n_pairs)),
+    respondent_id = c(seq_len(n_pairs), seq_len(n_pairs)),
+    respondent_task_id = c(seq_len(n_pairs), seq_len(n_pairs)),
+    profile_order = c(rep(1L, n_pairs), rep(2L, n_pairs)),
+    respondent_group = c(respondent_pair, respondent_pair),
+    candidate_group = c(left_group, right_group),
+    competition_group = c(competition_pair, competition_pair),
+    pair_types = pair_types
+  )
+}
+
+crossfit_adversarial_p_list <- function() {
+  list(female = stats::setNames(c(0.5, 0.5), c("0", "1")))
+}
+
 test_that("crossfit Q control validates defaults and overrides", {
   control <- cs_crossfit_q_default_control(list(
     folds = 2,
@@ -10,6 +48,7 @@ test_that("crossfit Q control validates defaults and overrides", {
   expect_equal(control$estimators, c("ips", "dr"))
   expect_equal(control$headline, "ips")
   expect_false(control$return_fold_results)
+  expect_null(control$perspective_group)
 
   expect_error(
     cs_crossfit_q_default_control(list(estimators = "unknown")),
@@ -115,6 +154,205 @@ test_that("crossfit Q probability weights and diagnostics are computed", {
   expect_true(diagnostics$clipped)
 })
 
+test_that("adversarial crossfit Q validation canonicalizes contests", {
+  data <- make_crossfit_adversarial_fixture(blocks = 4L)
+  p_list <- crossfit_adversarial_p_list()
+  control <- cs_crossfit_q_default_control(list(
+    folds = 2L,
+    perspective_group = "B"
+  ))
+
+  validated <- cs_crossfit_q_validate(
+    Y = data$Y,
+    W = data$W,
+    pair_id = data$pair_id,
+    profile_order = data$profile_order,
+    p_list = p_list,
+    diff = TRUE,
+    adversarial = TRUE,
+    K = 1,
+    outcome_model_type = "glm",
+    force_gaussian = FALSE,
+    adversarial_model_strategy = "four",
+    competing_group_variable_respondent = data$respondent_group,
+    competing_group_variable_candidate = data$candidate_group,
+    competing_group_competition_variable_candidate = data$competition_group,
+    competing_group_variable_respondent_proportions = c(A = 0.4, B = 0.6),
+    respondent_id = data$respondent_id,
+    control = control
+  )
+
+  expect_equal(validated$mode, "adversarial_pairwise_glm")
+  expect_equal(validated$groups, c("A", "B"))
+  expect_equal(validated$base_group, "A")
+  expect_equal(validated$other_group, "B")
+  expect_equal(validated$perspective_group, "B")
+  expect_equal(validated$opponent_group, "A")
+  expect_equal(nrow(validated$contests), 8L)
+  expect_equal(validated$contests$Y_perspective,
+               data$Y[validated$contests$perspective_idx])
+  expect_equal(validated$contests$Y_base,
+               data$Y[validated$contests$base_idx])
+  expect_equal(validated$rho, c(A = 0.4, B = 0.6), tolerance = 1e-8)
+
+  reversed_pair_mat <- validated$pair_mat
+  reversed_pair_mat[validated$contests$pair_row, ] <-
+    reversed_pair_mat[validated$contests$pair_row, 2:1]
+  reversed_contests <- cs_crossfit_q_build_adversarial_contests(
+    Y = data$Y,
+    pair_id = data$pair_id,
+    pair_mat = reversed_pair_mat,
+    respondent_group = validated$respondent_group,
+    candidate_group = validated$candidate_group,
+    competition_group = validated$competition_group,
+    groups = validated$groups,
+    perspective_group = validated$perspective_group,
+    opponent_group = validated$opponent_group
+  )
+  original <- validated$contests[order(validated$contests$pair_id), ]
+  reversed <- reversed_contests[order(reversed_contests$pair_id), ]
+  expect_equal(reversed$base_idx, original$base_idx)
+  expect_equal(reversed$other_idx, original$other_idx)
+  expect_equal(reversed$Y_perspective, original$Y_perspective)
+
+  fold_y <- cs_crossfit_q_adversarial_fold_strata(
+    pair_mat = validated$pair_mat,
+    respondent_group = validated$respondent_group,
+    candidate_group = validated$candidate_group,
+    groups = validated$groups
+  )
+  fold_obj <- cs_make_stratified_folds(
+    n = nrow(validated$pair_mat),
+    n_folds = 2L,
+    y = fold_y,
+    cluster = data$pair_id[validated$pair_mat[, 1]],
+    seed = 123L
+  )
+  expect_silent(cs_crossfit_q_validate_adversarial_folds(
+    fold_id = fold_obj$fold_id,
+    pair_mat = validated$pair_mat,
+    respondent_group = validated$respondent_group,
+    candidate_group = validated$candidate_group,
+    groups = validated$groups
+  ))
+  row_folds <- fold_obj$fold_id[match(data$pair_id,
+                                      data$pair_id[validated$pair_mat[, 1]])]
+  expect_true(all(vapply(split(row_folds, data$pair_id), function(x) {
+    length(unique(x)) == 1L
+  }, logical(1))))
+})
+
+test_that("adversarial crossfit Q validation rejects unsupported cases", {
+  data <- make_crossfit_adversarial_fixture(blocks = 4L)
+  p_list <- crossfit_adversarial_p_list()
+  control <- cs_crossfit_q_default_control(list(folds = 2L))
+  validate <- function(Y = data$Y,
+                       respondent_group = data$respondent_group,
+                       p_list_arg = p_list,
+                       strategy = "four") {
+    cs_crossfit_q_validate(
+      Y = Y,
+      W = data$W,
+      pair_id = data$pair_id,
+      profile_order = data$profile_order,
+      p_list = p_list_arg,
+      diff = TRUE,
+      adversarial = TRUE,
+      K = 1,
+      outcome_model_type = "glm",
+      force_gaussian = FALSE,
+      adversarial_model_strategy = strategy,
+      competing_group_variable_respondent = respondent_group,
+      competing_group_variable_candidate = data$candidate_group,
+      competing_group_competition_variable_candidate = data$competition_group,
+      respondent_id = data$respondent_id,
+      control = control
+    )
+  }
+
+  expect_error(validate(strategy = "two"), "strategy = 'four'")
+
+  same_a_pair <- which(data$pair_types == "same_A")[[1L]]
+  bad_group <- data$respondent_group
+  bad_group[data$pair_id == same_a_pair] <- "B"
+  expect_error(validate(respondent_group = bad_group), "same-party pairs")
+
+  cross_pair <- which(data$pair_types == "cross_A")[[1L]]
+  bad_Y <- data$Y
+  rows <- which(data$pair_id == cross_pair)
+  bad_Y[rows] <- 1
+  expect_error(validate(Y = bad_Y), "exactly one selected")
+
+  zero_level <- as.character(data$W$female[[1L]])
+  bad_p <- p_list
+  bad_p$female[[zero_level]] <- 0
+  expect_error(validate(p_list_arg = bad_p), "positive p_list probability")
+})
+
+test_that("adversarial crossfit Q aggregation uses global group weights", {
+  control <- cs_crossfit_q_default_control(list(
+    folds = 2L,
+    weight_clip = 2,
+    estimators = c("dr", "ips", "snips", "model")
+  ))
+  records <- data.frame(
+    fold = c(1L, 1L, 2L, 2L),
+    pair_row = seq_len(4L),
+    pair_id = seq_len(4L),
+    respondent_group = c("A", "A", "A", "B"),
+    Y_perspective = c(1, 0, 1, 0),
+    m_obs = c(0.5, 0.5, 0.5, 0.5),
+    mu_target = c(0.5, 0.5, 0.5, 0.5),
+    mu_reference = c(0.5, 0.5, 0.5, 0.5),
+    weight = c(1, 1, 1, 1),
+    weight_used = c(1, 1, 1, 1),
+    weight_clipped = c(FALSE, FALSE, FALSE, FALSE),
+    p_obs = c(0.25, 0.25, 0.25, 0.25),
+    pi_obs = c(0.25, 0.25, 0.25, 0.25),
+    stringsAsFactors = FALSE
+  )
+
+  agg <- cs_crossfit_q_adversarial_aggregate(
+    records = records,
+    control = control,
+    rho = c(A = 0.25, B = 0.75),
+    groups = c("A", "B")
+  )
+
+  expect_equal(sum(agg$records$a[agg$records$respondent_group == "A"]),
+               0.25, tolerance = 1e-8)
+  expect_equal(sum(agg$records$a[agg$records$respondent_group == "B"]),
+               0.75, tolerance = 1e-8)
+  expect_equal(agg$summary$Q_gain_crossfit, rep(0, nrow(agg$summary)),
+               tolerance = 1e-8)
+
+  records$weight[[1L]] <- 5
+  records$weight_used[[1L]] <- 2
+  records$weight_clipped[[1L]] <- TRUE
+  clipped <- cs_crossfit_q_adversarial_aggregate(
+    records = records,
+    control = control,
+    rho = c(A = 0.25, B = 0.75),
+    groups = c("A", "B")
+  )
+  expect_true(all(clipped$summary$any_weight_clipped))
+  expect_equal(clipped$summary$max_weight, rep(5, nrow(clipped$summary)))
+
+  zero_weight <- records
+  zero_weight$weight <- 0
+  zero_weight$weight_used <- 0
+  zero_weight$weight_clipped <- FALSE
+  expect_error(
+    cs_crossfit_q_adversarial_aggregate(
+      records = zero_weight,
+      control = control,
+      rho = c(A = 0.25, B = 0.75),
+      groups = c("A", "B")
+    ),
+    "SNIPS denominator is zero"
+  )
+})
+
 test_that("strategize can return first-class crossfit Q fields", {
   skip_on_cran()
   skip_if_no_jax()
@@ -183,4 +421,86 @@ test_that("strategize can return first-class crossfit Q fields", {
   expect_true(is.finite(res$Q_gain_crossfit))
   expect_s3_class(res$Q_crossfit_info$summary, "data.frame")
   expect_true(all(c("dr", "ips", "snips", "model") %in% res$Q_crossfit_info$summary$estimator))
+})
+
+test_that("strategize can return first-class adversarial crossfit Q fields", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  data <- make_crossfit_adversarial_fixture(blocks = 16L, seed = 3030L)
+  p_list <- crossfit_adversarial_p_list()
+
+  plot_sink <- tempfile(fileext = ".pdf")
+  grDevices::pdf(plot_sink)
+  on.exit({
+    grDevices::dev.off()
+    unlink(plot_sink)
+  }, add = TRUE)
+
+  res <- suppressWarnings(
+    strategize(
+      Y = data$Y,
+      W = data$W,
+      lambda = 0.1,
+      pair_id = data$pair_id,
+      respondent_id = data$respondent_id,
+      respondent_task_id = data$respondent_task_id,
+      profile_order = data$profile_order,
+      p_list = p_list,
+      competing_group_variable_respondent = data$respondent_group,
+      competing_group_variable_candidate = data$candidate_group,
+      competing_group_competition_variable_candidate = data$competition_group,
+      competing_group_variable_respondent_proportions = c(A = 0.5, B = 0.5),
+      K = 1,
+      nSGD = 2L,
+      diff = TRUE,
+      adversarial = TRUE,
+      adversarial_model_strategy = "four",
+      outcome_model_type = "glm",
+      force_gaussian = FALSE,
+      use_regularization = FALSE,
+      compute_se = FALSE,
+      compute_hessian = FALSE,
+      conda_env = "strategize_env",
+      conda_env_required = TRUE,
+      nMonte_adversarial = 4L,
+      nMonte_Qglm = 5L,
+      crossfit_q = TRUE,
+      crossfit_q_control = list(
+        folds = 2L,
+        n_policy_draws = 4L,
+        chunk_size = 8L,
+        seed = 2026L,
+        perspective_group = "B"
+      )
+    )
+  )
+
+  expect_true("Q_crossfit" %in% names(res))
+  expect_true("Q_reference_crossfit" %in% names(res))
+  expect_true("Q_gain_crossfit" %in% names(res))
+  expect_true("Q_crossfit_info" %in% names(res))
+  expect_true(is.finite(res$Q_crossfit))
+  expect_true(is.finite(res$Q_reference_crossfit))
+  expect_true(is.finite(res$Q_gain_crossfit))
+  expect_equal(res$Q_crossfit_info$mode, "adversarial_pairwise_glm")
+  expect_equal(res$Q_crossfit_info$perspective_group, "B")
+  expect_equal(res$Q_crossfit_info$opponent_group, "A")
+  expect_equal(res$Q_crossfit_info$assignment_assumption, "independent_product_p_list")
+  expect_s3_class(res$Q_crossfit_info$summary, "data.frame")
+  expect_s3_class(res$Q_crossfit_info$target_summary, "data.frame")
+  expect_s3_class(res$Q_crossfit_info$reference_summary, "data.frame")
+  expect_true(all(c("dr", "ips", "snips", "model") %in%
+                    res$Q_crossfit_info$summary$estimator))
+  expect_true(all(is.finite(res$Q_crossfit_info$summary$Q_crossfit)))
+  expect_true(all(is.finite(res$Q_crossfit_info$summary$Q_reference_crossfit)))
+  expect_true(all(table(res$Q_crossfit_info$records$respondent_group) > 0L))
+
+  split_info <- res$Q_crossfit_info$split
+  row_folds <- split_info$fold_id_by_pair[
+    match(data$pair_id, split_info$pair_id)
+  ]
+  expect_true(all(vapply(split(row_folds, data$pair_id), function(x) {
+    length(unique(x)) == 1L
+  }, logical(1))))
 })
