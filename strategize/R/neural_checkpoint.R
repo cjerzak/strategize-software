@@ -173,7 +173,10 @@ neural_svi_checkpoint_params_to_r <- function(params) {
   if (is.null(params)) {
     return(NULL)
   }
-  params_list <- as.list(params)
+  params_list <- neural_svi_checkpoint_params_to_list(params)
+  if (is.null(params_list)) {
+    return(NULL)
+  }
   lapply(params_list, function(x) {
     jax_shape <- if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
       tryCatch(as.integer(reticulate::py_to_r(x$shape)), error = function(e) NULL)
@@ -198,11 +201,27 @@ neural_svi_checkpoint_params_to_r <- function(params) {
   })
 }
 
+neural_svi_checkpoint_params_to_list <- function(params) {
+  if (is.null(params)) {
+    return(NULL)
+  }
+  if (cs2step_has_reticulate() && reticulate::is_py_object(params)) {
+    out <- tryCatch(reticulate::py_to_r(params), error = function(e) NULL)
+    if (is.list(out)) {
+      return(out)
+    }
+  }
+  tryCatch(as.list(params), error = function(e) NULL)
+}
+
 neural_svi_checkpoint_params_to_jax <- function(params) {
   if (is.null(params)) {
     return(NULL)
   }
-  params_list <- as.list(params)
+  params_list <- neural_svi_checkpoint_params_to_list(params)
+  if (is.null(params_list)) {
+    return(NULL)
+  }
   converted <- lapply(params_list, function(x) {
     if (cs2step_has_reticulate() && reticulate::is_py_object(x)) {
       return(x)

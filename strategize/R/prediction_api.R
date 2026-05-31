@@ -252,9 +252,7 @@ cs2step_eval_outcome_model_glm <- function(Y,
   eval_env$respondent_id <- NULL
   eval_env$respondent_task_id <- NULL
 
-  initialize_model <- paste(deparse(generate_ModelOutcome), collapse = "\n")
-  initialize_model <- gsub(initialize_model, pattern = "function \\(\\)", replacement = "")
-  eval(parse(text = initialize_model), envir = eval_env)
+  eval(body(generate_ModelOutcome), envir = eval_env)
 
   list(
     intercept = as.numeric(eval_env$EST_INTERCEPT_tf),
@@ -367,9 +365,7 @@ cs2step_eval_outcome_model_neural <- function(Y,
     NULL
   }
 
-  initialize_model <- paste(deparse(generate_ModelOutcome_neural), collapse = "\n")
-  initialize_model <- gsub(initialize_model, pattern = "function \\(\\)", replacement = "")
-  eval(parse(text = initialize_model), envir = eval_env)
+  eval(body(generate_ModelOutcome_neural), envir = eval_env)
 
   theta_mean <- tryCatch(as.numeric(reticulate::py_to_r(strenv$np$array(eval_env$EST_COEFFICIENTS_tf))),
                          error = function(e) as.numeric(eval_env$EST_COEFFICIENTS_tf))

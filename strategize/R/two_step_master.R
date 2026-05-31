@@ -863,10 +863,8 @@ strategize       <-          function(
     }
 
     # run models with inputs: W_; Y_; varcov_cluster_variable_;
-    if(outcome_model_type == "glm"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome),collapse="\n") } # linear w interactions
-    if(outcome_model_type == "neural"){ initialize_ModelOutcome <- paste(deparse(generate_ModelOutcome_neural),collapse="\n")}  
-    initialize_ModelOutcome <- gsub(initialize_ModelOutcome,pattern="function \\(\\)",replacement="")
-    eval( parse( text = initialize_ModelOutcome ), envir = evaluation_environment )
+    if(outcome_model_type == "glm"){ eval(body(generate_ModelOutcome), envir = evaluation_environment) } # linear w interactions
+    if(outcome_model_type == "neural"){ eval(body(generate_ModelOutcome_neural), envir = evaluation_environment) }
     
     # define combined parameter vector & fxn for reextracting intercept & coefficient
     REGRESSION_PARAMS_jax <- strenv$jnp$concatenate(list(EST_INTERCEPT_tf,

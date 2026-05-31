@@ -59,6 +59,29 @@ test_that("neural SVI checkpoint atomic writes leave readable snapshots", {
   expect_identical(sort(leftovers), "latest.rds")
 })
 
+test_that("neural SVI checkpoint params accept reticulate dictionaries", {
+  if (!requireNamespace("reticulate", quietly = TRUE)) {
+    testthat::skip("reticulate not available")
+  }
+  py_available <- tryCatch(reticulate::py_available(initialize = TRUE), error = function(e) FALSE)
+  if (!isTRUE(py_available)) {
+    testthat::skip("Python not available through reticulate")
+  }
+
+  params <- reticulate::dict(
+    W_out = matrix(c(1, 2), ncol = 1),
+    b_out = 0,
+    missing_site = reticulate::py_none()
+  )
+  out <- strategize:::neural_svi_checkpoint_params_to_list(params)
+
+  expect_type(out, "list")
+  expect_named(out, c("W_out", "b_out", "missing_site"))
+  expect_equal(out$W_out, matrix(c(1, 2), ncol = 1))
+  expect_equal(out$b_out, 0)
+  expect_null(out$missing_site)
+})
+
 test_that("neural SVI checkpoint fingerprint mismatch errors clearly", {
   snapshot <- list(
     artifact_type = "strategize_neural_svi_checkpoint_snapshot",

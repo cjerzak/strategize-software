@@ -779,3 +779,16 @@ test_that("neural backend errors with build_backend() hint when unavailable", {
     "build_backend"
   )
 })
+
+test_that("prediction API evaluates model generator bodies directly", {
+  glm_src <- paste(deparse(strategize:::cs2step_eval_outcome_model_glm), collapse = "\n")
+  neural_src <- paste(deparse(strategize:::cs2step_eval_outcome_model_neural), collapse = "\n")
+  master_src <- paste(deparse(strategize::strategize), collapse = "\n")
+
+  expect_false(grepl("deparse(generate_ModelOutcome)", glm_src, fixed = TRUE))
+  expect_false(grepl("deparse(generate_ModelOutcome_neural)", neural_src, fixed = TRUE))
+  expect_false(grepl("deparse(generate_ModelOutcome)", master_src, fixed = TRUE))
+  expect_false(grepl("deparse(generate_ModelOutcome_neural)", master_src, fixed = TRUE))
+  expect_true(grepl("eval(body(generate_ModelOutcome)", glm_src, fixed = TRUE))
+  expect_true(grepl("eval(body(generate_ModelOutcome_neural)", neural_src, fixed = TRUE))
+})

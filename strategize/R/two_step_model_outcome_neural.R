@@ -14733,8 +14733,18 @@ generate_ModelOutcome_neural <- function(){
       single_obs_idx_active <- obs_idx[obs_idx > n_universal_pair_obs] - n_universal_pair_obs
       pair_active <- length(pair_obs_idx_active) > 0L
       single_active <- length(single_obs_idx_active) > 0L
-      pair_obs_idx <- if (isTRUE(pair_active)) pair_obs_idx_active else 1L
-      single_obs_idx <- if (isTRUE(single_active)) single_obs_idx_active else 1L
+      pad_mixed_branch_idx <- function(active_idx, target_n) {
+        active_idx <- as.integer(active_idx)
+        dummy_idx <- if (length(active_idx) > 0L) active_idx[[1L]] else 1L
+        if (length(active_idx) >= target_n) {
+          return(active_idx)
+        }
+        c(active_idx, rep.int(dummy_idx, target_n - length(active_idx)))
+      }
+      pair_target_n <- if (isTRUE(compact_balanced_sampling$enabled)) compact_svi_batch_size else max(1L, length(pair_obs_idx_active))
+      single_target_n <- if (isTRUE(compact_balanced_sampling$enabled)) compact_svi_batch_size else max(1L, length(single_obs_idx_active))
+      pair_obs_idx <- pad_mixed_branch_idx(pair_obs_idx_active, pair_target_n)
+      single_obs_idx <- pad_mixed_branch_idx(single_obs_idx_active, single_target_n)
       pair_left_rows <- pair_mat[pair_obs_idx, 1L]
       pair_right_rows <- pair_mat[pair_obs_idx, 2L]
       single_rows <- universal_single_rows[single_obs_idx]
@@ -14765,17 +14775,18 @@ generate_ModelOutcome_neural <- function(){
       cov_single <- materialize_cov(single_rows)
       pair_global_obs <- pair_obs_idx
       single_global_obs <- n_universal_pair_obs + single_obs_idx
-      pair_obs_scale <- if (isTRUE(pair_active)) {
-        as.numeric(compact_sampling_n_obs()) / as.numeric(obs_idx_n) *
-          as.numeric(universal_loss_weights[pair_global_obs] %||% rep(1, length(pair_global_obs)))
-      } else {
-        rep(0, length(pair_global_obs))
+      loss_scale <- as.numeric(compact_sampling_n_obs()) / as.numeric(obs_idx_n)
+      pair_obs_scale <- rep(0, length(pair_global_obs))
+      if (isTRUE(pair_active)) {
+        pair_global_obs_active <- pair_obs_idx_active
+        pair_obs_scale[seq_along(pair_global_obs_active)] <-
+          loss_scale * as.numeric(universal_loss_weights[pair_global_obs_active] %||% rep(1, length(pair_global_obs_active)))
       }
-      single_obs_scale <- if (isTRUE(single_active)) {
-        as.numeric(compact_sampling_n_obs()) / as.numeric(obs_idx_n) *
-          as.numeric(universal_loss_weights[single_global_obs] %||% rep(1, length(single_global_obs)))
-      } else {
-        rep(0, length(single_global_obs))
+      single_obs_scale <- rep(0, length(single_global_obs))
+      if (isTRUE(single_active)) {
+        single_global_obs_active <- n_universal_pair_obs + single_obs_idx_active
+        single_obs_scale[seq_along(single_global_obs_active)] <-
+          loss_scale * as.numeric(universal_loss_weights[single_global_obs_active] %||% rep(1, length(single_global_obs_active)))
       }
       return(list(
         X_left = strenv$jnp$array(to_index_matrix(
@@ -17003,7 +17014,7 @@ generate_ModelOutcome_neural <- function(){
         return(NULL)
       }
       params_jax <- neural_svi_checkpoint_params_to_jax(prediction_params)
-      params_list <- tryCatch(as.list(params_jax), error = function(e) NULL)
+      params_list <- neural_svi_checkpoint_params_to_list(params_jax)
       if (is.null(params_list) || length(params_list) < 1L) {
         return(NULL)
       }
@@ -18422,7 +18433,13 @@ generate_ModelOutcome_neural <- function(){
     if (is.null(SVIParams)) {
       return(NULL)
     }
-    tryCatch(SVIParams[[name]], error = function(e) NULL)
+    value <- tryCatch(SVIParams[[name]], error = function(e) NULL)
+    if (cs2step_has_reticulate() &&
+        reticulate::is_py_object(value) &&
+        inherits(value, "python.builtin.NoneType")) {
+      return(NULL)
+    }
+    value
   }
   get_site_mean_or_param <- function(name) {
     draws <- get_param_draws(name)
