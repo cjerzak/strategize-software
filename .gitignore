@@ -8,6 +8,20 @@ AGENTS.md
 Rplots.pdf
 /strategize.Rcheck/
 
+# R / RStudio local state
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# R package build/check artifacts
+*.Rcheck/
+.tmp_covr_lines.csv
+
+# Local scratch/tooling
+/.tmp/
+/.claude/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
