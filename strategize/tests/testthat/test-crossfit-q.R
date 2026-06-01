@@ -37,15 +37,19 @@ crossfit_adversarial_p_list <- function() {
 }
 
 test_that("crossfit Q control validates defaults and overrides", {
+  defaults <- cs_crossfit_q_default_control()
+  expect_equal(defaults$estimators, c("dr_hajek", "dr", "ips", "snips", "model"))
+  expect_equal(defaults$headline, "dr_hajek")
+
   control <- cs_crossfit_q_default_control(list(
     folds = 2,
-    estimators = c("ips", "dr", "ips"),
+    estimators = c("ips", "dr_hajek", "ips"),
     headline = "ips",
     return_fold_results = FALSE
   ))
 
   expect_equal(control$folds, 2L)
-  expect_equal(control$estimators, c("ips", "dr"))
+  expect_equal(control$estimators, c("ips", "dr_hajek"))
   expect_equal(control$headline, "ips")
   expect_false(control$return_fold_results)
   expect_null(control$perspective_group)
@@ -151,7 +155,30 @@ test_that("crossfit Q probability weights and diagnostics are computed", {
   diagnostics <- cs_crossfit_q_weight_diagnostics(c(1, 2, 3), c(1, 2, 2))
   expect_equal(diagnostics$n, 3L)
   expect_true(is.finite(diagnostics$ess))
+  expect_equal(diagnostics$weight_sum, 5)
+  expect_equal(diagnostics$weight_sum_ratio, 5 / 3)
+  expect_true(is.finite(diagnostics$p999))
   expect_true(diagnostics$clipped)
+})
+
+test_that("Hajek-normalized DR is stable under extreme weights and flags zero denominators", {
+  y <- c(1, 0)
+  m_obs <- c(0.9, 0.9)
+  mu_policy <- c(0.5, 0.5)
+  w_extreme <- c(100, 0)
+
+  raw_dr <- mean(mu_policy + w_extreme * (y - m_obs))
+  hajek_dr <- cs_crossfit_q_dr_hajek(mu_policy, w_extreme, y, m_obs)
+
+  expect_gt(raw_dr, 1)
+  expect_true(is.finite(hajek_dr))
+  expect_true(hajek_dr >= 0 && hajek_dr <= 1)
+  expect_true(cs_crossfit_q_hajek_denominator_ok(w_extreme))
+
+  zero_weight <- c(0, 0)
+  expect_true(is.na(cs_crossfit_q_dr_hajek(mu_policy, zero_weight, y, m_obs)))
+  zero_diag <- cs_crossfit_q_weight_diagnostics(zero_weight, zero_weight)
+  expect_false(zero_diag$hajek_denominator_ok)
 })
 
 test_that("adversarial crossfit Q validation canonicalizes contests", {
@@ -293,7 +320,7 @@ test_that("adversarial crossfit Q aggregation uses global group weights", {
   control <- cs_crossfit_q_default_control(list(
     folds = 2L,
     weight_clip = 2,
-    estimators = c("dr", "ips", "snips", "model")
+    estimators = c("dr_hajek", "dr", "ips", "snips", "model")
   ))
   records <- data.frame(
     fold = c(1L, 1L, 2L, 2L),
@@ -342,15 +369,14 @@ test_that("adversarial crossfit Q aggregation uses global group weights", {
   zero_weight$weight <- 0
   zero_weight$weight_used <- 0
   zero_weight$weight_clipped <- FALSE
-  expect_error(
-    cs_crossfit_q_adversarial_aggregate(
-      records = zero_weight,
-      control = control,
-      rho = c(A = 0.25, B = 0.75),
-      groups = c("A", "B")
-    ),
-    "SNIPS denominator is zero"
+  zero_agg <- cs_crossfit_q_adversarial_aggregate(
+    records = zero_weight,
+    control = control,
+    rho = c(A = 0.25, B = 0.75),
+    groups = c("A", "B")
   )
+  expect_true(is.na(zero_agg$summary$Q_crossfit[zero_agg$summary$estimator == "dr_hajek"]))
+  expect_false(zero_agg$summary$hajek_denominator_ok[zero_agg$summary$estimator == "dr_hajek"])
 })
 
 test_that("strategize can return first-class crossfit Q fields", {
@@ -420,7 +446,8 @@ test_that("strategize can return first-class crossfit Q fields", {
   expect_true(is.finite(res$Q_reference_crossfit))
   expect_true(is.finite(res$Q_gain_crossfit))
   expect_s3_class(res$Q_crossfit_info$summary, "data.frame")
-  expect_true(all(c("dr", "ips", "snips", "model") %in% res$Q_crossfit_info$summary$estimator))
+  expect_true(all(c("dr_hajek", "dr", "ips", "snips", "model") %in%
+                    res$Q_crossfit_info$summary$estimator))
 })
 
 test_that("strategize can return first-class adversarial crossfit Q fields", {
@@ -490,7 +517,7 @@ test_that("strategize can return first-class adversarial crossfit Q fields", {
   expect_s3_class(res$Q_crossfit_info$summary, "data.frame")
   expect_s3_class(res$Q_crossfit_info$target_summary, "data.frame")
   expect_s3_class(res$Q_crossfit_info$reference_summary, "data.frame")
-  expect_true(all(c("dr", "ips", "snips", "model") %in%
+  expect_true(all(c("dr_hajek", "dr", "ips", "snips", "model") %in%
                     res$Q_crossfit_info$summary$estimator))
   expect_true(all(is.finite(res$Q_crossfit_info$summary$Q_crossfit)))
   expect_true(all(is.finite(res$Q_crossfit_info$summary$Q_reference_crossfit)))

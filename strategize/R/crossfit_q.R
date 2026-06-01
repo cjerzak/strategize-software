@@ -3,8 +3,8 @@ cs_crossfit_q_default_control <- function(control = NULL) {
     folds = 3L,
     seed = 123L,
     split_by = "pair_id",
-    estimators = c("dr", "ips", "snips", "model"),
-    headline = "dr",
+    estimators = c("dr_hajek", "dr", "ips", "snips", "model"),
+    headline = "dr_hajek",
     weight_clip = Inf,
     n_policy_draws = 1000L,
     chunk_size = 2000L,
@@ -33,7 +33,7 @@ cs_crossfit_q_default_control <- function(control = NULL) {
   } else {
     as.character(out$perspective_group)[[1L]]
   }
-  valid_estimators <- c("dr", "ips", "snips", "model")
+  valid_estimators <- c("dr_hajek", "dr", "ips", "snips", "model")
   bad_estimators <- setdiff(out$estimators, valid_estimators)
   if (length(bad_estimators)) {
     stop(sprintf(
@@ -854,6 +854,38 @@ cs_crossfit_q_adversarial_fold_records <- function(train_result, Y, W,
   )
 }
 
+cs_crossfit_q_dr_hajek <- function(mu_policy, w_used, y, m_obs, a = NULL) {
+  n <- length(y)
+  if (is.null(a)) {
+    a <- rep(1 / n, n)
+  } else {
+    a <- as.numeric(a)
+    if (length(a) != n) {
+      stop("'a' must have one entry per outcome row.", call. = FALSE)
+    }
+  }
+  mu_policy <- as.numeric(mu_policy)
+  w_used <- as.numeric(w_used)
+  y <- as.numeric(y)
+  m_obs <- as.numeric(m_obs)
+  denom <- sum(a * w_used, na.rm = TRUE)
+  if (!is.finite(denom) || denom <= 0) {
+    return(NA_real_)
+  }
+  sum(a * mu_policy, na.rm = TRUE) +
+    sum(a * w_used * (y - m_obs), na.rm = TRUE) / denom
+}
+
+cs_crossfit_q_hajek_denominator_ok <- function(w_used, a = NULL) {
+  w_used <- as.numeric(w_used)
+  if (is.null(a)) {
+    denom <- sum(w_used, na.rm = TRUE)
+  } else {
+    denom <- sum(as.numeric(a) * w_used, na.rm = TRUE)
+  }
+  is.finite(denom) && denom > 0
+}
+
 cs_crossfit_q_adversarial_aggregate <- function(records, control, rho, groups) {
   if (!nrow(records)) {
     stop("No adversarial cross-fit heldout records were available.", call. = FALSE)
@@ -867,25 +899,24 @@ cs_crossfit_q_adversarial_aggregate <- function(records, control, rho, groups) {
     as.numeric(n_by_group[records$respondent_group])
   records$a <- records$a / sum(records$a)
 
-  summarize_one <- function(df, strict_snips = TRUE) {
+  summarize_one <- function(df) {
     w <- df$weight_used
     a <- df$a
     y <- df$Y_perspective
     denom <- sum(a * w, na.rm = TRUE)
-    if (strict_snips && "snips" %in% control$estimators &&
-        (!is.finite(denom) || denom <= 0)) {
-      stop(
-        "Adversarial crossfit_q SNIPS denominator is zero. Use a target policy with heldout support or remove 'snips' from crossfit_q_control$estimators.",
-        call. = FALSE
-      )
-    }
+    reference_denom <- sum(a, na.rm = TRUE)
+    hajek_ok <- is.finite(denom) && denom > 0 &&
+      is.finite(reference_denom) && reference_denom > 0
+    diagnostics <- cs_crossfit_q_weight_diagnostics(df$weight, df$weight_used)
     target <- c(
+      dr_hajek = cs_crossfit_q_dr_hajek(df$mu_target, w, y, df$m_obs, a = a),
       ips = sum(a * w * y, na.rm = TRUE),
       snips = if (denom > 0) sum(a * w * y, na.rm = TRUE) / denom else NA_real_,
       model = sum(a * df$mu_target, na.rm = TRUE),
       dr = sum(a * (df$mu_target + w * (y - df$m_obs)), na.rm = TRUE)
     )
     reference <- c(
+      dr_hajek = cs_crossfit_q_dr_hajek(df$mu_reference, rep(1, nrow(df)), y, df$m_obs, a = a),
       ips = sum(a * y, na.rm = TRUE),
       snips = sum(a * y, na.rm = TRUE),
       model = sum(a * df$mu_reference, na.rm = TRUE),
@@ -898,19 +929,29 @@ cs_crossfit_q_adversarial_aggregate <- function(records, control, rho, groups) {
       Q_reference_crossfit = as.numeric(reference[estimators]),
       Q_gain_crossfit = as.numeric(target[estimators] - reference[estimators]),
       n_records = nrow(df),
+      weight_sum = diagnostics$weight_sum,
+      weight_mean = diagnostics$weight_mean,
+      weight_sum_ratio = diagnostics$weight_sum_ratio,
+      hajek_denominator_ok = hajek_ok,
+      p50 = diagnostics$p50,
+      p90 = diagnostics$p90,
+      p95 = diagnostics$p95,
+      p99 = diagnostics$p99,
+      p999 = diagnostics$p999,
       ess = ess_fxn(a * w),
       ess_fraction = ess_fxn(a * w) / nrow(df),
-      max_weight = max(df$weight, na.rm = TRUE),
-      mean_weight = mean(df$weight, na.rm = TRUE),
+      mean_ess_fraction = ess_fxn(a * w) / nrow(df),
+      max_weight = diagnostics$max_weight,
+      mean_weight = diagnostics$mean_weight,
       snips_denominator = denom,
       any_weight_clipped = any(df$weight_clipped),
       stringsAsFactors = FALSE
     )
   }
 
-  summary_df <- summarize_one(records, strict_snips = TRUE)
+  summary_df <- summarize_one(records)
   fold_rows <- lapply(split(records, records$fold), function(df) {
-    out <- summarize_one(df, strict_snips = FALSE)
+    out <- summarize_one(df)
     out$fold <- df$fold[[1L]]
     out
   })
@@ -927,16 +968,27 @@ cs_crossfit_q_adversarial_aggregate <- function(records, control, rho, groups) {
 }
 
 cs_crossfit_q_weight_diagnostics <- function(w, w_used) {
-  quantile_probs <- c(0, 0.5, 0.9, 0.95, 0.99, 1)
+  w <- as.numeric(w)
+  w_used <- as.numeric(w_used)
+  quantile_probs <- c(0.5, 0.9, 0.95, 0.99, 0.999)
   q <- stats::quantile(w, probs = quantile_probs, na.rm = TRUE, names = FALSE)
-  names(q) <- paste0("p", c("00", "50", "90", "95", "99", "100"))
+  names(q) <- paste0("p", c("50", "90", "95", "99", "999"))
+  weight_sum <- sum(w_used, na.rm = TRUE)
   list(
-    n = length(w),
+    n = length(w_used),
+    weight_sum = weight_sum,
+    weight_mean = mean(w_used, na.rm = TRUE),
+    weight_sum_ratio = weight_sum / length(w_used),
+    hajek_denominator_ok = is.finite(weight_sum) && weight_sum > 0,
     ess = ess_fxn(w_used),
     ess_fraction = ess_fxn(w_used) / length(w_used),
-    mean = mean(w, na.rm = TRUE),
-    max = max(w, na.rm = TRUE),
-    quantiles = q,
+    mean_weight = mean(w, na.rm = TRUE),
+    max_weight = max(w, na.rm = TRUE),
+    p50 = q[["p50"]],
+    p90 = q[["p90"]],
+    p95 = q[["p95"]],
+    p99 = q[["p99"]],
+    p999 = q[["p999"]],
     clipped = any(w_used != w, na.rm = TRUE)
   )
 }
@@ -978,8 +1030,13 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
   w_ref <- ifelse(p_focal > 0, p_focal / p_focal, 0)
   w_used <- pmin(w, control$weight_clip)
   w_ref_used <- pmin(w_ref, control$weight_clip)
+  diagnostics <- cs_crossfit_q_weight_diagnostics(w, w_used)
+  reference_diagnostics <- cs_crossfit_q_weight_diagnostics(w_ref, w_ref_used)
+  hajek_denominator_ok <- isTRUE(diagnostics$hajek_denominator_ok) &&
+    isTRUE(reference_diagnostics$hajek_denominator_ok)
 
   estimates <- list(
+    dr_hajek = cs_crossfit_q_dr_hajek(mu_policy, w_used, y_oriented, m_obs),
     ips = mean(w_used * y_oriented, na.rm = TRUE),
     snips = if (sum(w_used, na.rm = TRUE) > 0) {
       sum(w_used * y_oriented, na.rm = TRUE) / sum(w_used, na.rm = TRUE)
@@ -990,6 +1047,7 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
     dr = mean(mu_policy + w_used * (y_oriented - m_obs), na.rm = TRUE)
   )
   reference <- list(
+    dr_hajek = cs_crossfit_q_dr_hajek(mu_reference, w_ref_used, y_oriented, m_obs),
     ips = mean(w_ref_used * y_oriented, na.rm = TRUE),
     snips = if (sum(w_ref_used, na.rm = TRUE) > 0) {
       sum(w_ref_used * y_oriented, na.rm = TRUE) / sum(w_ref_used, na.rm = TRUE)
@@ -1006,14 +1064,24 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
     n_pairs = nrow(pair_mat_test),
     n_oriented = length(y_oriented),
     estimator = names(estimates),
-    Q_crossfit = as.numeric(estimates),
-    Q_reference_crossfit = as.numeric(reference),
-    Q_gain_crossfit = as.numeric(estimates) - as.numeric(reference),
-    ess = cs_crossfit_q_weight_diagnostics(w, w_used)$ess,
-    ess_fraction = cs_crossfit_q_weight_diagnostics(w, w_used)$ess_fraction,
-    max_weight = max(w, na.rm = TRUE),
-    mean_weight = mean(w, na.rm = TRUE),
-    weight_clipped = any(w_used != w, na.rm = TRUE),
+    Q_crossfit = as.numeric(unlist(estimates, use.names = FALSE)),
+    Q_reference_crossfit = as.numeric(unlist(reference, use.names = FALSE)),
+    Q_gain_crossfit = as.numeric(unlist(estimates, use.names = FALSE)) -
+      as.numeric(unlist(reference, use.names = FALSE)),
+    weight_sum = diagnostics$weight_sum,
+    weight_mean = diagnostics$weight_mean,
+    weight_sum_ratio = diagnostics$weight_sum_ratio,
+    hajek_denominator_ok = hajek_denominator_ok,
+    p50 = diagnostics$p50,
+    p90 = diagnostics$p90,
+    p95 = diagnostics$p95,
+    p99 = diagnostics$p99,
+    p999 = diagnostics$p999,
+    ess = diagnostics$ess,
+    ess_fraction = diagnostics$ess_fraction,
+    max_weight = diagnostics$max_weight,
+    mean_weight = diagnostics$mean_weight,
+    weight_clipped = diagnostics$clipped,
     stringsAsFactors = FALSE
   )
 }
@@ -1264,22 +1332,42 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
   summary_rows <- lapply(split(fold_df, fold_df$estimator), function(df) {
     weights <- df$n_oriented / sum(df$n_oriented)
     vals <- vapply(aggregate_cols, function(nm) {
-      sum(df[[nm]] * weights, na.rm = TRUE)
+      if (any(!is.finite(df[[nm]]))) {
+        NA_real_
+      } else {
+        sum(df[[nm]] * weights)
+      }
     }, numeric(1))
+    weight_sum <- sum(df$weight_sum, na.rm = TRUE)
+    n_oriented <- sum(df$n_oriented)
+    ess <- sum(df$ess, na.rm = TRUE)
     data.frame(
       estimator = df$estimator[[1L]],
       Q_crossfit = vals[["Q_crossfit"]],
       Q_reference_crossfit = vals[["Q_reference_crossfit"]],
       Q_gain_crossfit = vals[["Q_gain_crossfit"]],
       n_folds = length(unique(df$fold)),
-      n_oriented = sum(df$n_oriented),
+      n_oriented = n_oriented,
+      weight_sum = weight_sum,
+      weight_mean = if (n_oriented > 0) weight_sum / n_oriented else NA_real_,
+      weight_sum_ratio = if (n_oriented > 0) weight_sum / n_oriented else NA_real_,
+      hajek_denominator_ok = all(df$hajek_denominator_ok),
+      p50 = stats::weighted.mean(df$p50, weights, na.rm = TRUE),
+      p90 = stats::weighted.mean(df$p90, weights, na.rm = TRUE),
+      p95 = stats::weighted.mean(df$p95, weights, na.rm = TRUE),
+      p99 = stats::weighted.mean(df$p99, weights, na.rm = TRUE),
+      p999 = stats::weighted.mean(df$p999, weights, na.rm = TRUE),
+      ess = ess,
+      ess_fraction = if (n_oriented > 0) ess / n_oriented else NA_real_,
       mean_ess_fraction = mean(df$ess_fraction, na.rm = TRUE),
       max_weight = max(df$max_weight, na.rm = TRUE),
+      mean_weight = stats::weighted.mean(df$mean_weight, weights, na.rm = TRUE),
       any_weight_clipped = any(df$weight_clipped),
       stringsAsFactors = FALSE
     )
   })
   summary_df <- do.call(rbind, summary_rows)
+  summary_df <- summary_df[match(control$estimators, summary_df$estimator), , drop = FALSE]
   headline_row <- summary_df[summary_df$estimator == control$headline, , drop = FALSE]
   list(
     Q_crossfit = headline_row$Q_crossfit[[1L]],
