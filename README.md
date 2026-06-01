@@ -141,7 +141,7 @@ GPL-3.
 
 ## References
 
-Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2026. "MiniMax Learning of Interpretable Factored Stochastic Policies from Conjoint Data, with Uncertainty Quantification." *International Conference on Machine Learning (ICML)*. [[PDF]](https://arxiv.org/abs/2504.19043) [[bib]](https://connorjerzak.com/wp-content/uploads/2025/04/Strat.txt)
+Jerzak, Connor T., Priyanshi Chandra, and Rishi Hazra. 2026. "MiniMax Learning of Interpretable Factored Stochastic Policies from Conjoint Data, with Uncertainty Quantification." *International Conference on Machine Learning (ICML)*. [[ICML]](https://icml.cc/virtual/2026/poster/65152) [[PDF]](https://arxiv.org/pdf/2504.19043) [[bib]](https://connorjerzak.com/wp-content/uploads/2025/04/Strat.txt)
 
 ```bibtex
 @inproceedings{jerzak2026minimax,

@@ -1,7 +1,6 @@
 \name{build_text_embedding_backend}
 \alias{build_text_embedding_backend}
-\alias{inspect_text_embedding_backend}
-\title{Inspect or build a host-aware text embedding backend}
+\title{Build a host-aware text-embedding backend}
 \usage{
 build_text_embedding_backend(
   conda_env = "strategize_env",
@@ -10,14 +9,6 @@ build_text_embedding_backend(
   profile = "portable",
   cache_dir = NULL,
   required = TRUE,
-  conda = "auto"
-)
-
-inspect_text_embedding_backend(
-  conda_env = "strategize_env",
-  family = "qwen3",
-  runtime = "auto",
-  profile = "portable",
   conda = "auto"
 )
 }
@@ -37,9 +28,7 @@ inspect_text_embedding_backend(
 \item{conda}{Conda binary to use. Defaults to \code{"auto"}.}
 }
 \value{
-\code{inspect_text_embedding_backend()} returns a serializable list describing the host, Python env health, candidate runtimes, and the selected backend.
-
-\code{build_text_embedding_backend()} returns a list with \code{$fn}, \code{$spec}, and \code{$runtime}.
+A list with \code{$fn}, \code{$spec}, and \code{$runtime}.
 }
 \description{
 Resolve a text embedding backend that is compatible with the current machine while preserving a portable Qwen-family embedding surface across Mac and Linux hosts.
