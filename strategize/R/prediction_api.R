@@ -170,27 +170,148 @@ cs2step_has_reticulate <- function() {
   requireNamespace("reticulate", quietly = TRUE)
 }
 
-cs2step_py_to_r <- function(x) {
+cs2step_py_last_error_message <- function() {
+  if (!cs2step_has_reticulate()) {
+    return(character(0))
+  }
+  err <- tryCatch(reticulate::py_last_error(), error = function(e) NULL)
+  if (is.null(err)) {
+    return(character(0))
+  }
+  pieces <- c(
+    type = err$type %||% NULL,
+    value = err$value %||% NULL,
+    traceback = if (is.null(err$traceback)) NULL else paste(err$traceback, collapse = "\n")
+  )
+  pieces <- as.character(pieces)
+  pieces[nzchar(pieces)]
+}
+
+cs2step_py_object_summary <- function(x) {
+  if (!cs2step_has_reticulate() || !reticulate::is_py_object(x)) {
+    return("")
+  }
+  object_type <- tryCatch(
+    as.character(reticulate::py_to_r(x$`__class__`$`__name__`)),
+    error = function(e) NULL
+  )
+  object_shape <- tryCatch(
+    paste(as.character(reticulate::py_to_r(x$shape)), collapse = "x"),
+    error = function(e) NULL
+  )
+  object_dtype <- tryCatch(
+    as.character(reticulate::py_to_r(x$dtype)),
+    error = function(e) NULL
+  )
+  details <- c(
+    if (length(object_type) && nzchar(object_type)) sprintf("type=%s", object_type),
+    if (length(object_shape) && nzchar(object_shape)) sprintf("shape=%s", object_shape),
+    if (length(object_dtype) && nzchar(object_dtype)) sprintf("dtype=%s", object_dtype)
+  )
+  if (!length(details)) {
+    return("")
+  }
+  sprintf(" (%s)", paste(details, collapse = ", "))
+}
+
+cs2step_stop_py_conversion_failure <- function(context, x, attempts) {
+  last_error <- cs2step_py_last_error_message()
+  if (length(last_error)) {
+    attempts <- c(attempts, sprintf("reticulate::py_last_error(): %s", paste(last_error, collapse = "\n")))
+  }
+  attempts <- unique(attempts[nzchar(attempts)])
+  attempt_text <- if (length(attempts)) {
+    paste0("\n- ", paste(attempts, collapse = "\n- "))
+  } else {
+    ""
+  }
+  if (nchar(attempt_text) > 6000L) {
+    attempt_text <- paste0(substr(attempt_text, 1L, 6000L), "\n- <conversion diagnostics truncated>")
+  }
+  stop(
+    sprintf(
+      "Failed to convert %s from Python to R%s.%s",
+      context,
+      cs2step_py_object_summary(x),
+      attempt_text
+    ),
+    call. = FALSE
+  )
+}
+
+cs2step_py_to_r <- function(x, context = "Python object") {
   if (is.null(x)) {
     return(NULL)
   }
   if (exists("strategize_jax_block_until_ready", mode = "function")) {
-    strategize_jax_block_until_ready(x)
+    tryCatch(
+      strategize_jax_block_until_ready(x),
+      error = function(e) {
+        stop(
+          sprintf(
+            "Failed while waiting for %s to become ready%s: %s",
+            context,
+            cs2step_py_object_summary(x),
+            conditionMessage(e)
+          ),
+          call. = FALSE
+        )
+      }
+    )
   }
   if (!cs2step_has_reticulate()) {
     return(x)
   }
   if (reticulate::is_py_object(x)) {
-    has_np <- exists("strenv") && exists("np", envir = strenv, inherits = FALSE)
-    if (isTRUE(has_np)) {
-      return(tryCatch(
-        reticulate::py_to_r(strenv$np$array(x)),
+    attempts <- character(0)
+    try_convert <- function(label, expr) {
+      out <- tryCatch(
+        force(expr),
         error = function(e) {
-          tryCatch(reticulate::py_to_r(x), error = function(e2) x)
+          attempts <<- c(attempts, sprintf("%s: %s", label, conditionMessage(e)))
+          NULL
         }
-      ))
+      )
+      if (is.null(out)) {
+        return(NULL)
+      }
+      if (reticulate::is_py_object(out)) {
+        attempts <<- c(
+          attempts,
+          sprintf("%s: returned an unconverted Python object%s", label, cs2step_py_object_summary(out))
+        )
+        return(NULL)
+      }
+      out
     }
-    return(tryCatch(reticulate::py_to_r(x), error = function(e) x))
+
+    has_jax <- exists("strenv") &&
+      exists("jax", envir = strenv, inherits = FALSE)
+    has_np <- exists("strenv") && exists("np", envir = strenv, inherits = FALSE)
+    if (isTRUE(has_jax) && isTRUE(has_np)) {
+      out <- try_convert(
+        "py_to_r(np.asarray(jax.device_get(x)))",
+        reticulate::py_to_r(strenv$np$asarray(strenv$jax$device_get(x)))
+      )
+      if (!is.null(out)) {
+        return(out)
+      }
+    }
+    if (isTRUE(has_np)) {
+      out <- try_convert("py_to_r(np.asarray(x))", reticulate::py_to_r(strenv$np$asarray(x)))
+      if (!is.null(out)) {
+        return(out)
+      }
+      out <- try_convert("py_to_r(np.array(x))", reticulate::py_to_r(strenv$np$array(x)))
+      if (!is.null(out)) {
+        return(out)
+      }
+    }
+    out <- try_convert("py_to_r(x)", reticulate::py_to_r(x))
+    if (!is.null(out)) {
+      return(out)
+    }
+    cs2step_stop_py_conversion_failure(context, x, attempts)
   }
   x
 }
@@ -1633,7 +1754,7 @@ cs2step_neural_prepare_params <- function(object,
 }
 
 cs2step_neural_to_r_array <- function(x) {
-  cs2step_py_to_r(x)
+  cs2step_py_to_r(x, context = "neural prediction array")
 }
 
 cs2step_neural_coerce_prediction_output <- function(pred,
