@@ -473,6 +473,37 @@ test_that("cs2step_build_pair_mat preserves first-seen pair order", {
   )
 })
 
+test_that("cs2step_build_pair_mat row hash avoids integer overflow warnings", {
+  long_value <- paste(rep("long-row-token", 5000L), collapse = "|")
+  W <- data.frame(
+    price = c(long_value, paste0(long_value, "-right"), long_value, paste0(long_value, "-alt")),
+    stringsAsFactors = FALSE
+  )
+  pair_id <- c("b_pair", "b_pair", "a_pair", "a_pair")
+  profile_order <- c(2L, 1L, 1L, 2L)
+
+  pair_info <- testthat::expect_warning(
+    strategize:::cs2step_build_pair_mat(
+      pair_id = pair_id,
+      W = W,
+      profile_order = profile_order
+    ),
+    NA
+  )
+  pair_info_again <- strategize:::cs2step_build_pair_mat(
+    pair_id = pair_id,
+    W = W,
+    profile_order = profile_order
+  )
+
+  testthat::expect_identical(pair_info$pair_mat, pair_info_again$pair_mat)
+  testthat::expect_identical(names(pair_info$pair_sizes), c("b_pair", "a_pair"))
+  testthat::expect_identical(
+    unname(pair_info$pair_mat),
+    matrix(c(2L, 1L, 3L, 4L), ncol = 2L, byrow = TRUE)
+  )
+})
+
 test_that("cs2step_build_pair_mat is stable across collation locales", {
   W <- data.frame(
     price = c("A", "B", "A", "B", "A", "B"),

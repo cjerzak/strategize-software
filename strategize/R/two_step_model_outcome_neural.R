@@ -8736,7 +8736,7 @@ cs2step_build_pair_mat <- function(pair_id,
         if (!length(ints)) {
           return(0)
         }
-        sum(ints * seq_along(ints)) %% 2147483647
+        sum(as.numeric(ints) * seq_along(ints)) %% 2147483647
       }, numeric(1))
     } else {
       seq_len(n_rows)
