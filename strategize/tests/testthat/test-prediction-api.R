@@ -609,6 +609,9 @@ test_that("legacy neural model upgrades use portable attention defaults", {
   testthat::expect_identical(upgraded$low_rank_logit_normalization, "none")
   testthat::expect_null(upgraded$low_rank_head_weight_target_rms)
   testthat::expect_null(upgraded$low_rank_rc_out_target_rms)
+  testthat::expect_false(upgraded$learned_pairwise_bernoulli_logit_scale)
+  testthat::expect_equal(upgraded$pairwise_bernoulli_logit_scale, 1)
+  testthat::expect_null(upgraded$pairwise_bernoulli_logit_scale_prior_sd)
   testthat::expect_false(upgraded$has_respondent_cls)
   testthat::expect_false(upgraded$has_candidate_cls)
   testthat::expect_false(upgraded$has_low_rank_interaction)
@@ -647,6 +650,9 @@ test_that("neural model packing preserves readout and low-rank metadata", {
     low_rank_logit_normalization = "rms",
     low_rank_head_weight_target_rms = 1 / (sqrt(2) * 16),
     low_rank_rc_out_target_rms = 1 / (sqrt(2) * 8),
+    learned_pairwise_bernoulli_logit_scale = TRUE,
+    pairwise_bernoulli_logit_scale_prior_sd = 0.5,
+    pairwise_bernoulli_logit_scale = 3.25,
     has_respondent_cls = TRUE,
     has_candidate_cls = TRUE,
     has_low_rank_interaction = TRUE,
@@ -662,6 +668,9 @@ test_that("neural model packing preserves readout and low-rank metadata", {
   testthat::expect_identical(packed$low_rank_logit_normalization, "rms")
   testthat::expect_equal(packed$low_rank_head_weight_target_rms, 1 / (sqrt(2) * 16))
   testthat::expect_equal(packed$low_rank_rc_out_target_rms, 1 / (sqrt(2) * 8))
+  testthat::expect_true(packed$learned_pairwise_bernoulli_logit_scale)
+  testthat::expect_equal(packed$pairwise_bernoulli_logit_scale_prior_sd, 0.5)
+  testthat::expect_equal(packed$pairwise_bernoulli_logit_scale, 3.25)
   testthat::expect_true(packed$has_respondent_cls)
   testthat::expect_true(packed$has_candidate_cls)
   testthat::expect_true(packed$has_low_rank_interaction)
@@ -669,6 +678,35 @@ test_that("neural model packing preserves readout and low-rank metadata", {
     packed$readout_embedding_families,
     c("choice", "respondent_cls", "candidate_cls")
   )
+})
+
+test_that("mixed pairwise prediction coercion applies learned Bernoulli scale once", {
+  model_info <- list(
+    likelihood = "mixed",
+    learned_pairwise_bernoulli_logit_scale = TRUE,
+    pairwise_bernoulli_logit_scale = 4,
+    low_rank_interaction_rank = 0L,
+    low_rank_logit_transform = "none"
+  )
+  pred <- matrix(c(0.25, -0.25), ncol = 1L)
+
+  pairwise_prob <- strategize:::cs2step_neural_coerce_prediction_output(
+    pred,
+    likelihood = "mixed",
+    target_likelihood = "bernoulli",
+    model_info = model_info,
+    pairwise_prediction = TRUE
+  )
+  single_prob <- strategize:::cs2step_neural_coerce_prediction_output(
+    pred,
+    likelihood = "mixed",
+    target_likelihood = "bernoulli",
+    model_info = model_info,
+    pairwise_prediction = FALSE
+  )
+
+  testthat::expect_equal(pairwise_prob, stats::plogis(c(1, -1)))
+  testthat::expect_equal(single_prob, stats::plogis(c(0.25, -0.25)))
 })
 
 test_that("neural jit wrapper cache reuses identical experiment descriptions", {

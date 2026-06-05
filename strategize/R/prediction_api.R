@@ -1784,7 +1784,7 @@ cs2step_neural_coerce_prediction_output <- function(pred,
     }
     if (identical(target_likelihood, "bernoulli")) {
       if (isTRUE(pairwise_prediction)) {
-        logits[, 1L] <- neural_apply_low_rank_logit_transform_r(
+        logits[, 1L] <- neural_apply_pairwise_bernoulli_logit_adjustment_r(
           logits[, 1L],
           model_info
         )
@@ -2487,6 +2487,13 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   out <- model_info
   out$jit_cache_key <- NULL
 
+  if (is.null(out$pairwise_bernoulli_logit_scale) &&
+      !is.null(out$params$log_pairwise_bernoulli_logit_scale)) {
+    out$pairwise_bernoulli_logit_scale <- exp(
+      as.numeric(cs2step_neural_to_r_array(out$params$log_pairwise_bernoulli_logit_scale))[[1L]]
+    )
+  }
+
   if (!is.null(out$params)) {
     out$params <- if (isTRUE(drop_params)) {
       NULL
@@ -2707,6 +2714,29 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   if (!is.null(out$low_rank_rc_out_target_rms)) {
     out$low_rank_rc_out_target_rms <- as.numeric(out$low_rank_rc_out_target_rms)
   }
+  if (is.null(out$learned_pairwise_bernoulli_logit_scale)) {
+    out$learned_pairwise_bernoulli_logit_scale <- FALSE
+  } else {
+    out$learned_pairwise_bernoulli_logit_scale <-
+      neural_resolve_learned_pairwise_bernoulli_logit_scale(
+        out$learned_pairwise_bernoulli_logit_scale
+      )
+  }
+  if (isTRUE(out$learned_pairwise_bernoulli_logit_scale)) {
+    out$pairwise_bernoulli_logit_scale_prior_sd <-
+      neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(
+        out$pairwise_bernoulli_logit_scale_prior_sd %||% NULL,
+        enabled = TRUE
+      )
+    scale <- suppressWarnings(as.numeric(out$pairwise_bernoulli_logit_scale %||% NA_real_))
+    if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+      scale <- 1.0
+    }
+    out$pairwise_bernoulli_logit_scale <- as.numeric(scale)
+  } else {
+    out$pairwise_bernoulli_logit_scale_prior_sd <- NULL
+    out$pairwise_bernoulli_logit_scale <- 1.0
+  }
   if (!is.null(out$attention_backend)) {
     out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
   }
@@ -2795,6 +2825,29 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     out$low_rank_head_weight_target_rms <- as.numeric(out$low_rank_head_weight_target_rms)
     out$low_rank_rc_out_target_rms <- as.numeric(out$low_rank_rc_out_target_rms)
   }
+  if (is.null(out$learned_pairwise_bernoulli_logit_scale)) {
+    out$learned_pairwise_bernoulli_logit_scale <- FALSE
+  } else {
+    out$learned_pairwise_bernoulli_logit_scale <-
+      neural_resolve_learned_pairwise_bernoulli_logit_scale(
+        out$learned_pairwise_bernoulli_logit_scale
+      )
+  }
+  if (isTRUE(out$learned_pairwise_bernoulli_logit_scale)) {
+    out$pairwise_bernoulli_logit_scale_prior_sd <-
+      neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(
+        out$pairwise_bernoulli_logit_scale_prior_sd %||% NULL,
+        enabled = TRUE
+      )
+    scale <- suppressWarnings(as.numeric(out$pairwise_bernoulli_logit_scale %||% NA_real_))
+    if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+      scale <- 1.0
+    }
+    out$pairwise_bernoulli_logit_scale <- as.numeric(scale)
+  } else {
+    out$pairwise_bernoulli_logit_scale_prior_sd <- NULL
+    out$pairwise_bernoulli_logit_scale <- 1.0
+  }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(
       as.character(out$token_family_levels),
@@ -2837,6 +2890,12 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   }
   out <- model_info
   out$jit_cache_key <- NULL
+  if (is.null(out$pairwise_bernoulli_logit_scale) &&
+      !is.null(out$params$log_pairwise_bernoulli_logit_scale)) {
+    out$pairwise_bernoulli_logit_scale <- exp(
+      as.numeric(cs2step_neural_to_r_array(out$params$log_pairwise_bernoulli_logit_scale))[[1L]]
+    )
+  }
   if (is.null(out$pairwise_context_mode)) {
     out$pairwise_context_mode <- "stage_free"
   }
@@ -2999,6 +3058,29 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   } else {
     out$low_rank_head_weight_target_rms <- as.numeric(out$low_rank_head_weight_target_rms)
     out$low_rank_rc_out_target_rms <- as.numeric(out$low_rank_rc_out_target_rms)
+  }
+  if (is.null(out$learned_pairwise_bernoulli_logit_scale)) {
+    out$learned_pairwise_bernoulli_logit_scale <- FALSE
+  } else {
+    out$learned_pairwise_bernoulli_logit_scale <-
+      neural_resolve_learned_pairwise_bernoulli_logit_scale(
+        out$learned_pairwise_bernoulli_logit_scale
+      )
+  }
+  if (isTRUE(out$learned_pairwise_bernoulli_logit_scale)) {
+    out$pairwise_bernoulli_logit_scale_prior_sd <-
+      neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(
+        out$pairwise_bernoulli_logit_scale_prior_sd %||% NULL,
+        enabled = TRUE
+      )
+    scale <- suppressWarnings(as.numeric(out$pairwise_bernoulli_logit_scale %||% NA_real_))
+    if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+      scale <- 1.0
+    }
+    out$pairwise_bernoulli_logit_scale <- as.numeric(scale)
+  } else {
+    out$pairwise_bernoulli_logit_scale_prior_sd <- NULL
+    out$pairwise_bernoulli_logit_scale <- 1.0
   }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(

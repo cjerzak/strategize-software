@@ -1355,6 +1355,11 @@ neural_params_from_theta <- function(theta_vec, model_info){
     }
     params[[param_names[[i_]]]] <- strenv$jnp$reshape(slice, as.integer(shape_use))
   }
+  if (!is.null(params$log_pairwise_bernoulli_logit_scale)) {
+    params$pairwise_bernoulli_logit_scale <- strenv$jnp$exp(
+      params$log_pairwise_bernoulli_logit_scale
+    )
+  }
   params
 }
 
@@ -1466,6 +1471,9 @@ neural_build_param_schema <- function(params,
   }
   if (!is.null(params$W_rc_r) || !is.null(params$W_rc_c) || !is.null(params$W_rc_out)) {
     param_names <- c(param_names, "alpha_rc", "W_rc_r", "W_rc_c", "W_rc_out")
+  }
+  if (!is.null(params$log_pairwise_bernoulli_logit_scale)) {
+    param_names <- c(param_names, "log_pairwise_bernoulli_logit_scale")
   }
   if (isTRUE(neural_has_stacked_standard_transformer(params))) {
     param_names <- c(param_names, neural_standard_transformer_stack_names(params))
@@ -2452,6 +2460,49 @@ neural_resolve_low_rank_interaction_rank <- function(value = NULL) {
   as.integer(rank)
 }
 
+neural_resolve_learned_pairwise_bernoulli_logit_scale <- function(value = NULL) {
+  if (is.null(value)) {
+    return(FALSE)
+  }
+  if (is.logical(value)) {
+    if (length(value) != 1L || is.na(value)) {
+      stop(
+        "'learned_pairwise_bernoulli_logit_scale' must be TRUE or FALSE.",
+        call. = FALSE
+      )
+    }
+    return(isTRUE(value))
+  }
+  if (is.character(value)) {
+    mode <- tolower(trimws(as.character(value[[1L]])))
+    if (mode %in% c("true", "t", "yes", "y", "1", "learned", "on")) {
+      return(TRUE)
+    }
+    if (mode %in% c("false", "f", "no", "n", "0", "none", "off")) {
+      return(FALSE)
+    }
+  }
+  stop(
+    "'learned_pairwise_bernoulli_logit_scale' must be TRUE/FALSE or 'learned'/'off'.",
+    call. = FALSE
+  )
+}
+
+neural_resolve_pairwise_bernoulli_logit_scale_prior_sd <- function(value = NULL,
+                                                                   enabled = FALSE) {
+  if (!isTRUE(enabled)) {
+    return(NULL)
+  }
+  prior_sd <- if (is.null(value)) 0.5 else suppressWarnings(as.numeric(value[[1L]]))
+  if (length(prior_sd) != 1L || is.na(prior_sd) || !is.finite(prior_sd) || prior_sd <= 0) {
+    stop(
+      "'pairwise_bernoulli_logit_scale_prior_sd' must be a positive finite scalar.",
+      call. = FALSE
+    )
+  }
+  as.numeric(prior_sd)
+}
+
 neural_normalize_low_rank_logit_transform <- function(value = NULL) {
   if (is.null(value)) {
     return("none")
@@ -2659,6 +2710,31 @@ neural_low_rank_logit_normalization_enabled <- function(model_info = NULL,
     length(rc_target) == 1L && is.finite(rc_target) && rc_target > 0
 }
 
+neural_pairwise_bernoulli_logit_scale_enabled <- function(model_info = NULL) {
+  if (is.null(model_info)) {
+    return(FALSE)
+  }
+  isTRUE(model_info$learned_pairwise_bernoulli_logit_scale)
+}
+
+neural_pairwise_bernoulli_logit_scale_from_params <- function(params = NULL,
+                                                              model_info = NULL) {
+  if (!isTRUE(neural_pairwise_bernoulli_logit_scale_enabled(model_info))) {
+    return(NULL)
+  }
+  if (!is.null(params$pairwise_bernoulli_logit_scale)) {
+    return(params$pairwise_bernoulli_logit_scale)
+  }
+  if (!is.null(params$log_pairwise_bernoulli_logit_scale)) {
+    return(strenv$jnp$exp(params$log_pairwise_bernoulli_logit_scale))
+  }
+  scale <- suppressWarnings(as.numeric(model_info$pairwise_bernoulli_logit_scale %||% NA_real_))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    return(NULL)
+  }
+  strenv$jnp$array(scale, dtype = strenv$dtj)
+}
+
 neural_softclip_jnp <- function(x, low, high, softness) {
   s <- strenv$jnp$array(as.numeric(softness), dtype = x$dtype %||% strenv$dtj)
   low_j <- strenv$jnp$array(as.numeric(low), dtype = x$dtype %||% strenv$dtj)
@@ -2716,6 +2792,47 @@ neural_apply_pairwise_classification_logit_transform <- function(logits,
   strenv$jnp$concatenate(list(first_col, rest), axis = 1L)
 }
 
+neural_apply_pairwise_bernoulli_logit_scale <- function(logits,
+                                                        model_info = NULL,
+                                                        scale = NULL,
+                                                        likelihood_code_obs = NULL,
+                                                        pairwise_obs = FALSE) {
+  if (!isTRUE(pairwise_obs) ||
+      !isTRUE(neural_pairwise_bernoulli_logit_scale_enabled(model_info))) {
+    return(logits)
+  }
+  scale <- scale %||% neural_pairwise_bernoulli_logit_scale_from_params(
+    params = NULL,
+    model_info = model_info
+  )
+  if (is.null(scale)) {
+    return(logits)
+  }
+  scale <- strenv$jnp$array(scale, dtype = logits$dtype %||% strenv$dtj)
+  likelihood <- tolower(as.character(model_info$likelihood %||% "bernoulli"))
+  if (identical(likelihood, "bernoulli")) {
+    return(logits * scale)
+  }
+  if (!identical(likelihood, "mixed") || is.null(likelihood_code_obs)) {
+    return(logits)
+  }
+
+  out_dim <- ai(logits$shape[[2]])
+  if (out_dim < 1L) {
+    return(logits)
+  }
+  first <- strenv$jnp$take(logits, ai(0L), axis = 1L)
+  first_scaled <- first * scale
+  bern_mask <- strenv$jnp$equal(likelihood_code_obs, ai(0L))
+  first_use <- strenv$jnp$where(bern_mask, first_scaled, first)
+  first_col <- strenv$jnp$reshape(first_use, list(-1L, 1L))
+  if (out_dim == 1L) {
+    return(first_col)
+  }
+  rest <- strenv$jnp$take(logits, strenv$jnp$arange(ai(1L), ai(out_dim)), axis = 1L)
+  strenv$jnp$concatenate(list(first_col, rest), axis = 1L)
+}
+
 neural_softplus_numeric <- function(x) {
   pmax(x, 0) + log1p(exp(-abs(x)))
 }
@@ -2730,6 +2847,43 @@ neural_apply_low_rank_logit_transform_r <- function(logits, model_info = NULL) {
   high <- bound
   low + softness * neural_softplus_numeric((logits - low) / softness) -
     softness * neural_softplus_numeric((logits - high) / softness)
+}
+
+neural_pairwise_bernoulli_logit_scale_r <- function(model_info = NULL,
+                                                    scale = NULL) {
+  if (!isTRUE(neural_pairwise_bernoulli_logit_scale_enabled(model_info))) {
+    return(NULL)
+  }
+  if (is.null(scale)) {
+    scale <- model_info$pairwise_bernoulli_logit_scale %||% NULL
+  }
+  if (is.null(scale) && !is.null(model_info$params$log_pairwise_bernoulli_logit_scale)) {
+    scale <- exp(as.numeric(model_info$params$log_pairwise_bernoulli_logit_scale)[[1L]])
+  }
+  scale <- suppressWarnings(as.numeric(scale[[1L]]))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    return(NULL)
+  }
+  as.numeric(scale)
+}
+
+neural_apply_pairwise_bernoulli_logit_scale_r <- function(logits,
+                                                          model_info = NULL,
+                                                          scale = NULL) {
+  scale <- neural_pairwise_bernoulli_logit_scale_r(
+    model_info = model_info,
+    scale = scale
+  )
+  if (is.null(scale)) {
+    return(logits)
+  }
+  as.numeric(logits) * scale
+}
+
+neural_apply_pairwise_bernoulli_logit_adjustment_r <- function(logits,
+                                                               model_info = NULL) {
+  logits <- neural_apply_low_rank_logit_transform_r(logits, model_info)
+  neural_apply_pairwise_bernoulli_logit_scale_r(logits, model_info)
 }
 
 neural_low_rank_interaction_rank <- function(model_info = NULL) {
@@ -7781,6 +7935,15 @@ neural_predict_pair_core_prepared <- function(params,
   if (isTRUE(return_logits)) {
     return(logits)
   }
+  logits <- neural_apply_pairwise_bernoulli_logit_scale(
+    logits,
+    model_info = model_info,
+    scale = neural_pairwise_bernoulli_logit_scale_from_params(
+      params = params,
+      model_info = model_info
+    ),
+    pairwise_obs = TRUE
+  )
   if (model_info$likelihood == "bernoulli") {
     return(strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L)))
   }
@@ -8575,6 +8738,15 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
   if (return_logits) {
     return(logits)
   }
+  logits <- neural_apply_pairwise_bernoulli_logit_scale(
+    logits,
+    model_info = model_info,
+    scale = neural_pairwise_bernoulli_logit_scale_from_params(
+      params = params,
+      model_info = model_info
+    ),
+    pairwise_obs = TRUE
+  )
   neural_logits_to_q(logits, model_info$likelihood)
 }
 
@@ -9094,6 +9266,8 @@ generate_ModelOutcome_neural <- function(){
     attention_backend = "auto",
     attention_dtype = "auto",
     attention_padding_multiple = 8L,
+    learned_pairwise_bernoulli_logit_scale = FALSE,
+    pairwise_bernoulli_logit_scale_prior_sd = 0.5,
     balanced_sampling = NULL
   )
   RMS_scale = 0.5
@@ -9580,6 +9754,10 @@ generate_ModelOutcome_neural <- function(){
   if (!isTRUE(pairwise_mode)) {
     cross_candidate_encoder_mode <- "none"
   }
+  learned_pairwise_bernoulli_logit_scale_requested <-
+    neural_resolve_learned_pairwise_bernoulli_logit_scale(
+      mcmc_control$learned_pairwise_bernoulli_logit_scale %||% FALSE
+    )
   use_full_attn_residual <- identical(residual_mode, "full_attn")
   use_matchup_token <- FALSE
 
@@ -10644,6 +10822,14 @@ generate_ModelOutcome_neural <- function(){
     normalization = low_rank_logit_normalization,
     supplied = low_rank_rc_out_target_rms_supplied
   )
+  learned_pairwise_bernoulli_logit_scale <- isTRUE(
+    learned_pairwise_bernoulli_logit_scale_requested
+  ) && isTRUE(pairwise_mode) && likelihood %in% c("bernoulli", "mixed")
+  pairwise_bernoulli_logit_scale_prior_sd <-
+    neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(
+      value = mcmc_control$pairwise_bernoulli_logit_scale_prior_sd %||% NULL,
+      enabled = learned_pairwise_bernoulli_logit_scale
+    )
   if (identical(low_rank_logit_normalization, "rms") &&
       identical(low_rank_logit_transform, "softclip") &&
       isTRUE(low_rank_logit_transform_supplied) &&
@@ -10657,6 +10843,10 @@ generate_ModelOutcome_neural <- function(){
   low_rank_logit_model_info$low_rank_logit_normalization <- low_rank_logit_normalization
   low_rank_logit_model_info$low_rank_head_weight_target_rms <- low_rank_head_weight_target_rms
   low_rank_logit_model_info$low_rank_rc_out_target_rms <- low_rank_rc_out_target_rms
+  low_rank_logit_model_info$learned_pairwise_bernoulli_logit_scale <-
+    learned_pairwise_bernoulli_logit_scale
+  low_rank_logit_model_info$pairwise_bernoulli_logit_scale_prior_sd <-
+    pairwise_bernoulli_logit_scale_prior_sd
   sigma_prior_scale <- 1.0
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     y_numeric <- if (isTRUE(universal_enabled) && any(universal_likelihood_use == "normal")) {
@@ -10846,7 +11036,7 @@ generate_ModelOutcome_neural <- function(){
     }
     pairwise_idx[is.na(pairwise_idx)] <- FALSE
     if (any(pairwise_idx)) {
-      z[pairwise_idx] <- neural_apply_low_rank_logit_transform_r(
+      z[pairwise_idx] <- neural_apply_pairwise_bernoulli_logit_adjustment_r(
         z[pairwise_idx],
         low_rank_logit_model_info
       )
@@ -12327,6 +12517,18 @@ generate_ModelOutcome_neural <- function(){
         strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale))
       )
     }
+    log_pairwise_bernoulli_logit_scale <- NULL
+    if (isTRUE(learned_pairwise_bernoulli_logit_scale) &&
+        isTRUE(pairwise) &&
+        likelihood %in% c("bernoulli", "mixed")) {
+      log_pairwise_bernoulli_logit_scale <- strenv$numpyro$sample(
+        "log_pairwise_bernoulli_logit_scale",
+        strenv$numpyro$distributions$Normal(
+          0.,
+          as.numeric(pairwise_bernoulli_logit_scale_prior_sd)
+        )
+      )
+    }
 
     params_view <- if (isTRUE(pairwise)) {
       list(
@@ -12453,6 +12655,12 @@ generate_ModelOutcome_neural <- function(){
       params_view$W_rc_c <- W_rc_c
       params_view$W_rc_out <- W_rc_out
     }
+    if (!is.null(log_pairwise_bernoulli_logit_scale)) {
+      params_view$log_pairwise_bernoulli_logit_scale <- log_pairwise_bernoulli_logit_scale
+      params_view$pairwise_bernoulli_logit_scale <- strenv$jnp$exp(
+        log_pairwise_bernoulli_logit_scale
+      )
+    }
 
     list(
       params_view = params_view,
@@ -12463,7 +12671,8 @@ generate_ModelOutcome_neural <- function(){
       b_out = b_out,
       sigma = sigma,
       M_cross = M_cross,
-      W_cross_out = W_cross_out
+      W_cross_out = W_cross_out,
+      log_pairwise_bernoulli_logit_scale = log_pairwise_bernoulli_logit_scale
     )
   }
 
@@ -12509,10 +12718,18 @@ generate_ModelOutcome_neural <- function(){
                                            sigma = NULL,
                                            site_name = "obs",
                                            obs_scale = NULL,
-                                           pairwise_obs = FALSE) {
+                                           pairwise_obs = FALSE,
+                                           pairwise_logit_scale = NULL) {
     logits <- neural_apply_pairwise_classification_logit_transform(
       logits,
       model_info = low_rank_logit_model_info,
+      likelihood_code_obs = likelihood_code_obs,
+      pairwise_obs = pairwise_obs
+    )
+    logits <- neural_apply_pairwise_bernoulli_logit_scale(
+      logits,
+      model_info = low_rank_logit_model_info,
+      scale = pairwise_logit_scale,
       likelihood_code_obs = likelihood_code_obs,
       pairwise_obs = pairwise_obs
     )
@@ -13110,7 +13327,11 @@ generate_ModelOutcome_neural <- function(){
         sigma = sigma,
         site_name = "obs_pair",
         obs_scale = obs_scale_b,
-        pairwise_obs = TRUE
+        pairwise_obs = TRUE,
+        pairwise_logit_scale = neural_pairwise_bernoulli_logit_scale_from_params(
+          params = params_view,
+          model_info = low_rank_logit_model_info
+        )
       )
     }
 
@@ -15026,7 +15247,8 @@ generate_ModelOutcome_neural <- function(){
         "sigma",
         "W_cross_out",
         "M_cross", "M_cross_raw", "tau_cross",
-        "alpha_rc", "W_rc_out"
+        "alpha_rc", "W_rc_out",
+        "log_pairwise_bernoulli_logit_scale"
       )
       !name %in% dynamic_names
     }
@@ -15189,6 +15411,12 @@ generate_ModelOutcome_neural <- function(){
     W_rc_c_value <- get_loc_scale_site_value("W_rc_c", "tau_rc")
     maybe_site("W_rc_c", value = W_rc_c_value)
     maybe_site("W_rc_out")
+    maybe_site("log_pairwise_bernoulli_logit_scale")
+    if (!is.null(params_out$log_pairwise_bernoulli_logit_scale)) {
+      params_out$pairwise_bernoulli_logit_scale <- strenv$jnp$exp(
+        params_out$log_pairwise_bernoulli_logit_scale
+      )
+    }
 
     if (likelihood == "normal" || isTRUE(universal_has_normal)) {
       maybe_site("sigma")
@@ -15290,6 +15518,10 @@ generate_ModelOutcome_neural <- function(){
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
   )
+  validation_model_info$learned_pairwise_bernoulli_logit_scale <-
+    learned_pairwise_bernoulli_logit_scale
+  validation_model_info$pairwise_bernoulli_logit_scale_prior_sd <-
+    pairwise_bernoulli_logit_scale_prior_sd
   validation_model_info <- neural_set_pairwise_context_model_info(
     info = validation_model_info,
     pairwise_context_mode = pairwise_context_mode,
@@ -15525,7 +15757,22 @@ generate_ModelOutcome_neural <- function(){
         factor_order
       )
       strategize_jax_block_until_ready(pred)
-      coerce_prediction_output_local(pred)
+      out <- coerce_prediction_output_local(pred)
+      if (identical(likelihood, "mixed") &&
+          is.list(out) &&
+          !is.null(out$logits) &&
+          ncol(as.matrix(out$logits)) >= 1L) {
+        scale_now <- neural_pairwise_bernoulli_logit_scale_from_params(
+          params = params,
+          model_info = validation_model_info
+        )
+        out$logits[, 1L] <- neural_apply_pairwise_bernoulli_logit_scale_r(
+          out$logits[, 1L],
+          validation_model_info,
+          scale = to_r_array_local(scale_now)
+        )
+      }
+      out
     }
 
     predict_validation_single <- function(obs_idx) {
@@ -18530,6 +18777,7 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_rc_r")
   maybe_site("W_rc_c")
   maybe_site("W_rc_out")
+  maybe_site("log_pairwise_bernoulli_logit_scale")
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     ParamsMean$sigma <- mean_param(PosteriorDraws$sigma)
   }
@@ -18612,6 +18860,18 @@ generate_ModelOutcome_neural <- function(){
   }
   maybe_site("pseudo_query_final")
   maybe_site("RMS_final")
+
+  pairwise_bernoulli_logit_scale_mean <- 1.0
+  if (!is.null(ParamsMean$log_pairwise_bernoulli_logit_scale)) {
+    scale_jnp <- strenv$jnp$exp(ParamsMean$log_pairwise_bernoulli_logit_scale)
+    pairwise_bernoulli_logit_scale_mean <- as.numeric(strenv$np$array(scale_jnp))[[1L]]
+  }
+  if (!is.finite(pairwise_bernoulli_logit_scale_mean) ||
+      pairwise_bernoulli_logit_scale_mean <= 0) {
+    pairwise_bernoulli_logit_scale_mean <- 1.0
+  }
+  low_rank_logit_model_info$pairwise_bernoulli_logit_scale <-
+    pairwise_bernoulli_logit_scale_mean
 
   has_qk_norm <- !is.null(ParamsMean$RMS_q_layers) || !is.null(ParamsMean$RMS_k_layers)
   for (l_ in 1L:ModelDepth) {
@@ -18965,7 +19225,7 @@ generate_ModelOutcome_neural <- function(){
     }
     if (identical(target_likelihood, "bernoulli")) {
       if (isTRUE(pairwise_prediction)) {
-        logits[, 1L] <- neural_apply_low_rank_logit_transform_r(
+        logits[, 1L] <- neural_apply_pairwise_bernoulli_logit_adjustment_r(
           logits[, 1L],
           low_rank_logit_model_info
         )
@@ -19343,7 +19603,10 @@ generate_ModelOutcome_neural <- function(){
     param_var <- param_var[seq_len(param_total)]
   }
   if (uncertainty_scope == "output") {
-    keep <- param_names %in% c("W_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out")
+    keep <- param_names %in% c(
+      "W_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out",
+      "log_pairwise_bernoulli_logit_scale"
+    )
     mask <- unlist(mapply(function(keep_i, size_i) rep(keep_i, size_i),
                           keep, param_sizes))
     if (length(mask) == length(param_var)) {
@@ -19523,6 +19786,9 @@ generate_ModelOutcome_neural <- function(){
     low_rank_logit_normalization = low_rank_logit_normalization,
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    learned_pairwise_bernoulli_logit_scale = learned_pairwise_bernoulli_logit_scale,
+    pairwise_bernoulli_logit_scale_prior_sd = pairwise_bernoulli_logit_scale_prior_sd,
+    pairwise_bernoulli_logit_scale = pairwise_bernoulli_logit_scale_mean,
     schema_dropout = schema_dropout,
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),

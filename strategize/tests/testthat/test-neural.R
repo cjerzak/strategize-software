@@ -35,6 +35,41 @@ test_that("schema dropout resolver handles defaults and overrides", {
   )
 })
 
+test_that("pairwise Bernoulli logit scale controls final R logits", {
+  expect_false(strategize:::neural_resolve_learned_pairwise_bernoulli_logit_scale(NULL))
+  expect_true(strategize:::neural_resolve_learned_pairwise_bernoulli_logit_scale("learned"))
+  expect_error(
+    strategize:::neural_resolve_learned_pairwise_bernoulli_logit_scale("maybe"),
+    "learned_pairwise_bernoulli_logit_scale"
+  )
+  expect_equal(
+    strategize:::neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(0.25, enabled = TRUE),
+    0.25
+  )
+  expect_error(
+    strategize:::neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(0, enabled = TRUE),
+    "pairwise_bernoulli_logit_scale_prior_sd"
+  )
+
+  logits <- c(-0.5, 0, 0.5)
+  model_info <- list(
+    likelihood = "bernoulli",
+    learned_pairwise_bernoulli_logit_scale = TRUE,
+    pairwise_bernoulli_logit_scale = 4,
+    low_rank_interaction_rank = 0L,
+    low_rank_logit_transform = "none"
+  )
+  expect_equal(
+    strategize:::neural_apply_pairwise_bernoulli_logit_adjustment_r(logits, model_info),
+    logits * 4
+  )
+  model_info$learned_pairwise_bernoulli_logit_scale <- FALSE
+  expect_equal(
+    strategize:::neural_apply_pairwise_bernoulli_logit_adjustment_r(logits, model_info),
+    logits
+  )
+})
+
 test_that("balanced compact sampler draws studies and respondents hierarchically", {
   config <- strategize:::neural_resolve_balanced_sampling(list(
     scheme = "study_equal_respondent",
@@ -2309,6 +2344,151 @@ test_that("explicit term override remains honored with low-rank pairwise interac
   expect_true(isTRUE(model_info$cross_candidate_encoder))
   expect_true(isTRUE(model_info$has_cross_term))
   expect_match(model_info$cross_candidate_encoder_note, "low_rank_interaction_rank")
+})
+
+test_that("learned pairwise Bernoulli scale yields non-degenerate prior logits", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  withr::local_envvar(c(
+    STRATEGIZE_NEURAL_FAST_MCMC = "true",
+    STRATEGIZE_NEURAL_SKIP_EVAL = "1"
+  ))
+  withr::local_seed(20260605)
+
+  data <- generate_pairwise_performance_test_data(
+    n_pairs = 24L,
+    n_factors = 3L,
+    n_levels = 2L,
+    seed = 20260605
+  )
+  W <- as.data.frame(data$W, stringsAsFactors = FALSE)
+  names_list <- strategize:::cs2step_build_names_list(W)
+  W_idx <- strategize:::cs2step_encode_W_indices(
+    W,
+    names_list = names_list,
+    unknown = "error",
+    pad_unknown = 0L
+  )
+  factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
+
+  fit <- suppressMessages(suppressWarnings(strategize:::cs2step_eval_outcome_model_neural(
+    Y = data$Y,
+    W_idx = W_idx,
+    names_list = names_list,
+    factor_levels = factor_levels,
+    diff = TRUE,
+    pair_id = data$pair_id,
+    profile_order = data$profile_order,
+    respondent_id = data$respondent_id,
+    respondent_task_id = data$respondent_task_id,
+    conda_env_required = TRUE,
+    neural_mcmc_control = list(
+      ModelDims = 8L,
+      ModelDepth = 1L,
+      subsample_method = "batch_vi",
+      uncertainty_scope = "all",
+      optimizer = "adam",
+      batch_size = 16L,
+      svi_steps = 4L,
+      svi_num_draws = 1L,
+      low_rank_interaction_rank = 0L,
+      cross_candidate_encoder = "none",
+      learned_pairwise_bernoulli_logit_scale = TRUE,
+      pairwise_bernoulli_logit_scale_prior_sd = 0.5,
+      eval_enabled = FALSE,
+      early_stopping = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )))
+
+  model_info <- fit$neural_model_info
+  expect_true(isTRUE(model_info$learned_pairwise_bernoulli_logit_scale))
+  expect_equal(model_info$pairwise_bernoulli_logit_scale_prior_sd, 0.5)
+  expect_true("log_pairwise_bernoulli_logit_scale" %in% model_info$param_names)
+  expect_false(is.null(model_info$params$log_pairwise_bernoulli_logit_scale))
+
+  model_env <- environment(fit$my_model)
+  strenv <- get("strenv", envir = model_env)
+  model_fn <- get("BayesianPairTransformerModel", envir = model_env)
+  to_index_matrix <- get("to_index_matrix", envir = model_env)
+
+  idx_left <- which(data$profile_order == 1L)
+  idx_right <- which(data$profile_order == 2L)
+  n_obs <- length(idx_left)
+  X_left_jnp <- strenv$jnp$array(
+    to_index_matrix(W_idx[idx_left, , drop = FALSE])
+  )$astype(strenv$jnp$int32)
+  X_right_jnp <- strenv$jnp$array(
+    to_index_matrix(W_idx[idx_right, , drop = FALSE])
+  )$astype(strenv$jnp$int32)
+  party_left_jnp <- strenv$jnp$zeros(list(n_obs), dtype = strenv$jnp$int32)
+  party_right_jnp <- strenv$jnp$zeros(list(n_obs), dtype = strenv$jnp$int32)
+  resp_party_jnp <- strenv$jnp$zeros(list(n_obs), dtype = strenv$jnp$int32)
+  resp_cov_jnp <- strenv$jnp$zeros(list(n_obs, 0L), dtype = strenv$jnp$float32)
+
+  get_trace_site <- function(trace, name) {
+    tryCatch(trace[[name]], error = function(e) NULL)
+  }
+  to_numeric <- function(x) {
+    if (is.null(x)) {
+      return(numeric(0))
+    }
+    out <- tryCatch(
+      reticulate::py_to_r(strenv$np$asarray(x)),
+      error = function(e) NULL
+    )
+    if (is.null(out)) {
+      out <- tryCatch(
+        reticulate::py_to_r(strenv$jax$device_get(x)),
+        error = function(e) NULL
+      )
+    }
+    if (is.null(out)) {
+      out <- tryCatch(reticulate::py_to_r(x), error = function(e) NULL)
+    }
+    if (is.list(out)) {
+      out <- unlist(out, use.names = FALSE)
+    }
+    if (!is.numeric(out)) {
+      return(numeric(0))
+    }
+    as.numeric(out)
+  }
+
+  logit_samples <- numeric(0)
+  for (i in seq_len(20L)) {
+    rng_key <- strenv$jax$random$PRNGKey(as.integer(20260605L + i))
+    tracer <- strenv$numpyro$handlers$trace(
+      strenv$numpyro$handlers$seed(model_fn, rng_key)
+    )
+    trace <- tracer$get_trace(
+      X_left = X_left_jnp,
+      X_right = X_right_jnp,
+      party_left = party_left_jnp,
+      party_right = party_right_jnp,
+      resp_party = resp_party_jnp,
+      resp_cov = resp_cov_jnp,
+      Y_obs = NULL
+    )
+
+    expect_false(is.null(get_trace_site(trace, "log_pairwise_bernoulli_logit_scale")))
+    obs_site <- get_trace_site(trace, "obs_pair")
+    expect_false(is.null(obs_site))
+    logits <- tryCatch(obs_site$fn$logits, error = function(e) NULL)
+    expect_false(is.null(logits))
+    logit_samples <- c(logit_samples, to_numeric(logits))
+  }
+
+  logit_samples <- logit_samples[is.finite(logit_samples)]
+  expect_true(length(logit_samples) > 0L)
+  sd_logits <- stats::sd(logit_samples)
+  expect_true(is.finite(sd_logits))
+  expect_true(
+    sd_logits >= 0.05,
+    info = sprintf("Prior predictive pairwise Bernoulli logit SD %.4f below 0.05", sd_logits)
+  )
 })
 
 test_that("low-rank RMS logit normalization resolves defaults and column scales", {
