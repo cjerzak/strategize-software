@@ -205,6 +205,19 @@ validate_equilibrium <- function(result,
     if (!is.null(primary_pushforward)) {
       set_if_missing("primary_pushforward", tolower(primary_pushforward))
     }
+    outcome_model_type <- result$outcome_model_type
+    if (is.null(outcome_model_type)) {
+      outcome_model_type <- result$outcome_model_view$metadata$outcome_model_type
+    }
+    if (is.null(outcome_model_type)) {
+      outcome_model_type <- result$convergence_history$outcome_model_type
+    }
+    if (!is.null(outcome_model_type)) {
+      set_if_missing("outcome_model_type", as.character(outcome_model_type))
+    }
+    if (!is.null(result$force_gaussian)) {
+      set_if_missing("force_gaussian", isTRUE(result$force_gaussian))
+    }
     if (!is.null(result$primary_n_entrants)) {
       set_if_missing("primary_n_entrants", as.integer(result$primary_n_entrants))
     }
@@ -319,16 +332,31 @@ validate_equilibrium <- function(result,
   INTERCEPT_dag0 <- params_dag0[[1]]
   COEFFICIENTS_dag0 <- params_dag0[[2]]
 
-  # Function to evaluate Q at given strategies
+  # Functions to evaluate Q at given strategies. The grid/random best-response
+  # paths use batched evaluators so independent candidates stay inside JAX.
   seed_counter <- 0L
-  eval_Q <- function(a_ast, a_dag, Q_SIGN = 1.0) {
-    if (is.null(seed)) {
-      seed_val <- as.integer(Sys.time())
-    } else {
-      seed_val <- as.integer(seed + seed_counter)
-      seed_counter <<- seed_counter + 1L
+  next_seed_ids <- function(n = 1L) {
+    n <- as.integer(n)
+    if (is.na(n) || n < 1L) {
+      return(integer(0))
     }
-    SEED <- strenv$jax$random$PRNGKey(seed_val)
+    if (is.null(seed)) {
+      return(sample.int(.Machine$integer.max - 1L, n, replace = TRUE))
+    }
+    ids <- as.integer(seed + seq.int(seed_counter, length.out = n))
+    seed_counter <<- seed_counter + n
+    ids
+  }
+
+  to_numeric_jax <- function(x) {
+    if (exists("strategize_jax_block_until_ready", mode = "function")) {
+      strategize_jax_block_until_ready(x)
+    }
+    as.numeric(strenv$np$array(x))
+  }
+
+  eval_Q_one_jax <- function(a_ast, a_dag, q_sign, seed_id) {
+    SEED <- strenv$jax$random$PRNGKey(seed_id)
 
     Q_val <- FullGetQStar_eval(
       a_ast, a_dag,
@@ -339,12 +367,62 @@ validate_equilibrium <- function(result,
       P_VEC_FULL_ast, P_VEC_FULL_dag,
       SLATE_VEC_ast, SLATE_VEC_dag,
       LAMBDA,
-      strenv$jnp$array(Q_SIGN),
+      q_sign,
       SEED
     )
+    strenv$jnp$take(strenv$jnp$ravel(Q_val), 0L)
+  }
 
-    # Convert JAX array to R numeric via numpy
-    as.numeric(strenv$np$array(Q_val))
+  eval_Q_scalar_jit <- strenv$jax$jit(eval_Q_one_jax)
+  eval_Q_batch_ast_jit <- strenv$jax$jit(function(a_ast_candidates, fixed_a_dag,
+                                                  q_sign, seed_ids) {
+    strenv$jax$vmap(function(a_ast_candidate, seed_id) {
+      eval_Q_one_jax(a_ast_candidate, fixed_a_dag, q_sign, seed_id)
+    }, in_axes = list(0L, 0L))(a_ast_candidates, seed_ids)
+  })
+  eval_Q_batch_dag_jit <- strenv$jax$jit(function(fixed_a_ast, a_dag_candidates,
+                                                  q_sign, seed_ids) {
+    strenv$jax$vmap(function(a_dag_candidate, seed_id) {
+      eval_Q_one_jax(fixed_a_ast, a_dag_candidate, q_sign, seed_id)
+    }, in_axes = list(0L, 0L))(a_dag_candidates, seed_ids)
+  })
+
+  q_evaluator <- list(
+    scalar = function(a_ast, a_dag, Q_SIGN = 1.0) {
+      value <- eval_Q_scalar_jit(
+        a_ast,
+        a_dag,
+        strenv$jnp$array(Q_SIGN),
+        strenv$jnp$array(next_seed_ids(1L)[[1L]])$astype(strenv$jnp$int32)
+      )
+      to_numeric_jax(value)
+    },
+    batch_ast = function(a_ast_candidates, fixed_a_dag, Q_SIGN = 1.0) {
+      n_candidates <- as.integer(a_ast_candidates$shape[[1]])
+      values <- eval_Q_batch_ast_jit(
+        a_ast_candidates,
+        fixed_a_dag,
+        strenv$jnp$array(Q_SIGN),
+        strenv$jnp$array(next_seed_ids(n_candidates))$astype(strenv$jnp$int32)
+      )
+      to_numeric_jax(values)
+    },
+    batch_dag = function(fixed_a_ast, a_dag_candidates, Q_SIGN = -1.0) {
+      n_candidates <- as.integer(a_dag_candidates$shape[[1]])
+      values <- eval_Q_batch_dag_jit(
+        fixed_a_ast,
+        a_dag_candidates,
+        strenv$jnp$array(Q_SIGN),
+        strenv$jnp$array(next_seed_ids(n_candidates))$astype(strenv$jnp$int32)
+      )
+      to_numeric_jax(values)
+    }
+  )
+
+  eval_Q <- q_evaluator$scalar
+
+  if (verbose) {
+    message("  Using batched JAX best-response evaluation")
   }
 
   # Evaluate Q at current solution
@@ -357,7 +435,7 @@ validate_equilibrium <- function(result,
   if (method == "grid") {
     br_result <- find_best_response_grid(
       result, a_i_ast_current, a_i_dag_current,
-      eval_Q, resolution, verbose
+      q_evaluator, resolution, verbose
     )
   } else {
     br_result <- find_best_response_gradient(
@@ -418,7 +496,7 @@ validate_equilibrium <- function(result,
 #' @keywords internal
 #' @noRd
 find_best_response_grid <- function(result, a_i_ast_current, a_i_dag_current,
-                                    eval_Q, resolution, verbose) {
+                                    q_evaluator, resolution, verbose) {
 
   strenv <- result$strenv
 
@@ -435,7 +513,7 @@ find_best_response_grid <- function(result, a_i_ast_current, a_i_dag_current,
   if (n_params_ast > 5 || n_params_dag > 5) {
     if (verbose) message("  Using random search for high-dimensional problem...")
     return(find_best_response_random(result, a_i_ast_current, a_i_dag_current,
-                                      eval_Q, resolution * 100, verbose))
+                                      q_evaluator, resolution * 100, verbose))
   }
 
   # Generate grid points in the unconstrained parameter space
@@ -445,82 +523,47 @@ find_best_response_grid <- function(result, a_i_ast_current, a_i_dag_current,
 
   # Search range: +/- 2 units in unconstrained space
   search_range <- 2.0
-
-  # Find best response for AST (fixing DAG)
-  best_Q_ast <- eval_Q(a_i_ast_current, a_i_dag_current, Q_SIGN = 1.0)
-  best_a_ast <- a_i_ast_current
-
   grid_offsets_1d <- seq(-search_range, search_range, length.out = resolution)
 
-  if (n_params_ast == 1) {
-    for (offset in grid_offsets_1d) {
-      a_test <- strenv$jnp$array(current_ast + offset)
-      Q_test <- eval_Q(a_test, a_i_dag_current, Q_SIGN = 1.0)
-      if (Q_test > best_Q_ast) {
-        best_Q_ast <- Q_test
-        best_a_ast <- a_test
-      }
+  build_grid_candidates <- function(current, n_params) {
+    if (n_params == 1L) {
+      candidates <- matrix(current + grid_offsets_1d, ncol = 1L)
+    } else if (n_params <= 2L) {
+      grid_offsets <- as.matrix(expand.grid(rep(list(grid_offsets_1d), n_params)))
+      candidates <- sweep(grid_offsets, 2L, current, "+")
+    } else {
+      n_candidates <- as.integer(resolution^2)
+      offsets <- matrix(
+        runif(n_candidates * n_params, -search_range, search_range),
+        nrow = n_candidates,
+        ncol = n_params,
+        byrow = TRUE
+      )
+      candidates <- sweep(offsets, 2L, current, "+")
     }
-  } else if (n_params_ast <= 2) {
-    grid_offsets <- as.matrix(expand.grid(rep(list(grid_offsets_1d), n_params_ast)))
-    for (i in seq_len(nrow(grid_offsets))) {
-      offsets <- grid_offsets[i, ]
-      a_test <- strenv$jnp$array(current_ast + offsets)
-      Q_test <- eval_Q(a_test, a_i_dag_current, Q_SIGN = 1.0)
-      if (Q_test > best_Q_ast) {
-        best_Q_ast <- Q_test
-        best_a_ast <- a_test
-      }
-    }
-  } else {
-    # Multi-dimensional grid (simplified - random sampling)
-    for (i in seq_len(resolution^2)) {
-      offsets <- runif(n_params_ast, -search_range, search_range)
-      a_test <- strenv$jnp$array(current_ast + offsets)
-      Q_test <- eval_Q(a_test, a_i_dag_current, Q_SIGN = 1.0)
-      if (Q_test > best_Q_ast) {
-        best_Q_ast <- Q_test
-        best_a_ast <- a_test
-      }
-    }
+    rbind(current, candidates)
   }
+
+  as_jax_candidates <- function(candidates, template) {
+    out <- strenv$jnp$array(as.matrix(candidates))
+    tryCatch(out$astype(template$dtype), error = function(e) out)
+  }
+
+  ast_candidates <- build_grid_candidates(current_ast, n_params_ast)
+  ast_candidates_jnp <- as_jax_candidates(ast_candidates, a_i_ast_current)
+  ast_values <- q_evaluator$batch_ast(ast_candidates_jnp, a_i_dag_current, Q_SIGN = 1.0)
+  best_ast_idx <- which.max(ast_values)
+  best_Q_ast <- ast_values[[best_ast_idx]]
+  best_a_ast <- strenv$jnp$take(ast_candidates_jnp, as.integer(best_ast_idx - 1L), axis = 0L)
 
   # Find best response for DAG (fixing AST)
   # Note: DAG minimizes, so we use Q_SIGN = -1 and look for max of that
-  best_Q_dag <- eval_Q(a_i_ast_current, a_i_dag_current, Q_SIGN = -1.0)
-  best_a_dag <- a_i_dag_current
-
-  if (n_params_dag == 1) {
-    for (offset in grid_offsets_1d) {
-      a_test <- strenv$jnp$array(current_dag + offset)
-      Q_test <- eval_Q(a_i_ast_current, a_test, Q_SIGN = -1.0)
-      if (Q_test > best_Q_dag) {
-        best_Q_dag <- Q_test
-        best_a_dag <- a_test
-      }
-    }
-  } else if (n_params_dag <= 2) {
-    grid_offsets <- as.matrix(expand.grid(rep(list(grid_offsets_1d), n_params_dag)))
-    for (i in seq_len(nrow(grid_offsets))) {
-      offsets <- grid_offsets[i, ]
-      a_test <- strenv$jnp$array(current_dag + offsets)
-      Q_test <- eval_Q(a_i_ast_current, a_test, Q_SIGN = -1.0)
-      if (Q_test > best_Q_dag) {
-        best_Q_dag <- Q_test
-        best_a_dag <- a_test
-      }
-    }
-  } else {
-    for (i in seq_len(resolution^2)) {
-      offsets <- runif(n_params_dag, -search_range, search_range)
-      a_test <- strenv$jnp$array(current_dag + offsets)
-      Q_test <- eval_Q(a_i_ast_current, a_test, Q_SIGN = -1.0)
-      if (Q_test > best_Q_dag) {
-        best_Q_dag <- Q_test
-        best_a_dag <- a_test
-      }
-    }
-  }
+  dag_candidates <- build_grid_candidates(current_dag, n_params_dag)
+  dag_candidates_jnp <- as_jax_candidates(dag_candidates, a_i_dag_current)
+  dag_values <- q_evaluator$batch_dag(a_i_ast_current, dag_candidates_jnp, Q_SIGN = -1.0)
+  best_dag_idx <- which.max(dag_values)
+  best_Q_dag <- dag_values[[best_dag_idx]]
+  best_a_dag <- strenv$jnp$take(dag_candidates_jnp, as.integer(best_dag_idx - 1L), axis = 0L)
 
   return(list(
     Q_br_ast = best_Q_ast,
@@ -535,7 +578,7 @@ find_best_response_grid <- function(result, a_i_ast_current, a_i_dag_current,
 #' @keywords internal
 #' @noRd
 find_best_response_random <- function(result, a_i_ast_current, a_i_dag_current,
-                                       eval_Q, n_samples, verbose) {
+                                       q_evaluator, n_samples, verbose) {
 
   strenv <- result$strenv
 
@@ -547,33 +590,37 @@ find_best_response_random <- function(result, a_i_ast_current, a_i_dag_current,
 
   search_range <- 2.0
 
-  # Find best response for AST
-  best_Q_ast <- eval_Q(a_i_ast_current, a_i_dag_current, Q_SIGN = 1.0)
-  best_a_ast <- a_i_ast_current
-
-  for (i in seq_len(n_samples)) {
-    offsets <- rnorm(n_params_ast, mean = 0, sd = search_range / 2)
-    a_test <- strenv$jnp$array(current_ast + offsets)
-    Q_test <- eval_Q(a_test, a_i_dag_current, Q_SIGN = 1.0)
-    if (Q_test > best_Q_ast) {
-      best_Q_ast <- Q_test
-      best_a_ast <- a_test
-    }
+  build_random_candidates <- function(current, n_params) {
+    n_samples_int <- as.integer(n_samples)
+    offsets <- matrix(
+      rnorm(n_samples_int * n_params, mean = 0, sd = search_range / 2),
+      nrow = n_samples_int,
+      ncol = n_params,
+      byrow = TRUE
+    )
+    rbind(current, sweep(offsets, 2L, current, "+"))
   }
+
+  as_jax_candidates <- function(candidates, template) {
+    out <- strenv$jnp$array(as.matrix(candidates))
+    tryCatch(out$astype(template$dtype), error = function(e) out)
+  }
+
+  # Find best response for AST
+  ast_candidates <- build_random_candidates(current_ast, n_params_ast)
+  ast_candidates_jnp <- as_jax_candidates(ast_candidates, a_i_ast_current)
+  ast_values <- q_evaluator$batch_ast(ast_candidates_jnp, a_i_dag_current, Q_SIGN = 1.0)
+  best_ast_idx <- which.max(ast_values)
+  best_Q_ast <- ast_values[[best_ast_idx]]
+  best_a_ast <- strenv$jnp$take(ast_candidates_jnp, as.integer(best_ast_idx - 1L), axis = 0L)
 
   # Find best response for DAG
-  best_Q_dag <- eval_Q(a_i_ast_current, a_i_dag_current, Q_SIGN = -1.0)
-  best_a_dag <- a_i_dag_current
-
-  for (i in seq_len(n_samples)) {
-    offsets <- rnorm(n_params_dag, mean = 0, sd = search_range / 2)
-    a_test <- strenv$jnp$array(current_dag + offsets)
-    Q_test <- eval_Q(a_i_ast_current, a_test, Q_SIGN = -1.0)
-    if (Q_test > best_Q_dag) {
-      best_Q_dag <- Q_test
-      best_a_dag <- a_test
-    }
-  }
+  dag_candidates <- build_random_candidates(current_dag, n_params_dag)
+  dag_candidates_jnp <- as_jax_candidates(dag_candidates, a_i_dag_current)
+  dag_values <- q_evaluator$batch_dag(a_i_ast_current, dag_candidates_jnp, Q_SIGN = -1.0)
+  best_dag_idx <- which.max(dag_values)
+  best_Q_dag <- dag_values[[best_dag_idx]]
+  best_a_dag <- strenv$jnp$take(dag_candidates_jnp, as.integer(best_dag_idx - 1L), axis = 0L)
 
   return(list(
     Q_br_ast = best_Q_ast,
