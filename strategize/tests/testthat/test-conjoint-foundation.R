@@ -54,6 +54,17 @@ test_that("checkpoint directory loader restores direct params without preference
       reticulate::py_has_attr(ocp, "PyTreeCheckpointer"),
     "unsupported orbax checkpoint API"
   )
+  rewrite_checkpoint_sharding <- function(arrays_path, device_str) {
+    sharding_path <- file.path(arrays_path, "pytree", "_sharding")
+    skip_if_not(file.exists(sharding_path), "checkpoint did not write sharding metadata")
+    sharding <- jsonlite::read_json(sharding_path, simplifyVector = FALSE)
+    sharding <- lapply(sharding, function(entry_json) {
+      entry <- jsonlite::fromJSON(entry_json, simplifyVector = FALSE)
+      entry$device_str <- device_str
+      as.character(jsonlite::toJSON(entry, auto_unbox = TRUE))
+    })
+    jsonlite::write_json(sharding, sharding_path, auto_unbox = TRUE)
+  }
 
   group_key <- strategize:::cs_foundation_universal_group_key()
   tmp <- tempfile()
@@ -156,10 +167,12 @@ test_that("checkpoint directory loader restores direct params without preference
   } else {
     ocp$PyTreeCheckpointer()$save(file.path(tmp, "arrays"), item = tree)
   }
+  rewrite_checkpoint_sharding(file.path(tmp, "arrays"), "cuda:987654")
 
-  loaded <- load_conjoint_foundation_bundle(tmp, preload_params = FALSE)
+  loaded <- load_conjoint_foundation_bundle(tmp, preload_params = TRUE)
   expect_s3_class(loaded, "conjoint_foundation_model")
   expect_false(is.null(loaded$groups[[group_key]]$fit$neural_model_info$params$W_out))
+  expect_false(is.null(loaded$groups[[group_key]]$fit$params$W_out))
   expect_equal(loaded$groups[[group_key]]$fit$theta_mean, 1)
 
   manifest_with_theta <- manifest
@@ -189,6 +202,7 @@ test_that("checkpoint directory loader restores direct params without preference
   } else {
     ocp$PyTreeCheckpointer()$save(file.path(tmp_direct, "arrays"), item = tree_direct)
   }
+  rewrite_checkpoint_sharding(file.path(tmp_direct, "arrays"), "mps:987654")
 
   loaded_direct <- load_conjoint_foundation_bundle(tmp_direct, preload_params = FALSE)
   expect_s3_class(loaded_direct, "conjoint_foundation_model")

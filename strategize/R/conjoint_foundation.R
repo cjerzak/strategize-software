@@ -2676,6 +2676,11 @@ load_conjoint_foundation_bundle <- function(file,
   if (length(file) != 1L || !nzchar(file)) {
     stop("'file' must be a non-empty path.", call. = FALSE)
   }
+  file <- path.expand(file)
+  if (!grepl("^(/|[A-Za-z]:[\\\\/])", file)) {
+    file <- file.path(getwd(), file)
+  }
+  file <- normalizePath(file, winslash = "/", mustWork = FALSE)
   if (!file.exists(file)) {
     stop("Bundle file does not exist.", call. = FALSE)
   }

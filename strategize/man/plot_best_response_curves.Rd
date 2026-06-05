@@ -81,7 +81,7 @@ for dimension \eqn{d}, holding the other dimensions fixed at the solution found 
 
 This function is computationally intensive: for each of \code{nPoints_br} grid values
 of \eqn{\pi_{\mathrm{ast}, d}}, it searches over possible \eqn{\pi_{\mathrm{dag}, d}}
-(and vice versa) to find each side's best response, re-running partial objective evaluations.
+(and vice versa) to find each side's best response through batched JAX grid evaluation.
 Nonetheless, it provides a direct visualization of how each player (ast or dag) responds
 to changes in the other's distribution along a single factor dimension.
 }
@@ -101,10 +101,10 @@ The intersection in \eqn{\bigl(\pi_{\mathrm{ast}, d}, \pi_{\mathrm{dag}, d}\bigr
 dimension, \emph{given that the other factor dimensions remain at the solution from
 \code{\link{strategize}}.}
 
-\strong{Performance Caution:} This brute force line-search re-runs partial
-objective evaluations many times, which may be slow for large \code{nPoints_br} or
-complex outcome models. Consider using a smaller \code{nPoints_br} if performance
-is an issue, or focusing on only a handful of crucial dimensions \eqn{d}.
+\strong{Performance Caution:} This batched grid search evaluates many candidate
+responses, which may still be slow for large \code{nPoints_br} or complex outcome
+models. Consider using a smaller \code{nPoints_br} if performance is an issue, or
+focusing on only a handful of crucial dimensions \eqn{d}.
 }
 \examples{
 \dontrun{

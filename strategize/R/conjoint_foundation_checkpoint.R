@@ -33,6 +33,14 @@ cs_foundation_array_abstract_leaf <- function(meta) {
   )
 }
 
+cs_foundation_array_restore_leaf <- function(meta, ocp) {
+  dtype <- as.character(meta$dtype %||% "float32")
+  ocp$RestoreArgs(
+    restore_type = strenv$np$ndarray,
+    dtype = strenv$np$dtype(dtype)
+  )
+}
+
 cs_foundation_build_abstract_tree <- function(array_manifest) {
   groups <- array_manifest$groups %||% list()
   tree_groups <- lapply(groups, function(group_meta) {
@@ -56,8 +64,42 @@ cs_foundation_build_abstract_tree <- function(array_manifest) {
   list(groups = tree_groups)
 }
 
-cs_foundation_orbax_load_tree <- function(path, abstract_tree) {
-  ocp <- cs_foundation_import_orbax_v1()
+cs_foundation_build_restore_args_tree <- function(array_manifest, ocp) {
+  groups <- array_manifest$groups %||% list()
+  tree_groups <- lapply(groups, function(group_meta) {
+    group_tree <- list()
+    params_meta <- group_meta$params %||% list()
+    if (length(params_meta) > 0L) {
+      group_tree$params <- lapply(params_meta, cs_foundation_array_restore_leaf, ocp = ocp)
+    }
+    if (!is.null(group_meta$theta_mean)) {
+      group_tree$theta_mean <- cs_foundation_array_restore_leaf(group_meta$theta_mean, ocp)
+    }
+    if (!is.null(group_meta$theta_var)) {
+      group_tree$theta_var <- cs_foundation_array_restore_leaf(group_meta$theta_var, ocp)
+    }
+    text_meta <- group_meta$text_registry %||% list()
+    if (length(text_meta) > 0L) {
+      group_tree$text_registry <- lapply(text_meta, cs_foundation_array_restore_leaf, ocp = ocp)
+    }
+    group_tree
+  })
+  list(groups = tree_groups)
+}
+
+cs_foundation_orbax_restore_path <- function(path) {
+  pytree_path <- file.path(path, "pytree")
+  if (dir.exists(pytree_path)) {
+    return(pytree_path)
+  }
+  path
+}
+
+cs_foundation_orbax_load_tree <- function(path, abstract_tree, array_manifest) {
+  ocp <- tryCatch(
+    reticulate::import("orbax.checkpoint", convert = FALSE),
+    error = function(e) NULL
+  )
   if (is.null(ocp)) {
     stop(
       "Loading this foundation checkpoint requires Python module 'orbax.checkpoint'.\n",
@@ -65,11 +107,25 @@ cs_foundation_orbax_load_tree <- function(path, abstract_tree) {
       call. = FALSE
     )
   }
-  if (reticulate::py_has_attr(ocp, "load_pytree")) {
-    return(ocp$load_pytree(path, abstract_tree))
-  }
   if (reticulate::py_has_attr(ocp, "PyTreeCheckpointer")) {
-    return(ocp$PyTreeCheckpointer()$restore(path, item = abstract_tree))
+    restore_path <- cs_foundation_orbax_restore_path(path)
+    restore_args <- if (reticulate::py_has_attr(ocp, "RestoreArgs")) {
+      cs_foundation_build_restore_args_tree(array_manifest, ocp)
+    } else {
+      NULL
+    }
+    if (!is.null(restore_args)) {
+      return(ocp$PyTreeCheckpointer()$restore(
+        restore_path,
+        item = abstract_tree,
+        restore_args = restore_args
+      ))
+    }
+    return(ocp$PyTreeCheckpointer()$restore(restore_path, item = abstract_tree))
+  }
+  ocp_v1 <- cs_foundation_import_orbax_v1()
+  if (!is.null(ocp_v1) && reticulate::py_has_attr(ocp_v1, "load_pytree")) {
+    return(ocp_v1$load_pytree(path, abstract_tree))
   }
   stop("Installed 'orbax.checkpoint' does not expose a supported PyTree loader.", call. = FALSE)
 }
@@ -169,7 +225,11 @@ cs_foundation_load_checkpoint_dir <- function(path,
   )
 
   abstract_tree <- cs_foundation_build_abstract_tree(manifest$arrays %||% list())
-  restored <- cs_foundation_orbax_load_tree(arrays_path, abstract_tree)
+  restored <- cs_foundation_orbax_load_tree(
+    arrays_path,
+    abstract_tree,
+    manifest$arrays %||% list()
+  )
   restored_groups <- cs_foundation_py_get_item(restored, "groups")
   manifest_groups <- manifest$arrays$groups %||% list()
   group_keys <- vapply(manifest_groups, function(x) as.character(x$group_key), character(1))
@@ -188,7 +248,7 @@ cs_foundation_load_checkpoint_dir <- function(path,
     if (length(params_meta) > 0L) {
       py_params <- cs_foundation_py_get_item(py_group, "params")
       params <- lapply(names(params_meta), function(param_name) {
-        cs_foundation_py_get_item(py_params, param_name)
+        cs2step_neural_to_r_array(cs_foundation_py_get_item(py_params, param_name))
       })
       names(params) <- names(params_meta)
       model_info <- bundle$groups[[group_key]]$fit$neural_model_info %||% list()
@@ -228,6 +288,10 @@ cs_foundation_load_checkpoint_dir <- function(path,
     }
   }
 
+  bundle$groups <- lapply(bundle$groups, cs_foundation_unpack_group,
+                          conda_env = conda_env,
+                          conda_env_required = conda_env_required,
+                          preload_params = preload_params)
   class(bundle) <- "conjoint_foundation_model"
   bundle
 }
