@@ -205,6 +205,45 @@ test_that("strategize.plot handles multiple clusters", {
 # These tests require a full adversarial strategize result, so they
 # are marked to skip unless JAX is available.
 
+test_that("plot_best_response_extract_curves uses first maxima by grid direction", {
+  grid_points <- c(0, 0.5, 1)
+  ast_surface <- matrix(
+    c(
+      1, 4, 2,
+      3, 4, 1,
+      2, 1, 5
+    ),
+    nrow = 3L,
+    byrow = TRUE
+  )
+  dag_surface <- matrix(
+    c(
+      1, 2, 3,
+      5, 5, 4,
+      1, 9, 0
+    ),
+    nrow = 3L,
+    byrow = TRUE
+  )
+
+  curves <- strategize:::plot_best_response_extract_curves(
+    grid_points = grid_points,
+    ast_surface = ast_surface,
+    dag_surface = dag_surface
+  )
+
+  expect_equal(curves$br_dag_given_ast, c(1, 0, 0.5))
+  expect_equal(curves$br_ast_given_dag, c(0.5, 0, 1))
+})
+
+test_that("plot_best_response_curves avoids scalar objective grid loops", {
+  body_text <- paste(deparse(body(plot_best_response_curves)), collapse = "\n")
+
+  expect_false(grepl("FullGetQStar_jit", body_text, fixed = TRUE))
+  expect_false(grepl("for\\s*\\(i_\\s+in\\s+seq_along\\(grid_points\\)", body_text, perl = TRUE))
+  expect_false(grepl("for\\s*\\(ix\\s+in\\s+seq_along\\(xvals\\)", body_text, perl = TRUE))
+})
+
 test_that("plot_best_response_curves requires adversarial result", {
   skip_on_cran()
   skip_if_no_jax()

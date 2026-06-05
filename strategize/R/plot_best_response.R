@@ -1,3 +1,30 @@
+plot_best_response_extract_curves <- function(grid_points,
+                                              ast_surface,
+                                              dag_surface) {
+  grid_points <- as.numeric(grid_points)
+  ast_surface <- as.matrix(ast_surface)
+  dag_surface <- as.matrix(dag_surface)
+
+  n_grid <- length(grid_points)
+  if (n_grid < 1L ||
+      nrow(ast_surface) != n_grid ||
+      ncol(ast_surface) != n_grid ||
+      nrow(dag_surface) != n_grid ||
+      ncol(dag_surface) != n_grid) {
+    stop("Best-response surfaces must be square matrices matching grid_points.", call. = FALSE)
+  }
+
+  ast_idx <- vapply(seq_len(ncol(ast_surface)), function(j) {
+    which.max(ast_surface[, j])
+  }, integer(1L))
+  dag_idx <- max.col(dag_surface, ties.method = "first")
+
+  list(
+    br_dag_given_ast = grid_points[dag_idx],
+    br_ast_given_dag = grid_points[ast_idx]
+  )
+}
+
 #' Plot Dimension-by-Dimension Best-Response Curves from Adversarial \code{strategize()} Output
 #'
 #' @description
@@ -17,7 +44,7 @@
 #'
 #' This function is computationally intensive: for each of \code{nPoints_br} grid values
 #' of \eqn{\pi_{\mathrm{ast}, d}}, it searches over possible \eqn{\pi_{\mathrm{dag}, d}} 
-#' (and vice versa) to find each side's best response, re-running partial objective evaluations. 
+#' (and vice versa) to find each side's best response through batched JAX grid evaluation.
 #' Nonetheless, it provides a direct visualization of how each player (ast or dag) responds 
 #' to changes in the other's distribution along a single factor dimension.
 #'
@@ -88,10 +115,10 @@
 #' dimension, \emph{given that the other factor dimensions remain at the solution from 
 #' \code{\link{strategize}}.}
 #'
-#' \strong{Performance Caution:} This brute force line-search re-runs partial 
-#' objective evaluations many times, which may be slow for large \code{nPoints_br} or 
-#' complex outcome models. Consider using a smaller \code{nPoints_br} if performance 
-#' is an issue, or focusing on only a handful of crucial dimensions \eqn{d}.
+#' \strong{Performance Caution:} This batched grid search evaluates many candidate
+#' responses, which may still be slow for large \code{nPoints_br} or complex outcome
+#' models. Consider using a smaller \code{nPoints_br} if performance is an issue, or
+#' focusing on only a handful of crucial dimensions \eqn{d}.
 #'
 #' @seealso
 #' \code{\link{strategize}} for obtaining the result object \code{res} in adversarial mode.
@@ -213,30 +240,6 @@ plot_best_response_curves  <- function(
   
   START_VAL_SEARCH <- 0; STOP_VAL_SEARCH <- 1
   
-  ########################################################################
-  ## 2) Helper: We need to "override" dimension d_ of the unconstrained 'a' 
-  ##    to achieve a specific [0,1] probability in that dimension. 
-  ##    We do a small numeric bisection for each point.
-  ########################################################################
-  override_a_value <- function(a_in, dimensionIndex, newPiValue) {
-    dimensionIndex <- ai(dimensionIndex - 1L) # for zero indices 
-    a0 <- -10
-    b0 <- 10
-    a_use <- a_in
-    for (iter_ in 1:18) {
-      m_ <- 0.5 * (a0 + b0)
-      a_use <- a_use$at[[dimensionIndex]]$set(strenv$jnp$array(m_, strenv$dtj))  # update a_in
-      piTrial <- strenv$a2Simplex_diff_use(a_use)
-      piValTrial <- as.numeric(strenv$np$array(piTrial)[dimensionIndex+1])
-      if (piValTrial < newPiValue) {
-        a0 <- m_
-      } else {
-        b0 <- m_
-      }
-    }
-    return(a_use)
-  }
-  
   # setup environments 
   # multiround material
   for(DisaggreateQ in ifelse(adversarial, 
@@ -258,127 +261,132 @@ plot_best_response_curves  <- function(
   MNtemp <- res$temperature
   nMonte_Qglm <- 200L
   # d_locator_use already defined at line 186
-  environment(adversarial) <- evaluation_environment
-  environment(AstProp) <- environment(DagProp) <- evaluation_environment
+  if (is.function(AstProp)) {
+    environment(AstProp) <- evaluation_environment
+  }
+  if (is.function(DagProp)) {
+    environment(DagProp) <- evaluation_environment
+  }
   # rlang and reticulate are in Suggests/Imports - use :: syntax when needed
-  environment(FullGetQStar_) <- evaluation_environment
-  FullGetQStar_jit <- strenv$jax$jit(FullGetQStar_,
-                                  static_argnames = c("ParameterizationType", "d_locator"))
-  
-  ########################################################################
-  ## 3) We define two "best response" functions:
-  ##    - best_response_dag_for_astVal: given x in [0..1] for pi_ast[d_], 
-  ##      find argmax for dag. 
-  ##    - best_response_ast_for_dagVal: similarly. 
-  ##    Both do a small grid search. 
-  ########################################################################
-  # We'll do a "small search" in nPoints_br points for the best response.
-  oneD_grid <- seq(0,1,length.out=nPoints_br)
-  
-  best_response_dag_for_astVal <- function(x_ast_dim_d, seed){
-    # fix ast dimension d_ = x
-    a_ast_FROZEN <- override_a_value(a_ast_current, d_, x_ast_dim_d)
-    best_y    <- 0
-    best_loss <- -Inf
-    cnt__ <- 0
-    val_seq <- rep(NA,times = nPoints_br)
-    for(yCandidate in oneD_grid){
-      cnt__ <- cnt__ + 1 
-      a_dag_test <- override_a_value(a_dag_current, d_, yCandidate)
+  FullGetQStar_eval <- res$FullGetQStar_
+  if (is.null(FullGetQStar_eval)) {
+    environment(FullGetQStar_) <- evaluation_environment
+    FullGetQStar_eval <- strenv$jax$jit(FullGetQStar_)
+  }
 
-      res_val_ <- FullGetQStar_jit(
-          a_i_ast            = a_ast_FROZEN,
-          a_i_dag            = a_dag_test,
-          INTERCEPT_ast_     = gather_fxn(REGRESSION_PARAMS_ast)[[1]],
-          COEFFICIENTS_ast_  = gather_fxn(REGRESSION_PARAMS_ast)[[2]],
-          INTERCEPT_dag_     = gather_fxn(REGRESSION_PARAMS_dag)[[1]],
-          COEFFICIENTS_dag_  = gather_fxn(REGRESSION_PARAMS_dag)[[2]],
-          INTERCEPT_ast0_    = gather_fxn(REGRESSION_PARAMS_ast0)[[1]],
-          COEFFICIENTS_ast0_ = gather_fxn(REGRESSION_PARAMS_ast0)[[2]],
-          INTERCEPT_dag0_    = gather_fxn(REGRESSION_PARAMS_dag0)[[1]],
-          COEFFICIENTS_dag0_ = gather_fxn(REGRESSION_PARAMS_dag0)[[2]],
-          P_VEC_FULL_ast_    = P_VEC_FULL_ast,
-          P_VEC_FULL_dag_    = P_VEC_FULL_dag,
-          SLATE_VEC_ast_     = SLATE_VEC_ast,
-          SLATE_VEC_dag_     = SLATE_VEC_dag,
-          LAMBDA_            = LAMBDA_,
-          Q_SIGN             = strenv$jnp$array(-1), # Evaluate objective with Q_SIGN_=-1 for dag's side
-          SEED_IN_LOOP       = strenv$jnp$array(ai(cnt__*seed)),
-          
-          ParameterizationType = strenv$ParameterizationType, # don't trace
-          d_locator         = d_locator,  # don't trace 
-          main_comp_mat     = main_comp_mat,
-          shadow_comp_mat   = shadow_comp_mat 
+  REGRESSION_PARAMETERS_ast_parts <- gather_fxn(REGRESSION_PARAMS_ast)
+  REGRESSION_PARAMETERS_dag_parts <- gather_fxn(REGRESSION_PARAMS_dag)
+  REGRESSION_PARAMETERS_ast0_parts <- gather_fxn(REGRESSION_PARAMS_ast0)
+  REGRESSION_PARAMETERS_dag0_parts <- gather_fxn(REGRESSION_PARAMS_dag0)
+  INTERCEPT_ast_ <- REGRESSION_PARAMETERS_ast_parts[[1]]
+  COEFFICIENTS_ast_ <- REGRESSION_PARAMETERS_ast_parts[[2]]
+  INTERCEPT_dag_ <- REGRESSION_PARAMETERS_dag_parts[[1]]
+  COEFFICIENTS_dag_ <- REGRESSION_PARAMETERS_dag_parts[[2]]
+  INTERCEPT_ast0_ <- REGRESSION_PARAMETERS_ast0_parts[[1]]
+  COEFFICIENTS_ast0_ <- REGRESSION_PARAMETERS_ast0_parts[[2]]
+  INTERCEPT_dag0_ <- REGRESSION_PARAMETERS_dag0_parts[[1]]
+  COEFFICIENTS_dag0_ <- REGRESSION_PARAMETERS_dag0_parts[[2]]
+
+  dimension_index <- ai(d_ - 1L)
+  plot_seed_key <- strenv$jax$random$PRNGKey(ai(0L))
+  half_jnp <- strenv$jnp$array(0.5, dtype = strenv$dtj)
+  lower_override <- strenv$jnp$array(-10.0, dtype = strenv$dtj)
+  upper_override <- strenv$jnp$array(10.0, dtype = strenv$dtj)
+
+  override_a_value_jax <- function(a_in, new_pi_value) {
+    body <- function(iter_idx, carry) {
+      a0 <- carry[[0L]]
+      b0 <- carry[[1L]]
+      mid <- strenv$jnp$multiply(strenv$jnp$add(a0, b0), half_jnp)
+      a_trial <- a_in$at[[dimension_index]]$set(mid)
+      pi_trial <- strenv$a2Simplex_diff_use(a_trial)
+      pi_val <- strenv$jnp$take(pi_trial, dimension_index)
+      update_low <- pi_val < new_pi_value
+      list(
+        strenv$jnp$where(update_low, mid, a0),
+        strenv$jnp$where(update_low, b0, mid)
       )
-      
-      # Convert the result to a numeric value (assuming the first element holds the objective value)
-      val_seq[cnt__] <- val__ <- strenv$np$array(res_val_)[1]
-      # Larger val__ => better for dag if Q_SIGN=-1 is used internally
-      if(val__ > best_loss){
-        best_loss <- val__
-        best_y    <- yCandidate
-      }
     }
-    # plot(oneD_grid, val_seq); abline(v=best_y)
-    return(best_y)
+    carry <- strenv$jax$lax$fori_loop(
+      ai(0L),
+      ai(18L),
+      body,
+      list(lower_override, upper_override)
+    )
+    mid <- strenv$jnp$multiply(strenv$jnp$add(carry[[0L]], carry[[1L]]), half_jnp)
+    a_in$at[[dimension_index]]$set(mid)
+  }
+
+  batch_override_ast <- strenv$jax$vmap(function(pi_value) {
+    override_a_value_jax(a_ast_current, pi_value)
+  }, in_axes = list(0L))
+  batch_override_dag <- strenv$jax$vmap(function(pi_value) {
+    override_a_value_jax(a_dag_current, pi_value)
+  }, in_axes = list(0L))
+
+  evaluate_surface <- function(ast_grid, dag_grid, seed_ids, q_sign) {
+    a_ast_grid <- batch_override_ast(ast_grid)
+    a_dag_grid <- batch_override_dag(dag_grid)
+
+    evaluate_pair <- function(a_ast_test, a_dag_test, seed_id) {
+      seed_key <- strenv$jax$random$fold_in(plot_seed_key, seed_id)
+      value <- FullGetQStar_eval(
+        a_ast_test,
+        a_dag_test,
+        INTERCEPT_ast_, COEFFICIENTS_ast_,
+        INTERCEPT_dag_, COEFFICIENTS_dag_,
+        INTERCEPT_ast0_, COEFFICIENTS_ast0_,
+        INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+        P_VEC_FULL_ast, P_VEC_FULL_dag,
+        SLATE_VEC_ast, SLATE_VEC_dag,
+        LAMBDA_,
+        q_sign,
+        seed_key
+      )
+      strenv$jnp$take(strenv$jnp$ravel(value), 0L)
+    }
+
+    evaluate_row <- function(a_ast_test, seed_row) {
+      strenv$jax$vmap(function(a_dag_test, seed_id) {
+        evaluate_pair(a_ast_test, a_dag_test, seed_id)
+      }, in_axes = list(0L, 0L))(a_dag_grid, seed_row)
+    }
+
+    strenv$jax$vmap(evaluate_row, in_axes = list(0L, 0L))(a_ast_grid, seed_ids)
+  }
+  evaluate_surface_jit <- strenv$jax$jit(evaluate_surface)
+
+  evaluate_surface_r <- function(ast_grid, dag_grid, seed_ids, q_sign) {
+    surface <- evaluate_surface_jit(
+      strenv$jnp$array(as.numeric(ast_grid), dtype = strenv$dtj),
+      strenv$jnp$array(as.numeric(dag_grid), dtype = strenv$dtj),
+      strenv$jnp$array(as.matrix(seed_ids))$astype(strenv$jnp$int32),
+      strenv$jnp$array(q_sign, dtype = strenv$dtj)
+    )
+    strategize_jax_block_until_ready(surface)
+    as.matrix(strenv$np$array(surface))
   }
   
-  best_response_ast_for_dagVal <- function(y_dag_dim_d, seed){
-    # fix dag dimension d_ = y
-    a_dag_FROZEN  <- override_a_value(a_dag_current, d_, y_dag_dim_d)
-    best_x     <- 0
-    best_loss  <- -Inf
-    cntr__ <- 0
-    val_seq <- rep(NA,times = nPoints_br)
-    for(xCandidate in oneD_grid){
-      cntr__<- cntr__ +1 
-      a_ast_test <- override_a_value(a_ast_current, d_, xCandidate)
-      
-      # Evaluate objective with Q_SIGN_=+1 for ast
-      res_val_ <- FullGetQStar_jit(
-        a_i_ast            = a_ast_test,
-        a_i_dag            = a_dag_FROZEN,
-        INTERCEPT_ast_     = gather_fxn(REGRESSION_PARAMS_ast)[[1]],
-        COEFFICIENTS_ast_  = gather_fxn(REGRESSION_PARAMS_ast)[[2]],
-        INTERCEPT_dag_     = gather_fxn(REGRESSION_PARAMS_dag)[[1]],
-        COEFFICIENTS_dag_  = gather_fxn(REGRESSION_PARAMS_dag)[[2]],
-        INTERCEPT_ast0_    = gather_fxn(REGRESSION_PARAMS_ast0)[[1]],
-        COEFFICIENTS_ast0_ = gather_fxn(REGRESSION_PARAMS_ast0)[[2]],
-        INTERCEPT_dag0_    = gather_fxn(REGRESSION_PARAMS_dag0)[[1]],
-        COEFFICIENTS_dag0_ = gather_fxn(REGRESSION_PARAMS_dag0)[[2]],
-        P_VEC_FULL_ast_    = P_VEC_FULL_ast,
-        P_VEC_FULL_dag_    = P_VEC_FULL_dag,
-        SLATE_VEC_ast_     = SLATE_VEC_ast,
-        SLATE_VEC_dag_     = SLATE_VEC_dag,
-        LAMBDA_            = LAMBDA_,
-        Q_SIGN             = strenv$jnp$array(1.),
-        SEED_IN_LOOP       = strenv$jnp$array(ai(cntr__*seed)),
-        
-        ParameterizationType = strenv$ParameterizationType,
-        d_locator         = d_locator,  
-        main_comp_mat     = main_comp_mat,
-        shadow_comp_mat   = shadow_comp_mat 
-      )
-      val_seq[cntr__] <- val__ <- as.numeric( strenv$np$array( res_val_ ) )
-      if(val__ > best_loss){
-        best_loss <- val__
-        best_x    <- xCandidate
-      }
-    }
-    # plot(oneD_grid, val_seq)
-    return(best_x)
-  }
-  
+  ########################################################################
+  ## 3) Evaluate best-response surfaces in batches.
+  ########################################################################
   ########################################################################
   # 4) Evaluate these curves on an outer grid
   ########################################################################
   grid_points <- seq(0,1,length.out=nPoints_br)
-  br_ast_given_dag <- br_dag_given_ast <- numeric(nPoints_br)
-  for(i_ in seq_along(grid_points)){
-    print(i_)
-    br_dag_given_ast[i_] <- best_response_dag_for_astVal( grid_points[i_], seed = i_ )
-    br_ast_given_dag[i_] <- best_response_ast_for_dagVal( grid_points[i_], seed = i_ )
+  br_seed_ids <- outer(seq_len(nPoints_br), seq_len(nPoints_br), FUN = "*")
+  if(!silent) {
+    message("[plot_best_response_curves] Evaluating best-response surfaces with batched JAX...")
   }
+  br_ast_surface <- evaluate_surface_r(grid_points, grid_points, br_seed_ids, 1.0)
+  br_dag_surface <- evaluate_surface_r(grid_points, grid_points, br_seed_ids, -1.0)
+  br_curves <- plot_best_response_extract_curves(
+    grid_points = grid_points,
+    ast_surface = br_ast_surface,
+    dag_surface = br_dag_surface
+  )
+  br_dag_given_ast <- br_curves$br_dag_given_ast
+  br_ast_given_dag <- br_curves$br_ast_given_dag
   
   ########################################################################
   # 5) Plot 
@@ -417,74 +425,17 @@ plot_best_response_curves  <- function(
     xvals <- seq(START_VAL_SEARCH, STOP_VAL_SEARCH, length.out=nPoints_heat)
     yvals <- seq(START_VAL_SEARCH, STOP_VAL_SEARCH, length.out=nPoints_heat)
     
-    yvals_mat <- xvals_mat <- matrix(NA_real_, nrow=nPoints_heat, ncol=nPoints_heat)
-    z_ast <- matrix(NA_real_, nrow=nPoints_heat, ncol=nPoints_heat)
-    z_dag <- matrix(NA_real_, nrow=nPoints_heat, ncol=nPoints_heat)
-    
-    cnt_ <- 0L
-    for(ix in seq_along(xvals)){
-      for(iy in seq_along(yvals)){
-        cnt_ <- cnt_ + 1L
-        if(iy %% 10 == 0){print(c(ix,iy))}
-        # override dimension d_ for ast and dag
-        a_ast_test <- override_a_value(a_ast_current, d_, xvals[ix])
-        a_dag_test <- override_a_value(a_dag_current, d_, yvals[iy])
-        
-        # AST objective (Q_SIGN=+1 if zero-sum)
-        val_ast_ <- FullGetQStar_jit(
-          a_i_ast            = a_ast_test,
-          a_i_dag            = a_dag_test,
-          INTERCEPT_ast_     = gather_fxn(REGRESSION_PARAMS_ast)[[1]],
-          COEFFICIENTS_ast_  = gather_fxn(REGRESSION_PARAMS_ast)[[2]],
-          INTERCEPT_dag_     = gather_fxn(REGRESSION_PARAMS_dag)[[1]],
-          COEFFICIENTS_dag_  = gather_fxn(REGRESSION_PARAMS_dag)[[2]],
-          INTERCEPT_ast0_    = gather_fxn(REGRESSION_PARAMS_ast0)[[1]],
-          COEFFICIENTS_ast0_ = gather_fxn(REGRESSION_PARAMS_ast0)[[2]],
-          INTERCEPT_dag0_    = gather_fxn(REGRESSION_PARAMS_dag0)[[1]],
-          COEFFICIENTS_dag0_ = gather_fxn(REGRESSION_PARAMS_dag0)[[2]],
-          P_VEC_FULL_ast_    = P_VEC_FULL_ast,
-          P_VEC_FULL_dag_    = P_VEC_FULL_dag,
-          SLATE_VEC_ast_     = SLATE_VEC_ast,
-          SLATE_VEC_dag_     = SLATE_VEC_dag,
-          LAMBDA_            = LAMBDA_,
-          Q_SIGN             = strenv$jnp$array(1.),
-          SEED_IN_LOOP       = strenv$jnp$array(ai(cnt_)),
-          ParameterizationType = strenv$ParameterizationType,
-          d_locator         = d_locator,  
-          main_comp_mat     = main_comp_mat,
-          shadow_comp_mat   = shadow_comp_mat
-        )
-        z_ast[ix, iy] <- strenv$np$array(val_ast_)[1]
-        
-        # DAG objective (Q_SIGN=-1) if zero-sum 
-        val_dag_ <- FullGetQStar_jit(
-          a_i_ast            = a_ast_test,
-          a_i_dag            = a_dag_test,
-          INTERCEPT_ast_     = gather_fxn(REGRESSION_PARAMS_ast)[[1]],
-          COEFFICIENTS_ast_  = gather_fxn(REGRESSION_PARAMS_ast)[[2]],
-          INTERCEPT_dag_     = gather_fxn(REGRESSION_PARAMS_dag)[[1]],
-          COEFFICIENTS_dag_  = gather_fxn(REGRESSION_PARAMS_dag)[[2]],
-          INTERCEPT_ast0_    = gather_fxn(REGRESSION_PARAMS_ast0)[[1]],
-          COEFFICIENTS_ast0_ = gather_fxn(REGRESSION_PARAMS_ast0)[[2]],
-          INTERCEPT_dag0_    = gather_fxn(REGRESSION_PARAMS_dag0)[[1]],
-          COEFFICIENTS_dag0_ = gather_fxn(REGRESSION_PARAMS_dag0)[[2]],
-          P_VEC_FULL_ast_    = P_VEC_FULL_ast,
-          P_VEC_FULL_dag_    = P_VEC_FULL_dag,
-          SLATE_VEC_ast_     = SLATE_VEC_ast,
-          SLATE_VEC_dag_     = SLATE_VEC_dag,
-          LAMBDA_            = LAMBDA_,
-          Q_SIGN             = strenv$jnp$array(-1),
-          SEED_IN_LOOP       = strenv$jnp$array(ai(cnt_)),
-          ParameterizationType = strenv$ParameterizationType,
-          d_locator         = d_locator,  
-          main_comp_mat     = main_comp_mat,
-          shadow_comp_mat   = shadow_comp_mat
-        )
-        z_dag[ix, iy] <- strenv$np$array(val_dag_)[1]
-        xvals_mat[ix,iy] <- xvals[ix] # for ast 
-        yvals_mat[ix,iy] <- yvals[iy] # for dag 
-      }
+    xvals_mat <- matrix(rep(xvals, times = nPoints_heat), nrow = nPoints_heat, ncol = nPoints_heat)
+    yvals_mat <- matrix(rep(yvals, each = nPoints_heat), nrow = nPoints_heat, ncol = nPoints_heat)
+    heat_seed_ids <- matrix(seq_len(nPoints_heat * nPoints_heat),
+                            nrow = nPoints_heat,
+                            ncol = nPoints_heat,
+                            byrow = TRUE)
+    if(!silent) {
+      message("[plot_best_response_curves] Evaluating heatmap surfaces with batched JAX...")
     }
+    z_ast <- evaluate_surface_r(xvals, yvals, heat_seed_ids, 1.0)
+    z_dag <- evaluate_surface_r(xvals, yvals, heat_seed_ids, -1.0)
   }
   
   # helper fxn
