@@ -1,3 +1,107 @@
+cs_prepare_cv_folds <- function(folds, Y, W, respondent_id = NULL, respondent_task_id = NULL) {
+  n <- length(Y)
+  if (n < 2L) {
+    stop("'Y' must contain at least two observations for cross-validation.", call. = FALSE)
+  }
+  if (is.null(respondent_id)) {
+    respondent_id <- seq_len(n)
+  }
+  if (is.null(respondent_task_id)) {
+    respondent_task_id <- rep(1L, n)
+  }
+  if (length(respondent_id) != n || length(respondent_task_id) != n) {
+    stop("'respondent_id' and 'respondent_task_id' must match length(Y).", call. = FALSE)
+  }
+
+  task_id <- paste0(respondent_id, "_", respondent_task_id)
+  task_order <- unique(task_id)
+
+  build_split_matrix <- function(fold_id_obs) {
+    if (length(fold_id_obs) != n) {
+      stop("Internal fold assignment length mismatch.", call. = FALSE)
+    }
+    if (any(is.na(fold_id_obs))) {
+      stop("'folds' contains missing fold IDs.", call. = FALSE)
+    }
+    fold_labels <- unique(fold_id_obs)
+    if (length(fold_labels) < 2L) {
+      stop("'folds' must define at least two folds.", call. = FALSE)
+    }
+    indi_list <- sapply(fold_labels, function(f_) {
+      list(which(fold_id_obs != f_), which(fold_id_obs == f_))
+    })
+    list(
+      indi_list = indi_list,
+      n_folds = length(fold_labels),
+      fold_id = fold_id_obs,
+      fold_labels = fold_labels
+    )
+  }
+
+  is_scalar_count <- (is.numeric(folds) || is.integer(folds)) && length(folds) == 1L
+  if (is_scalar_count) {
+    n_folds <- as.integer(folds)
+    if (is.na(n_folds) || n_folds < 2L || n_folds != as.numeric(folds)) {
+      stop("'folds' must be an integer >= 2 or a fold-assignment vector.", call. = FALSE)
+    }
+
+    W_fold <- as.data.frame(W)
+    all_tabs <- apply(W_fold, 2, table)
+    ok_counter <- 0
+    ok <- FALSE
+    while(!ok){
+      ok_counter <- ok_counter + 1
+
+      task_fold <- sample(seq_len(n_folds), size = length(task_order), replace = TRUE)
+      names(task_fold) <- task_order
+      fold_id_obs <- task_fold[task_id]
+      if (length(unique(fold_id_obs)) < n_folds) {
+        next
+      }
+
+      split_obj <- build_split_matrix(fold_id_obs)
+      indi_list <- split_obj$indi_list
+      split_tabs_in <- apply(indi_list, 2, function(l_) {
+        apply(W_fold[l_[[1]], , drop = FALSE], 2, table)
+      })
+      if (all(names(unlist(all_tabs)) == names(unlist(split_tabs_in)))) {
+        if (all(unlist(split_tabs_in) > 10)) {
+          ok <- TRUE
+        }
+      }
+      if (ok_counter > 1000) {
+        stop("Stopping: Could not find split with > 10 observations per factor level.")
+      }
+    }
+    return(split_obj)
+  }
+
+  if (!is.atomic(folds)) {
+    stop("'folds' must be an integer >= 2 or a fold-assignment vector.", call. = FALSE)
+  }
+  if (length(folds) == n) {
+    fold_id_obs <- folds
+    per_task_n <- vapply(split(fold_id_obs, task_id), function(x) {
+      length(unique(x))
+    }, integer(1))
+    if (any(per_task_n != 1L)) {
+      stop("'folds' must assign every respondent-task to exactly one fold.", call. = FALSE)
+    }
+    return(build_split_matrix(fold_id_obs))
+  }
+  if (length(folds) == length(task_order)) {
+    fold_id_task <- folds
+    names(fold_id_task) <- task_order
+    return(build_split_matrix(fold_id_task[task_id]))
+  }
+
+  stop(
+    "'folds' must be an integer >= 2, a vector with length(Y) entries, ",
+    "or a vector with one entry per unique respondent-task.",
+    call. = FALSE
+  )
+}
+
 #' Cross-validation for Optimal Stochastic Interventions in Conjoint Analysis
 #'
 #' Performs cross-validation to select the regularization parameter \eqn{\lambda} 
@@ -25,8 +129,10 @@
 #' @param lambda A single user-specified \eqn{\lambda} value. If provided, 
 #'   cross-validation is effectively disabled unless \code{lambda_seq} is also 
 #'   supplied. 
-#' @param folds An integer or user-specified partitioning indicating the number of 
-#'   cross-validation folds. Defaults to 2. See Details for how data splitting is done.
+#' @param folds Either an integer number of cross-validation folds, a vector with
+#'   one fold ID per observation, or a vector with one fold ID per unique
+#'   respondent-task in first-seen order. Defaults to 2. Observation-level fold
+#'   vectors must assign all rows from the same respondent-task to one fold.
 #' @param crossfit_q Logical. If \code{TRUE}, compute \code{Q_crossfit},
 #'   \code{Q_reference_crossfit}, \code{Q_gain_crossfit}, and
 #'   \code{Q_crossfit_info} on the final refit after lambda selection. Supported
@@ -444,36 +550,25 @@ cv_strategize       <-          function(
     message("Starting CV sequence...")
     outsamp_results <- insamp_results <- matrix(nrow = 0, ncol = 4, dimnames = list(NULL, c("lambda","Qhat","Qse","selected")))
 
-    # build cv splits - same for all lambda 
-    all_tabs <- apply(W,2,table)
-    ok_counter <- 0; ok <- F; while(!ok){ 
-        ok_counter <- ok_counter + 1 
-        
-        # sample based on unique respondent-tasks 
-        tmp_ <- (paste0(respondent_id, "_", respondent_task_id))
-        indi_list <- sample(1:folds, size = length(unique(tmp_)), replace = T)
-        names(indi_list) <- unique(tmp_)
-        indi_list <- indi_list[tmp_]
-        
-        indi_list <- sapply(1:folds, function(f_){
-          list(which(!indi_list %in% f_), # pos 1 is in
-               which(indi_list %in% f_) ) # pos 2 is out 
-        })
-        split_tabs_in <- apply(indi_list,2,function(l_){ apply(W[l_[[1]],],2,table) })
-        if(all(names(unlist(all_tabs)) == names(unlist(split_tabs_in)))){
-          if(all(unlist(split_tabs_in) > 10)){ ok <- T }
-        }
-        if(ok_counter > 1000){stop("Stopping: Could not find split with > 10 observations per factor level.")}
-    }
+    # build cv splits - same for all lambda
+    cv_fold_obj <- cs_prepare_cv_folds(
+      folds = folds,
+      Y = Y,
+      W = W,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id
+    )
+    indi_list <- cv_fold_obj$indi_list
+    folds_use <- cv_fold_obj$n_folds
     
     lambda_counter <- 0; for(lambda__ in lambda_seq){
       lambda_counter <- lambda_counter + 1
-      Qoptimized__ <- replicate(n = folds, list())
+      Qoptimized__ <- replicate(n = folds_use, list())
       message(sprintf("At lambda %s of %s...", lambda_counter, length(lambda_seq)))
 
       # CV sequence
       q_vec_in <- q_vec_out <- c()
-      for(split_ in c(1:folds)){
+      for(split_ in seq_len(folds_use)){
         message(sprintf("On fold %s",split_))
         for(type_ in c(1,2)){ 
           # in sample optimization of pi*, evaluation on OOS coefficients 

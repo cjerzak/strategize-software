@@ -131,6 +131,18 @@ strategize.plot <- function(pi_star_list=NULL,
                             open_browser = FALSE
                             ) {
   if(open_browser){browser()}
+  valid_ticks_type <- c("assignmentProbs", "zero", "none")
+  if (!is.character(ticks_type) || length(ticks_type) != 1L ||
+      is.na(ticks_type) || !ticks_type %in% valid_ticks_type) {
+    stop(
+      "'ticks_type' must be one of: ",
+      paste(valid_ticks_type, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (!is.numeric(zStar) || length(zStar) != 1L || !is.finite(zStar)) {
+    stop("'zStar' must be a single finite numeric value.", call. = FALSE)
+  }
   wrap_labels <- function(labels, width) {
     if (is.null(width) || is.na(width) || !is.finite(width) || width <= 0) {
       return(labels)
@@ -178,7 +190,7 @@ strategize.plot <- function(pi_star_list=NULL,
     }, integer(1))
 
     # Preliminary calculations
-    zStar <- 1; yScale <- 0.2
+    yScale <- 0.2
     k_EST <- length(pi_star_list)
     p_d <- p_list[[d_]][ordering_d]
     ypos_grid <- expand.grid(k = 1:k_EST, l = 1:length(pd_))
@@ -203,11 +215,12 @@ strategize.plot <- function(pi_star_list=NULL,
       par(mar = c(3.5, left_margin, 2, 1))
     }
     ylim <- c(0.8, max(ypos_grid$ypos) + 0.20)
+    xlim_use <- if(is.null(xlim)) c(0, 1) else xlim
     plot(pd_[ordering_d], 1:length(pd_),
          ylim = ylim,
          main = prettyFactorNames,
          cex.main = cex.main, cex = 0,
-         xlim = if(is.null(xlim)) c(0, 1) else xlim,
+         xlim = xlim_use,
          yaxt = "n", xlab = "", ylab = "")
     
     for(l_ in 1:length(pd_)) {
@@ -215,7 +228,6 @@ strategize.plot <- function(pi_star_list=NULL,
       for(k_ in k_EST:1) {
         shadowk_ <- shadowk_ + 1
         pi_kd <- pi_star_list[[k_]][[d_]][ordering_d]
-        se_kd <- pi_star_se_list[[k_]][[d_]][ordering_d]
         
         col_ <- if(is.null(col_vec)) k_ else col_vec[k_]
         y_loc <- ypos_grid[ypos_grid$l == l_ & ypos_grid$k == shadowk_, "ypos"]
@@ -227,9 +239,13 @@ strategize.plot <- function(pi_star_list=NULL,
           points(0, y_loc, pch = "|", col = "gray", cex = 1.5)
         }
         
-        if(plot_ci) {
-          points(c(min(xlim[2], min(1,pi_kd[l_] + zStar * se_kd[l_])),
-                   max(xlim[1], max(0,pi_kd[l_] - zStar * se_kd[l_]))),
+        if(plot_ci && !is.null(pi_star_se_list) &&
+           length(pi_star_se_list) >= k_ &&
+           length(pi_star_se_list[[k_]]) >= d_ &&
+           !is.null(pi_star_se_list[[k_]][[d_]])) {
+          se_kd <- pi_star_se_list[[k_]][[d_]][ordering_d]
+          points(c(min(xlim_use[2], min(1,pi_kd[l_] + zStar * se_kd[l_])),
+                   max(xlim_use[1], max(0,pi_kd[l_] - zStar * se_kd[l_]))),
                  c(y_loc, y_loc), lwd = 2, type = "l", col = col_)
         }
         points(pi_kd[l_], y_loc, pch = pch, col = col_, cex = 1.5)

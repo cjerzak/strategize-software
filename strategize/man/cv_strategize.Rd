@@ -86,8 +86,10 @@ a sequence of values is automatically generated (e.g., via
 cross-validation is effectively disabled unless \code{lambda_seq} is also 
 supplied.}
 
-\item{folds}{An integer or user-specified partitioning indicating the number of 
-cross-validation folds. Defaults to 2. See Details for how data splitting is done.}
+\item{folds}{Either an integer number of cross-validation folds, a vector with
+one fold ID per observation, or a vector with one fold ID per unique
+respondent-task in first-seen order. Defaults to 2. Observation-level fold
+vectors must assign all rows from the same respondent-task to one fold.}
 
 \item{crossfit_q}{Logical. If \code{TRUE}, compute \code{Q_crossfit},
 \code{Q_reference_crossfit}, \code{Q_gain_crossfit}, and

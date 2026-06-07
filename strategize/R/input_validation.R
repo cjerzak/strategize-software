@@ -190,6 +190,20 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
   if (ncol(W) < 1) {
     stop("'W' must have at least 1 column (factor).", call. = FALSE)
   }
+  if (anyNA(W)) {
+    W_df_missing <- as.data.frame(W)
+    factor_names_missing <- colnames(W_df_missing)
+    if (is.null(factor_names_missing)) {
+      factor_names_missing <- paste0("Column ", seq_len(ncol(W_df_missing)))
+    }
+    missing_cols <- factor_names_missing[vapply(W_df_missing, anyNA, logical(1))]
+    stop(
+      "'W' contains missing factor values in column(s): ",
+      paste(missing_cols, collapse = ", "),
+      ".\n  Impute, remove, or encode missing factor values as an explicit level before calling strategize().",
+      call. = FALSE
+    )
+  }
 
   # ---- lambda validation ----
   if (missing(lambda) || is.null(lambda)) {

@@ -5,6 +5,108 @@
 # for lambda selection.
 # =============================================================================
 
+test_that("cs_prepare_cv_folds handles scalar fold counts", {
+  withr::local_seed(123)
+
+  Y <- rep(c(0, 1), 100)
+  W <- data.frame(
+    A = rep(c("x", "y"), 100),
+    B = rep(c("m", "n"), each = 100),
+    stringsAsFactors = FALSE
+  )
+
+  folds <- strategize:::cs_prepare_cv_folds(
+    folds = 2L,
+    Y = Y,
+    W = W,
+    respondent_id = seq_along(Y),
+    respondent_task_id = rep(1L, length(Y))
+  )
+
+  expect_identical(folds$n_folds, 2L)
+  expect_equal(length(folds$fold_id), length(Y))
+  expect_true(all(table(folds$fold_id) > 0L))
+})
+
+test_that("cs_prepare_cv_folds handles observation-level assignments", {
+  Y <- rep(c(0, 1), 4)
+  W <- data.frame(A = rep(c("x", "y"), 4), stringsAsFactors = FALSE)
+  respondent_id <- rep(seq_len(4), each = 2L)
+  respondent_task_id <- rep(1L, length(Y))
+  fold_id <- c("fold_a", "fold_a", "fold_b", "fold_b",
+               "fold_a", "fold_a", "fold_b", "fold_b")
+
+  folds <- strategize:::cs_prepare_cv_folds(
+    folds = fold_id,
+    Y = Y,
+    W = W,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id
+  )
+
+  expect_identical(folds$n_folds, 2L)
+  expect_identical(as.character(folds$fold_id), fold_id)
+  expect_equal(sort(folds$indi_list[[2, 1]]), c(1L, 2L, 5L, 6L))
+})
+
+test_that("cs_prepare_cv_folds handles task-level assignments", {
+  Y <- rep(c(0, 1), 4)
+  W <- data.frame(A = rep(c("x", "y"), 4), stringsAsFactors = FALSE)
+  respondent_id <- rep(seq_len(4), each = 2L)
+  respondent_task_id <- rep(1L, length(Y))
+
+  folds <- strategize:::cs_prepare_cv_folds(
+    folds = c("fold_a", "fold_b", "fold_a", "fold_b"),
+    Y = Y,
+    W = W,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id
+  )
+
+  expect_identical(folds$n_folds, 2L)
+  expect_identical(as.character(folds$fold_id),
+                   c("fold_a", "fold_a", "fold_b", "fold_b",
+                     "fold_a", "fold_a", "fold_b", "fold_b"))
+})
+
+test_that("cs_prepare_cv_folds rejects invalid assignments", {
+  Y <- rep(c(0, 1), 4)
+  W <- data.frame(A = rep(c("x", "y"), 4), stringsAsFactors = FALSE)
+  respondent_id <- rep(seq_len(4), each = 2L)
+  respondent_task_id <- rep(1L, length(Y))
+
+  expect_error(
+    strategize:::cs_prepare_cv_folds(
+      folds = c(1, 2, 1, 1, 2, 2, 1, 1),
+      Y = Y,
+      W = W,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id
+    ),
+    "respondent-task"
+  )
+  expect_error(
+    strategize:::cs_prepare_cv_folds(
+      folds = c(1, NA, 2, 2),
+      Y = Y,
+      W = W,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id
+    ),
+    "missing fold IDs"
+  )
+  expect_error(
+    strategize:::cs_prepare_cv_folds(
+      folds = c(1, 2, 3),
+      Y = Y,
+      W = W,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id
+    ),
+    "length\\(Y\\)"
+  )
+})
+
 test_that("cv_strategize selects lambda with single value", {
   skip_on_cran()
   skip_if_no_jax()

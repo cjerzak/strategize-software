@@ -55,6 +55,22 @@ test_that("validate_strategize_inputs catches non-numeric Y", {
   )
 })
 
+test_that("validate_strategize_inputs catches missing W values", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(
+    Gender = c("M", "F", NA, "F"),
+    Message = c("Jobs", "Taxes", "Jobs", NA),
+    stringsAsFactors = FALSE
+  )
+
+  expect_error(
+    validate_strategize_inputs(Y = Y, W = W, lambda = 0.1),
+    "Gender.*Message"
+  )
+})
+
 test_that("validate_strategize_inputs warns about NA in Y", {
   skip_on_cran()
 

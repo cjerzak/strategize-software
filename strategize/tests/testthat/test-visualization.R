@@ -10,6 +10,27 @@
 # strategize.plot() Tests
 # =============================================================================
 
+local_trace_graphics_points <- function(mock, .local_envir = parent.frame()) {
+  mock_name <- ".strategize_test_points_mock"
+  assign(mock_name, mock, envir = .GlobalEnv)
+  tracer <- substitute(MOCK(x, y, ...), list(MOCK = as.name(mock_name)))
+
+  invisible(utils::capture.output(
+    suppressMessages(trace("points",
+                           where = asNamespace("graphics"),
+                           tracer = tracer,
+                           print = FALSE))
+  ))
+  withr::defer({
+    invisible(utils::capture.output(
+      suppressMessages(untrace("points", where = asNamespace("graphics")))
+    ))
+    if (exists(mock_name, envir = .GlobalEnv, inherits = FALSE)) {
+      rm(list = mock_name, envir = .GlobalEnv)
+    }
+  }, envir = .local_envir)
+}
+
 test_that("strategize.plot runs without error on mock data", {
   skip_on_cran()
 
@@ -145,6 +166,88 @@ test_that("strategize.plot handles plot_ci = FALSE", {
       )
     }),
     NA
+  )
+})
+
+test_that("strategize.plot uses the supplied zStar for confidence intervals", {
+  skip_on_cran()
+
+  line_calls <- list()
+  local_trace_graphics_points(function(x, y, ...) {
+    args <- list(...)
+    if (identical(args$type, "l")) {
+      line_calls[[length(line_calls) + 1L]] <<- as.numeric(x)
+    }
+    invisible(NULL)
+  })
+
+  pi_star_list <- list(k1 = list(
+    Gender = c(Male = 0.5, Female = 0.5)
+  ))
+  pi_star_se_list <- list(k1 = list(
+    Gender = c(Male = 0.1, Female = 0.1)
+  ))
+  p_list <- list(Gender = c(Male = 0.5, Female = 0.5))
+
+  pdf(tempfile(fileext = ".pdf"))
+  withr::defer(dev.off())
+
+  strategize.plot(
+    pi_star_list = pi_star_list,
+    pi_star_se_list = pi_star_se_list,
+    p_list = p_list,
+    zStar = 2,
+    xlim = c(0, 1)
+  )
+
+  expect_true(length(line_calls) > 0L)
+  expect_equal(line_calls[[1]], c(0.7, 0.3), tolerance = 1e-10)
+})
+
+test_that("strategize.plot skips confidence intervals when SEs are omitted", {
+  skip_on_cran()
+
+  line_calls <- list()
+  local_trace_graphics_points(function(x, y, ...) {
+    args <- list(...)
+    if (identical(args$type, "l")) {
+      line_calls[[length(line_calls) + 1L]] <<- as.numeric(x)
+    }
+    invisible(NULL)
+  })
+
+  pi_star_list <- list(k1 = list(
+    Gender = c(Male = 0.35, Female = 0.65)
+  ))
+  p_list <- list(Gender = c(Male = 0.5, Female = 0.5))
+
+  pdf(tempfile(fileext = ".pdf"))
+  withr::defer(dev.off())
+
+  strategize.plot(
+    pi_star_list = pi_star_list,
+    p_list = p_list,
+    xlim = c(0, 1)
+  )
+
+  expect_length(line_calls, 0L)
+})
+
+test_that("strategize.plot validates ticks_type", {
+  skip_on_cran()
+
+  pi_star_list <- list(k1 = list(
+    Gender = c(Male = 0.35, Female = 0.65)
+  ))
+  p_list <- list(Gender = c(Male = 0.5, Female = 0.5))
+
+  expect_error(
+    strategize.plot(
+      pi_star_list = pi_star_list,
+      p_list = p_list,
+      ticks_type = "bad"
+    ),
+    "ticks_type"
   )
 })
 

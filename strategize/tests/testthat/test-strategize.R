@@ -157,6 +157,7 @@ test_that("strategize returns all expected output fields", {
   for (field in expected_fields) {
     expect_true(field %in% names(res), info = paste("Missing field:", field))
   }
+  expect_identical(anyDuplicated(names(res)), 0L)
 
   expect_type(res$pi_star_point, "list")
   expect_type(res$p_list, "list")

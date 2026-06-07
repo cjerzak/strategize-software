@@ -2407,7 +2407,6 @@ strategize       <-          function(
                   "q_dag_ave" = q_dag_ave,
                   "pi_star_lb" = lowerList,
                   "pi_star_ub" = upperList,
-                  "Q_point" = c(q_star),
                   "penalty_type" = penalty_type,
                   "lambda" = lambda,
                   "p_vec_full" = p_vec_full,
@@ -2440,7 +2439,6 @@ strategize       <-          function(
                   "a_i_ast" = a_i_ast_optimized,
                   "a_i_dag" = a_i_dag_optimized,
                   
-                  "ParameterizationType" = strenv$ParameterizationType,
                   "d_locator" = d_locator,  
                   "d_locator_use" = strenv$d_locator_use, 
                   "main_comp_mat" = main_comp_mat,
