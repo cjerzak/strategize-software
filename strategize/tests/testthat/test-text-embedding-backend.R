@@ -80,6 +80,99 @@ test_that("qwen3 8B profile resolves platform-specific 4096-dimensional candidat
   expect_equal(mac_candidates$mlx$canonical_dim, 4096L)
 })
 
+test_that("Harrier profile resolves 1024-dimensional sentence-transformers candidates", {
+  host <- make_text_embedding_host()
+  candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "harrier_oss_v1_0.6b_1024"
+  )
+
+  expect_null(candidates$mlx)
+  expect_equal(candidates$cuda$family, "harrier")
+  expect_equal(candidates$cuda$profile, "harrier_oss_v1_0.6b_1024")
+  expect_equal(candidates$cuda$model_id, "microsoft/harrier-oss-v1-0.6b")
+  expect_equal(candidates$cuda$backend, "sentence_transformers")
+  expect_equal(candidates$cuda$canonical_dim, 1024L)
+  expect_equal(candidates$cuda$raw_dim, 1024L)
+  expect_equal(candidates$cpu$model_id, "microsoft/harrier-oss-v1-0.6b")
+})
+
+test_that("Harrier auto mode chooses CUDA on validated Nvidia hosts", {
+  host <- make_text_embedding_host(
+    nvidia_tools = list(nvidia_smi = TRUE, nvcc = TRUE),
+    nvidia_driver = list(
+      available = TRUE,
+      driver_version = "580.12",
+      driver_major = 580L,
+      device_name = "NVIDIA RTX"
+    ),
+    cuda_runtime = list(
+      validated = TRUE,
+      cuda_available = TRUE,
+      cuda_version = "13.0",
+      hip_version = "",
+      device_name = "NVIDIA RTX"
+    )
+  )
+  candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "harrier_oss_v1_0.6b_1024"
+  )
+
+  testthat::local_mocked_bindings(
+    cs2step_evaluate_text_embedding_candidate = function(candidate, host) {
+      candidate$status <- if (identical(candidate$device, "cuda")) "ready" else "needs_install"
+      candidate$issues <- character(0)
+      candidate
+    },
+    .package = "strategize"
+  )
+
+  inspected <- strategize:::cs2step_select_text_embedding_candidate(
+    candidates = candidates,
+    host = host,
+    runtime = "auto",
+    family = "harrier",
+    profile = "harrier_oss_v1_0.6b_1024"
+  )
+
+  expect_equal(inspected$selected$backend, "sentence_transformers")
+  expect_equal(inspected$selected$device, "cuda")
+  expect_equal(inspected$selected$model_id, "microsoft/harrier-oss-v1-0.6b")
+})
+
+test_that("Harrier auto mode falls back to CPU on Apple Silicon without MLX candidate", {
+  host <- make_text_embedding_host(
+    os = "Darwin",
+    machine = "arm64",
+    mlx_host_capable = TRUE
+  )
+  candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "harrier_oss_v1_0.6b_1024"
+  )
+
+  testthat::local_mocked_bindings(
+    cs2step_evaluate_text_embedding_candidate = function(candidate, host) {
+      candidate$status <- if (identical(candidate$device, "cpu")) "needs_install" else "unavailable"
+      candidate$issues <- character(0)
+      candidate
+    },
+    .package = "strategize"
+  )
+
+  inspected <- strategize:::cs2step_select_text_embedding_candidate(
+    candidates = candidates,
+    host = host,
+    runtime = "auto",
+    family = "harrier",
+    profile = "harrier_oss_v1_0.6b_1024"
+  )
+
+  expect_equal(inspected$selected$backend, "sentence_transformers")
+  expect_equal(inspected$selected$device, "cpu")
+})
+
 test_that("qwen3 8B profile requires an accelerator in auto mode but allows explicit CPU", {
   host <- make_text_embedding_host()
   candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
@@ -482,6 +575,10 @@ test_that("text embedding cache file includes the profile in the cache key", {
     host,
     profile = "qwen3_0.6b_1024"
   )$cpu
+  harrier <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "harrier_oss_v1_0.6b_1024"
+  )$cpu
   cache_dir <- tempfile("strategize-text-cache-")
   dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
@@ -491,5 +588,9 @@ test_that("text embedding cache file includes the profile in the cache key", {
   expect_false(identical(
     strategize:::cs2step_text_embedding_cache_file(portable, cache_dir = cache_dir),
     strategize:::cs2step_text_embedding_cache_file(alias, cache_dir = cache_dir)
+  ))
+  expect_false(identical(
+    strategize:::cs2step_text_embedding_cache_file(portable, cache_dir = cache_dir),
+    strategize:::cs2step_text_embedding_cache_file(harrier, cache_dir = cache_dir)
   ))
 })

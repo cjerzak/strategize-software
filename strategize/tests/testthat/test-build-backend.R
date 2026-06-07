@@ -186,12 +186,12 @@ test_that("build_backend delegates requested text embedding profile for a ready 
   expect_invisible(build_backend(
     conda_env = "test_env",
     conda = "auto",
-    text_embeddings = "qwen3_8b_4096",
+    text_embeddings = "harrier_oss_v1_0.6b_1024",
     text_embedding_runtime = "cuda"
   ))
 
   expect_length(calls, 1L)
-  expect_equal(calls[[1]]$text_embeddings$profile, "qwen3_8b_4096")
+  expect_equal(calls[[1]]$text_embeddings$profile, "harrier_oss_v1_0.6b_1024")
   expect_equal(calls[[1]]$text_embeddings$runtime, "cuda")
   expect_equal(calls[[1]]$text_embedding_runtime, "cuda")
   expect_equal(calls[[1]]$conda_env, "test_env")

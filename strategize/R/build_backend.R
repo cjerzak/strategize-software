@@ -26,8 +26,9 @@
 #'   requested input specifications.
 #' @param text_embeddings Optional text embedding profile to install after the
 #'   core backend is ready. Use \code{NULL} or \code{FALSE} for no text runtime,
-#'   a profile name such as \code{"portable"} or \code{"qwen3_8b_4096"}, or a
-#'   list with \code{profile}, \code{runtime}, and optional \code{model_id}.
+#'   a profile name such as \code{"portable"},
+#'   \code{"harrier_oss_v1_0.6b_1024"}, or \code{"qwen3_8b_4096"}, or a list
+#'   with \code{profile}, \code{runtime}, and optional \code{model_id}.
 #' @param text_embedding_runtime Runtime preference for \code{text_embeddings};
 #'   one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
 #'   \code{"cpu"}.
@@ -54,10 +55,10 @@
 #' # directly through reticulate in an already-running R session.
 #'
 #' # Install the host-specific text embedding runtime for a profile:
-#' # build_backend(text_embeddings = "qwen3_8b_4096")
+#' # build_backend(text_embeddings = "harrier_oss_v1_0.6b_1024")
 #'
 #' # Keep scripted runs quiet:
-#' # build_backend(text_embeddings = "qwen3_8b_4096", verbose = FALSE)
+#' # build_backend(text_embeddings = "harrier_oss_v1_0.6b_1024", verbose = FALSE)
 #' }
 #'
 #' @export

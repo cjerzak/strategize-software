@@ -23,7 +23,8 @@ selected profile supplies the family.}
 choose one of \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or \code{"cpu"} explicitly.}
 
 \item{profile}{Embedding profile. Use \code{"portable"} for the default
-portable profile or a registered profile such as \code{"qwen3_8b_4096"}.}
+portable profile or a registered profile such as
+\code{"harrier_oss_v1_0.6b_1024"} or \code{"qwen3_8b_4096"}.}
 
 \item{model_id}{Optional model id override applied to every compatible
 candidate in the selected profile.}
