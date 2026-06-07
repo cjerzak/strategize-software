@@ -54,6 +54,69 @@ test_that("text embedding selector chooses MLX on Apple Silicon in auto mode", {
   expect_equal(inspected$selected$device, "metal")
 })
 
+test_that("qwen3 8B profile resolves platform-specific 4096-dimensional candidates", {
+  linux_host <- make_text_embedding_host()
+  linux_candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
+    linux_host,
+    profile = "qwen3_8b_4096"
+  )
+
+  expect_equal(linux_candidates$cuda$profile, "qwen3_8b_4096")
+  expect_equal(linux_candidates$cuda$model_id, "Qwen/Qwen3-Embedding-8B")
+  expect_equal(linux_candidates$cuda$canonical_dim, 4096L)
+  expect_equal(linux_candidates$cuda$raw_dim, 4096L)
+
+  mac_host <- make_text_embedding_host(
+    os = "Darwin",
+    machine = "arm64",
+    mlx_host_capable = TRUE
+  )
+  mac_candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
+    mac_host,
+    profile = "qwen3_8b_4096"
+  )
+  expect_equal(mac_candidates$mlx$model_id, "mlx-community/Qwen3-Embedding-8B-mxfp8")
+  expect_equal(mac_candidates$mlx$backend, "mlx")
+  expect_equal(mac_candidates$mlx$canonical_dim, 4096L)
+})
+
+test_that("qwen3 8B profile requires an accelerator in auto mode but allows explicit CPU", {
+  host <- make_text_embedding_host()
+  candidates <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "qwen3_8b_4096"
+  )
+
+  testthat::local_mocked_bindings(
+    cs2step_evaluate_text_embedding_candidate = function(candidate, host) {
+      candidate$status <- if (identical(candidate$device, "cpu")) "needs_install" else "unavailable"
+      candidate$issues <- character(0)
+      candidate
+    },
+    .package = "strategize"
+  )
+
+  auto_inspected <- strategize:::cs2step_select_text_embedding_candidate(
+    candidates = candidates,
+    host = host,
+    runtime = "auto",
+    family = "qwen3",
+    profile = "qwen3_8b_4096"
+  )
+  expect_null(auto_inspected$selected)
+  expect_true(any(grepl("requires an accelerator", auto_inspected$issues, fixed = TRUE)))
+
+  cpu_inspected <- strategize:::cs2step_select_text_embedding_candidate(
+    candidates = candidates,
+    host = host,
+    runtime = "cpu",
+    family = "qwen3",
+    profile = "qwen3_8b_4096"
+  )
+  expect_equal(cpu_inspected$selected$device, "cpu")
+  expect_equal(cpu_inspected$selected$model_id, "Qwen/Qwen3-Embedding-8B")
+})
+
 test_that("CUDA candidate is installable on supported Nvidia hosts even before validation", {
   host <- make_text_embedding_host(
     nvidia_tools = list(nvidia_smi = TRUE, nvcc = TRUE),
@@ -290,4 +353,68 @@ test_that("canonical text embedding width truncates larger matrices", {
   expect_equal(dim(out), c(2L, 1024L))
   expect_equal(out[, 1], emb[, 1])
   expect_equal(out[, 1024], emb[, 1024])
+})
+
+test_that("legacy text embedding metadata preserves embedding_dim during normalization", {
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    .package = "strategize"
+  )
+  spec <- strategize:::cs2step_normalize_text_embedding_spec(list(
+    backend = "mlx_embeddings",
+    model_id = "mlx-community/Qwen3-Embedding-8B-mxfp8",
+    embedding_dim = 4096L
+  ))
+
+  expect_equal(spec$canonical_dim, 4096L)
+})
+
+test_that("cache-only text embedding backend errors before importing model runtime", {
+  host <- make_text_embedding_host()
+  spec <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "qwen3_8b_4096"
+  )$cpu
+  cache_dir <- tempfile("strategize-text-cache-")
+  dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+  fn <- strategize:::cs2step_build_text_embedding_fn(
+    spec = spec,
+    cache_dir = cache_dir,
+    cache_only = TRUE
+  )
+
+  testthat::local_mocked_bindings(
+    cs2step_ensure_text_embedding_runtime = function(spec) {
+      stop("runtime import should not be attempted")
+    },
+    .package = "strategize"
+  )
+
+  expect_error(
+    fn("new text"),
+    "Text embedding cache-only backend"
+  )
+})
+
+test_that("text embedding cache file includes the profile in the cache key", {
+  host <- make_text_embedding_host()
+  portable <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "portable"
+  )$cpu
+  alias <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "qwen3_0.6b_1024"
+  )$cpu
+  cache_dir <- tempfile("strategize-text-cache-")
+  dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(cache_dir, recursive = TRUE), add = TRUE)
+
+  expect_equal(portable$model_id, alias$model_id)
+  expect_equal(portable$canonical_dim, alias$canonical_dim)
+  expect_false(identical(
+    strategize:::cs2step_text_embedding_cache_file(portable, cache_dir = cache_dir),
+    strategize:::cs2step_text_embedding_cache_file(alias, cache_dir = cache_dir)
+  ))
 })

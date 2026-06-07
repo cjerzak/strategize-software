@@ -8,7 +8,9 @@ build_backend(
   conda_env = "strategize_env",
   conda = "auto",
   backend = c("auto", "cpu", "cuda", "mps"),
-  force_reinstall = FALSE
+  force_reinstall = FALSE,
+  text_embeddings = NULL,
+  text_embedding_runtime = "auto"
 )
 }
 \arguments{
@@ -28,6 +30,15 @@ experimental Apple Silicon \code{jax-mps} backend.}
 \item{force_reinstall}{Logical. If \code{TRUE}, remove the named conda
 environment if it exists, then recreate and reinstall the backend from the
 requested input specifications.}
+
+\item{text_embeddings}{Optional text embedding profile to install after the
+core backend is ready. Use \code{NULL} or \code{FALSE} for no text runtime,
+a profile name such as \code{"portable"} or \code{"qwen3_8b_4096"}, or a
+list with \code{profile}, \code{runtime}, and optional \code{model_id}.}
+
+\item{text_embedding_runtime}{Runtime preference for \code{text_embeddings};
+one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
+\code{"cpu"}.}
 }
 \value{
 Invisibly returns \code{NULL}. This function is called for its side effects
@@ -60,6 +71,9 @@ build_backend(conda_env = "strategize_env", conda = "auto")
 # build_backend(backend = "mps")
 # Sys.setenv(JAX_PLATFORMS = "mps") may be needed before importing JAX
 # directly through reticulate in an already-running R session.
+
+# Install the host-specific text embedding runtime for a profile:
+# build_backend(text_embeddings = "qwen3_8b_4096")
 }
 
 }

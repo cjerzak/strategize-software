@@ -78,6 +78,179 @@ test_that("build_backend is idempotent when the core env is already healthy", {
   expect_invisible(build_backend(conda_env = "test_env", conda = "auto"))
 })
 
+test_that("build_backend leaves text embedding runtime untouched by default", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  py_path <- file.path(tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+  file.create(py_path)
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_env_state = function(conda_env, conda) {
+      build_backend_mock_state(
+        conda_env = conda_env,
+        conda = conda,
+        registered = TRUE,
+        python = py_path,
+        python_exists = TRUE,
+        core_ready = TRUE
+      )
+    },
+    cs2step_ensure_text_embedding_request = function(...) {
+      stop("text embedding runtime should not be touched")
+    },
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_create = function(...) stop("conda_create should not run"),
+    py_install = function(...) stop("py_install should not run"),
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  expect_invisible(build_backend(conda_env = "test_env", conda = "auto"))
+})
+
+test_that("build_backend delegates requested text embedding profile for a ready env", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  calls <- list()
+  py_path <- file.path(tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+  file.create(py_path)
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_env_state = function(conda_env, conda) {
+      build_backend_mock_state(
+        conda_env = conda_env,
+        conda = conda,
+        registered = TRUE,
+        python = py_path,
+        python_exists = TRUE,
+        core_ready = TRUE
+      )
+    },
+    cs2step_ensure_text_embedding_request = function(text_embeddings,
+                                                     text_embedding_runtime,
+                                                     conda_env,
+                                                     conda) {
+      calls <<- c(calls, list(list(
+        text_embeddings = text_embeddings,
+        text_embedding_runtime = text_embedding_runtime,
+        conda_env = conda_env,
+        conda = conda
+      )))
+      invisible(TRUE)
+    },
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_create = function(...) stop("conda_create should not run"),
+    py_install = function(...) stop("py_install should not run"),
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  expect_invisible(build_backend(
+    conda_env = "test_env",
+    conda = "auto",
+    text_embeddings = "qwen3_8b_4096",
+    text_embedding_runtime = "cuda"
+  ))
+
+  expect_length(calls, 1L)
+  expect_equal(calls[[1]]$text_embeddings$profile, "qwen3_8b_4096")
+  expect_equal(calls[[1]]$text_embeddings$runtime, "cuda")
+  expect_equal(calls[[1]]$text_embedding_runtime, "cuda")
+  expect_equal(calls[[1]]$conda_env, "test_env")
+})
+
+test_that("build_backend delegates requested text embedding profile after installing core env", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  calls <- list()
+  install_calls <- list()
+  registered <- FALSE
+  installed <- FALSE
+  py_path <- file.path(withr::local_tempdir(), "env", "bin", "python")
+
+  states <- function(conda_env, conda) {
+    if (registered) {
+      dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+      if (!file.exists(py_path)) {
+        file.create(py_path)
+      }
+    }
+    build_backend_mock_state(
+      conda_env = conda_env,
+      conda = conda,
+      registered = registered,
+      python = if (registered) py_path else "",
+      python_exists = registered,
+      core_ready = registered && installed
+    )
+  }
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_host_info = function() {
+      list(os = "Linux", machine = "x86_64", is_macos = FALSE, is_arm64 = FALSE)
+    },
+    cs2step_backend_env_state = states,
+    cs2step_probe_nvidia_driver = function() {
+      list(available = FALSE, driver_version = "unknown", driver_major = NA_integer_, device_name = "")
+    },
+    cs2step_ensure_text_embedding_request = function(text_embeddings,
+                                                     text_embedding_runtime,
+                                                     conda_env,
+                                                     conda) {
+      calls <<- c(calls, list(list(
+        text_embeddings = text_embeddings,
+        text_embedding_runtime = text_embedding_runtime,
+        conda_env = conda_env,
+        conda = conda
+      )))
+      invisible(TRUE)
+    },
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_create = function(envname, conda, python_version) {
+      registered <<- TRUE
+      TRUE
+    },
+    py_install = function(packages, envname, conda, pip, ...) {
+      install_calls <<- c(install_calls, list(packages))
+      installed <<- TRUE
+      TRUE
+    },
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  expect_invisible(build_backend(
+    conda_env = "test_env",
+    conda = "auto",
+    text_embeddings = list(profile = "qwen3_8b_4096", runtime = "cpu")
+  ))
+
+  expect_true("jax" %in% unlist(install_calls))
+  expect_length(calls, 1L)
+  expect_equal(calls[[1]]$text_embeddings$profile, "qwen3_8b_4096")
+  expect_equal(calls[[1]]$text_embeddings$runtime, "cpu")
+})
+
 test_that("build_backend force_reinstall removes and rebuilds a healthy env", {
   skip_on_cran()
   skip_if_not_installed("withr")

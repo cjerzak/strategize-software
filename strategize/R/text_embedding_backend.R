@@ -1,29 +1,36 @@
 #' Inspect a host-aware text-embedding backend
 #'
 #' @param conda_env Conda env name used for the Python runtime.
-#' @param family Embedding-family selector. Currently only \code{"qwen3"} is supported.
+#' @param family Optional embedding-family selector. When \code{NULL}, the
+#'   selected profile supplies the family.
 #' @param runtime Runtime preference. Use \code{"auto"} to resolve per host, or
 #'   choose one of \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or \code{"cpu"} explicitly.
-#' @param profile Embedding profile. Currently only \code{"portable"} is supported.
+#' @param profile Embedding profile. Use \code{"portable"} for the default
+#'   portable profile or a registered profile such as \code{"qwen3_8b_4096"}.
+#' @param model_id Optional model id override applied to every compatible
+#'   candidate in the selected profile.
 #' @param conda Conda binary to use. Defaults to \code{"auto"}.
 #'
 #' @return A serializable list describing the host, Python env health, candidate
 #'   text-embedding runtimes, and the selected backend.
 #' @export
 inspect_text_embedding_backend <- function(conda_env = "strategize_env",
-                                           family = "qwen3",
+                                           family = NULL,
                                            runtime = "auto",
                                            profile = "portable",
+                                           model_id = NULL,
                                            conda = "auto") {
-  family <- cs2step_text_embedding_family(family)
   runtime <- cs2step_text_embedding_runtime(runtime)
   profile <- cs2step_text_embedding_profile(profile)
+  family <- cs2step_text_embedding_family(family %||%
+    cs2step_text_embedding_profile_spec(profile)$family)
   host <- cs2step_collect_text_embedding_host_info(conda_env = conda_env, conda = conda)
   inspected <- cs2step_inspect_text_embedding_candidates(
     host = host,
     family = family,
     runtime = runtime,
-    profile = profile
+    profile = profile,
+    model_id = model_id
   )
   structure(inspected, class = "strategize_text_embedding_backend")
 }
@@ -31,11 +38,18 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_env",
 #' Build a host-aware text-embedding backend
 #'
 #' @param conda_env Conda env name used for the Python runtime.
-#' @param family Embedding-family selector. Currently only \code{"qwen3"} is supported.
+#' @param family Optional embedding-family selector. When \code{NULL}, the
+#'   selected profile supplies the family.
 #' @param runtime Runtime preference. Use \code{"auto"} to resolve per host, or
 #'   choose one of \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or \code{"cpu"} explicitly.
-#' @param profile Embedding profile. Currently only \code{"portable"} is supported.
+#' @param profile Embedding profile. Use \code{"portable"} for the default
+#'   portable profile or a registered profile such as \code{"qwen3_8b_4096"}.
+#' @param model_id Optional model id override applied to every compatible
+#'   candidate in the selected profile.
 #' @param cache_dir Optional directory for cached text embeddings.
+#' @param cache_only Logical; if \code{TRUE}, missing cache entries error before
+#'   a model runtime is imported.
+#' @param batch_size Number of texts to encode per model call.
 #' @param required Logical; if \code{TRUE}, ensure the selected runtime is usable
 #'   immediately. If \code{FALSE}, return a lazy backend that validates on first use.
 #' @param conda Conda binary to use. Defaults to \code{"auto"}.
@@ -43,15 +57,19 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_env",
 #' @return A list with \code{$fn}, \code{$spec}, and \code{$runtime}.
 #' @export
 build_text_embedding_backend <- function(conda_env = "strategize_env",
-                                         family = "qwen3",
+                                         family = NULL,
                                          runtime = "auto",
                                          profile = "portable",
+                                         model_id = NULL,
                                          cache_dir = NULL,
+                                         cache_only = FALSE,
+                                         batch_size = 64L,
                                          required = TRUE,
                                          conda = "auto") {
-  family <- cs2step_text_embedding_family(family)
   runtime <- cs2step_text_embedding_runtime(runtime)
   profile <- cs2step_text_embedding_profile(profile)
+  family <- cs2step_text_embedding_family(family %||%
+    cs2step_text_embedding_profile_spec(profile)$family)
 
   env_state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda)
   if (isTRUE(required) && !isTRUE(env_state$core_modules_ready)) {
@@ -63,6 +81,7 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
     family = family,
     runtime = runtime,
     profile = profile,
+    model_id = model_id,
     conda = conda
   )
   spec <- inspected$selected
@@ -86,6 +105,7 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
       family = family,
       runtime = runtime,
       profile = profile,
+      model_id = model_id,
       conda = conda
     )
     spec <- inspected$selected
@@ -102,7 +122,12 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
     }
   }
 
-  fn <- cs2step_build_text_embedding_fn(spec = spec, cache_dir = cache_dir)
+  fn <- cs2step_build_text_embedding_fn(
+    spec = spec,
+    cache_dir = cache_dir,
+    cache_only = cache_only,
+    batch_size = batch_size
+  )
   list(fn = fn, spec = spec, runtime = inspected)
 }
 
@@ -127,12 +152,252 @@ cs2step_text_embedding_runtime <- function(runtime) {
   runtime
 }
 
+cs2step_text_embedding_profile_registry <- function() {
+  st_modules <- c("sentence_transformers", "transformers", "torch", "numpy")
+  list(
+    portable = list(
+      profile = "portable",
+      family = "qwen3",
+      canonical_dim = 1024L,
+      cache_key_version = 1L,
+      auto_cpu_fallback = TRUE,
+      candidates = list(
+        mlx = list(
+          label = "mlx",
+          backend = "mlx",
+          device = "metal",
+          model_id = "mlx-community/Qwen3-Embedding-8B-mxfp8",
+          raw_dim = 4096L,
+          required_modules = c("mlx_embeddings", "mlx.core", "numpy"),
+          install_packages = c("mlx", "mlx-embeddings"),
+          host_constraints = list(os = "Darwin", machine = "arm64")
+        ),
+        cuda = list(
+          label = "sentence_transformers_cuda",
+          backend = "sentence_transformers",
+          device = "cuda",
+          model_id = "Qwen/Qwen3-Embedding-0.6B",
+          raw_dim = 1024L,
+          required_modules = st_modules,
+          install_packages = c("sentence-transformers", "transformers")
+        ),
+        rocm = list(
+          label = "sentence_transformers_rocm",
+          backend = "sentence_transformers",
+          device = "rocm",
+          model_id = "Qwen/Qwen3-Embedding-0.6B",
+          raw_dim = 1024L,
+          required_modules = st_modules,
+          install_packages = c("sentence-transformers", "transformers")
+        ),
+        cpu = list(
+          label = "sentence_transformers_cpu",
+          backend = "sentence_transformers",
+          device = "cpu",
+          model_id = "Qwen/Qwen3-Embedding-0.6B",
+          raw_dim = 1024L,
+          required_modules = st_modules,
+          install_packages = c("torch", "sentence-transformers", "transformers")
+        )
+      )
+    ),
+    qwen3_0.6b_1024 = list(
+      alias = "portable"
+    ),
+    qwen3_8b_4096 = list(
+      profile = "qwen3_8b_4096",
+      family = "qwen3",
+      canonical_dim = 4096L,
+      cache_key_version = 1L,
+      auto_cpu_fallback = FALSE,
+      candidates = list(
+        mlx = list(
+          label = "mlx_qwen3_8b_4096",
+          backend = "mlx",
+          device = "metal",
+          model_id = "mlx-community/Qwen3-Embedding-8B-mxfp8",
+          raw_dim = 4096L,
+          required_modules = c("mlx_embeddings", "mlx.core", "numpy"),
+          install_packages = c("mlx", "mlx-embeddings"),
+          host_constraints = list(os = "Darwin", machine = "arm64")
+        ),
+        cuda = list(
+          label = "sentence_transformers_cuda_qwen3_8b_4096",
+          backend = "sentence_transformers",
+          device = "cuda",
+          model_id = "Qwen/Qwen3-Embedding-8B",
+          raw_dim = 4096L,
+          required_modules = st_modules,
+          install_packages = c("sentence-transformers", "transformers")
+        ),
+        rocm = list(
+          label = "sentence_transformers_rocm_qwen3_8b_4096",
+          backend = "sentence_transformers",
+          device = "rocm",
+          model_id = "Qwen/Qwen3-Embedding-8B",
+          raw_dim = 4096L,
+          required_modules = st_modules,
+          install_packages = c("sentence-transformers", "transformers")
+        ),
+        cpu = list(
+          label = "sentence_transformers_cpu_qwen3_8b_4096",
+          backend = "sentence_transformers",
+          device = "cpu",
+          model_id = "Qwen/Qwen3-Embedding-8B",
+          raw_dim = 4096L,
+          required_modules = st_modules,
+          install_packages = c("torch", "sentence-transformers", "transformers")
+        )
+      )
+    )
+  )
+}
+
+cs2step_text_embedding_profile_names <- function() {
+  names(cs2step_text_embedding_profile_registry())
+}
+
 cs2step_text_embedding_profile <- function(profile) {
   profile <- tolower(as.character(profile %||% "portable"))
-  if (!identical(profile, "portable")) {
-    stop("Only profile = 'portable' is currently supported.", call. = FALSE)
+  valid <- cs2step_text_embedding_profile_names()
+  if (!profile %in% valid) {
+    stop(
+      sprintf(
+        "Unsupported text embedding profile '%s'. Valid profiles: %s.",
+        profile,
+        paste(valid, collapse = ", ")
+      ),
+      call. = FALSE
+    )
   }
   profile
+}
+
+cs2step_text_embedding_profile_spec <- function(profile) {
+  registry <- cs2step_text_embedding_profile_registry()
+  profile <- cs2step_text_embedding_profile(profile)
+  spec <- registry[[profile]]
+  if (!is.null(spec$alias)) {
+    spec <- registry[[spec$alias]]
+    spec$profile <- profile
+  }
+  spec
+}
+
+cs2step_text_embedding_install_packages <- function(spec, fallback = character(0)) {
+  packages <- as.character(spec$install_packages %||% character(0))
+  packages <- packages[nzchar(packages)]
+  if (!length(packages)) {
+    packages <- as.character(fallback %||% character(0))
+  }
+  packages
+}
+
+cs2step_text_embedding_request <- function(text_embeddings = NULL,
+                                           text_embedding_runtime = "auto") {
+  runtime_default <- cs2step_text_embedding_runtime(text_embedding_runtime)
+  if (is.null(text_embeddings) || identical(text_embeddings, FALSE)) {
+    return(NULL)
+  }
+  if (is.character(text_embeddings) && length(text_embeddings) == 1L) {
+    value <- tolower(trimws(text_embeddings))
+    if (!nzchar(value) || value %in% c("none", "off", "false", "0", "no")) {
+      return(NULL)
+    }
+    return(list(
+      profile = cs2step_text_embedding_profile(value),
+      runtime = runtime_default,
+      family = NULL,
+      model_id = NULL
+    ))
+  }
+  if (!is.list(text_embeddings)) {
+    stop(
+      "text_embeddings must be NULL, FALSE, a profile name, or a list with profile/runtime/model_id fields.",
+      call. = FALSE
+    )
+  }
+  profile <- cs2step_text_embedding_profile(text_embeddings$profile %||% "portable")
+  runtime <- cs2step_text_embedding_runtime(text_embeddings$runtime %||% runtime_default)
+  family <- text_embeddings$family %||% NULL
+  if (!is.null(family)) {
+    family <- cs2step_text_embedding_family(family)
+  }
+  model_id <- text_embeddings$model_id %||% NULL
+  if (!is.null(model_id)) {
+    model_id <- as.character(model_id)
+    if (length(model_id) != 1L || is.na(model_id) || !nzchar(trimws(model_id))) {
+      stop("text_embeddings$model_id must be a non-empty scalar string when supplied.", call. = FALSE)
+    }
+  }
+  list(
+    profile = profile,
+    runtime = runtime,
+    family = family,
+    model_id = model_id
+  )
+}
+
+cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
+                                                  text_embedding_runtime = "auto",
+                                                  conda_env = "strategize_env",
+                                                  conda = "auto") {
+  request <- cs2step_text_embedding_request(
+    text_embeddings = text_embeddings,
+    text_embedding_runtime = text_embedding_runtime
+  )
+  if (is.null(request)) {
+    return(invisible(NULL))
+  }
+  inspected <- inspect_text_embedding_backend(
+    conda_env = conda_env,
+    family = request$family,
+    runtime = request$runtime,
+    profile = request$profile,
+    model_id = request$model_id,
+    conda = conda
+  )
+  spec <- inspected$selected
+  if (is.null(spec) || identical(spec$status, "unavailable")) {
+    stop(
+      sprintf(
+        "No compatible text embedding backend is available for profile '%s' and runtime '%s'.\n%s",
+        request$profile,
+        request$runtime,
+        paste(unique(inspected$issues %||% character(0)), collapse = "\n")
+      ),
+      call. = FALSE
+    )
+  }
+  cs2step_ensure_text_embedding_runtime(spec)
+  inspected <- inspect_text_embedding_backend(
+    conda_env = conda_env,
+    family = request$family,
+    runtime = request$runtime,
+    profile = request$profile,
+    model_id = request$model_id,
+    conda = conda
+  )
+  spec <- inspected$selected
+  if (is.null(spec) || !identical(spec$status, "ready")) {
+    label_use <- if (is.null(spec)) "unknown" else spec$label %||% "unknown"
+    stop(
+      sprintf(
+        "Selected text embedding backend '%s' is not ready after installation.\n%s",
+        label_use,
+        paste(unique(inspected$issues %||% character(0)), collapse = "\n")
+      ),
+      call. = FALSE
+    )
+  }
+  message(sprintf(
+    "Text embedding backend '%s' is ready (profile=%s, runtime=%s, model=%s).",
+    spec$label %||% spec$backend,
+    spec$profile,
+    request$runtime,
+    spec$model_id
+  ))
+  invisible(spec)
 }
 
 cs2step_text_embedding_backend_version <- function() 1L
@@ -301,15 +566,11 @@ cs2step_python_module_probe <- function(python, modules) {
 }
 
 cs2step_backend_core_modules <- function() {
-  modules <- c("jax", "numpyro", "optax", "equinox", "numpy", "orbax.checkpoint")
-  if (isTRUE(cs2step_backend_host_info()$is_macos)) {
-    modules <- c(modules, "mlx_embeddings", "mlx.core")
-  }
-  modules
+  c("jax", "numpyro", "optax", "equinox", "numpy", "orbax.checkpoint")
 }
 
 cs2step_backend_core_pip_packages <- function() {
-  packages <- c(
+  c(
     jax = "jax",
     numpyro = "numpyro",
     optax = "optax",
@@ -317,10 +578,6 @@ cs2step_backend_core_pip_packages <- function() {
     numpy = "numpy",
     "orbax.checkpoint" = "orbax-checkpoint"
   )
-  if (isTRUE(cs2step_backend_host_info()$is_macos)) {
-    packages <- c(packages, mlx_embeddings = "mlx-embeddings")
-  }
-  packages
 }
 
 cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "auto") {
@@ -629,15 +886,19 @@ cs2step_text_embedding_candidate <- function(label,
                                              model_id,
                                              conda_env,
                                              conda,
+                                             family = "qwen3",
+                                             profile = "portable",
                                              canonical_dim = 1024L,
                                              raw_dim = canonical_dim,
                                              required_modules = character(0),
+                                             install_packages = character(0),
+                                             cache_key_version = 1L,
                                              host_constraints = list()) {
   list(
     version = cs2step_text_embedding_backend_version(),
     label = label,
-    family = "qwen3",
-    profile = "portable",
+    family = family,
+    profile = profile,
     backend = backend,
     device = device,
     model_id = model_id,
@@ -646,7 +907,8 @@ cs2step_text_embedding_candidate <- function(label,
     canonical_dim = as.integer(canonical_dim),
     raw_dim = as.integer(raw_dim),
     required_modules = as.character(required_modules),
-    cache_key_version = 1L,
+    install_packages = as.character(install_packages),
+    cache_key_version = as.integer(cache_key_version),
     host_constraints = host_constraints
   )
 }
@@ -753,54 +1015,32 @@ cs2step_evaluate_text_embedding_candidate <- function(candidate, host) {
   candidate
 }
 
-cs2step_resolve_text_embedding_candidates <- function(host) {
-  list(
-    mlx = cs2step_text_embedding_candidate(
-      label = "mlx",
-      backend = "mlx",
-      device = "metal",
-      model_id = "mlx-community/Qwen3-Embedding-8B-mxfp8",
+cs2step_resolve_text_embedding_candidates <- function(host,
+                                                      profile = "portable",
+                                                      family = NULL,
+                                                      model_id = NULL) {
+  profile <- cs2step_text_embedding_profile(profile)
+  spec <- cs2step_text_embedding_profile_spec(profile)
+  family <- cs2step_text_embedding_family(family %||% spec$family)
+  lapply(spec$candidates, function(candidate) {
+    model_use <- as.character(model_id %||% candidate$model_id)
+    cs2step_text_embedding_candidate(
+      label = candidate$label,
+      backend = candidate$backend,
+      device = candidate$device,
+      model_id = model_use,
       conda_env = host$conda_env,
       conda = host$conda,
-      canonical_dim = 1024L,
-      raw_dim = 4096L,
-      required_modules = c("mlx_embeddings", "mlx.core", "numpy"),
-      host_constraints = list(os = "Darwin", machine = "arm64")
-    ),
-    cuda = cs2step_text_embedding_candidate(
-      label = "sentence_transformers_cuda",
-      backend = "sentence_transformers",
-      device = "cuda",
-      model_id = "Qwen/Qwen3-Embedding-0.6B",
-      conda_env = host$conda_env,
-      conda = host$conda,
-      canonical_dim = 1024L,
-      raw_dim = 1024L,
-      required_modules = c("sentence_transformers", "transformers", "torch", "numpy")
-    ),
-    rocm = cs2step_text_embedding_candidate(
-      label = "sentence_transformers_rocm",
-      backend = "sentence_transformers",
-      device = "rocm",
-      model_id = "Qwen/Qwen3-Embedding-0.6B",
-      conda_env = host$conda_env,
-      conda = host$conda,
-      canonical_dim = 1024L,
-      raw_dim = 1024L,
-      required_modules = c("sentence_transformers", "transformers", "torch", "numpy")
-    ),
-    cpu = cs2step_text_embedding_candidate(
-      label = "sentence_transformers_cpu",
-      backend = "sentence_transformers",
-      device = "cpu",
-      model_id = "Qwen/Qwen3-Embedding-0.6B",
-      conda_env = host$conda_env,
-      conda = host$conda,
-      canonical_dim = 1024L,
-      raw_dim = 1024L,
-      required_modules = c("sentence_transformers", "transformers", "torch", "numpy")
+      family = family,
+      profile = profile,
+      canonical_dim = spec$canonical_dim,
+      raw_dim = candidate$raw_dim %||% spec$canonical_dim,
+      required_modules = candidate$required_modules %||% character(0),
+      install_packages = candidate$install_packages %||% character(0),
+      cache_key_version = spec$cache_key_version %||% 1L,
+      host_constraints = candidate$host_constraints %||% list()
     )
-  )
+  })
 }
 
 cs2step_select_text_embedding_candidate <- function(candidates,
@@ -810,6 +1050,7 @@ cs2step_select_text_embedding_candidate <- function(candidates,
                                                     profile = "portable") {
   family <- cs2step_text_embedding_family(family)
   profile <- cs2step_text_embedding_profile(profile)
+  profile_spec <- cs2step_text_embedding_profile_spec(profile)
   runtime <- cs2step_text_embedding_runtime(runtime)
   candidates <- lapply(candidates, cs2step_evaluate_text_embedding_candidate, host = host)
 
@@ -825,7 +1066,7 @@ cs2step_select_text_embedding_candidate <- function(candidates,
                isTRUE(any(unlist(host$rocm_tools))) &&
                isTRUE(host$rocm_runtime$validated)) {
       selected <- candidates$rocm
-    } else {
+    } else if (isTRUE(profile_spec$auto_cpu_fallback)) {
       selected <- candidates$cpu
       if (identical(host$os, "Linux") && isTRUE(any(unlist(host$nvidia_tools)))) {
         issues <- c(
@@ -840,6 +1081,14 @@ cs2step_select_text_embedding_candidate <- function(candidates,
           "ROCm tooling is present but not validated in Python; falling back to CPU text embeddings."
         )
       }
+    } else {
+      issues <- c(
+        issues,
+        sprintf(
+          "Profile '%s' requires an accelerator in runtime='auto'; use runtime='cpu' explicitly to force CPU.",
+          profile
+        )
+      )
     }
   } else if (identical(runtime, "mlx")) {
     selected <- candidates$mlx
@@ -870,8 +1119,14 @@ cs2step_select_text_embedding_candidate <- function(candidates,
 cs2step_inspect_text_embedding_candidates <- function(host,
                                                       family = "qwen3",
                                                       runtime = "auto",
-                                                      profile = "portable") {
-  candidates <- cs2step_resolve_text_embedding_candidates(host)
+                                                      profile = "portable",
+                                                      model_id = NULL) {
+  candidates <- cs2step_resolve_text_embedding_candidates(
+    host = host,
+    profile = profile,
+    family = family,
+    model_id = model_id
+  )
   cs2step_select_text_embedding_candidate(
     candidates = candidates,
     host = host,
@@ -941,7 +1196,10 @@ cs2step_install_cuda_sentence_transformers <- function(spec) {
   cs2step_pip_install_in_conda(
     conda = spec$conda,
     conda_env = spec$conda_env,
-    packages = c("sentence-transformers", "transformers")
+    packages = cs2step_text_embedding_install_packages(
+      spec,
+      fallback = c("sentence-transformers", "transformers")
+    )
   )
 }
 
@@ -954,7 +1212,10 @@ cs2step_ensure_text_embedding_runtime <- function(spec) {
 
   if (identical(spec$backend, "mlx")) {
     reticulate::py_install(
-      packages = c("mlx", "mlx-embeddings"),
+      packages = cs2step_text_embedding_install_packages(
+        spec,
+        fallback = c("mlx", "mlx-embeddings")
+      ),
       envname = spec$conda_env,
       conda = spec$conda,
       pip = TRUE
@@ -964,14 +1225,20 @@ cs2step_ensure_text_embedding_runtime <- function(spec) {
       cs2step_install_cuda_sentence_transformers(spec)
     } else if (identical(spec$device, "cpu")) {
       reticulate::py_install(
-        packages = c("torch", "sentence-transformers", "transformers"),
+        packages = cs2step_text_embedding_install_packages(
+          spec,
+          fallback = c("torch", "sentence-transformers", "transformers")
+        ),
         envname = spec$conda_env,
         conda = spec$conda,
         pip = TRUE
       )
     } else {
       reticulate::py_install(
-        packages = c("sentence-transformers", "transformers"),
+        packages = cs2step_text_embedding_install_packages(
+          spec,
+          fallback = c("sentence-transformers", "transformers")
+        ),
         envname = spec$conda_env,
         conda = spec$conda,
         pip = TRUE
@@ -988,10 +1255,11 @@ cs2step_normalize_text_embedding_spec <- function(spec) {
   spec$family <- cs2step_text_embedding_family(spec$family %||% "qwen3")
   spec$profile <- cs2step_text_embedding_profile(spec$profile %||% "portable")
   spec$runtime <- cs2step_text_embedding_runtime(spec$runtime %||% "auto")
-  spec$canonical_dim <- as.integer(spec$canonical_dim %||% 1024L)
+  spec$canonical_dim <- as.integer(spec$canonical_dim %||% spec$embedding_dim %||% 1024L)
   spec$raw_dim <- as.integer(spec$raw_dim %||% spec$canonical_dim)
   spec$conda_env <- as.character(spec$conda_env %||% "strategize_env")
   spec$conda <- cs2step_resolve_conda_binary(spec$conda %||% "auto")
+  spec$install_packages <- as.character(spec$install_packages %||% character(0))
   spec$cache_key_version <- as.integer(spec$cache_key_version %||% 1L)
   spec
 }
@@ -1010,6 +1278,7 @@ cs2step_text_embedding_cache_file <- function(spec, cache_dir = NULL) {
       "%s.rds",
       digest::digest(list(
         family = spec$family,
+        profile = spec$profile,
         backend = spec$backend,
         device = spec$device,
         model = spec$model_id,
@@ -1041,8 +1310,16 @@ cs2step_text_embedding_canonicalize_matrix <- function(emb, spec) {
   emb
 }
 
-cs2step_build_text_embedding_fn <- function(spec, cache_dir = NULL) {
+cs2step_build_text_embedding_fn <- function(spec,
+                                            cache_dir = NULL,
+                                            cache_only = FALSE,
+                                            batch_size = 64L) {
   spec <- cs2step_normalize_text_embedding_spec(spec)
+  cache_only <- isTRUE(cache_only)
+  batch_size <- as.integer(batch_size %||% 64L)
+  if (length(batch_size) != 1L || is.na(batch_size) || batch_size < 1L) {
+    batch_size <- 64L
+  }
   cache_file <- function() cs2step_text_embedding_cache_file(spec, cache_dir = cache_dir)
   state <- new.env(parent = emptyenv())
   state$loaded <- FALSE
@@ -1053,7 +1330,14 @@ cs2step_build_text_embedding_fn <- function(spec, cache_dir = NULL) {
       return(invisible(TRUE))
     }
     cache_path <- cache_file()
-    state$cache <- if (file.exists(cache_path)) readRDS(cache_path) else list()
+    state$cache <- if (file.exists(cache_path)) {
+      tryCatch(readRDS(cache_path), error = function(e) list())
+    } else {
+      list()
+    }
+    if (!is.list(state$cache)) {
+      state$cache <- list()
+    }
     invisible(TRUE)
   }
 
@@ -1106,7 +1390,8 @@ cs2step_build_text_embedding_fn <- function(spec, cache_dir = NULL) {
       state$model$encode(
         texts,
         show_progress_bar = FALSE,
-        convert_to_numpy = TRUE
+        convert_to_numpy = TRUE,
+        batch_size = batch_size
       )
     )
     cs2step_text_embedding_canonicalize_matrix(emb, spec)
@@ -1118,19 +1403,35 @@ cs2step_build_text_embedding_fn <- function(spec, cache_dir = NULL) {
     texts[is.na(texts) | !nzchar(texts)] <- "(missing)"
     missing <- setdiff(unique(texts), names(state$cache))
     if (length(missing)) {
+      if (isTRUE(cache_only)) {
+        stop(
+          sprintf(
+            "Text embedding cache-only backend '%s' is missing %d text embedding(s). First missing text: %s",
+            spec$label %||% spec$backend,
+            length(missing),
+            substr(missing[[1L]], 1L, 160L)
+          ),
+          call. = FALSE
+        )
+      }
       load_model()
-      emb <- if (identical(spec$backend, "mlx")) {
-        encode_mlx(missing)
-      } else {
-        encode_sentence_transformers(missing)
+      starts <- seq.int(1L, length(missing), by = batch_size)
+      for (start in starts) {
+        idx <- seq.int(start, min(length(missing), start + batch_size - 1L))
+        batch_texts <- missing[idx]
+        emb <- if (identical(spec$backend, "mlx")) {
+          encode_mlx(batch_texts)
+        } else {
+          encode_sentence_transformers(batch_texts)
+        }
+        if (nrow(emb) != length(batch_texts)) {
+          stop("Text embedding backend returned a row count that does not match the input text count.", call. = FALSE)
+        }
+        for (i in seq_along(batch_texts)) {
+          state$cache[[batch_texts[[i]]]] <- unname(emb[i, ])
+        }
+        save_cache()
       }
-      if (nrow(emb) != length(missing)) {
-        stop("Text embedding backend returned a row count that does not match the input text count.", call. = FALSE)
-      }
-      for (i in seq_along(missing)) {
-        state$cache[[missing[[i]]]] <- unname(emb[i, ])
-      }
-      save_cache()
     }
     out <- do.call(rbind, lapply(texts, function(text) state$cache[[text]]))
     rownames(out) <- NULL
@@ -1138,6 +1439,11 @@ cs2step_build_text_embedding_fn <- function(spec, cache_dir = NULL) {
     out
   }
   attr(fn, "text_embedding_backend") <- spec
+  attr(fn, "text_embedding_cache") <- list(
+    cache_path = normalizePath(cache_file(), mustWork = FALSE),
+    cache_only = cache_only,
+    batch_size = batch_size
+  )
   class(fn) <- c("strategize_text_embedding_fn", class(fn))
   fn
 }

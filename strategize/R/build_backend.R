@@ -24,6 +24,13 @@
 #' @param force_reinstall Logical. If \code{TRUE}, remove the named conda
 #'   environment if it exists, then recreate and reinstall the backend from the
 #'   requested input specifications.
+#' @param text_embeddings Optional text embedding profile to install after the
+#'   core backend is ready. Use \code{NULL} or \code{FALSE} for no text runtime,
+#'   a profile name such as \code{"portable"} or \code{"qwen3_8b_4096"}, or a
+#'   list with \code{profile}, \code{runtime}, and optional \code{model_id}.
+#' @param text_embedding_runtime Runtime preference for \code{text_embeddings};
+#'   one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
+#'   \code{"cpu"}.
 #'
 #' @return Invisibly returns \code{NULL}. This function is called for its side effects
 #'   of creating and configuring a conda environment for \code{strategize}.
@@ -43,6 +50,9 @@
 #' # build_backend(backend = "mps")
 #' # Sys.setenv(JAX_PLATFORMS = "mps") may be needed before importing JAX
 #' # directly through reticulate in an already-running R session.
+#'
+#' # Install the host-specific text embedding runtime for a profile:
+#' # build_backend(text_embeddings = "qwen3_8b_4096")
 #' }
 #'
 #' @export
@@ -50,8 +60,15 @@
 
 build_backend <- function(conda_env = "strategize_env", conda = "auto",
                           backend = c("auto", "cpu", "cuda", "mps"),
-                          force_reinstall = FALSE) {
+                          force_reinstall = FALSE,
+                          text_embeddings = NULL,
+                          text_embedding_runtime = "auto") {
   backend <- match.arg(backend)
+  text_embedding_runtime <- cs2step_text_embedding_runtime(text_embedding_runtime)
+  text_embedding_request <- cs2step_text_embedding_request(
+    text_embeddings = text_embeddings,
+    text_embedding_runtime = text_embedding_runtime
+  )
   if (!is.logical(force_reinstall) || length(force_reinstall) != 1L ||
       is.na(force_reinstall)) {
     stop("force_reinstall must be TRUE or FALSE.", call. = FALSE)
@@ -156,6 +173,14 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   if (isTRUE(state$core_modules_ready) &&
       (!identical(backend, "mps") || isTRUE(mps_compatibility$compatible))) {
     write_activation_scripts(state)
+    if (!is.null(text_embedding_request)) {
+      cs2step_ensure_text_embedding_request(
+        text_embeddings = text_embedding_request,
+        text_embedding_runtime = text_embedding_runtime,
+        conda_env = conda_env,
+        conda = conda_bin
+      )
+    }
     message(sprintf("Environment '%s' is ready.", conda_env))
     mps_message()
     return(invisible(NULL))
@@ -305,6 +330,15 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   }
 
   write_activation_scripts(state)
+
+  if (!is.null(text_embedding_request)) {
+    cs2step_ensure_text_embedding_request(
+      text_embeddings = text_embedding_request,
+      text_embedding_runtime = text_embedding_runtime,
+      conda_env = conda_env,
+      conda = conda_bin
+    )
+  }
   
   msg("Environment '%s' is ready.", conda_env)
   mps_message()
