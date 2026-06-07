@@ -240,6 +240,37 @@ test_that("CUDA candidate is installable on supported Nvidia hosts even before v
   expect_true(any(grepl("CUDA validation did not succeed", evaluated$issues, fixed = TRUE)))
 })
 
+test_that("text embedding candidates do not require JAX core modules", {
+  host <- make_text_embedding_host(
+    core_modules_ready = FALSE,
+    core_module_status = setNames(
+      rep(FALSE, length(strategize:::cs2step_backend_core_modules())),
+      strategize:::cs2step_backend_core_modules()
+    )
+  )
+  candidate <- strategize:::cs2step_resolve_text_embedding_candidates(
+    host,
+    profile = "harrier_oss_v1_0.6b_1024"
+  )$cpu
+
+  testthat::local_mocked_bindings(
+    cs2step_python_module_probe = function(python, modules) {
+      list(
+        ok = setNames(rep(FALSE, length(modules)), modules),
+        details = setNames(rep("", length(modules)), modules),
+        status = 1L
+      )
+    },
+    .package = "strategize"
+  )
+
+  evaluated <- strategize:::cs2step_evaluate_text_embedding_candidate(candidate, host)
+
+  expect_equal(evaluated$status, "needs_install")
+  expect_true(isTRUE(evaluated$installable))
+  expect_false(any(grepl("Core strategize", evaluated$issues, fixed = TRUE)))
+})
+
 test_that("text embedding selector prefers CUDA on validated Nvidia hosts", {
   host <- make_text_embedding_host(
     nvidia_tools = list(nvidia_smi = TRUE, nvcc = TRUE),
@@ -563,6 +594,75 @@ test_that("cache-only text embedding backend errors before importing model runti
     fn("new text"),
     "Text embedding cache-only backend"
   )
+})
+
+test_that("text embedding runtime installation only creates a basic Python env", {
+  spec <- list(
+    family = "harrier",
+    profile = "harrier_oss_v1_0.6b_1024",
+    runtime = "cpu",
+    backend = "sentence_transformers",
+    label = "sentence_transformers_cpu",
+    device = "cpu",
+    model_id = "microsoft/harrier-oss-v1-0.6b",
+    conda_env = "strategize_torch_env",
+    conda = "/usr/bin/conda",
+    canonical_dim = 1024L,
+    raw_dim = 1024L
+  )
+  calls <- list()
+
+  testthat::local_mocked_bindings(
+    cs2step_backend_env_state = function(conda_env, conda) {
+      make_text_embedding_host(
+        conda = conda,
+        conda_env = conda_env,
+        registered = FALSE,
+        conda_registered = FALSE,
+        python = "",
+        python_exists = FALSE,
+        core_modules_ready = FALSE
+      )
+    },
+    cs2step_ensure_basic_python_conda_env = function(conda_env,
+                                                     conda = "auto",
+                                                     python_version = "3.12",
+                                                     force_reinstall = FALSE,
+                                                     verbose = TRUE,
+                                                     context = "Python runtime") {
+      calls <<- c(calls, list(list(
+        kind = "create_python_env",
+        conda_env = conda_env,
+        conda = conda,
+        context = context
+      )))
+      invisible(TRUE)
+    },
+    cs2step_pip_install_in_conda = function(conda,
+                                            conda_env,
+                                            packages,
+                                            index_url = NULL,
+                                            force_reinstall = FALSE,
+                                            verbose = TRUE,
+                                            context = "installing Python packages") {
+      calls <<- c(calls, list(list(
+        kind = "pip_install",
+        conda_env = conda_env,
+        packages = packages,
+        context = context
+      )))
+      invisible(TRUE)
+    },
+    build_backend = function(...) {
+      stop("build_backend should not be called for text-only runtime installation")
+    },
+    .package = "strategize"
+  )
+
+  expect_invisible(strategize:::cs2step_ensure_text_embedding_runtime(spec))
+  expect_equal(calls[[1]]$kind, "create_python_env")
+  expect_equal(calls[[1]]$conda_env, "strategize_torch_env")
+  expect_true(any(vapply(calls, `[[`, character(1), "kind") == "pip_install"))
 })
 
 test_that("text embedding cache file includes the profile in the cache key", {

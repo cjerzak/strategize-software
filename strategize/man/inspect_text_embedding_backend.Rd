@@ -5,7 +5,7 @@
 \title{Inspect a host-aware text-embedding backend}
 \usage{
 inspect_text_embedding_backend(
-  conda_env = "strategize_env",
+  conda_env = "strategize_torch_env",
   family = NULL,
   runtime = "auto",
   profile = "portable",
@@ -14,7 +14,9 @@ inspect_text_embedding_backend(
 )
 }
 \arguments{
-\item{conda_env}{Conda env name used for the Python runtime.}
+\item{conda_env}{Conda env name used for the Python runtime. Defaults to
+\code{"strategize_torch_env"} so text embedding packages can be isolated
+from the JAX backend environment.}
 
 \item{family}{Optional embedding-family selector. When \code{NULL}, the
 selected profile supplies the family.}

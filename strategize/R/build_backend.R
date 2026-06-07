@@ -32,6 +32,11 @@
 #' @param text_embedding_runtime Runtime preference for \code{text_embeddings};
 #'   one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
 #'   \code{"cpu"}.
+#' @param text_embedding_conda_env Name of the conda environment used for
+#'   optional text embedding runtimes. Defaults to
+#'   \code{"strategize_torch_env"} so Torch/sentence-transformers packages do
+#'   not share the JAX backend environment. Set to \code{conda_env} to preserve
+#'   legacy single-environment behavior.
 #' @param verbose Logical; if \code{TRUE}, print install milestones and stream
 #'   long-running pip/conda output.
 #'
@@ -56,6 +61,7 @@
 #'
 #' # Install the host-specific text embedding runtime for a profile:
 #' # build_backend(text_embeddings = "harrier_oss_v1_0.6b_1024")
+#' # This uses "strategize_torch_env" for Torch/sentence-transformers by default.
 #'
 #' # Keep scripted runs quiet:
 #' # build_backend(text_embeddings = "harrier_oss_v1_0.6b_1024", verbose = FALSE)
@@ -69,6 +75,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
                           force_reinstall = FALSE,
                           text_embeddings = NULL,
                           text_embedding_runtime = "auto",
+                          text_embedding_conda_env = "strategize_torch_env",
                           verbose = TRUE) {
   backend <- match.arg(backend)
   text_embedding_runtime <- cs2step_text_embedding_runtime(text_embedding_runtime)
@@ -76,6 +83,13 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
     text_embeddings = text_embeddings,
     text_embedding_runtime = text_embedding_runtime
   )
+  text_embedding_conda_env <- as.character(text_embedding_conda_env %||% conda_env)
+  if (length(text_embedding_conda_env) != 1L ||
+      is.na(text_embedding_conda_env) ||
+      !nzchar(trimws(text_embedding_conda_env))) {
+    stop("text_embedding_conda_env must be a non-empty scalar string.", call. = FALSE)
+  }
+  text_embedding_conda_env <- trimws(text_embedding_conda_env)
   verbose <- cs2step_backend_verbose(verbose)
   if (!is.logical(force_reinstall) || length(force_reinstall) != 1L ||
       is.na(force_reinstall)) {
@@ -189,8 +203,10 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
       cs2step_ensure_text_embedding_request(
         text_embeddings = text_embedding_request,
         text_embedding_runtime = text_embedding_runtime,
-        conda_env = conda_env,
+        conda_env = text_embedding_conda_env,
         conda = conda_bin,
+        force_reinstall = isTRUE(force_reinstall) &&
+          !identical(text_embedding_conda_env, conda_env),
         verbose = verbose
       )
     }
@@ -354,8 +370,10 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
     cs2step_ensure_text_embedding_request(
       text_embeddings = text_embedding_request,
       text_embedding_runtime = text_embedding_runtime,
-      conda_env = conda_env,
+      conda_env = text_embedding_conda_env,
       conda = conda_bin,
+      force_reinstall = isTRUE(force_reinstall) &&
+        !identical(text_embedding_conda_env, conda_env),
       verbose = verbose
     )
   }

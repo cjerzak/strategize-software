@@ -11,6 +11,7 @@ build_backend(
   force_reinstall = FALSE,
   text_embeddings = NULL,
   text_embedding_runtime = "auto",
+  text_embedding_conda_env = "strategize_torch_env",
   verbose = TRUE
 )
 }
@@ -41,6 +42,12 @@ with \code{profile}, \code{runtime}, and optional \code{model_id}.}
 \item{text_embedding_runtime}{Runtime preference for \code{text_embeddings};
 one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
 \code{"cpu"}.}
+
+\item{text_embedding_conda_env}{Name of the conda environment used for
+optional text embedding runtimes. Defaults to
+\code{"strategize_torch_env"} so Torch/sentence-transformers packages do
+not share the JAX backend environment. Set to \code{conda_env} to preserve
+legacy single-environment behavior.}
 
 \item{verbose}{Logical; if \code{TRUE}, print install milestones and stream
 long-running pip/conda output.}
@@ -79,6 +86,7 @@ build_backend(conda_env = "strategize_env", conda = "auto")
 
 # Install the host-specific text embedding runtime for a profile:
 # build_backend(text_embeddings = "harrier_oss_v1_0.6b_1024")
+# This uses "strategize_torch_env" for Torch/sentence-transformers by default.
 
 # Keep scripted runs quiet:
 # build_backend(text_embeddings = "harrier_oss_v1_0.6b_1024", verbose = FALSE)

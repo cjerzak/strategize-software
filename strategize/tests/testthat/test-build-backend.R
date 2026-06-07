@@ -163,12 +163,14 @@ test_that("build_backend delegates requested text embedding profile for a ready 
                                                      text_embedding_runtime,
                                                      conda_env,
                                                      conda,
+                                                     force_reinstall = FALSE,
                                                      verbose = TRUE) {
       calls <<- c(calls, list(list(
         text_embeddings = text_embeddings,
         text_embedding_runtime = text_embedding_runtime,
         conda_env = conda_env,
-        conda = conda
+        conda = conda,
+        force_reinstall = force_reinstall
       )))
       invisible(TRUE)
     },
@@ -194,6 +196,65 @@ test_that("build_backend delegates requested text embedding profile for a ready 
   expect_equal(calls[[1]]$text_embeddings$profile, "harrier_oss_v1_0.6b_1024")
   expect_equal(calls[[1]]$text_embeddings$runtime, "cuda")
   expect_equal(calls[[1]]$text_embedding_runtime, "cuda")
+  expect_equal(calls[[1]]$conda_env, "strategize_torch_env")
+  expect_false(calls[[1]]$force_reinstall)
+})
+
+test_that("build_backend can install text embeddings into the JAX env when requested", {
+  skip_on_cran()
+  skip_if_not_installed("withr")
+
+  calls <- list()
+  py_path <- file.path(tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE, showWarnings = FALSE)
+  file.create(py_path)
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_backend_env_state = function(conda_env, conda) {
+      build_backend_mock_state(
+        conda_env = conda_env,
+        conda = conda,
+        registered = TRUE,
+        python = py_path,
+        python_exists = TRUE,
+        core_ready = TRUE
+      )
+    },
+    cs2step_ensure_text_embedding_request = function(text_embeddings,
+                                                     text_embedding_runtime,
+                                                     conda_env,
+                                                     conda,
+                                                     force_reinstall = FALSE,
+                                                     verbose = TRUE) {
+      calls <<- c(calls, list(list(
+        text_embeddings = text_embeddings,
+        text_embedding_runtime = text_embedding_runtime,
+        conda_env = conda_env,
+        conda = conda,
+        force_reinstall = force_reinstall
+      )))
+      invisible(TRUE)
+    },
+    .package = "strategize"
+  )
+
+  testthat::local_mocked_bindings(
+    conda_create = function(...) stop("conda_create should not run"),
+    py_install = function(...) stop("py_install should not run"),
+    .package = "reticulate"
+  )
+
+  withr::local_envvar(HOME = tempdir())
+
+  expect_invisible(build_backend(
+    conda_env = "test_env",
+    conda = "auto",
+    text_embeddings = "harrier_oss_v1_0.6b_1024",
+    text_embedding_conda_env = "test_env"
+  ))
+
+  expect_length(calls, 1L)
   expect_equal(calls[[1]]$conda_env, "test_env")
 })
 
@@ -237,12 +298,14 @@ test_that("build_backend delegates requested text embedding profile after instal
                                                      text_embedding_runtime,
                                                      conda_env,
                                                      conda,
+                                                     force_reinstall = FALSE,
                                                      verbose = TRUE) {
       calls <<- c(calls, list(list(
         text_embeddings = text_embeddings,
         text_embedding_runtime = text_embedding_runtime,
         conda_env = conda_env,
-        conda = conda
+        conda = conda,
+        force_reinstall = force_reinstall
       )))
       invisible(TRUE)
     },
@@ -274,6 +337,7 @@ test_that("build_backend delegates requested text embedding profile after instal
   expect_length(calls, 1L)
   expect_equal(calls[[1]]$text_embeddings$profile, "qwen3_8b_4096")
   expect_equal(calls[[1]]$text_embeddings$runtime, "cpu")
+  expect_equal(calls[[1]]$conda_env, "strategize_torch_env")
 })
 
 test_that("build_backend force_reinstall removes and rebuilds a healthy env", {
@@ -466,6 +530,10 @@ test_that("build_backend force_reinstall validates scalar logical input", {
   expect_error(
     build_backend(verbose = c(TRUE, FALSE)),
     "verbose must be TRUE or FALSE"
+  )
+  expect_error(
+    build_backend(text_embedding_conda_env = ""),
+    "text_embedding_conda_env must be a non-empty scalar string"
   )
 })
 

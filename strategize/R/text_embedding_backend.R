@@ -1,6 +1,8 @@
 #' Inspect a host-aware text-embedding backend
 #'
-#' @param conda_env Conda env name used for the Python runtime.
+#' @param conda_env Conda env name used for the Python runtime. Defaults to
+#'   \code{"strategize_torch_env"} so text embedding packages can be isolated
+#'   from the JAX backend environment.
 #' @param family Optional embedding-family selector. When \code{NULL}, the
 #'   selected profile supplies the family.
 #' @param runtime Runtime preference. Use \code{"auto"} to resolve per host, or
@@ -15,7 +17,7 @@
 #' @return A serializable list describing the host, Python env health, candidate
 #'   text-embedding runtimes, and the selected backend.
 #' @export
-inspect_text_embedding_backend <- function(conda_env = "strategize_env",
+inspect_text_embedding_backend <- function(conda_env = "strategize_torch_env",
                                            family = NULL,
                                            runtime = "auto",
                                            profile = "portable",
@@ -38,7 +40,9 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_env",
 
 #' Build a host-aware text-embedding backend
 #'
-#' @param conda_env Conda env name used for the Python runtime.
+#' @param conda_env Conda env name used for the Python runtime. Defaults to
+#'   \code{"strategize_torch_env"} so text embedding packages can be isolated
+#'   from the JAX backend environment.
 #' @param family Optional embedding-family selector. When \code{NULL}, the
 #'   selected profile supplies the family.
 #' @param runtime Runtime preference. Use \code{"auto"} to resolve per host, or
@@ -60,7 +64,7 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_env",
 #'
 #' @return A list with \code{$fn}, \code{$spec}, and \code{$runtime}.
 #' @export
-build_text_embedding_backend <- function(conda_env = "strategize_env",
+build_text_embedding_backend <- function(conda_env = "strategize_torch_env",
                                          family = NULL,
                                          runtime = "auto",
                                          profile = "portable",
@@ -77,9 +81,13 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
     cs2step_text_embedding_profile_spec(profile)$family)
   verbose <- cs2step_backend_verbose(verbose)
 
-  env_state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda)
-  if (isTRUE(required) && !isTRUE(env_state$core_modules_ready)) {
-    build_backend(conda_env = conda_env, conda = conda, verbose = verbose)
+  if (isTRUE(required)) {
+    cs2step_ensure_basic_python_conda_env(
+      conda_env = conda_env,
+      conda = conda,
+      verbose = verbose,
+      context = "text embedding Python runtime"
+    )
   }
 
   inspected <- inspect_text_embedding_backend(
@@ -407,8 +415,9 @@ cs2step_text_embedding_request <- function(text_embeddings = NULL,
 
 cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
                                                   text_embedding_runtime = "auto",
-                                                  conda_env = "strategize_env",
+                                                  conda_env = "strategize_torch_env",
                                                   conda = "auto",
+                                                  force_reinstall = FALSE,
                                                   verbose = TRUE) {
   verbose <- cs2step_backend_verbose(verbose)
   request <- cs2step_text_embedding_request(
@@ -418,6 +427,13 @@ cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
   if (is.null(request)) {
     return(invisible(NULL))
   }
+  cs2step_ensure_basic_python_conda_env(
+    conda_env = conda_env,
+    conda = conda,
+    force_reinstall = force_reinstall,
+    verbose = verbose,
+    context = "text embedding Python runtime"
+  )
   inspected <- inspect_text_embedding_backend(
     conda_env = conda_env,
     family = request$family,
@@ -700,6 +716,128 @@ cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "aut
   )
 }
 
+cs2step_ensure_basic_python_conda_env <- function(conda_env,
+                                                  conda = "auto",
+                                                  python_version = "3.12",
+                                                  force_reinstall = FALSE,
+                                                  verbose = TRUE,
+                                                  context = "Python runtime") {
+  verbose <- cs2step_backend_verbose(verbose)
+  conda_env <- as.character(conda_env %||% "")
+  if (length(conda_env) != 1L || is.na(conda_env) || !nzchar(trimws(conda_env))) {
+    stop("conda_env must be a non-empty scalar string.", call. = FALSE)
+  }
+  conda_env <- trimws(conda_env)
+  if (!is.logical(force_reinstall) || length(force_reinstall) != 1L ||
+      is.na(force_reinstall)) {
+    stop("force_reinstall must be TRUE or FALSE.", call. = FALSE)
+  }
+  conda_bin <- cs2step_resolve_conda_binary(conda) %||% conda
+
+  remove_env <- function(conda_use) {
+    tryCatch(
+      reticulate::conda_remove(envname = conda_env, conda = conda_use),
+      error = function(e) {
+        if (nzchar(conda_use %||% "")) {
+          suppressWarnings(system2(
+            conda_use,
+            c("env", "remove", "-n", conda_env, "-y"),
+            stdout = TRUE,
+            stderr = TRUE
+          ))
+        }
+        invisible(FALSE)
+      }
+    )
+    invisible(TRUE)
+  }
+
+  create_env <- function(conda_use) {
+    cs2step_backend_message(
+      verbose,
+      "Creating conda environment '%s' for %s.",
+      conda_env,
+      context
+    )
+    reticulate::conda_create(
+      envname = conda_env,
+      conda = conda_use,
+      python_version = python_version
+    )
+    invisible(TRUE)
+  }
+
+  env_registered <- function(conda_use) {
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_use)
+    isTRUE(state$registered)
+  }
+
+  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  if (isTRUE(force_reinstall) && isTRUE(state$registered)) {
+    cs2step_backend_message(
+      verbose,
+      "force_reinstall = TRUE; removing conda environment '%s' before rebuilding it.",
+      conda_env
+    )
+    remove_env(conda_bin)
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+    if (isTRUE(state$registered)) {
+      stop(
+        sprintf(
+          "Conda environment '%s' is still registered after forced reinstall removal.",
+          conda_env
+        ),
+        call. = FALSE
+      )
+    }
+  }
+
+  if (isTRUE(state$registered) && !isTRUE(state$python_exists)) {
+    cs2step_backend_message(
+      verbose,
+      "Conda environment '%s' is registered but its Python interpreter is missing; recreating it.",
+      conda_env
+    )
+    remove_env(conda_bin)
+    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  }
+
+  ok <- TRUE
+  if (!isTRUE(state$registered)) {
+    ok <- tryCatch({
+      create_env(conda_bin)
+      TRUE
+    }, error = function(e) {
+      cs2step_backend_message(verbose, "conda_create failed using '%s': %s", conda_bin, e$message)
+      FALSE
+    })
+  }
+
+  if (!ok || !env_registered(conda_bin)) {
+    conda_fallback <- Sys.which("conda")
+    if (nzchar(conda_fallback) && conda_fallback != conda_bin) {
+      cs2step_backend_message(verbose, "Retrying conda_create with: %s", conda_fallback)
+      tryCatch({
+        create_env(conda_fallback)
+      }, error = function(e) {
+        cs2step_backend_message(verbose, "conda_create failed using '%s': %s", conda_fallback, e$message)
+      })
+      if (env_registered(conda_fallback)) {
+        conda_bin <- conda_fallback
+      }
+    }
+  }
+
+  state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
+  if (!isTRUE(state$registered) || !isTRUE(state$python_exists)) {
+    stop(
+      sprintf("Failed to create conda environment '%s' for %s.", conda_env, context),
+      call. = FALSE
+    )
+  }
+  state
+}
+
 cs2step_backend_host_info <- function() {
   info <- Sys.info()
   os <- as.character(unname(info["sysname"]))
@@ -946,7 +1084,7 @@ cs2step_probe_cuda_runtime <- function(python) {
   )
 }
 
-cs2step_collect_text_embedding_host_info <- function(conda_env = "strategize_env", conda = "auto") {
+cs2step_collect_text_embedding_host_info <- function(conda_env = "strategize_torch_env", conda = "auto") {
   env_state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda)
   os_name <- as.character(Sys.info()[["sysname"]] %||% .Platform$OS.type)
   machine <- as.character(Sys.info()[["machine"]] %||% R.version$arch)
@@ -1021,13 +1159,6 @@ cs2step_evaluate_text_embedding_candidate <- function(candidate, host) {
   if (!isTRUE(host$python_exists)) {
     status <- "unavailable"
     issues <- c(issues, sprintf("Python interpreter for env '%s' is missing.", candidate$conda_env))
-  }
-  if (!isTRUE(host$core_modules_ready)) {
-    status <- "unavailable"
-    issues <- c(
-      issues,
-      sprintf("Core strategize backend modules are not ready in '%s'. Run build_backend() first.", candidate$conda_env)
-    )
   }
 
   if (identical(candidate$backend, "mlx")) {
@@ -1377,8 +1508,13 @@ cs2step_ensure_text_embedding_runtime <- function(spec, verbose = TRUE) {
   verbose <- cs2step_backend_verbose(verbose)
   spec <- cs2step_normalize_text_embedding_spec(spec)
   env_state <- cs2step_backend_env_state(conda_env = spec$conda_env, conda = spec$conda)
-  if (!isTRUE(env_state$core_modules_ready)) {
-    build_backend(conda_env = spec$conda_env, conda = spec$conda, verbose = verbose)
+  if (!isTRUE(env_state$registered) || !isTRUE(env_state$python_exists)) {
+    cs2step_ensure_basic_python_conda_env(
+      conda_env = spec$conda_env,
+      conda = spec$conda,
+      verbose = verbose,
+      context = "text embedding Python runtime"
+    )
   }
 
   if (identical(spec$backend, "mlx")) {
@@ -1431,7 +1567,7 @@ cs2step_normalize_text_embedding_spec <- function(spec) {
   spec$runtime <- cs2step_text_embedding_runtime(spec$runtime %||% "auto")
   spec$canonical_dim <- as.integer(spec$canonical_dim %||% spec$embedding_dim %||% 1024L)
   spec$raw_dim <- as.integer(spec$raw_dim %||% spec$canonical_dim)
-  spec$conda_env <- as.character(spec$conda_env %||% "strategize_env")
+  spec$conda_env <- as.character(spec$conda_env %||% "strategize_torch_env")
   spec$conda <- cs2step_resolve_conda_binary(spec$conda %||% "auto")
   spec$install_packages <- as.character(spec$install_packages %||% character(0))
   spec$cache_key_version <- as.integer(spec$cache_key_version %||% 1L)

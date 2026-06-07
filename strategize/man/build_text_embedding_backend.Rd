@@ -3,7 +3,7 @@
 \title{Build a host-aware text-embedding backend}
 \usage{
 build_text_embedding_backend(
-  conda_env = "strategize_env",
+  conda_env = "strategize_torch_env",
   family = NULL,
   runtime = "auto",
   profile = "portable",
@@ -17,7 +17,9 @@ build_text_embedding_backend(
 )
 }
 \arguments{
-\item{conda_env}{Conda env name used for the Python runtime.}
+\item{conda_env}{Conda env name used for the Python runtime. Defaults to
+\code{"strategize_torch_env"} so text embedding packages can be isolated
+from the JAX backend environment.}
 
 \item{family}{Optional embedding-family selector. When \code{NULL}, the
 selected profile supplies the family.}
@@ -53,7 +55,7 @@ Build a host-aware text-embedding backend
 }
 \examples{
 \dontrun{
-backend <- build_text_embedding_backend(conda_env = "strategize_env")
+backend <- build_text_embedding_backend(conda_env = "strategize_torch_env")
 
 study_a$experiment_description <- "Source study A"
 study_b$experiment_description <- "Source study B"
@@ -65,6 +67,6 @@ foundation_fit <- preference.fm::fit_conjoint_foundation_model(
   )
 )
 
-inspect_text_embedding_backend(conda_env = "strategize_env")
+inspect_text_embedding_backend(conda_env = "strategize_torch_env")
 }
 }
