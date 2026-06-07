@@ -8999,6 +8999,70 @@ cs2step_compact_rows_by_block <- function(x, rows = NULL) {
   list(rows = rows, ranges = ranges, split = split_idx)
 }
 
+cs2step_compact_present_cols <- function(block, n_cols, context) {
+  present_cols <- as.integer(block$present_cols %||% integer(0))
+  if (length(present_cols) > 0L &&
+      any(is.na(present_cols) | present_cols < 1L | present_cols > n_cols)) {
+    stop(sprintf("Compact %s block present_cols are out of bounds.", context), call. = FALSE)
+  }
+  present_cols
+}
+
+cs2step_compact_block_values <- function(block, present_cols, context, storage = c("double", "integer")) {
+  storage <- match.arg(storage)
+  values <- as.matrix(block$values)
+  if (ncol(values) != length(present_cols)) {
+    stop(
+      sprintf("Compact %s block values must have one column per present column.", context),
+      call. = FALSE
+    )
+  }
+  storage.mode(values) <- storage
+  values
+}
+
+cs2step_validate_w_idx_compact <- function(x, factor_levels) {
+  if (is.null(x) || is.matrix(x) || is.data.frame(x)) {
+    return(invisible(x))
+  }
+  factor_levels <- as.integer(factor_levels %||% integer(0))
+  n_cols <- cs2step_compact_n_cols(x, "n_factors")
+  if (length(factor_levels) != n_cols) {
+    stop("Compact factor index metadata must align with factor_levels.", call. = FALSE)
+  }
+  expected_holdout <- factor_levels + 1L
+  holdout_codes <- as.integer(x$holdout_codes %||% integer(0))
+  if (length(holdout_codes) != n_cols || any(holdout_codes != expected_holdout)) {
+    stop(
+      "Compact factor holdout_codes must equal factor_levels + 1 for the explicit holdout row.",
+      call. = FALSE
+    )
+  }
+  for (block in x$blocks %||% list()) {
+    block_holdout <- as.integer(block$holdout_codes %||% holdout_codes)
+    if (length(block_holdout) != n_cols || any(block_holdout != expected_holdout)) {
+      stop(
+        "Compact factor block holdout_codes must equal factor_levels + 1 for the explicit holdout row.",
+        call. = FALSE
+      )
+    }
+    present_cols <- cs2step_compact_present_cols(block, n_cols, "factor")
+    if (length(present_cols) < 1L) {
+      next
+    }
+    vals <- cs2step_compact_block_values(block, present_cols, "factor", storage = "integer")
+    for (j in seq_along(present_cols)) {
+      col_idx <- present_cols[[j]]
+      bad <- vals[, j]
+      bad <- bad[!is.na(bad) & (bad < 1L | bad > expected_holdout[[col_idx]])]
+      if (length(bad) > 0L) {
+        stop("Compact factor block values contain an out-of-range level code.", call. = FALSE)
+      }
+    }
+  }
+  invisible(x)
+}
+
 cs2step_materialize_w_idx_compact <- function(x, rows = NULL) {
   if (is.null(x)) {
     return(NULL)
@@ -9012,9 +9076,13 @@ cs2step_materialize_w_idx_compact <- function(x, rows = NULL) {
     return(out)
   }
   n_cols <- cs2step_compact_n_cols(x, "n_factors")
+  holdout_codes <- as.integer(x$holdout_codes %||% integer(0))
+  if (length(holdout_codes) != n_cols) {
+    stop("Compact factor index metadata must include one holdout code per factor.", call. = FALSE)
+  }
   rows_info <- cs2step_compact_rows_by_block(x, rows)
   out <- matrix(
-    rep.int(as.integer(x$holdout_codes %||% integer(n_cols)), rep.int(length(rows_info$rows), n_cols)),
+    rep.int(holdout_codes, rep.int(length(rows_info$rows), n_cols)),
     nrow = length(rows_info$rows),
     ncol = n_cols
   )
@@ -9024,10 +9092,10 @@ cs2step_materialize_w_idx_compact <- function(x, rows = NULL) {
     block <- x$blocks[[block_idx]]
     out_rows <- rows_info$split[[block_name]]
     local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
-    present_cols <- as.integer(block$present_cols %||% integer(0))
+    present_cols <- cs2step_compact_present_cols(block, n_cols, "factor")
     if (length(present_cols) > 0L) {
-      vals <- as.matrix(block$values)[local_rows, , drop = FALSE]
-      storage.mode(vals) <- "integer"
+      vals <- cs2step_compact_block_values(block, present_cols, "factor", storage = "integer")
+      vals <- vals[local_rows, , drop = FALSE]
       out[out_rows, present_cols] <- vals
     }
   }
@@ -9067,10 +9135,10 @@ cs2step_materialize_x_compact <- function(x, rows = NULL) {
     block <- x$blocks[[block_idx]]
     out_rows <- rows_info$split[[block_name]]
     local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
-    present_cols <- as.integer(block$present_cols %||% integer(0))
+    present_cols <- cs2step_compact_present_cols(block, n_cols, "covariate")
     if (length(present_cols) > 0L) {
-      vals <- as.matrix(block$values)[local_rows, , drop = FALSE]
-      storage.mode(vals) <- "double"
+      vals <- cs2step_compact_block_values(block, present_cols, "covariate", storage = "double")
+      vals <- vals[local_rows, , drop = FALSE]
       vals[!is.finite(vals)] <- 0
       out[out_rows, present_cols] <- vals
     }
@@ -9100,7 +9168,7 @@ cs2step_materialize_x_present_compact <- function(x, rows = NULL) {
     block <- x$blocks[[block_idx]]
     out_rows <- rows_info$split[[block_name]]
     local_rows <- rows_info$rows[out_rows] - rows_info$ranges$start[[block_idx]] + 1L
-    present_cols <- as.integer(block$present_cols %||% integer(0))
+    present_cols <- cs2step_compact_present_cols(block, n_cols, "covariate")
     if (length(present_cols) > 0L) {
       out[out_rows, present_cols] <- 1
       missing_by_col <- cs2step_compact_missing_rows(block, present_cols, as.integer(block$n_rows %||% 0L))
@@ -9161,12 +9229,12 @@ cs2step_compact_covariate_profiles <- function(x,
     if (is.null(values_by_exp[[exp_key]])) {
       values_by_exp[[exp_key]] <- setNames(vector("list", n_covariates), as.character(seq_len(n_covariates)))
     }
-    present_cols <- as.integer(block$present_cols %||% integer(0))
+    present_cols <- cs2step_compact_present_cols(block, n_covariates, "covariate")
     if (length(present_cols) < 1L) {
       next
     }
-    vals_mat <- as.matrix(block$values)[local_rows, , drop = FALSE]
-    storage.mode(vals_mat) <- "double"
+    vals_mat <- cs2step_compact_block_values(block, present_cols, "covariate", storage = "double")
+    vals_mat <- vals_mat[local_rows, , drop = FALSE]
     for (j in seq_along(present_cols)) {
       col_idx <- present_cols[[j]]
       vals <- vals_mat[, j]
@@ -9783,6 +9851,7 @@ generate_ModelOutcome_neural <- function(){
   names(regularization_adjust_hash) <- main_info$d
 
   factor_levels_int <- as.integer(factor_levels)
+  cs2step_validate_w_idx_compact(W_idx_compact_use, factor_levels_int)
   factor_levels_aug <- factor_levels_int + 1L
   factor_index_list <- vector("list", length(factor_levels))
   offset <- 0L
@@ -12695,20 +12764,31 @@ generate_ModelOutcome_neural <- function(){
     masked_logits <- strenv$jnp$where(class_mask, logits, neg_large)
     y_numeric <- Yb$astype(ddtype_)
     y_int <- strenv$jnp$astype(strenv$jnp$round(y_numeric), strenv$jnp$int32)
-    like_bern <- strenv$jnp$equal(likelihood_code_obs, ai(0L))$astype(ddtype_)
-    like_cat <- strenv$jnp$equal(likelihood_code_obs, ai(1L))$astype(ddtype_)
-    like_norm <- strenv$jnp$equal(likelihood_code_obs, ai(2L))$astype(ddtype_)
+    like_bern_mask <- strenv$jnp$equal(likelihood_code_obs, ai(0L))
+    like_cat_mask <- strenv$jnp$equal(likelihood_code_obs, ai(1L))
+    like_norm_mask <- strenv$jnp$equal(likelihood_code_obs, ai(2L))
+    like_bern <- like_bern_mask$astype(ddtype_)
+    like_cat <- like_cat_mask$astype(ddtype_)
+    like_norm <- like_norm_mask$astype(ddtype_)
+    zeros_y <- strenv$jnp$zeros_like(y_numeric)
+    zeros_i <- strenv$jnp$zeros_like(y_int)
+    y_bern <- strenv$jnp$where(like_bern_mask, y_numeric, zeros_y)
+    y_cat <- strenv$jnp$where(like_cat_mask, y_int, zeros_i)
+    y_norm <- strenv$jnp$where(like_norm_mask, y_numeric, zeros_y)
     bern_logits <- strenv$jnp$take(logits, ai(0L), axis = 1L)
-    bern_logp <- strenv$numpyro$distributions$Bernoulli(logits = bern_logits)$log_prob(y_numeric)
-    cat_logp <- strenv$numpyro$distributions$Categorical(logits = masked_logits)$log_prob(y_int)
+    bern_logp <- strenv$numpyro$distributions$Bernoulli(logits = bern_logits)$log_prob(y_bern)
+    cat_logp <- strenv$numpyro$distributions$Categorical(logits = masked_logits)$log_prob(y_cat)
     mu <- strenv$jnp$take(logits, ai(0L), axis = 1L)
     sigma_use <- if (is.null(sigma)) {
       strenv$jnp$array(1., dtype = ddtype_)
     } else {
       sigma
     }
-    norm_logp <- strenv$numpyro$distributions$Normal(mu, sigma_use)$log_prob(y_numeric)
-    like_bern * bern_logp + like_cat * cat_logp + like_norm * norm_logp
+    norm_logp <- strenv$numpyro$distributions$Normal(mu, sigma_use)$log_prob(y_norm)
+    bern_term <- like_bern * bern_logp
+    cat_term <- like_cat * cat_logp
+    norm_term <- like_norm * norm_logp
+    bern_term + cat_term + norm_term
   }
 
   apply_observation_likelihood <- function(logits,

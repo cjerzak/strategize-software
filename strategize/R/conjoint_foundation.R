@@ -195,7 +195,6 @@ cs_foundation_mode <- function(mode, pair_id) {
 }
 
 cs_foundation_infer_likelihood <- function(Y, W, likelihood = NULL, n_outcomes = NULL) {
-  y_num <- suppressWarnings(as.numeric(Y))
   if (!is.null(likelihood)) {
     like <- tolower(as.character(likelihood))
     if (!like %in% c("bernoulli", "categorical", "normal", "auto")) {
@@ -209,10 +208,24 @@ cs_foundation_infer_likelihood <- function(Y, W, likelihood = NULL, n_outcomes =
     }
   }
 
+  y_raw <- if (is.factor(Y) || is.character(Y)) as.character(Y) else Y
+  y_num <- suppressWarnings(as.numeric(y_raw))
+  observed <- !is.na(y_raw)
+  if (!any(observed)) {
+    stop("Cannot infer likelihood: outcome Y must contain at least one non-missing value.", call. = FALSE)
+  }
+  if (any(observed & is.na(y_num))) {
+    stop(
+      "Cannot infer likelihood for non-numeric outcomes. Supply likelihood='categorical' for categorical Y.",
+      call. = FALSE
+    )
+  }
+
   vals <- unique(stats::na.omit(y_num))
-  is_binary <- length(vals) <= 2L && all(vals %in% c(0, 1))
+  is_binary <- length(vals) > 0L && length(vals) <= 2L && all(vals %in% c(0, 1))
   is_intvec <- length(y_num) > 0L &&
     all(!is.na(y_num)) &&
+    all(is.finite(y_num)) &&
     all(abs(y_num - round(y_num)) < 1e-8)
   k_classes <- if (is_intvec) length(unique(as.integer(y_num))) else NA_integer_
 
@@ -223,6 +236,22 @@ cs_foundation_infer_likelihood <- function(Y, W, likelihood = NULL, n_outcomes =
     return(list(likelihood = "categorical", n_outcomes = k_classes))
   }
   list(likelihood = "normal", n_outcomes = 1L)
+}
+
+cs_foundation_numeric_outcome <- function(Y, experiment_id, likelihood) {
+  y_raw <- if (is.factor(Y) || is.character(Y)) as.character(Y) else Y
+  y_num <- suppressWarnings(as.numeric(y_raw))
+  if (length(y_num) < 1L || any(!is.finite(y_num))) {
+    stop(
+      sprintf(
+        "Experiment '%s' declared %s but Y contains missing, non-finite, or non-numeric values.",
+        experiment_id,
+        likelihood
+      ),
+      call. = FALSE
+    )
+  }
+  y_num
 }
 
 cs_foundation_normalize_categorical_y <- function(Y, n_outcomes = NULL) {
@@ -538,21 +567,21 @@ cs_foundation_normalize_experiment <- function(experiment, index) {
   n_outcomes <- as.integer(like_info$n_outcomes %||% 1L)
   outcome_levels <- NULL
   if (identical(likelihood, "bernoulli")) {
-    vals <- unique(stats::na.omit(as.numeric(Y_raw)))
+    Y_use <- cs_foundation_numeric_outcome(Y_raw, experiment_id, "bernoulli")
+    vals <- unique(Y_use)
     if (!all(vals %in% c(0, 1))) {
       stop(
         sprintf("Experiment '%s' declared bernoulli but Y is not binary 0/1.", experiment_id),
         call. = FALSE
       )
     }
-    Y_use <- as.numeric(Y_raw)
   } else if (identical(likelihood, "categorical")) {
     cat_info <- cs_foundation_normalize_categorical_y(Y_raw, n_outcomes = n_outcomes)
     Y_use <- cat_info$Y
     outcome_levels <- cat_info$outcome_levels
     n_outcomes <- cat_info$n_outcomes
   } else {
-    Y_use <- as.numeric(Y_raw)
+    Y_use <- cs_foundation_numeric_outcome(Y_raw, experiment_id, "normal")
   }
 
   X_use <- cs_foundation_validate_numeric_matrix(

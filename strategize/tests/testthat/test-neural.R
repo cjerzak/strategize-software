@@ -706,7 +706,7 @@ get_neural_model_info <- function(res) {
 
 compact_w_idx_from_matrix <- function(W_idx, factor_levels) {
   factor_names <- colnames(W_idx)
-  holdout_codes <- as.integer(factor_levels)
+  holdout_codes <- as.integer(factor_levels) + 1L
   block <- structure(
     list(
       n_rows = as.integer(nrow(W_idx)),
@@ -730,6 +730,81 @@ compact_w_idx_from_matrix <- function(W_idx, factor_levels) {
     class = c("cs_w_idx_blocks", "cs_w_idx_compact")
   )
 }
+
+test_that("compact W holdout codes target the explicit missing level", {
+  bad_block <- structure(
+    list(
+      n_rows = 1L,
+      n_factors = 1L,
+      factor_names = "feature",
+      present_cols = integer(0),
+      values = matrix(integer(0), nrow = 1L, ncol = 0L),
+      holdout_codes = 2L,
+      experiment_index = 0L
+    ),
+    class = c("cs_w_idx_block", "cs_w_idx_compact")
+  )
+  bad <- structure(
+    list(
+      blocks = list(bad_block),
+      n_rows = 1L,
+      n_factors = 1L,
+      factor_names = "feature",
+      holdout_codes = 2L
+    ),
+    class = c("cs_w_idx_blocks", "cs_w_idx_compact")
+  )
+
+  expect_error(
+    strategize:::cs2step_validate_w_idx_compact(bad, factor_levels = 2L),
+    "factor_levels \\+ 1"
+  )
+
+  good <- bad
+  good$holdout_codes <- 3L
+  good$blocks[[1L]]$holdout_codes <- 3L
+  expect_silent(strategize:::cs2step_validate_w_idx_compact(good, factor_levels = 2L))
+  expect_equal(
+    unname(strategize:::cs2step_materialize_w_idx_compact(good)),
+    matrix(3L, nrow = 1L, ncol = 1L)
+  )
+})
+
+test_that("compact X materialization follows present column order and masks missing rows", {
+  block <- structure(
+    list(
+      n_rows = 2L,
+      n_covariates = 2L,
+      covariate_names = c("age", "income"),
+      present_cols = c(2L, 1L),
+      values = cbind(income = c(100, 200), age = c(30, 40)),
+      missing_rows_by_col = list(`1` = 2L),
+      experiment_index = 0L
+    ),
+    class = c("cs_covariate_values_block", "cs_covariate_values_compact")
+  )
+  compact <- structure(
+    list(
+      blocks = list(block),
+      n_rows = 2L,
+      n_covariates = 2L,
+      covariate_names = c("age", "income")
+    ),
+    class = c("cs_covariate_values_blocks", "cs_covariate_values_compact")
+  )
+
+  values <- strategize:::cs2step_materialize_x_compact(compact)
+  present <- strategize:::cs2step_materialize_x_present_compact(compact)
+  expect_equal(unname(values), matrix(c(30, 40, 100, 200), nrow = 2L))
+  expect_equal(unname(present), matrix(c(1, 0, 1, 1), nrow = 2L))
+
+  bad <- compact
+  bad$blocks[[1L]]$values <- matrix(c(100, 200), ncol = 1L)
+  expect_error(
+    strategize:::cs2step_materialize_x_compact(bad),
+    "one column per present column"
+  )
+})
 
 run_compact_svi_fit <- function(compact_update_scan = "required",
                                 compact_update_chunk_size = 2L,

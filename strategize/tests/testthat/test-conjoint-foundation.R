@@ -13,6 +13,44 @@ test_that("pooled foundation training and writing stubs point to preference.fm",
   )
 })
 
+test_that("foundation adaptation outcome normalization rejects invalid targets", {
+  base <- list(
+    experiment_id = "invalid_adapt_outcome",
+    W = data.frame(policy = c("A", "B", "A"), stringsAsFactors = FALSE),
+    Y = c(0, 1, 0)
+  )
+
+  all_missing <- base
+  all_missing$Y <- c(NA_real_, NA_real_, NA_real_)
+  expect_error(
+    strategize:::cs_foundation_normalize_experiment(all_missing, index = 1L),
+    "at least one non-missing"
+  )
+
+  character_auto <- base
+  character_auto$Y <- c("A", "B", "A")
+  expect_error(
+    strategize:::cs_foundation_normalize_experiment(character_auto, index = 1L),
+    "Cannot infer likelihood for non-numeric outcomes"
+  )
+
+  bernoulli_missing <- base
+  bernoulli_missing$Y <- c(0, 1, NA_real_)
+  bernoulli_missing$likelihood <- "bernoulli"
+  expect_error(
+    strategize:::cs_foundation_normalize_experiment(bernoulli_missing, index = 1L),
+    "contains missing, non-finite, or non-numeric"
+  )
+
+  normal_inf <- base
+  normal_inf$Y <- c(0.1, Inf, 0.3)
+  normal_inf$likelihood <- "normal"
+  expect_error(
+    strategize:::cs_foundation_normalize_experiment(normal_inf, index = 1L),
+    "contains missing, non-finite, or non-numeric"
+  )
+})
+
 test_that("legacy RDS foundation bundles still load", {
   bundle <- structure(
     list(
