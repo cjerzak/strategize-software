@@ -10,7 +10,8 @@ build_backend(
   backend = c("auto", "cpu", "cuda", "mps"),
   force_reinstall = FALSE,
   text_embeddings = NULL,
-  text_embedding_runtime = "auto"
+  text_embedding_runtime = "auto",
+  verbose = TRUE
 )
 }
 \arguments{
@@ -39,6 +40,9 @@ list with \code{profile}, \code{runtime}, and optional \code{model_id}.}
 \item{text_embedding_runtime}{Runtime preference for \code{text_embeddings};
 one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
 \code{"cpu"}.}
+
+\item{verbose}{Logical; if \code{TRUE}, print install milestones and stream
+long-running pip/conda output.}
 }
 \value{
 Invisibly returns \code{NULL}. This function is called for its side effects
@@ -74,6 +78,9 @@ build_backend(conda_env = "strategize_env", conda = "auto")
 
 # Install the host-specific text embedding runtime for a profile:
 # build_backend(text_embeddings = "qwen3_8b_4096")
+
+# Keep scripted runs quiet:
+# build_backend(text_embeddings = "qwen3_8b_4096", verbose = FALSE)
 }
 
 }

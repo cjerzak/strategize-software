@@ -52,6 +52,8 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_env",
 #' @param batch_size Number of texts to encode per model call.
 #' @param required Logical; if \code{TRUE}, ensure the selected runtime is usable
 #'   immediately. If \code{FALSE}, return a lazy backend that validates on first use.
+#' @param verbose Logical; if \code{TRUE}, print install milestones and stream
+#'   long-running pip/conda output.
 #' @param conda Conda binary to use. Defaults to \code{"auto"}.
 #'
 #' @return A list with \code{$fn}, \code{$spec}, and \code{$runtime}.
@@ -65,15 +67,17 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
                                          cache_only = FALSE,
                                          batch_size = 64L,
                                          required = TRUE,
+                                         verbose = TRUE,
                                          conda = "auto") {
   runtime <- cs2step_text_embedding_runtime(runtime)
   profile <- cs2step_text_embedding_profile(profile)
   family <- cs2step_text_embedding_family(family %||%
     cs2step_text_embedding_profile_spec(profile)$family)
+  verbose <- cs2step_backend_verbose(verbose)
 
   env_state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda)
   if (isTRUE(required) && !isTRUE(env_state$core_modules_ready)) {
-    build_backend(conda_env = conda_env, conda = conda)
+    build_backend(conda_env = conda_env, conda = conda, verbose = verbose)
   }
 
   inspected <- inspect_text_embedding_backend(
@@ -99,7 +103,7 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
   }
 
   if (isTRUE(required)) {
-    cs2step_ensure_text_embedding_runtime(spec)
+    cs2step_ensure_text_embedding_runtime(spec, verbose = verbose)
     inspected <- inspect_text_embedding_backend(
       conda_env = conda_env,
       family = family,
@@ -126,7 +130,8 @@ build_text_embedding_backend <- function(conda_env = "strategize_env",
     spec = spec,
     cache_dir = cache_dir,
     cache_only = cache_only,
-    batch_size = batch_size
+    batch_size = batch_size,
+    verbose = verbose
   )
   list(fn = fn, spec = spec, runtime = inspected)
 }
@@ -150,6 +155,21 @@ cs2step_text_embedding_runtime <- function(runtime) {
     )
   }
   runtime
+}
+
+cs2step_backend_verbose <- function(verbose) {
+  if (!is.logical(verbose) || length(verbose) != 1L || is.na(verbose)) {
+    stop("verbose must be TRUE or FALSE.", call. = FALSE)
+  }
+  isTRUE(verbose)
+}
+
+cs2step_backend_message <- function(verbose, ...) {
+  if (!isTRUE(verbose)) {
+    return(invisible(FALSE))
+  }
+  message(sprintf(...))
+  invisible(TRUE)
 }
 
 cs2step_text_embedding_profile_registry <- function() {
@@ -341,7 +361,9 @@ cs2step_text_embedding_request <- function(text_embeddings = NULL,
 cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
                                                   text_embedding_runtime = "auto",
                                                   conda_env = "strategize_env",
-                                                  conda = "auto") {
+                                                  conda = "auto",
+                                                  verbose = TRUE) {
+  verbose <- cs2step_backend_verbose(verbose)
   request <- cs2step_text_embedding_request(
     text_embeddings = text_embeddings,
     text_embedding_runtime = text_embedding_runtime
@@ -369,7 +391,15 @@ cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
       call. = FALSE
     )
   }
-  cs2step_ensure_text_embedding_runtime(spec)
+  cs2step_backend_message(
+    verbose,
+    "Preparing text embedding backend: profile=%s; backend=%s; device=%s; model=%s",
+    spec$profile,
+    spec$backend,
+    spec$device %||% "unknown",
+    spec$model_id
+  )
+  cs2step_ensure_text_embedding_runtime(spec, verbose = verbose)
   inspected <- inspect_text_embedding_backend(
     conda_env = conda_env,
     family = request$family,
@@ -390,13 +420,14 @@ cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
       call. = FALSE
     )
   }
-  message(sprintf(
+  cs2step_backend_message(
+    verbose,
     "Text embedding backend '%s' is ready (profile=%s, runtime=%s, model=%s).",
     spec$label %||% spec$backend,
     spec$profile,
     request$runtime,
     spec$model_id
-  ))
+  )
   invisible(spec)
 }
 
@@ -711,6 +742,22 @@ cs2step_command_probe <- function(command, args = character()) {
     status <- 0L
   }
   list(status = as.integer(status), output = as.character(output))
+}
+
+cs2step_command_stream <- function(command, args = character()) {
+  status <- tryCatch(
+    suppressWarnings(system2(command, args = args, stdout = "", stderr = "")),
+    error = function(e) {
+      out <- 127L
+      attr(out, "output") <- conditionMessage(e)
+      out
+    }
+  )
+  output <- attr(status, "output") %||% character()
+  if (is.null(status)) {
+    status <- 0L
+  }
+  list(status = as.integer(status), output = as.character(output), streamed = TRUE)
 }
 
 cs2step_run_command_available <- function(cmd) {
@@ -1136,21 +1183,53 @@ cs2step_inspect_text_embedding_candidates <- function(host,
   )
 }
 
-cs2step_conda_run <- function(conda, conda_env, args) {
+cs2step_conda_run_supports_no_capture <- function(conda_bin) {
+  probe <- cs2step_command_probe(conda_bin, c("run", "--help"))
+  identical(probe$status, 0L) &&
+    any(grepl("--no-capture-output", probe$output, fixed = TRUE))
+}
+
+cs2step_conda_run <- function(conda,
+                              conda_env,
+                              args,
+                              verbose = TRUE,
+                              stream = verbose,
+                              context = "preparing Python runtime") {
+  verbose <- cs2step_backend_verbose(verbose)
+  stream <- isTRUE(stream) && isTRUE(verbose)
   conda_bin <- cs2step_resolve_conda_binary(conda)
   if (!nzchar(conda_bin %||% "")) {
     stop("Unable to resolve a conda binary for text embedding runtime installation.", call. = FALSE)
   }
-  probe <- cs2step_command_probe(
-    conda_bin,
-    c("run", "-n", conda_env, args)
+  run_args <- c("run")
+  if (isTRUE(stream) && isTRUE(cs2step_conda_run_supports_no_capture(conda_bin))) {
+    run_args <- c(run_args, "--no-capture-output")
+  }
+  run_args <- c(run_args, "-n", conda_env, args)
+  command_text <- paste(c(conda_bin, run_args), collapse = " ")
+  cs2step_backend_message(
+    verbose,
+    "Running in conda env '%s': %s",
+    conda_env,
+    paste(args, collapse = " ")
   )
+  probe <- if (isTRUE(stream)) {
+    cs2step_command_stream(conda_bin, run_args)
+  } else {
+    cs2step_command_probe(conda_bin, run_args)
+  }
   if (!identical(probe$status, 0L)) {
+    output <- paste(probe$output %||% character(0), collapse = "\n")
+    if (!nzchar(output) && isTRUE(probe$streamed)) {
+      output <- "Command output was streamed above."
+    }
     stop(
       sprintf(
-        "Command failed while preparing text embedding runtime in '%s':\n%s",
+        "Command failed while %s in '%s'.\nCommand: %s\n%s",
+        context,
         conda_env,
-        paste(probe$output, collapse = "\n")
+        command_text,
+        output
       ),
       call. = FALSE
     )
@@ -1162,7 +1241,15 @@ cs2step_pip_install_in_conda <- function(conda,
                                          conda_env,
                                          packages,
                                          index_url = NULL,
-                                         force_reinstall = FALSE) {
+                                         force_reinstall = FALSE,
+                                         verbose = TRUE,
+                                         context = "installing Python packages") {
+  verbose <- cs2step_backend_verbose(verbose)
+  packages <- as.character(packages)
+  packages <- packages[nzchar(packages)]
+  if (!length(packages)) {
+    return(invisible(TRUE))
+  }
   args <- c("python", "-m", "pip", "install", "--upgrade")
   if (isTRUE(force_reinstall)) {
     args <- c(args, "--force-reinstall")
@@ -1170,11 +1257,25 @@ cs2step_pip_install_in_conda <- function(conda,
   if (!is.null(index_url) && nzchar(index_url)) {
     args <- c(args, "--index-url", index_url)
   }
-  args <- c(args, as.character(packages))
-  cs2step_conda_run(conda = conda, conda_env = conda_env, args = args)
+  args <- c(args, packages)
+  cs2step_backend_message(
+    verbose,
+    "Installing Python package(s) in '%s': %s",
+    conda_env,
+    paste(packages, collapse = ", ")
+  )
+  cs2step_conda_run(
+    conda = conda,
+    conda_env = conda_env,
+    args = args,
+    verbose = verbose,
+    stream = verbose,
+    context = context
+  )
 }
 
-cs2step_install_cuda_sentence_transformers <- function(spec) {
+cs2step_install_cuda_sentence_transformers <- function(spec, verbose = TRUE) {
+  verbose <- cs2step_backend_verbose(verbose)
   driver <- cs2step_probe_nvidia_driver()
   wheel <- cs2step_cuda_torch_wheel(driver$driver_major)
   if (is.null(wheel)) {
@@ -1191,7 +1292,9 @@ cs2step_install_cuda_sentence_transformers <- function(spec) {
     conda_env = spec$conda_env,
     packages = "torch",
     index_url = wheel$index_url,
-    force_reinstall = TRUE
+    force_reinstall = TRUE,
+    verbose = verbose,
+    context = "installing CUDA torch for text embeddings"
   )
   cs2step_pip_install_in_conda(
     conda = spec$conda,
@@ -1199,49 +1302,55 @@ cs2step_install_cuda_sentence_transformers <- function(spec) {
     packages = cs2step_text_embedding_install_packages(
       spec,
       fallback = c("sentence-transformers", "transformers")
-    )
+    ),
+    verbose = verbose,
+    context = "installing sentence-transformers for text embeddings"
   )
 }
 
-cs2step_ensure_text_embedding_runtime <- function(spec) {
+cs2step_ensure_text_embedding_runtime <- function(spec, verbose = TRUE) {
+  verbose <- cs2step_backend_verbose(verbose)
   spec <- cs2step_normalize_text_embedding_spec(spec)
   env_state <- cs2step_backend_env_state(conda_env = spec$conda_env, conda = spec$conda)
   if (!isTRUE(env_state$core_modules_ready)) {
-    build_backend(conda_env = spec$conda_env, conda = spec$conda)
+    build_backend(conda_env = spec$conda_env, conda = spec$conda, verbose = verbose)
   }
 
   if (identical(spec$backend, "mlx")) {
-    reticulate::py_install(
+    cs2step_pip_install_in_conda(
+      conda = spec$conda,
+      conda_env = spec$conda_env,
       packages = cs2step_text_embedding_install_packages(
         spec,
         fallback = c("mlx", "mlx-embeddings")
       ),
-      envname = spec$conda_env,
-      conda = spec$conda,
-      pip = TRUE
+      verbose = verbose,
+      context = "installing MLX text embedding packages"
     )
   } else if (identical(spec$backend, "sentence_transformers")) {
     if (identical(spec$device, "cuda")) {
-      cs2step_install_cuda_sentence_transformers(spec)
+      cs2step_install_cuda_sentence_transformers(spec, verbose = verbose)
     } else if (identical(spec$device, "cpu")) {
-      reticulate::py_install(
+      cs2step_pip_install_in_conda(
+        conda = spec$conda,
+        conda_env = spec$conda_env,
         packages = cs2step_text_embedding_install_packages(
           spec,
           fallback = c("torch", "sentence-transformers", "transformers")
         ),
-        envname = spec$conda_env,
-        conda = spec$conda,
-        pip = TRUE
+        verbose = verbose,
+        context = "installing CPU text embedding packages"
       )
     } else {
-      reticulate::py_install(
+      cs2step_pip_install_in_conda(
+        conda = spec$conda,
+        conda_env = spec$conda_env,
         packages = cs2step_text_embedding_install_packages(
           spec,
           fallback = c("sentence-transformers", "transformers")
         ),
-        envname = spec$conda_env,
-        conda = spec$conda,
-        pip = TRUE
+        verbose = verbose,
+        context = "installing text embedding packages"
       )
     }
   }
@@ -1313,8 +1422,10 @@ cs2step_text_embedding_canonicalize_matrix <- function(emb, spec) {
 cs2step_build_text_embedding_fn <- function(spec,
                                             cache_dir = NULL,
                                             cache_only = FALSE,
-                                            batch_size = 64L) {
+                                            batch_size = 64L,
+                                            verbose = TRUE) {
   spec <- cs2step_normalize_text_embedding_spec(spec)
+  verbose <- cs2step_backend_verbose(verbose)
   cache_only <- isTRUE(cache_only)
   batch_size <- as.integer(batch_size %||% 64L)
   if (length(batch_size) != 1L || is.na(batch_size) || batch_size < 1L) {
@@ -1351,7 +1462,7 @@ cs2step_build_text_embedding_fn <- function(spec,
     if (isTRUE(state$loaded)) {
       return(invisible(TRUE))
     }
-    cs2step_ensure_text_embedding_runtime(spec)
+    cs2step_ensure_text_embedding_runtime(spec, verbose = verbose)
     reticulate::use_condaenv(spec$conda_env, required = TRUE)
 
     if (identical(spec$backend, "mlx")) {

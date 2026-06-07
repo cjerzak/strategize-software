@@ -286,7 +286,9 @@ test_that("CUDA sentence-transformers install uses the CUDA 13 wheel index for n
     cs2step_probe_nvidia_driver = function() {
       list(available = TRUE, driver_version = "580.12", driver_major = 580L, device_name = "NVIDIA RTX")
     },
-    cs2step_pip_install_in_conda = function(conda, conda_env, packages, index_url = NULL, force_reinstall = FALSE) {
+    cs2step_pip_install_in_conda = function(conda, conda_env, packages, index_url = NULL,
+                                            force_reinstall = FALSE, verbose = TRUE,
+                                            context = "installing Python packages") {
       calls <<- c(calls, list(list(packages = packages, index_url = index_url, force_reinstall = force_reinstall)))
       invisible(TRUE)
     },
@@ -321,7 +323,9 @@ test_that("CUDA sentence-transformers install uses the CUDA 12 wheel index for m
     cs2step_probe_nvidia_driver = function() {
       list(available = TRUE, driver_version = "530.40", driver_major = 530L, device_name = "NVIDIA RTX")
     },
-    cs2step_pip_install_in_conda = function(conda, conda_env, packages, index_url = NULL, force_reinstall = FALSE) {
+    cs2step_pip_install_in_conda = function(conda, conda_env, packages, index_url = NULL,
+                                            force_reinstall = FALSE, verbose = TRUE,
+                                            context = "installing Python packages") {
       calls <<- c(calls, list(list(packages = packages, index_url = index_url, force_reinstall = force_reinstall)))
       invisible(TRUE)
     },
@@ -332,6 +336,77 @@ test_that("CUDA sentence-transformers install uses the CUDA 12 wheel index for m
 
   expect_equal(calls[[1]]$packages, "torch")
   expect_equal(calls[[1]]$index_url, "https://download.pytorch.org/whl/cu128")
+})
+
+test_that("conda run streams with no-capture output when supported", {
+  stream_call <- NULL
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_command_probe = function(command, args = character()) {
+      expect_equal(args, c("run", "--help"))
+      list(status = 0L, output = "--no-capture-output")
+    },
+    cs2step_command_stream = function(command, args = character()) {
+      stream_call <<- list(command = command, args = args)
+      list(status = 0L, output = character(), streamed = TRUE)
+    },
+    .package = "strategize"
+  )
+
+  expect_invisible(strategize:::cs2step_conda_run(
+    conda = "/usr/bin/conda",
+    conda_env = "strategize_env",
+    args = c("python", "--version"),
+    verbose = TRUE
+  ))
+  expect_true("--no-capture-output" %in% stream_call$args)
+})
+
+test_that("conda run quiet mode captures output and does not stream", {
+  probe_call <- NULL
+
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_command_stream = function(...) stop("streaming should not run"),
+    cs2step_command_probe = function(command, args = character()) {
+      probe_call <<- list(command = command, args = args)
+      list(status = 0L, output = "ok")
+    },
+    .package = "strategize"
+  )
+
+  expect_invisible(strategize:::cs2step_conda_run(
+    conda = "/usr/bin/conda",
+    conda_env = "strategize_env",
+    args = c("python", "--version"),
+    verbose = FALSE
+  ))
+  expect_false("--no-capture-output" %in% probe_call$args)
+})
+
+test_that("conda run streaming failures retain command context", {
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",
+    cs2step_command_probe = function(command, args = character()) {
+      list(status = 0L, output = "--no-capture-output")
+    },
+    cs2step_command_stream = function(command, args = character()) {
+      list(status = 1L, output = character(), streamed = TRUE)
+    },
+    .package = "strategize"
+  )
+
+  expect_error(
+    strategize:::cs2step_conda_run(
+      conda = "/usr/bin/conda",
+      conda_env = "strategize_env",
+      args = c("python", "--version"),
+      verbose = TRUE,
+      context = "testing streamed install"
+    ),
+    "Command failed while testing streamed install.*Command output was streamed above"
+  )
 })
 
 test_that("canonical text embedding width truncates larger matrices", {

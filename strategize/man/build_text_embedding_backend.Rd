@@ -12,6 +12,7 @@ build_text_embedding_backend(
   cache_only = FALSE,
   batch_size = 64L,
   required = TRUE,
+  verbose = TRUE,
   conda = "auto"
 )
 }
@@ -37,6 +38,9 @@ a model runtime is imported.}
 \item{batch_size}{Number of texts to encode per model call.}
 
 \item{required}{Logical; if \code{TRUE}, ensure the selected runtime is usable immediately. If \code{FALSE}, return a lazy backend that validates on first use.}
+
+\item{verbose}{Logical; if \code{TRUE}, print install milestones and stream
+long-running pip/conda output.}
 
 \item{conda}{Conda binary to use. Defaults to \code{"auto"}.}
 }

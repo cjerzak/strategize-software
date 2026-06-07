@@ -31,6 +31,8 @@
 #' @param text_embedding_runtime Runtime preference for \code{text_embeddings};
 #'   one of \code{"auto"}, \code{"mlx"}, \code{"cuda"}, \code{"rocm"}, or
 #'   \code{"cpu"}.
+#' @param verbose Logical; if \code{TRUE}, print install milestones and stream
+#'   long-running pip/conda output.
 #'
 #' @return Invisibly returns \code{NULL}. This function is called for its side effects
 #'   of creating and configuring a conda environment for \code{strategize}.
@@ -53,6 +55,9 @@
 #'
 #' # Install the host-specific text embedding runtime for a profile:
 #' # build_backend(text_embeddings = "qwen3_8b_4096")
+#'
+#' # Keep scripted runs quiet:
+#' # build_backend(text_embeddings = "qwen3_8b_4096", verbose = FALSE)
 #' }
 #'
 #' @export
@@ -62,13 +67,15 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
                           backend = c("auto", "cpu", "cuda", "mps"),
                           force_reinstall = FALSE,
                           text_embeddings = NULL,
-                          text_embedding_runtime = "auto") {
+                          text_embedding_runtime = "auto",
+                          verbose = TRUE) {
   backend <- match.arg(backend)
   text_embedding_runtime <- cs2step_text_embedding_runtime(text_embedding_runtime)
   text_embedding_request <- cs2step_text_embedding_request(
     text_embeddings = text_embeddings,
     text_embedding_runtime = text_embedding_runtime
   )
+  verbose <- cs2step_backend_verbose(verbose)
   if (!is.logical(force_reinstall) || length(force_reinstall) != 1L ||
       is.na(force_reinstall)) {
     stop("force_reinstall must be TRUE or FALSE.", call. = FALSE)
@@ -137,9 +144,13 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
 
   mps_message <- function() {
     if (identical(backend, "mps")) {
-      message(
-        "MPS backend selected. R sessions using reticulate directly may need ",
-        "Sys.setenv(JAX_PLATFORMS = \"mps\") before the first JAX import."
+      cs2step_backend_message(
+        verbose,
+        "%s",
+        paste(
+          "MPS backend selected. R sessions using reticulate directly may need",
+          "Sys.setenv(JAX_PLATFORMS = \"mps\") before the first JAX import."
+        )
       )
     }
   }
@@ -147,10 +158,10 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   conda_bin <- cs2step_resolve_conda_binary(conda) %||% conda
   state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
   if (isTRUE(force_reinstall) && isTRUE(state$registered)) {
-    message(sprintf(
+    cs2step_backend_message(verbose,
       "force_reinstall = TRUE; removing conda environment '%s' before rebuilding it.",
       conda_env
-    ))
+    )
     remove_env(conda_bin)
     state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
     if (isTRUE(state$registered)) {
@@ -178,10 +189,11 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
         text_embeddings = text_embedding_request,
         text_embedding_runtime = text_embedding_runtime,
         conda_env = conda_env,
-        conda = conda_bin
+        conda = conda_bin,
+        verbose = verbose
       )
     }
-    message(sprintf("Environment '%s' is ready.", conda_env))
+    cs2step_backend_message(verbose, "Environment '%s' is ready.", conda_env)
     mps_message()
     return(invisible(NULL))
   }
@@ -189,21 +201,21 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   if (identical(backend, "mps") &&
       isTRUE(state$registered) && isTRUE(state$python_exists) &&
       !isTRUE(mps_compatibility$compatible)) {
-    message(sprintf(
+    cs2step_backend_message(verbose,
       "Conda environment '%s' is not compatible with backend = 'mps' (%s); recreating it.",
       conda_env,
       cs2step_describe_mps_compatibility(mps_compatibility)
-    ))
+    )
     remove_env(conda_bin)
     state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
     mps_compatibility <- NULL
   }
 
   if (isTRUE(state$registered) && !isTRUE(state$python_exists)) {
-    message(sprintf(
+    cs2step_backend_message(verbose,
       "Conda environment '%s' is registered but its Python interpreter is missing; recreating it.",
       conda_env
-    ))
+    )
     remove_env(conda_bin)
     state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
     mps_compatibility <- NULL
@@ -215,7 +227,7 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
       create_env(conda_bin)
       TRUE
     }, error = function(e) {
-      message(sprintf("conda_create failed using '%s': %s", conda_bin, e$message))
+      cs2step_backend_message(verbose, "conda_create failed using '%s': %s", conda_bin, e$message)
       FALSE
     })
   }
@@ -223,11 +235,11 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   if (!ok || !env_registered(conda_bin)) {
     conda_fallback <- Sys.which("conda")
     if (nzchar(conda_fallback) && conda_fallback != conda_bin) {
-      message(sprintf("Retrying conda_create with: %s", conda_fallback))
+      cs2step_backend_message(verbose, "Retrying conda_create with: %s", conda_fallback)
       tryCatch({
         create_env(conda_fallback)
       }, error = function(e) {
-        message(sprintf("conda_create failed using '%s': %s", conda_fallback, e$message))
+        cs2step_backend_message(verbose, "conda_create failed using '%s': %s", conda_fallback, e$message)
       })
       if (env_registered(conda_fallback)) {
         conda_bin <- conda_fallback
@@ -245,10 +257,16 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   }
   
   os <- host$os
-  msg <- function(...) message(sprintf(...))
+  msg <- function(...) cs2step_backend_message(verbose, ...)
   
   pip_install <- function(pkgs, ...) {
-    reticulate::py_install(packages = pkgs, envname = conda_env, conda = conda_bin, pip = TRUE, ...)
+    cs2step_pip_install_in_conda(
+      conda = conda_bin,
+      conda_env = conda_env,
+      packages = pkgs,
+      verbose = verbose,
+      ...
+    )
     TRUE
   }
   
@@ -336,7 +354,8 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
       text_embeddings = text_embedding_request,
       text_embedding_runtime = text_embedding_runtime,
       conda_env = conda_env,
-      conda = conda_bin
+      conda = conda_bin,
+      verbose = verbose
     )
   }
   

@@ -42,6 +42,29 @@ build_backend_mps_compat <- function(compatible = FALSE,
   )
 }
 
+build_backend_mock_pip_install_in_conda <- function(conda,
+                                                    conda_env,
+                                                    packages,
+                                                    index_url = NULL,
+                                                    force_reinstall = FALSE,
+                                                    verbose = TRUE,
+                                                    context = "installing Python packages") {
+  reticulate::py_install(
+    packages = packages,
+    envname = conda_env,
+    conda = conda,
+    pip = TRUE,
+    index_url = index_url,
+    force_reinstall = force_reinstall
+  )
+  invisible(TRUE)
+}
+
+testthat::local_mocked_bindings(
+  cs2step_pip_install_in_conda = build_backend_mock_pip_install_in_conda,
+  .package = "strategize"
+)
+
 test_that("build_backend is idempotent when the core env is already healthy", {
   skip_on_cran()
   skip_if_not_installed("withr")
@@ -139,7 +162,8 @@ test_that("build_backend delegates requested text embedding profile for a ready 
     cs2step_ensure_text_embedding_request = function(text_embeddings,
                                                      text_embedding_runtime,
                                                      conda_env,
-                                                     conda) {
+                                                     conda,
+                                                     verbose = TRUE) {
       calls <<- c(calls, list(list(
         text_embeddings = text_embeddings,
         text_embedding_runtime = text_embedding_runtime,
@@ -212,7 +236,8 @@ test_that("build_backend delegates requested text embedding profile after instal
     cs2step_ensure_text_embedding_request = function(text_embeddings,
                                                      text_embedding_runtime,
                                                      conda_env,
-                                                     conda) {
+                                                     conda,
+                                                     verbose = TRUE) {
       calls <<- c(calls, list(list(
         text_embeddings = text_embeddings,
         text_embedding_runtime = text_embedding_runtime,
@@ -433,6 +458,14 @@ test_that("build_backend force_reinstall validates scalar logical input", {
   expect_error(
     build_backend(force_reinstall = c(TRUE, FALSE)),
     "force_reinstall must be TRUE or FALSE"
+  )
+  expect_error(
+    build_backend(verbose = NA),
+    "verbose must be TRUE or FALSE"
+  )
+  expect_error(
+    build_backend(verbose = c(TRUE, FALSE)),
+    "verbose must be TRUE or FALSE"
   )
 })
 
