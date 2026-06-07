@@ -1757,10 +1757,89 @@ cs2step_neural_to_r_array <- function(x) {
   cs2step_py_to_r(x, context = "neural prediction array")
 }
 
+cs2step_ordinal_thresholds_from_raw <- function(raw) {
+  raw <- as.matrix(raw)
+  if (!length(raw)) {
+    return(raw)
+  }
+  out <- raw
+  if (ncol(raw) > 1L) {
+    inc <- log1p(exp(-abs(raw[, -1L, drop = FALSE]))) +
+      pmax(raw[, -1L, drop = FALSE], 0) +
+      1e-4
+    out[, -1L] <- inc
+  }
+  t(apply(out, 1L, cumsum))
+}
+
+cs2step_ordinal_prob_matrix <- function(eta,
+                                        n_outcomes_obs,
+                                        experiment_index = NULL,
+                                        ordinal_thresholds = NULL,
+                                        ordinal_threshold_raw = NULL) {
+  eta <- as.numeric(eta)
+  n <- length(eta)
+  k_vec <- as.integer(n_outcomes_obs)
+  if (length(k_vec) == 1L && n > 1L) {
+    k_vec <- rep.int(k_vec, n)
+  }
+  if (length(k_vec) != n) {
+    fallback_k <- if (length(k_vec)) k_vec[[1L]] else 2L
+    k_vec <- rep.int(max(2L, suppressWarnings(as.integer(fallback_k %||% 2L))), n)
+  }
+  k_vec[is.na(k_vec) | k_vec < 2L] <- 2L
+  k_max <- max(2L, k_vec, na.rm = TRUE)
+  probs <- matrix(0, nrow = n, ncol = k_max)
+  thresholds <- ordinal_thresholds
+  if (is.null(thresholds) && !is.null(ordinal_threshold_raw)) {
+    thresholds <- cs2step_ordinal_thresholds_from_raw(ordinal_threshold_raw)
+  }
+  if (is.null(thresholds)) {
+    thresholds <- matrix(seq(-1, 1, length.out = max(1L, k_max - 1L)), nrow = 1L)
+  }
+  thresholds <- as.matrix(thresholds)
+  exp_idx <- if (is.null(experiment_index)) {
+    rep(0L, n)
+  } else {
+    as.integer(cs2step_neural_to_r_array(experiment_index))
+  }
+  if (length(exp_idx) == 1L && n > 1L) {
+    exp_idx <- rep.int(exp_idx, n)
+  }
+  if (length(exp_idx) != n) {
+    exp_idx <- rep.int(0L, n)
+  }
+  exp_idx[is.na(exp_idx) | exp_idx < 0L] <- 0L
+  exp_idx <- pmin(exp_idx + 1L, nrow(thresholds))
+  for (i in seq_len(n)) {
+    k_i <- min(as.integer(k_vec[[i]]), k_max)
+    if (!is.finite(k_i) || k_i < 2L || !is.finite(eta[[i]])) {
+      next
+    }
+    cut <- as.numeric(thresholds[
+      exp_idx[[i]],
+      seq_len(min(k_i - 1L, ncol(thresholds))),
+      drop = TRUE
+    ])
+    if (length(cut) < k_i - 1L) {
+      cut <- c(cut, tail(cut, 1L) + seq_len(k_i - 1L - length(cut)))
+    }
+    cut <- cummax(cut)
+    cdf <- stats::plogis(cut - eta[[i]])
+    p <- c(cdf[[1L]], diff(cdf), 1 - cdf[[length(cdf)]])
+    p <- pmax(p, 1e-12)
+    probs[i, seq_len(k_i)] <- p / sum(p)
+  }
+  probs
+}
+
 cs2step_neural_coerce_prediction_output <- function(pred,
                                                     likelihood,
                                                     target_likelihood = NULL,
                                                     target_n_outcomes = NULL,
+                                                    target_experiment_index = NULL,
+                                                    ordinal_thresholds = NULL,
+                                                    ordinal_threshold_raw = NULL,
                                                     sigma = NULL,
                                                     model_info = NULL,
                                                     pairwise_prediction = FALSE) {
@@ -1798,6 +1877,15 @@ cs2step_neural_coerce_prediction_output <- function(pred,
       p <- exp(z)
       return(sweep(p, 1L, rowSums(p), "/"))
     }
+    if (target_likelihood %in% c("ordinal", "ordered", "ordered_logit", "ordered-logit", "ordinal_single")) {
+      return(cs2step_ordinal_prob_matrix(
+        eta = logits[, 1L],
+        n_outcomes_obs = rep.int(as.integer(target_n_outcomes), nrow(logits)),
+        experiment_index = target_experiment_index,
+        ordinal_thresholds = cs2step_neural_to_r_array(ordinal_thresholds),
+        ordinal_threshold_raw = cs2step_neural_to_r_array(ordinal_threshold_raw)
+      ))
+    }
     if (identical(target_likelihood, "normal")) {
       sigma_source <- if (is.list(pred) && !is.null(pred$sigma)) pred$sigma else sigma
       sigma_value <- as.numeric(cs2step_neural_to_r_array(sigma_source %||% 1))
@@ -1824,6 +1912,24 @@ cs2step_neural_coerce_prediction_output <- function(pred,
     return(list(
       mu = as.numeric(cs2step_neural_to_r_array(pred$mu)),
       sigma = as.numeric(cs2step_neural_to_r_array(pred$sigma))
+    ))
+  }
+  if (likelihood == "ordinal") {
+    logits <- if (is.list(pred) && !is.null(pred$logits)) {
+      pred$logits
+    } else {
+      pred
+    }
+    logits <- as.matrix(cs2step_neural_to_r_array(logits))
+    return(cs2step_ordinal_prob_matrix(
+      eta = logits[, 1L],
+      n_outcomes_obs = rep.int(
+        as.integer(target_n_outcomes %||% model_info$n_outcomes %||% model_info$nOutcomes %||% 2L),
+        nrow(logits)
+      ),
+      experiment_index = target_experiment_index,
+      ordinal_thresholds = cs2step_neural_to_r_array(ordinal_thresholds),
+      ordinal_threshold_raw = cs2step_neural_to_r_array(ordinal_threshold_raw)
     ))
   }
   pred
@@ -1861,6 +1967,9 @@ cs2step_neural_predict_pair_prepared <- function(params,
     likelihood = model_info$likelihood,
     target_likelihood = target_likelihood,
     target_n_outcomes = target_n_outcomes,
+    target_experiment_index = prep$experiment_idx %||% NULL,
+    ordinal_thresholds = params$ordinal_thresholds %||% NULL,
+    ordinal_threshold_raw = params$ordinal_threshold_raw %||% NULL,
     sigma = params$sigma %||% NULL,
     model_info = model_info,
     pairwise_prediction = TRUE
@@ -1891,6 +2000,9 @@ cs2step_neural_predict_single_prepared <- function(params,
     likelihood = model_info$likelihood,
     target_likelihood = target_likelihood,
     target_n_outcomes = target_n_outcomes,
+    target_experiment_index = prep$experiment_idx %||% NULL,
+    ordinal_thresholds = params$ordinal_thresholds %||% NULL,
+    ordinal_threshold_raw = params$ordinal_threshold_raw %||% NULL,
     sigma = params$sigma %||% NULL,
     model_info = model_info,
     pairwise_prediction = FALSE
@@ -2194,18 +2306,40 @@ cs2step_neural_predict_internal <- function(object,
 
   if (isTRUE(use_internal)) {
     if (type == "link") {
-      eps <- .Machine$double.eps
-      p <- pmin(pmax(p, eps), 1 - eps)
-      pred <- stats::qlogis(p)
+      if (is.numeric(p) && is.null(dim(p))) {
+        eps <- .Machine$double.eps
+        p <- pmin(pmax(p, eps), 1 - eps)
+        pred <- stats::qlogis(p)
+      } else {
+        pred <- p
+      }
     } else {
-      pred <- as.numeric(p)
+      pred <- if (is.numeric(p) && is.null(dim(p))) as.numeric(p) else p
     }
   } else if (identical(type, "link")) {
     pred <- as.numeric(cs2step_neural_to_r_array(p))
   } else if (identical(model_info$likelihood, "mixed")) {
     pred <- p
   } else {
-    pred <- cs2step_neural_coerce_prediction_output(p, model_info$likelihood)
+    pred <- cs2step_neural_coerce_prediction_output(
+      pred = p,
+      likelihood = model_info$likelihood,
+      target_likelihood = target_likelihood,
+      target_n_outcomes = target_n_outcomes,
+      target_experiment_index = if (!is.null(prep)) prep$experiment_idx %||% NULL else NULL,
+      ordinal_thresholds = if (exists("prep_params", inherits = FALSE)) {
+        prep_params$params$ordinal_thresholds %||% NULL
+      } else {
+        NULL
+      },
+      ordinal_threshold_raw = if (exists("prep_params", inherits = FALSE)) {
+        prep_params$params$ordinal_threshold_raw %||% NULL
+      } else {
+        NULL
+      },
+      sigma = if (exists("prep_params", inherits = FALSE)) prep_params$params$sigma %||% NULL else NULL,
+      model_info = model_info
+    )
   }
 
   if (interval == "none") {

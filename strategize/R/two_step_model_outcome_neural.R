@@ -7950,6 +7950,9 @@ neural_predict_pair_core_prepared <- function(params,
   if (model_info$likelihood == "categorical") {
     return(strenv$jax$nn$softmax(logits, axis = -1L))
   }
+  if (model_info$likelihood == "ordinal") {
+    return(logits)
+  }
   list(
     mu = strenv$jnp$squeeze(logits, axis = 1L),
     sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.)
@@ -8036,6 +8039,9 @@ neural_predict_single_core_prepared <- function(params,
   }
   if (model_info$likelihood == "categorical") {
     return(strenv$jax$nn$softmax(logits, axis = -1L))
+  }
+  if (model_info$likelihood == "ordinal") {
+    return(logits)
   }
   list(
     mu = strenv$jnp$squeeze(logits, axis = 1L),
@@ -10247,9 +10253,9 @@ generate_ModelOutcome_neural <- function(){
       )
     }
     if (length(universal_likelihood_all) < 1L ||
-        !all(universal_likelihood_all %in% c("bernoulli", "categorical", "normal"))) {
+        !all(universal_likelihood_all %in% c("bernoulli", "categorical", "normal", "ordinal"))) {
       stop(
-        "foundation_universal_training$likelihood_by_row must only contain 'bernoulli', 'categorical', or 'normal'.",
+        "foundation_universal_training$likelihood_by_row must only contain 'bernoulli', 'categorical', 'normal', or 'ordinal'.",
         call. = FALSE
       )
     }
@@ -10840,18 +10846,23 @@ generate_ModelOutcome_neural <- function(){
     length(unique(universal_likelihood_use)) > 1L
   universal_has_normal <- isTRUE(universal_enabled) &&
     any(universal_likelihood_use == "normal")
-  universal_likelihood_levels <- c("bernoulli", "categorical", "normal")
+  universal_has_ordinal <- isTRUE(universal_enabled) &&
+    any(universal_likelihood_use == "ordinal")
+  universal_likelihood_levels <- c("bernoulli", "categorical", "normal", "ordinal")
 
   if (!is.null(likelihood_override)) {
     likelihood <- tolower(as.character(likelihood_override))
-    if (!likelihood %in% c("bernoulli", "categorical", "normal")) {
-      stop("neural_likelihood_override must be one of 'bernoulli', 'categorical', or 'normal'.",
+    if (likelihood %in% c("ordered", "ordered_logit", "ordered-logit", "ordinal_single")) {
+      likelihood <- "ordinal"
+    }
+    if (!likelihood %in% c("bernoulli", "categorical", "normal", "ordinal")) {
+      stop("neural_likelihood_override must be one of 'bernoulli', 'categorical', 'normal', or 'ordinal'.",
            call. = FALSE)
     }
     if (!is.null(nOutcomes_override)) {
       nOutcomes <- ai(nOutcomes_override)
-    } else if (likelihood == "categorical") {
-      stop("neural_nOutcomes_override must be provided when forcing categorical likelihood.",
+    } else if (likelihood %in% c("categorical", "ordinal")) {
+      stop("neural_nOutcomes_override must be provided when forcing categorical or ordinal likelihood.",
            call. = FALSE)
     } else {
       nOutcomes <- ai(1L)
@@ -10870,6 +10881,27 @@ generate_ModelOutcome_neural <- function(){
     likelihood <- "categorical"; nOutcomes <- ai(K_classes)
   } else {
     likelihood <- "normal"; nOutcomes <- ai(1L)
+  }
+  has_ordinal_likelihood <- identical(likelihood, "ordinal") ||
+    isTRUE(universal_has_ordinal)
+  ordinal_n_threshold_groups <- if (isTRUE(has_ordinal_likelihood)) {
+    max(1L, as.integer(n_experiment_levels))
+  } else {
+    0L
+  }
+  ordinal_max_n_outcomes <- if (isTRUE(has_ordinal_likelihood)) {
+    if (isTRUE(universal_enabled) && any(universal_likelihood_use == "ordinal")) {
+      max(2L, max(as.integer(universal_n_outcomes_use[universal_likelihood_use == "ordinal"]), na.rm = TRUE))
+    } else {
+      max(2L, as.integer(nOutcomes))
+    }
+  } else {
+    0L
+  }
+  ordinal_max_thresholds <- if (isTRUE(has_ordinal_likelihood)) {
+    max(1L, as.integer(ordinal_max_n_outcomes) - 1L)
+  } else {
+    0L
   }
   low_rank_logit_model_info$likelihood <- likelihood
   low_rank_logit_normalization <- neural_resolve_low_rank_logit_normalization(
@@ -11008,6 +11040,16 @@ generate_ModelOutcome_neural <- function(){
     if (any(norm_idx)) {
       ok[norm_idx] <- is.finite(y_num[norm_idx])
     }
+    ord_idx <- ok & code == 3L
+    if (any(ord_idx)) {
+      y_ord <- suppressWarnings(as.integer(round(y_num[ord_idx])))
+      ok[ord_idx] <- is.finite(y_ord) &
+        abs(y_num[ord_idx] - y_ord) < 1e-8 &
+        is.finite(n_outcomes_obs[ord_idx]) &
+        n_outcomes_obs[ord_idx] >= 2L &
+        y_ord >= 0L &
+        y_ord < n_outcomes_obs[ord_idx]
+    }
     ok
   }
 
@@ -11025,8 +11067,9 @@ generate_ModelOutcome_neural <- function(){
     fam_label[likelihood_code_obs == 0L] <- "bernoulli"
     fam_label[likelihood_code_obs == 1L] <- "categorical"
     fam_label[likelihood_code_obs == 2L] <- "normal"
+    fam_label[likelihood_code_obs == 3L] <- "ordinal"
     strata <- paste(fam_label, exp_label, sep = "::")
-    class_idx <- likelihood_code_obs %in% c(0L, 1L) & is.finite(as.numeric(y))
+    class_idx <- likelihood_code_obs %in% c(0L, 1L, 3L) & is.finite(as.numeric(y))
     if (any(class_idx)) {
       y_class <- suppressWarnings(as.integer(round(as.numeric(y[class_idx]))))
       strata[class_idx] <- paste(strata[class_idx], paste0("class", y_class), sep = "::")
@@ -11037,6 +11080,14 @@ generate_ModelOutcome_neural <- function(){
         strata[cat_idx] <- paste(
           strata[cat_idx],
           paste0("k", as.integer(n_outcomes_obs[cat_idx])),
+          sep = "::"
+        )
+      }
+      ord_idx <- likelihood_code_obs == 3L & is.finite(as.numeric(n_outcomes_obs))
+      if (any(ord_idx)) {
+        strata[ord_idx] <- paste(
+          strata[ord_idx],
+          paste0("k", as.integer(n_outcomes_obs[ord_idx])),
           sep = "::"
         )
       }
@@ -11073,6 +11124,115 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     probs
+  }
+
+  ordinal_thresholds_from_raw_r <- function(raw) {
+    raw <- as.matrix(raw)
+    if (!length(raw)) {
+      return(raw)
+    }
+    out <- raw
+    if (ncol(raw) > 1L) {
+      inc <- log1p(exp(-abs(raw[, -1L, drop = FALSE]))) +
+        pmax(raw[, -1L, drop = FALSE], 0) +
+        1e-4
+      out[, -1L] <- inc
+    }
+    t(apply(out, 1L, cumsum))
+  }
+
+  ordinal_prob_matrix_r <- function(eta,
+                                    n_outcomes_obs,
+                                    experiment_index = NULL,
+                                    ordinal_thresholds = NULL,
+                                    ordinal_threshold_raw = NULL) {
+    eta <- as.numeric(eta)
+    n <- length(eta)
+    k_vec <- as.integer(n_outcomes_obs)
+    k_max <- max(1L, k_vec[is.finite(k_vec)], na.rm = TRUE)
+    if (!is.finite(k_max) || k_max < 1L) {
+      k_max <- 1L
+    }
+    probs <- matrix(0, nrow = n, ncol = k_max)
+    thresholds <- ordinal_thresholds
+    if (is.null(thresholds) && !is.null(ordinal_threshold_raw)) {
+      thresholds <- ordinal_thresholds_from_raw_r(ordinal_threshold_raw)
+    }
+    if (is.null(thresholds)) {
+      thresholds <- matrix(seq(-1, 1, length.out = max(1L, k_max - 1L)), nrow = 1L)
+    }
+    thresholds <- as.matrix(thresholds)
+    exp_idx <- as.integer(experiment_index %||% rep(0L, n))
+    if (length(exp_idx) == 1L && n > 1L) {
+      exp_idx <- rep.int(exp_idx, n)
+    }
+    if (length(exp_idx) != n) {
+      exp_idx <- rep.int(0L, n)
+    }
+    exp_idx[is.na(exp_idx) | exp_idx < 0L] <- 0L
+    exp_idx <- pmin(exp_idx + 1L, nrow(thresholds))
+    for (i in seq_len(n)) {
+      k_i <- as.integer(k_vec[[i]])
+      if (!is.finite(k_i) || k_i < 2L || !is.finite(eta[[i]])) {
+        next
+      }
+      k_i <- min(k_i, k_max)
+      cut <- as.numeric(thresholds[exp_idx[[i]], seq_len(min(k_i - 1L, ncol(thresholds))), drop = TRUE])
+      if (length(cut) < k_i - 1L) {
+        cut <- c(cut, tail(cut, 1L) + seq_len(k_i - 1L - length(cut)))
+      }
+      cut <- cummax(cut)
+      cdf <- stats::plogis(cut - eta[[i]])
+      p <- c(cdf[[1L]], diff(cdf), 1 - cdf[[length(cdf)]])
+      p <- pmax(p, 1e-12)
+      probs[i, seq_len(k_i)] <- p / sum(p)
+    }
+    probs
+  }
+
+  ordinal_metrics_r <- function(y_eval, prob_mat, n_outcomes_obs = NULL) {
+    y_int <- suppressWarnings(as.integer(round(as.numeric(y_eval))))
+    prob_mat <- as.matrix(prob_mat)
+    n <- length(y_int)
+    k_vec <- as.integer(n_outcomes_obs %||% rep(ncol(prob_mat), n))
+    if (length(k_vec) == 1L && n > 1L) {
+      k_vec <- rep.int(k_vec, n)
+    }
+    keep <- is.finite(y_int) & y_int >= 0L & seq_along(y_int) <= nrow(prob_mat)
+    keep <- keep & is.finite(k_vec) & k_vec >= 2L & y_int < k_vec
+    if (!any(keep)) {
+      return(list(likelihood = "ordinal", n_eval = 0L, n_obs = 0L,
+                  log_loss = NA_real_, nll = NA_real_,
+                  accuracy = NA_real_, mae = NA_real_,
+                  rmse = NA_real_, ranked_probability_score = NA_real_))
+    }
+    row_idx <- which(keep)
+    p_y <- mapply(function(i, y) {
+      prob_mat[i, y + 1L]
+    }, row_idx, y_int[keep])
+    p_y <- pmin(pmax(as.numeric(p_y), 1e-12), 1)
+    expected <- rowSums(sweep(prob_mat[row_idx, , drop = FALSE], 2L, seq_len(ncol(prob_mat)) - 1L, `*`))
+    denom <- pmax(k_vec[keep] - 1L, 1L)
+    err <- (expected - y_int[keep]) / denom
+    rps <- numeric(length(row_idx))
+    for (j in seq_along(row_idx)) {
+      i <- row_idx[[j]]
+      k_i <- min(k_vec[keep][[j]], ncol(prob_mat))
+      pred_cdf <- cumsum(prob_mat[i, seq_len(k_i)])
+      obs_cdf <- as.numeric(seq.int(0L, k_i - 1L) >= y_int[keep][[j]])
+      rps[[j]] <- sum((pred_cdf - obs_cdf)^2) / max(1L, k_i - 1L)
+    }
+    list(
+      likelihood = "ordinal",
+      n_eval = length(row_idx),
+      n_obs = length(row_idx),
+      log_loss = -mean(log(p_y)),
+      nll = -mean(log(p_y)),
+      accuracy = mean(max.col(prob_mat[row_idx, , drop = FALSE], ties.method = "first") - 1L == y_int[keep]),
+      mae = mean(abs(err)),
+      rmse = sqrt(mean(err^2)),
+      ranked_probability_score = mean(rps)
+    )
   }
 
   mixed_sigma_vector_r <- function(sigma, n) {
@@ -11118,7 +11278,10 @@ generate_ModelOutcome_neural <- function(){
                                    likelihood_code_obs,
                                    n_outcomes_obs,
                                    sigma = NULL,
-                                   task_mode_obs = NULL) {
+                                   task_mode_obs = NULL,
+                                   experiment_index = NULL,
+                                   ordinal_thresholds = NULL,
+                                   ordinal_threshold_raw = NULL) {
     logits <- as.matrix(logits)
     n <- nrow(logits)
     if (n < 1L) {
@@ -11187,6 +11350,32 @@ generate_ModelOutcome_neural <- function(){
       }
     }
 
+    ord_idx <- which(code == 3L)
+    if (length(ord_idx) > 0L) {
+      exp_idx_ord <- if (!is.null(experiment_index) && length(experiment_index) == n) {
+        as.integer(experiment_index[ord_idx])
+      } else {
+        rep(0L, length(ord_idx))
+      }
+      prob_ord <- ordinal_prob_matrix_r(
+        eta = as.numeric(logits[ord_idx, 1L]),
+        n_outcomes_obs = n_outcomes_obs[ord_idx],
+        experiment_index = exp_idx_ord,
+        ordinal_thresholds = ordinal_thresholds,
+        ordinal_threshold_raw = ordinal_threshold_raw
+      )
+      y_ord <- suppressWarnings(as.integer(round(y_num[ord_idx])))
+      keep <- is.finite(y_ord) &
+        y_ord >= 0L &
+        y_ord < as.integer(n_outcomes_obs[ord_idx]) &
+        (y_ord + 1L) <= ncol(prob_ord)
+      if (any(keep)) {
+        p <- prob_ord[cbind(which(keep), y_ord[keep] + 1L)]
+        p <- pmin(pmax(p, 1e-12), 1)
+        out[ord_idx[keep]] <- log(p)
+      }
+    }
+
     out
   }
 
@@ -11195,6 +11384,9 @@ generate_ModelOutcome_neural <- function(){
                                               likelihood_code_obs,
                                               n_outcomes_obs,
                                               task_mode_obs = NULL,
+                                              experiment_index = NULL,
+                                              ordinal_thresholds = NULL,
+                                              ordinal_threshold_raw = NULL,
                                               threshold = 0.5) {
     logits <- as.matrix(pred_eval$logits %||% pred_eval)
     sigma_vec <- mixed_sigma_vector_r(pred_eval$sigma %||% NULL, nrow(logits))
@@ -11207,7 +11399,10 @@ generate_ModelOutcome_neural <- function(){
       likelihood_code_obs = code,
       n_outcomes_obs = n_outcomes_obs,
       sigma = sigma_vec,
-      task_mode_obs = task_mode_obs
+      task_mode_obs = task_mode_obs,
+      experiment_index = experiment_index,
+      ordinal_thresholds = ordinal_thresholds,
+      ordinal_threshold_raw = ordinal_threshold_raw
     )
     keep <- is.finite(log_prob)
     out <- list(
@@ -11259,6 +11454,29 @@ generate_ModelOutcome_neural <- function(){
       )
       metrics_norm$n_obs <- metrics_norm$n_eval %||% length(norm_idx)
       out$by_family$normal <- metrics_norm
+    }
+
+    ord_idx <- which(code == 3L)
+    if (length(ord_idx) > 0L) {
+      exp_idx_ord <- if (!is.null(experiment_index) && length(experiment_index) == length(y_num)) {
+        as.integer(experiment_index[ord_idx])
+      } else {
+        rep(0L, length(ord_idx))
+      }
+      prob_ord <- ordinal_prob_matrix_r(
+        eta = as.numeric(logits[ord_idx, 1L]),
+        n_outcomes_obs = n_outcomes_obs[ord_idx],
+        experiment_index = exp_idx_ord,
+        ordinal_thresholds = ordinal_thresholds,
+        ordinal_threshold_raw = ordinal_threshold_raw
+      )
+      metrics_ord <- ordinal_metrics_r(
+        y_eval = y_num[ord_idx],
+        prob_mat = prob_ord,
+        n_outcomes_obs = n_outcomes_obs[ord_idx]
+      )
+      metrics_ord$n_obs <- metrics_ord$n_eval %||% length(ord_idx)
+      out$by_family$ordinal <- metrics_ord
     }
 
     out
@@ -11330,6 +11548,25 @@ generate_ModelOutcome_neural <- function(){
         strenv$numpyro$distributions$Normal(0., scale)$expand(shape_tuple)
       )
     }
+  }
+
+  ordinal_thresholds_from_raw_jnp <- function(raw) {
+    if (is.null(raw)) {
+      return(NULL)
+    }
+    n_thr <- ai(raw$shape[[2]])
+    if (n_thr <= 1L) {
+      return(raw)
+    }
+    first <- strenv$jnp$take(raw, ai(0L), axis = 1L)
+    rest <- strenv$jnp$take(raw, strenv$jnp$arange(ai(1L), n_thr), axis = 1L)
+    increments <- strenv$jax$nn$softplus(rest) +
+      strenv$jnp$array(1e-4, dtype = raw$dtype %||% ddtype_)
+    values <- strenv$jnp$concatenate(
+      list(strenv$jnp$reshape(first, list(-1L, 1L)), increments),
+      axis = 1L
+    )
+    strenv$jnp$cumsum(values, axis = 1L)
   }
 
   sample_shared_transformer_params <- function(D_local, pairwise = FALSE) {
@@ -12483,6 +12720,32 @@ generate_ModelOutcome_neural <- function(){
     )
     b_out <- sample_loc_scale("b_out", tau_b, reticulate::tuple(output_dim))
 
+    ordinal_threshold_raw <- NULL
+    ordinal_thresholds <- NULL
+    if (isTRUE(has_ordinal_likelihood)) {
+      ordinal_threshold_shape <- reticulate::tuple(
+        ai(ordinal_n_threshold_groups),
+        ai(ordinal_max_thresholds)
+      )
+      ordinal_threshold_raw <- p2d(
+        name = "ordinal_threshold_raw",
+        sample_fxn = function() {
+          strenv$numpyro$sample(
+            "ordinal_threshold_raw",
+            strenv$numpyro$distributions$Normal(0., 1.)$expand(ordinal_threshold_shape)
+          )
+        },
+        init_fxn = function() {
+          p2d_init_normal("ordinal_threshold_raw", 0., ordinal_threshold_shape)
+        },
+        is_output_layer = TRUE
+      )
+      ordinal_thresholds <- strenv$numpyro$deterministic(
+        "ordinal_thresholds",
+        ordinal_thresholds_from_raw_jnp(ordinal_threshold_raw)
+      )
+    }
+
     M_cross <- NULL
     W_cross_out <- NULL
     if (isTRUE(pairwise) && isTRUE(use_cross_term)) {
@@ -12714,6 +12977,10 @@ generate_ModelOutcome_neural <- function(){
     params_view$RMS_final <- RMS_final
     params_view$W_out <- W_out
     params_view$b_out <- b_out
+    if (!is.null(ordinal_threshold_raw)) {
+      params_view$ordinal_threshold_raw <- ordinal_threshold_raw
+      params_view$ordinal_thresholds <- ordinal_thresholds
+    }
     if (isTRUE(pairwise) && isTRUE(use_cross_term)) {
       params_view$M_cross <- M_cross
       params_view$W_cross_out <- W_cross_out
@@ -12738,6 +13005,8 @@ generate_ModelOutcome_neural <- function(){
       E_candidate_cls = E_candidate_cls,
       W_out = W_out,
       b_out = b_out,
+      ordinal_threshold_raw = ordinal_threshold_raw,
+      ordinal_thresholds = ordinal_thresholds,
       sigma = sigma,
       M_cross = M_cross,
       W_cross_out = W_cross_out,
@@ -12749,7 +13018,9 @@ generate_ModelOutcome_neural <- function(){
                                          Yb,
                                          likelihood_code_obs,
                                          n_outcomes_obs,
-                                         sigma = NULL) {
+                                         sigma = NULL,
+                                         experiment_index_obs = NULL,
+                                         ordinal_thresholds = NULL) {
     out_dim <- ai(logits$shape[[2]])
     class_axis <- strenv$jnp$arange(out_dim)$astype(strenv$jnp$int32)
     class_mask <- strenv$jnp$less(
@@ -12767,9 +13038,11 @@ generate_ModelOutcome_neural <- function(){
     like_bern_mask <- strenv$jnp$equal(likelihood_code_obs, ai(0L))
     like_cat_mask <- strenv$jnp$equal(likelihood_code_obs, ai(1L))
     like_norm_mask <- strenv$jnp$equal(likelihood_code_obs, ai(2L))
+    like_ord_mask <- strenv$jnp$equal(likelihood_code_obs, ai(3L))
     like_bern <- like_bern_mask$astype(ddtype_)
     like_cat <- like_cat_mask$astype(ddtype_)
     like_norm <- like_norm_mask$astype(ddtype_)
+    like_ord <- like_ord_mask$astype(ddtype_)
     zeros_y <- strenv$jnp$zeros_like(y_numeric)
     zeros_i <- strenv$jnp$zeros_like(y_int)
     y_bern <- strenv$jnp$where(like_bern_mask, y_numeric, zeros_y)
@@ -12785,10 +13058,50 @@ generate_ModelOutcome_neural <- function(){
       sigma
     }
     norm_logp <- strenv$numpyro$distributions$Normal(mu, sigma_use)$log_prob(y_norm)
+    ord_logp <- strenv$jnp$zeros_like(y_numeric)
+    if (!is.null(ordinal_thresholds)) {
+      exp_idx <- if (is.null(experiment_index_obs)) {
+        strenv$jnp$zeros_like(y_int)
+      } else {
+        experiment_index_obs
+      }
+      exp_idx <- strenv$jnp$maximum(exp_idx, ai(0L))
+      n_threshold_groups <- ai(ordinal_thresholds$shape[[1]])
+      exp_idx <- strenv$jnp$minimum(exp_idx, n_threshold_groups - ai(1L))
+      cutpoints <- strenv$jnp$take(ordinal_thresholds, exp_idx, axis = 0L)
+      eta <- strenv$jnp$take(logits, ai(0L), axis = 1L)
+      cdf <- strenv$jax$nn$sigmoid(cutpoints - strenv$jnp$reshape(eta, list(-1L, 1L)))
+      max_thr <- ai(cdf$shape[[2]])
+      y_ord <- strenv$jnp$where(like_ord_mask, y_int, zeros_i)
+      prev_idx <- strenv$jnp$maximum(y_ord - ai(1L), ai(0L))
+      curr_idx <- strenv$jnp$minimum(y_ord, max_thr - ai(1L))
+      prev_cdf <- strenv$jnp$take_along_axis(
+        cdf,
+        strenv$jnp$reshape(prev_idx, list(-1L, 1L)),
+        axis = 1L
+      )
+      curr_cdf <- strenv$jnp$take_along_axis(
+        cdf,
+        strenv$jnp$reshape(curr_idx, list(-1L, 1L)),
+        axis = 1L
+      )
+      prev_cdf <- strenv$jnp$reshape(prev_cdf, list(-1L))
+      curr_cdf <- strenv$jnp$reshape(curr_cdf, list(-1L))
+      first_class <- strenv$jnp$equal(y_ord, ai(0L))
+      last_class <- strenv$jnp$greater_equal(y_ord, n_outcomes_obs - ai(1L))
+      prev_cdf <- strenv$jnp$where(first_class, zeros_y, prev_cdf)
+      curr_cdf <- strenv$jnp$where(last_class, strenv$jnp$ones_like(y_numeric), curr_cdf)
+      ord_prob <- strenv$jnp$maximum(
+        curr_cdf - prev_cdf,
+        strenv$jnp$array(1e-12, dtype = ddtype_)
+      )
+      ord_logp <- strenv$jnp$log(ord_prob)
+    }
     bern_term <- like_bern * bern_logp
     cat_term <- like_cat * cat_logp
     norm_term <- like_norm * norm_logp
-    bern_term + cat_term + norm_term
+    ord_term <- like_ord * ord_logp
+    bern_term + cat_term + norm_term + ord_term
   }
 
   apply_observation_likelihood <- function(logits,
@@ -12799,7 +13112,9 @@ generate_ModelOutcome_neural <- function(){
                                            site_name = "obs",
                                            obs_scale = NULL,
                                            pairwise_obs = FALSE,
-                                           pairwise_logit_scale = NULL) {
+                                           pairwise_logit_scale = NULL,
+                                           experiment_index_obs = NULL,
+                                           ordinal_thresholds = NULL) {
     logits <- neural_apply_pairwise_classification_logit_transform(
       logits,
       model_info = low_rank_logit_model_info,
@@ -12838,6 +13153,22 @@ generate_ModelOutcome_neural <- function(){
         )
         return(invisible(NULL))
       }
+      if (likelihood == "ordinal") {
+        total_logp <- universal_row_log_prob_jnp(
+          logits = logits,
+          Yb = Yb,
+          likelihood_code_obs = strenv$jnp$full(Yb$shape, ai(3L), dtype = strenv$jnp$int32),
+          n_outcomes_obs = strenv$jnp$full(Yb$shape, ai(nOutcomes), dtype = strenv$jnp$int32),
+          sigma = sigma,
+          experiment_index_obs = experiment_index_obs,
+          ordinal_thresholds = ordinal_thresholds
+        )
+        if (!is.null(obs_scale)) {
+          total_logp <- total_logp * strenv$jnp$array(obs_scale, dtype = ddtype_)
+        }
+        strenv$numpyro$factor(site_name, total_logp)
+        return(invisible(NULL))
+      }
       mu <- strenv$jnp$take(logits, ai(0L), axis = 1L)
       scaled_observation_factor(
         strenv$numpyro$distributions$Normal(mu, sigma),
@@ -12854,7 +13185,9 @@ generate_ModelOutcome_neural <- function(){
       Yb = Yb,
       likelihood_code_obs = likelihood_code_obs,
       n_outcomes_obs = n_outcomes_obs,
-      sigma = sigma
+      sigma = sigma,
+      experiment_index_obs = experiment_index_obs,
+      ordinal_thresholds = ordinal_thresholds
     )
     if (!is.null(obs_scale)) {
       total_logp <- total_logp * strenv$jnp$array(obs_scale, dtype = ddtype_)
@@ -13411,7 +13744,9 @@ generate_ModelOutcome_neural <- function(){
         pairwise_logit_scale = neural_pairwise_bernoulli_logit_scale_from_params(
           params = params_view,
           model_info = low_rank_logit_model_info
-        )
+        ),
+        experiment_index_obs = experiment_idx,
+        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL
       )
     }
 
@@ -13490,7 +13825,9 @@ generate_ModelOutcome_neural <- function(){
         sigma = sigma,
         site_name = "obs_single",
         obs_scale = obs_scale_b,
-        pairwise_obs = FALSE
+        pairwise_obs = FALSE,
+        experiment_index_obs = experiment_idx,
+        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL
       )
     }
 
@@ -13817,7 +14154,9 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_obs = n_outcomes_b,
         sigma = sigma,
         site_name = "obs",
-        obs_scale = obs_scale_b
+        obs_scale = obs_scale_b,
+        experiment_index_obs = experiment_idx,
+        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL
       )
     }
 
@@ -14067,7 +14406,19 @@ generate_ModelOutcome_neural <- function(){
                   universal_task_mode_use[idx_use]
                 } else {
                   NULL
+                },
+                experiment_index = if (!is.null(experiment_index_use)) {
+                  experiment_index_use[idx_use]
+                } else {
+                  NULL
                 }
+              ))
+            }
+            if (identical(likelihood, "ordinal")) {
+              return(ordinal_metrics_r(
+                y_eval = y_eval,
+                prob_mat = pred_eval,
+                n_outcomes_obs = rep.int(as.integer(nOutcomes), length(y_eval))
               ))
             }
             cs_compute_outcome_metrics(
@@ -14106,6 +14457,14 @@ generate_ModelOutcome_neural <- function(){
                 format_metric("NormNLL", by_family$normal$nll, 4)
               )))
             }
+            if (!is.null(by_family$ordinal)) {
+              items <- c(items, Filter(Negate(is.null), list(
+                format_metric("OrdLL", by_family$ordinal$log_loss, 4),
+                format_metric("OrdAcc", by_family$ordinal$accuracy, 3),
+                format_metric("OrdMAE", by_family$ordinal$mae, 4),
+                format_metric("RPS", by_family$ordinal$ranked_probability_score, 4)
+              )))
+            }
             items
           }
 
@@ -14135,6 +14494,19 @@ generate_ModelOutcome_neural <- function(){
                 n_eval = 0L,
                 log_loss = NA_real_,
                 accuracy = NA_real_
+              ))
+            }
+            if (identical(likelihood_value, "ordinal")) {
+              return(list(
+                likelihood = likelihood_value,
+                n_eval = 0L,
+                n_obs = 0L,
+                log_loss = NA_real_,
+                nll = NA_real_,
+                accuracy = NA_real_,
+                mae = NA_real_,
+                rmse = NA_real_,
+                ranked_probability_score = NA_real_
               ))
             }
             list(
@@ -14169,6 +14541,8 @@ generate_ModelOutcome_neural <- function(){
               pred_oos[idx]
             } else if (likelihood == "categorical") {
               pred_oos[idx, , drop = FALSE]
+            } else if (likelihood == "ordinal") {
+              pred_oos[idx, , drop = FALSE]
             } else {
               list(mu = pred_oos$mu[idx],
                    sigma = pred_oos$sigma[idx])
@@ -14183,7 +14557,7 @@ generate_ModelOutcome_neural <- function(){
             )
           } else if (likelihood == "bernoulli") {
             pred_oos <- rep(NA_real_, n_total)
-          } else if (likelihood == "categorical") {
+          } else if (likelihood %in% c("categorical", "ordinal")) {
             pred_oos <- matrix(NA_real_, nrow = n_total, ncol = as.integer(nOutcomes))
           } else {
             pred_oos <- list(mu = rep(NA_real_, n_total),
@@ -15479,6 +15853,13 @@ generate_ModelOutcome_neural <- function(){
     if (is.null(params_out$W_out) || is.null(params_out$b_out)) {
       return(NULL)
     }
+    ordinal_raw_value <- get_site_value("ordinal_threshold_raw")
+    if (!is.null(ordinal_raw_value)) {
+      params_out$ordinal_threshold_raw <- ordinal_raw_value
+      params_out$ordinal_thresholds <- ordinal_thresholds_from_raw_jnp(ordinal_raw_value)
+    } else {
+      maybe_site("ordinal_thresholds")
+    }
 
     cross_value <- get_cross_site_value()
     if (!is.null(cross_value)) {
@@ -16104,9 +16485,17 @@ generate_ModelOutcome_neural <- function(){
           format_metric_item("NormNLL", by_family$normal$nll, 4L)
         )))
       }
+      if (!is.null(by_family$ordinal)) {
+        items <- c(items, Filter(Negate(is.null), list(
+          format_metric_item("OrdLL", by_family$ordinal$log_loss, 4L),
+          format_metric_item("OrdAcc", by_family$ordinal$accuracy, 3L),
+          format_metric_item("OrdMAE", by_family$ordinal$mae, 4L),
+          format_metric_item("RPS", by_family$ordinal$ranked_probability_score, 4L)
+        )))
+      }
       return(items)
     }
-    if (!likelihood %in% c("bernoulli", "categorical", "normal")) {
+    if (!likelihood %in% c("bernoulli", "categorical", "normal", "ordinal")) {
       return(character(0))
     }
     if (likelihood == "bernoulli") {
@@ -16121,6 +16510,14 @@ generate_ModelOutcome_neural <- function(){
       return(Filter(Negate(is.null), list(
         format_metric_item("LogLoss", metrics$log_loss, 4L),
         format_metric_item("Acc", metrics$accuracy, 3L)
+      )))
+    }
+    if (likelihood == "ordinal") {
+      return(Filter(Negate(is.null), list(
+        format_metric_item("OrdLL", metrics$log_loss, 4L),
+        format_metric_item("OrdAcc", metrics$accuracy, 3L),
+        format_metric_item("OrdMAE", metrics$mae, 4L),
+        format_metric_item("RPS", metrics$ranked_probability_score, 4L)
       )))
     }
     Filter(Negate(is.null), list(
@@ -16946,14 +17343,27 @@ generate_ModelOutcome_neural <- function(){
             universal_task_mode_use[validation_split$validation_idx]
           } else {
             NULL
+          },
+          experiment_index = if (!is.null(experiment_index_use)) {
+            experiment_index_use[validation_split$validation_idx]
+          } else {
+            NULL
           }
         )
       } else {
-        cs_compute_outcome_metrics(
-          y_eval = validation_split$y_all[validation_split$validation_idx],
-          pred_eval = pred_eval,
-          likelihood = likelihood
-        )
+        if (identical(likelihood, "ordinal")) {
+          ordinal_metrics_r(
+            y_eval = validation_split$y_all[validation_split$validation_idx],
+            prob_mat = pred_eval,
+            n_outcomes_obs = rep.int(as.integer(nOutcomes), length(validation_split$validation_idx))
+          )
+        } else {
+          cs_compute_outcome_metrics(
+            y_eval = validation_split$y_all[validation_split$validation_idx],
+            pred_eval = pred_eval,
+            likelihood = likelihood
+          )
+        }
       }
       metric_name <- if (likelihood %in% c("normal", "mixed")) "nll" else "log_loss"
       metric_value <- metrics[[metric_name]]
@@ -18839,6 +19249,13 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(b_out_draws)) {
     ParamsMean$b_out <- mean_param(b_out_draws)
   }
+  ordinal_threshold_raw_mean <- get_site_mean_or_param("ordinal_threshold_raw")
+  if (!is.null(ordinal_threshold_raw_mean)) {
+    ParamsMean$ordinal_threshold_raw <- ordinal_threshold_raw_mean
+    ParamsMean$ordinal_thresholds <- ordinal_thresholds_from_raw_jnp(ordinal_threshold_raw_mean)
+  } else {
+    maybe_site("ordinal_thresholds")
+  }
 
   cross_draws <- get_cross_draws()
   if (!is.null(cross_draws)) {
@@ -19285,7 +19702,8 @@ generate_ModelOutcome_neural <- function(){
   coerce_mixed_prediction_output <- function(pred,
                                              target_likelihood = NULL,
                                              target_n_outcomes = NULL,
-                                             pairwise_prediction = FALSE) {
+                                             pairwise_prediction = FALSE,
+                                             target_experiment_index = NULL) {
     logits <- if (is.list(pred) && !is.null(pred$logits)) {
       pred$logits
     } else {
@@ -19330,6 +19748,15 @@ generate_ModelOutcome_neural <- function(){
         sigma = mixed_sigma_vector_r(to_r_array(sigma_source), nrow(logits))
       ))
     }
+    if (target_likelihood %in% c("ordinal", "ordered", "ordered_logit", "ordinal_single")) {
+      return(ordinal_prob_matrix_r(
+        eta = logits[, 1L],
+        n_outcomes_obs = rep.int(as.integer(target_n_outcomes), nrow(logits)),
+        experiment_index = target_experiment_index,
+        ordinal_thresholds = to_r_array(ParamsMean$ordinal_thresholds %||% NULL),
+        ordinal_threshold_raw = to_r_array(ParamsMean$ordinal_threshold_raw %||% NULL)
+      ))
+    }
     stop(
       sprintf("Unsupported target likelihood for mixed-family prediction: %s", target_likelihood),
       call. = FALSE
@@ -19356,6 +19783,21 @@ generate_ModelOutcome_neural <- function(){
       return(list(
         mu = as.numeric(to_r_array(pred$mu)),
         sigma = as.numeric(to_r_array(pred$sigma))
+      ))
+    }
+    if (likelihood == "ordinal") {
+      logits <- if (is.list(pred) && !is.null(pred$logits)) {
+        pred$logits
+      } else {
+        pred
+      }
+      logits <- as.matrix(to_r_array(logits))
+      return(ordinal_prob_matrix_r(
+        eta = logits[, 1L],
+        n_outcomes_obs = rep.int(as.integer(target_n_outcomes %||% nOutcomes), nrow(logits)),
+        experiment_index = NULL,
+        ordinal_thresholds = to_r_array(ParamsMean$ordinal_thresholds %||% NULL),
+        ordinal_threshold_raw = to_r_array(ParamsMean$ordinal_threshold_raw %||% NULL)
       ))
     }
     pred
@@ -19451,7 +19893,8 @@ generate_ModelOutcome_neural <- function(){
           pred = raw_pred,
           target_likelihood = target_likelihood,
           target_n_outcomes = target_n_outcomes,
-          pairwise_prediction = TRUE
+          pairwise_prediction = TRUE,
+          target_experiment_index = experiment_idx_new
         ))
       }
       if (isTRUE(return_logits)) {
@@ -19459,7 +19902,11 @@ generate_ModelOutcome_neural <- function(){
         sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
         return(list(logits = logits, sigma = sigma_vec))
       }
-      return(coerce_prediction_output(pred))
+      return(coerce_prediction_output(
+        pred,
+        target_likelihood = target_likelihood,
+        target_n_outcomes = target_n_outcomes
+      ))
     }
 
     X_new <- args$X_new
@@ -19518,7 +19965,8 @@ generate_ModelOutcome_neural <- function(){
         pred = raw_pred,
         target_likelihood = target_likelihood,
         target_n_outcomes = target_n_outcomes,
-        pairwise_prediction = FALSE
+        pairwise_prediction = FALSE,
+        target_experiment_index = experiment_idx_new
       ))
     }
     if (isTRUE(return_logits)) {
@@ -19526,10 +19974,14 @@ generate_ModelOutcome_neural <- function(){
       sigma_vec <- mixed_sigma_vector_r(to_r_array(ParamsMean$sigma %||% NULL), nrow(logits))
       return(list(logits = logits, sigma = sigma_vec))
     }
-    coerce_prediction_output(pred)
+    coerce_prediction_output(
+      pred,
+      target_likelihood = target_likelihood,
+      target_n_outcomes = target_n_outcomes
+    )
   }
 
-  if (likelihood %in% c("bernoulli", "categorical", "normal") &&
+  if (likelihood %in% c("bernoulli", "categorical", "normal", "ordinal") &&
       !is.null(fit_metrics) &&
       !is.null(fit_metrics$eval_index) &&
       length(fit_metrics$eval_index) > 0L) {
@@ -19583,11 +20035,19 @@ generate_ModelOutcome_neural <- function(){
     }, error = function(e) NULL)
 
     if (!is.null(pred_in_sample)) {
-      in_sample_metrics <- cs_compute_outcome_metrics(
-        y_eval = Y_use[eval_idx_in],
-        pred_eval = pred_in_sample,
-        likelihood = likelihood
-      )
+      in_sample_metrics <- if (identical(likelihood, "ordinal")) {
+        ordinal_metrics_r(
+          y_eval = Y_use[eval_idx_in],
+          prob_mat = pred_in_sample,
+          n_outcomes_obs = rep.int(as.integer(nOutcomes), length(eval_idx_in))
+        )
+      } else {
+        cs_compute_outcome_metrics(
+          y_eval = Y_use[eval_idx_in],
+          pred_eval = pred_in_sample,
+          likelihood = likelihood
+        )
+      }
       in_sample_metrics$eval_note <- "in_sample_full_fit"
       in_sample_metrics$eval_subset <- fit_metrics$eval_subset
 
@@ -19603,7 +20063,7 @@ generate_ModelOutcome_neural <- function(){
             idx0 <- which(stage_primary)
             pred_stage <- if (likelihood == "bernoulli") {
               pred_in_sample[idx0]
-            } else if (likelihood == "categorical") {
+            } else if (likelihood %in% c("categorical", "ordinal")) {
               pred_in_sample[idx0, , drop = FALSE]
             } else {
               list(
@@ -19611,17 +20071,25 @@ generate_ModelOutcome_neural <- function(){
                 sigma = pred_in_sample$sigma[idx0]
               )
             }
-            by_stage$primary <- cs_compute_outcome_metrics(
-              y_eval = Y_use[eval_idx_in][idx0],
-              pred_eval = pred_stage,
-              likelihood = likelihood
-            )
+            by_stage$primary <- if (identical(likelihood, "ordinal")) {
+              ordinal_metrics_r(
+                y_eval = Y_use[eval_idx_in][idx0],
+                prob_mat = pred_stage,
+                n_outcomes_obs = rep.int(as.integer(nOutcomes), length(idx0))
+              )
+            } else {
+              cs_compute_outcome_metrics(
+                y_eval = Y_use[eval_idx_in][idx0],
+                pred_eval = pred_stage,
+                likelihood = likelihood
+              )
+            }
           }
           if (any(!stage_primary, na.rm = TRUE)) {
             idx1 <- which(!stage_primary)
             pred_stage <- if (likelihood == "bernoulli") {
               pred_in_sample[idx1]
-            } else if (likelihood == "categorical") {
+            } else if (likelihood %in% c("categorical", "ordinal")) {
               pred_in_sample[idx1, , drop = FALSE]
             } else {
               list(
@@ -19629,11 +20097,19 @@ generate_ModelOutcome_neural <- function(){
                 sigma = pred_in_sample$sigma[idx1]
               )
             }
-            by_stage$general <- cs_compute_outcome_metrics(
-              y_eval = Y_use[eval_idx_in][idx1],
-              pred_eval = pred_stage,
-              likelihood = likelihood
-            )
+            by_stage$general <- if (identical(likelihood, "ordinal")) {
+              ordinal_metrics_r(
+                y_eval = Y_use[eval_idx_in][idx1],
+                prob_mat = pred_stage,
+                n_outcomes_obs = rep.int(as.integer(nOutcomes), length(idx1))
+              )
+            } else {
+              cs_compute_outcome_metrics(
+                y_eval = Y_use[eval_idx_in][idx1],
+                pred_eval = pred_stage,
+                likelihood = likelihood
+              )
+            }
           }
           if (length(by_stage) > 0L) {
             in_sample_metrics$by_stage <- by_stage
@@ -19685,7 +20161,7 @@ generate_ModelOutcome_neural <- function(){
   if (uncertainty_scope == "output") {
     keep <- param_names %in% c(
       "W_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out",
-      "log_pairwise_bernoulli_logit_scale"
+      "log_pairwise_bernoulli_logit_scale", "ordinal_threshold_raw", "ordinal_thresholds"
     )
     mask <- unlist(mapply(function(keep_i, size_i) rep(keep_i, size_i),
                           keep, param_sizes))
@@ -19943,6 +20419,20 @@ generate_ModelOutcome_neural <- function(){
       likelihood
     },
     global_out_dim = as.integer(if (isTRUE(universal_enabled)) universal_global_out_dim else nOutcomes),
+    has_ordinal_likelihood = isTRUE(has_ordinal_likelihood),
+    ordinal_n_threshold_groups = as.integer(ordinal_n_threshold_groups),
+    ordinal_max_n_outcomes = as.integer(ordinal_max_n_outcomes),
+    ordinal_max_thresholds = as.integer(ordinal_max_thresholds),
+    ordinal_threshold_schema = if (isTRUE(has_ordinal_likelihood)) {
+      list(
+        parameter = "ordinal_threshold_raw",
+        transformed_parameter = "ordinal_thresholds",
+        transform = "cumulative_softplus_spacing",
+        indexed_by = "experiment_index"
+      )
+    } else {
+      NULL
+    },
     fit_metrics = fit_metrics,
     svi_loss_curve = svi_loss_curve,
     svi_steps = resolved_svi_steps,
