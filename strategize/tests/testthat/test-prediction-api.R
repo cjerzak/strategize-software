@@ -82,7 +82,7 @@ prediction_test_text_embedding <- function(text) {
   }, numeric(2)))
 }
 
-test_that("neural prediction W preparation defaults unnamed matrices and rejects partial names", {
+test_that("neural prediction W preparation defaults unnamed matrices and rejects ambiguous names", {
   factor_names <- c("price", "message")
 
   unnamed <- matrix(c("low", "high", "short", "long"), nrow = 2L)
@@ -112,6 +112,94 @@ test_that("neural prediction W preparation defaults unnamed matrices and rejects
   testthat::expect_error(
     strategize:::cs2step_neural_prepare_W_for_prediction(partial, factor_names),
     "either all match"
+  )
+
+  unmatched <- data.frame(
+    color = c("red", "blue"),
+    slogan = c("jobs", "taxes"),
+    check.names = FALSE
+  )
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_W_for_prediction(unmatched, factor_names),
+    "factor names do not match"
+  )
+})
+
+test_that("explicit neural factor_schema builds prediction-time semantic token metadata", {
+  base_model <- prediction_test_cache_model_info()
+  params <- list(
+    W_factor_name_text = matrix(0, nrow = 2L, ncol = base_model$model_dims),
+    W_level_name_text = matrix(0, nrow = 2L, ncol = base_model$model_dims)
+  )
+  object <- structure(
+    list(
+      model_type = "neural",
+      metadata = list(text_embedding_fn = prediction_test_text_embedding)
+    ),
+    class = "strategic_predictor"
+  )
+  W_new <- data.frame(
+    color = c("red", "blue", "green"),
+    slogan = c("jobs", "taxes", "jobs"),
+    check.names = FALSE
+  )
+  schema <- list(
+    names_list = list(
+      color = list(c("red", "blue", "green")),
+      slogan = list(c("jobs", "taxes"))
+    )
+  )
+
+  unpacked <- strategize:::cs2step_unpack_newdata(
+    W_new,
+    factor_names = c("price", "message"),
+    mode = "single",
+    factor_schema = schema
+  )
+  testthat::expect_identical(colnames(unpacked$W), c("color", "slogan"))
+
+  prepared <- strategize:::cs2step_neural_prepare_factor_schema_prediction(
+    object = object,
+    W = W_new,
+    model_info = base_model,
+    params = params,
+    factor_schema = schema
+  )
+
+  testthat::expect_identical(colnames(prepared$W), c("color", "slogan"))
+  testthat::expect_equal(dim(prepared$W_idx), c(3L, 2L))
+  testthat::expect_identical(prepared$model_info$n_factors, 2L)
+  testthat::expect_identical(rownames(prepared$model_info$factor_name_text), c("color", "slogan"))
+  testthat::expect_identical(
+    rownames(prepared$model_info$level_name_text$color),
+    c("red", "blue", "green", "__holdout__")
+  )
+  testthat::expect_identical(
+    colnames(prepared$model_info$factor_struct_matrix),
+    base_model$factor_struct_feature_names
+  )
+  identity_cols <- grep("^factor_identity_", colnames(prepared$model_info$factor_struct_matrix))
+  if (length(identity_cols) > 0L) {
+    testthat::expect_equal(sum(abs(prepared$model_info$factor_struct_matrix[, identity_cols, drop = FALSE])), 0)
+  }
+  testthat::expect_false(identical(
+    strategize:::neural_model_jit_cache_key(base_model),
+    strategize:::neural_model_jit_cache_key(prepared$model_info)
+  ))
+
+  bad_embedding <- function(text) {
+    matrix(1, nrow = length(as.character(text)), ncol = 3L)
+  }
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_factor_schema_prediction(
+      object = object,
+      W = W_new,
+      model_info = base_model,
+      params = params,
+      factor_schema = schema,
+      text_embedding_fn = bad_embedding
+    ),
+    "incompatible width"
   )
 })
 

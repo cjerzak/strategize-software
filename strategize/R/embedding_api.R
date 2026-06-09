@@ -576,7 +576,9 @@ cs2step_neural_extract_internal <- function(object,
                                             profile_order = NULL,
                                             level = c("candidate", "respondent_context", "all"),
                                             source_class = class(object)[[1]],
-                                            extra_metadata = NULL) {
+                                            extra_metadata = NULL,
+                                            factor_schema = NULL,
+                                            text_embedding_fn = NULL) {
   level <- cs2step_embedding_level(level)
   if (!inherits(object, "strategic_predictor")) {
     stop("Internal neural extraction requires a strategic_predictor.", call. = FALSE)
@@ -586,20 +588,41 @@ cs2step_neural_extract_internal <- function(object,
   }
 
   enc <- object$encoder
-  W_raw <- as.data.frame(W_new, check.names = FALSE)
-  W_new <- cs2step_align_W(W_new, enc$factor_names)
-  W_idx <- cs2step_encode_W_indices(
-    W = W_new,
-    names_list = enc$names_list,
-    unknown = "holdout",
-    pad_unknown = 1L
-  )
   prep_params <- cs2step_neural_prepare_params(
     object,
     conda_env = object$metadata$conda_env %||% NULL,
     conda_env_required = object$metadata$conda_env_required %||% TRUE
   )
   model_info <- prep_params$model_info
+  schema_prediction <- NULL
+  if (!is.null(factor_schema)) {
+    schema_prediction <- cs2step_neural_prepare_factor_schema_prediction(
+      object = object,
+      W = W_new,
+      model_info = model_info,
+      params = prep_params$params,
+      factor_schema = factor_schema,
+      text_embedding_fn = text_embedding_fn
+    )
+    W_new <- schema_prediction$W
+    W_idx <- schema_prediction$W_idx
+    model_info <- schema_prediction$model_info
+    factor_order_new <- schema_prediction$factor_order_new
+    W_raw <- W_new
+  } else {
+    W_raw <- as.data.frame(W_new, check.names = FALSE)
+    W_new <- if (identical(neural_factor_tokenization(model_info), "fused")) {
+      cs2step_neural_prepare_W_for_prediction(W_new, enc$factor_names)
+    } else {
+      cs2step_align_W(W_new, enc$factor_names)
+    }
+    W_idx <- cs2step_encode_W_indices(
+      W = W_new,
+      names_list = enc$names_list,
+      unknown = "holdout",
+      pad_unknown = 1L
+    )
+  }
   if (identical(object$mode, "pairwise") &&
       ((!is.null(experiment_description) && length(experiment_description) == nrow(W_idx)) ||
        (!is.null(experiment_country) && length(experiment_country) == nrow(W_idx)) ||
@@ -633,20 +656,25 @@ cs2step_neural_extract_internal <- function(object,
     } else {
       nrow(W_idx)
     },
-    text_embedding_fn = object$metadata$text_embedding_fn %||% NULL
+    text_embedding_fn = text_embedding_fn %||% object$metadata$text_embedding_fn %||% NULL
   )
+  factor_order_arg <- if (!is.null(schema_prediction)) {
+    factor_order_new
+  } else {
+    factor_order_new %||%
+      if (identical(neural_factor_tokenization(model_info), "fused")) {
+        neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
+      } else {
+        NULL
+      }
+  }
   prep <- cs2step_neural_prepare_prediction_data(
     W_idx = W_idx,
     model_info = model_info,
     competing_group_variable_candidate = competing_group_variable_candidate,
     competing_group_variable_respondent = competing_group_variable_respondent,
     resp_cov_new = X_new,
-    factor_order_new = factor_order_new %||%
-      if (identical(neural_factor_tokenization(model_info), "fused")) {
-        neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
-      } else {
-        NULL
-    },
+    factor_order_new = factor_order_arg,
     experiment_id = experiment_id,
     experiment_country = experiment_country,
     experiment_year = experiment_year,
@@ -746,16 +774,35 @@ cs2step_neural_extract_internal <- function(object,
 #' @param level Embedding level to return: \code{"candidate"} keeps the
 #'   historical candidate/profile output, \code{"respondent_context"} returns
 #'   context-side embeddings, and \code{"all"} returns both.
+#' @param factor_schema Optional explicit prediction-time factor schema for fused
+#'   neural predictors. Supply a list with \code{names_list} or \code{p_list},
+#'   and optionally precomputed factor/level text or structural matrices.
+#' @param text_embedding_fn Optional text embedding function used with
+#'   \code{factor_schema} and prediction-time \code{experiment_description}.
 #' @export
 extract_embeddings.strategic_predictor <- function(object,
                                                    newdata,
                                                    level = c("candidate", "respondent_context", "all"),
+                                                   factor_schema = NULL,
+                                                   text_embedding_fn = NULL,
                                                    ...) {
   if (!inherits(object, "strategic_predictor")) {
     stop("extract_embeddings.strategic_predictor() requires a strategic_predictor object.",
          call. = FALSE)
   }
-  unpacked <- cs2step_unpack_newdata(newdata, object$encoder$factor_names, object$mode)
+  unpack_schema <- cs2step_neural_factor_schema_from_inputs(factor_schema)
+  unpacked <- cs2step_unpack_newdata(
+    newdata,
+    object$encoder$factor_names,
+    object$mode,
+    factor_schema = unpack_schema
+  )
+  factor_schema_use <- cs2step_neural_merge_factor_schema(
+    newdata_schema = unpacked$factor_schema,
+    newdata_names_list = unpacked$names_list,
+    newdata_p_list = unpacked$p_list,
+    explicit_schema = factor_schema
+  )
   cs2step_neural_extract_internal(
     object = object,
     W_new = unpacked$W,
@@ -769,7 +816,9 @@ extract_embeddings.strategic_predictor <- function(object,
     pair_id = unpacked$pair_id,
     profile_order = unpacked$profile_order,
     level = level,
-    source_class = "strategic_predictor"
+    source_class = "strategic_predictor",
+    factor_schema = factor_schema_use,
+    text_embedding_fn = text_embedding_fn
   )
 }
 

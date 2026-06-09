@@ -50,7 +50,10 @@ cs2step_neural_prepare_W_for_prediction <- function(W, factor_names) {
     return(W_df)
   }
 
-  if (is.null(W_cols) || length(W_cols) < 1L) {
+  has_column_names <- !is.null(W_cols) &&
+    length(W_cols) > 0L &&
+    any(!is.na(W_cols) & nzchar(W_cols))
+  if (!isTRUE(has_column_names)) {
     if (ncol(W_df) != length(factor_names)) {
       stop(
         "Unnamed prediction-time W must match the fitted factor width exactly.",
@@ -61,20 +64,29 @@ cs2step_neural_prepare_W_for_prediction <- function(W, factor_names) {
     return(W_df)
   }
 
+  if (!any(W_cols %in% factor_names)) {
+    stop(
+      paste(
+        "Prediction-time factor names do not match the fitted schema.",
+        "For genuinely new factor schemas, supply factor_schema with text embeddings or refit."
+      ),
+      call. = FALSE
+    )
+  }
+
   order_idx <- neural_factor_order_from_names(
     W_cols,
     factor_names,
     error_on_partial = TRUE
   )
   if (length(order_idx) < 1L) {
-    if (ncol(W_df) != length(factor_names)) {
-      stop(
-        "Prediction-time W with unmatched factor names must match the fitted factor width exactly.",
-        call. = FALSE
-      )
-    }
-    colnames(W_df) <- factor_names
-    return(W_df)
+    stop(
+      paste(
+        "Prediction-time factor names do not match the fitted schema.",
+        "For genuinely new factor schemas, supply factor_schema with text embeddings or refit."
+      ),
+      call. = FALSE
+    )
   }
 
   cs2step_align_W(W_df, factor_names)
@@ -91,7 +103,50 @@ cs2step_encode_W_indices <- function(W, names_list, unknown = c("holdout", "erro
   enc$W_idx
 }
 
-cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
+cs2step_neural_factor_schema_known_fields <- function() {
+  c(
+    "names_list",
+    "p_list",
+    "factor_name_text",
+    "level_name_text",
+    "factor_struct_matrix",
+    "level_struct_matrices",
+    "factor_struct_feature_names",
+    "level_struct_feature_names",
+    "text_embedding_fn"
+  )
+}
+
+cs2step_neural_factor_schema_names_hint <- function(factor_schema = NULL) {
+  if (is.null(factor_schema)) {
+    return(NULL)
+  }
+  if (!is.list(factor_schema)) {
+    return(NULL)
+  }
+  schema_names <- names(factor_schema)
+  known_fields <- cs2step_neural_factor_schema_known_fields()
+  if (is.null(schema_names) || !any(schema_names %in% known_fields)) {
+    names_list <- factor_schema
+  } else {
+    names_list <- factor_schema$names_list %||% NULL
+    if (is.null(names_list) && !is.null(factor_schema$p_list)) {
+      names_list <- lapply(factor_schema$p_list, function(x) {
+        list(names(x %||% character(0)))
+      })
+      if (!is.null(names(factor_schema$p_list))) {
+        names(names_list) <- names(factor_schema$p_list)
+      }
+    }
+  }
+  out <- names(names_list %||% list())
+  if (is.null(out) || !length(out) || any(is.na(out) | !nzchar(out))) {
+    return(NULL)
+  }
+  as.character(out)
+}
+
+cs2step_unpack_newdata <- function(newdata, factor_names, mode, factor_schema = NULL) {
   if (is.null(newdata)) {
     stop("'newdata' is required for prediction.", call. = FALSE)
   }
@@ -114,12 +169,17 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
       } else {
         NULL
       },
-      experiment_year = newdata$experiment_year %||% NULL
+      experiment_year = newdata$experiment_year %||% NULL,
+      factor_schema = newdata$factor_schema %||% NULL,
+      names_list = newdata$names_list %||% NULL,
+      p_list = newdata$p_list %||% NULL
     )
     return(out)
   }
 
   newdata <- as.data.frame(newdata)
+  schema_factor_names <- cs2step_neural_factor_schema_names_hint(factor_schema)
+  factor_names_use <- schema_factor_names %||% factor_names
   pair_id <- NULL
   profile_order <- NULL
   competing_group_variable_candidate <- NULL
@@ -154,11 +214,19 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
   if ("competing_group_variable_respondent" %in% colnames(newdata)) {
     competing_group_variable_respondent <- newdata[["competing_group_variable_respondent"]]
   }
-  W <- newdata[, factor_names, drop = FALSE]
+  missing_factor_cols <- setdiff(factor_names_use, colnames(newdata))
+  if (length(missing_factor_cols) > 0L) {
+    stop(
+      "Missing factor columns in newdata: ",
+      paste(missing_factor_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  W <- newdata[, factor_names_use, drop = FALSE]
   extra_cols <- setdiff(
     colnames(newdata),
     c(
-      factor_names,
+      factor_names_use,
       "pair_id",
       "profile_order",
       "competing_group_variable_candidate",
@@ -184,7 +252,10 @@ cs2step_unpack_newdata <- function(newdata, factor_names, mode) {
     experiment_id = experiment_id,
     experiment_description = experiment_description,
     experiment_country = experiment_country,
-    experiment_year = experiment_year
+    experiment_year = experiment_year,
+    factor_schema = NULL,
+    names_list = NULL,
+    p_list = NULL
   )
 }
 
@@ -935,6 +1006,586 @@ cs2step_neural_to_index_matrix <- function(x_mat, factor_levels) {
     x_int[, d_] <- col_vals - 1L
   }
   x_int
+}
+
+cs2step_neural_factor_schema_from_inputs <- function(factor_schema = NULL,
+                                                     names_list = NULL,
+                                                     p_list = NULL) {
+  schema <- list()
+  if (!is.null(factor_schema)) {
+    if (!is.list(factor_schema)) {
+      stop("'factor_schema' must be a list.", call. = FALSE)
+    }
+    schema_names <- names(factor_schema)
+    known_fields <- cs2step_neural_factor_schema_known_fields()
+    schema <- if (is.null(schema_names) || !any(schema_names %in% known_fields)) {
+      list(names_list = factor_schema)
+    } else {
+      factor_schema
+    }
+  }
+  if (!is.null(names_list)) {
+    schema$names_list <- names_list
+  }
+  if (!is.null(p_list)) {
+    schema$p_list <- p_list
+  }
+  if (!length(schema)) {
+    return(NULL)
+  }
+  schema
+}
+
+cs2step_neural_merge_factor_schema <- function(newdata_schema = NULL,
+                                               newdata_names_list = NULL,
+                                               newdata_p_list = NULL,
+                                               explicit_schema = NULL) {
+  base <- cs2step_neural_factor_schema_from_inputs(
+    factor_schema = newdata_schema,
+    names_list = newdata_names_list,
+    p_list = newdata_p_list
+  )
+  explicit <- cs2step_neural_factor_schema_from_inputs(factor_schema = explicit_schema)
+  if (is.null(base)) {
+    return(explicit)
+  }
+  if (is.null(explicit)) {
+    return(base)
+  }
+  modifyList(base, explicit)
+}
+
+cs2step_neural_schema_text_dim <- function(model_info, params = NULL) {
+  text_dim <- suppressWarnings(as.integer(model_info$text_semantic_dim %||% NA_integer_))
+  if (length(text_dim) == 1L && !is.na(text_dim) && text_dim > 0L) {
+    return(text_dim)
+  }
+  for (name in c("W_factor_name_text", "W_level_name_text")) {
+    mat <- params[[name]] %||% NULL
+    if (!is.null(mat)) {
+      arr <- tryCatch(cs2step_neural_to_r_array(mat), error = function(e) NULL)
+      if (!is.null(arr) && length(dim(arr)) >= 2L && dim(arr)[[1L]] > 0L) {
+        return(as.integer(dim(arr)[[1L]]))
+      }
+    }
+  }
+  0L
+}
+
+cs2step_neural_reorder_schema_matrix <- function(x,
+                                                 row_names,
+                                                 n_cols,
+                                                 field,
+                                                 allow_missing_rows = FALSE) {
+  mat <- as.matrix(x)
+  storage.mode(mat) <- "double"
+  if (ncol(mat) != n_cols) {
+    stop(
+      sprintf(
+        "'factor_schema$%s' has width %d but the fitted text semantic width is %d.",
+        field,
+        ncol(mat),
+        n_cols
+      ),
+      call. = FALSE
+    )
+  }
+  row_names <- as.character(row_names)
+  mat_rows <- rownames(mat)
+  if (!is.null(mat_rows) && all(row_names %in% mat_rows)) {
+    mat <- mat[row_names, , drop = FALSE]
+  } else if (nrow(mat) == length(row_names)) {
+    rownames(mat) <- row_names
+  } else if (isTRUE(allow_missing_rows)) {
+    out <- matrix(0, nrow = length(row_names), ncol = n_cols)
+    rownames(out) <- row_names
+    colnames(out) <- colnames(mat)
+    if (!is.null(mat_rows)) {
+      ok <- match(intersect(row_names, mat_rows), row_names)
+      src <- match(row_names[ok], mat_rows)
+      out[ok, ] <- mat[src, , drop = FALSE]
+      return(out)
+    }
+    stop(
+      sprintf(
+        "'factor_schema$%s' must have %d row(s).",
+        field,
+        length(row_names)
+      ),
+      call. = FALSE
+    )
+  } else {
+    stop(
+      sprintf(
+        "'factor_schema$%s' must have %d row(s).",
+        field,
+        length(row_names)
+      ),
+      call. = FALSE
+    )
+  }
+  mat
+}
+
+cs2step_neural_schema_factor_text <- function(schema,
+                                              factor_names,
+                                              text_dim,
+                                              text_embedding_fn = NULL) {
+  supplied <- schema$factor_name_text %||% NULL
+  if (!is.null(supplied)) {
+    return(cs2step_neural_reorder_schema_matrix(
+      supplied,
+      row_names = factor_names,
+      n_cols = text_dim,
+      field = "factor_name_text"
+    ))
+  }
+  if (is.null(text_embedding_fn) || !is.function(text_embedding_fn)) {
+    stop(
+      "Prediction-time factor_schema requires 'text_embedding_fn' or 'factor_schema$factor_name_text'.",
+      call. = FALSE
+    )
+  }
+  out <- cs_foundation_text_embed(text_embedding_fn, factor_names)
+  if (ncol(out) != text_dim) {
+    stop(
+      "text_embedding_fn returned factor-name embeddings with incompatible width.",
+      call. = FALSE
+    )
+  }
+  rownames(out) <- factor_names
+  out
+}
+
+cs2step_neural_schema_level_text_one <- function(x,
+                                                 levels_here,
+                                                 text_dim,
+                                                 field) {
+  row_names <- c(as.character(levels_here), "__holdout__")
+  mat <- as.matrix(x)
+  storage.mode(mat) <- "double"
+  if (ncol(mat) != text_dim) {
+    stop(
+      sprintf(
+        "'factor_schema$level_name_text[[%s]]' has width %d but the fitted text semantic width is %d.",
+        field,
+        ncol(mat),
+        text_dim
+      ),
+      call. = FALSE
+    )
+  }
+  mat_rows <- rownames(mat)
+  out <- matrix(0, nrow = length(row_names), ncol = text_dim)
+  rownames(out) <- row_names
+  colnames(out) <- colnames(mat)
+  if (!is.null(mat_rows) && all(levels_here %in% mat_rows)) {
+    out[seq_along(levels_here), ] <- mat[as.character(levels_here), , drop = FALSE]
+    if ("__holdout__" %in% mat_rows) {
+      out[nrow(out), ] <- mat["__holdout__", , drop = FALSE]
+    }
+    return(out)
+  }
+  if (nrow(mat) == length(levels_here)) {
+    out[seq_along(levels_here), ] <- mat
+    return(out)
+  }
+  if (nrow(mat) == length(row_names)) {
+    rownames(mat) <- row_names
+    return(mat)
+  }
+  stop(
+    sprintf(
+      "'factor_schema$level_name_text[[%s]]' must have %d or %d row(s).",
+      field,
+      length(levels_here),
+      length(row_names)
+    ),
+    call. = FALSE
+  )
+}
+
+cs2step_neural_schema_level_text <- function(schema,
+                                             names_list,
+                                             text_dim,
+                                             text_embedding_fn = NULL) {
+  factor_names <- names(names_list)
+  supplied <- schema$level_name_text %||% NULL
+  if (!is.null(supplied)) {
+    if (is.matrix(supplied) && length(factor_names) == 1L) {
+      supplied <- setNames(list(supplied), factor_names)
+    }
+    if (!is.list(supplied)) {
+      stop("'factor_schema$level_name_text' must be a list of matrices.", call. = FALSE)
+    }
+    return(setNames(lapply(seq_along(factor_names), function(i) {
+      factor_name <- factor_names[[i]]
+      x <- if (!is.null(names(supplied)) && factor_name %in% names(supplied)) {
+        supplied[[factor_name]]
+      } else {
+        supplied[[i]]
+      }
+      if (is.null(x)) {
+        stop(
+          sprintf("Missing level_name_text for factor '%s'.", factor_name),
+          call. = FALSE
+        )
+      }
+      cs2step_neural_schema_level_text_one(
+        x,
+        levels_here = names_list[[factor_name]][[1]],
+        text_dim = text_dim,
+        field = factor_name
+      )
+    }), factor_names))
+  }
+  if (is.null(text_embedding_fn) || !is.function(text_embedding_fn)) {
+    stop(
+      "Prediction-time factor_schema requires 'text_embedding_fn' or 'factor_schema$level_name_text'.",
+      call. = FALSE
+    )
+  }
+  setNames(lapply(factor_names, function(factor_name) {
+    levels_here <- as.character(names_list[[factor_name]][[1]])
+    emb <- if (length(levels_here) > 0L) {
+      cs_foundation_text_embed(text_embedding_fn, levels_here)
+    } else {
+      matrix(numeric(0), nrow = 0L, ncol = text_dim)
+    }
+    if (ncol(emb) != text_dim) {
+      stop(
+        "text_embedding_fn returned level-name embeddings with incompatible width.",
+        call. = FALSE
+      )
+    }
+    out <- matrix(0, nrow = length(levels_here) + 1L, ncol = text_dim)
+    rownames(out) <- c(levels_here, "__holdout__")
+    colnames(out) <- colnames(emb)
+    if (length(levels_here) > 0L) {
+      out[seq_along(levels_here), ] <- emb
+    }
+    out
+  }), factor_names)
+}
+
+cs2step_neural_struct_feature_names <- function(model_info,
+                                                kind = c("factor", "level")) {
+  kind <- match.arg(kind)
+  fallback <- if (identical(kind, "factor")) {
+    neural_fused_default_factor_struct_feature_names()
+  } else {
+    neural_fused_default_level_struct_feature_names()
+  }
+  field <- paste0(kind, "_struct_feature_names")
+  dim_field <- paste0(kind, "_struct_dim")
+  features <- as.character(model_info[[field]] %||% character(0))
+  dim_use <- suppressWarnings(as.integer(model_info[[dim_field]] %||% length(features)))
+  if (length(dim_use) != 1L || is.na(dim_use) || dim_use < 1L) {
+    dim_use <- length(features)
+  }
+  if (length(features) < 1L) {
+    features <- fallback
+  }
+  if (dim_use > length(features)) {
+    features <- c(features, sprintf("%s_struct_extra_%d", kind, seq_len(dim_use - length(features))))
+  }
+  if (dim_use > 0L && length(features) > dim_use) {
+    features <- features[seq_len(dim_use)]
+  }
+  features
+}
+
+cs2step_neural_align_struct_matrix <- function(x,
+                                               row_names,
+                                               feature_names,
+                                               field) {
+  mat <- as.matrix(x)
+  storage.mode(mat) <- "double"
+  row_names <- as.character(row_names)
+  out <- matrix(0, nrow = length(row_names), ncol = length(feature_names))
+  rownames(out) <- row_names
+  colnames(out) <- feature_names
+  if (nrow(mat) != length(row_names)) {
+    mat_rows <- rownames(mat)
+    if (!is.null(mat_rows) && all(row_names %in% mat_rows)) {
+      mat <- mat[row_names, , drop = FALSE]
+    } else {
+      stop(
+        sprintf("'factor_schema$%s' must have %d row(s).", field, length(row_names)),
+        call. = FALSE
+      )
+    }
+  }
+  mat_cols <- colnames(mat)
+  if (!is.null(mat_cols)) {
+    ok <- match(intersect(feature_names, mat_cols), feature_names)
+    src <- match(feature_names[ok], mat_cols)
+    out[, ok] <- mat[, src, drop = FALSE]
+  } else if (ncol(mat) > 0L) {
+    n_copy <- min(ncol(mat), ncol(out))
+    out[, seq_len(n_copy)] <- mat[, seq_len(n_copy), drop = FALSE]
+  }
+  out
+}
+
+cs2step_neural_default_factor_struct_matrix <- function(names_list, feature_names) {
+  factor_names <- names(names_list)
+  factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
+  out <- matrix(0, nrow = length(factor_names), ncol = length(feature_names))
+  rownames(out) <- factor_names
+  colnames(out) <- feature_names
+  put <- function(name, value) {
+    if (name %in% colnames(out)) {
+      out[, name] <<- value
+    }
+  }
+  put("type_categorical", 1)
+  put("cardinality_log", log1p(factor_levels))
+  put("has_numeric_levels", vapply(names_list, function(x) {
+    any(is.finite(suppressWarnings(as.numeric(x[[1]]))))
+  }, logical(1)))
+  out
+}
+
+cs2step_neural_default_level_struct_matrices <- function(names_list, feature_names) {
+  factor_names <- names(names_list)
+  setNames(lapply(factor_names, function(factor_name) {
+    levels_here <- as.character(names_list[[factor_name]][[1]])
+    row_names <- c(levels_here, "__holdout__")
+    out <- matrix(0, nrow = length(row_names), ncol = length(feature_names))
+    rownames(out) <- row_names
+    colnames(out) <- feature_names
+    n_levels <- length(levels_here)
+    if (n_levels > 0L) {
+      rank01 <- if (n_levels > 1L) (seq_len(n_levels) - 1) / (n_levels - 1) else rep(0, n_levels)
+      numeric_levels <- suppressWarnings(as.numeric(levels_here))
+      finite_numeric <- is.finite(numeric_levels)
+      if ("has_raw_value" %in% colnames(out)) {
+        out[seq_len(n_levels), "has_raw_value"] <- as.numeric(finite_numeric)
+      }
+      if ("raw_value_log1p_signed" %in% colnames(out)) {
+        out[seq_len(n_levels), "raw_value_log1p_signed"] <-
+          ifelse(finite_numeric, sign(numeric_levels) * log1p(abs(numeric_levels)), 0)
+      }
+      if ("level_rank01" %in% colnames(out)) {
+        out[seq_len(n_levels), "level_rank01"] <- rank01
+      }
+      if ("level_quantile" %in% colnames(out)) {
+        out[seq_len(n_levels), "level_quantile"] <- rank01
+      }
+      if ("level_z_score" %in% colnames(out)) {
+        out[seq_len(n_levels), "level_z_score"] <- (2 * rank01) - 1
+      }
+    }
+    if ("is_holdout" %in% colnames(out)) {
+      out[nrow(out), "is_holdout"] <- 1
+    }
+    out
+  }), factor_names)
+}
+
+cs2step_neural_schema_structural_info <- function(schema, names_list, model_info) {
+  factor_features <- cs2step_neural_struct_feature_names(model_info, "factor")
+  level_features <- cs2step_neural_struct_feature_names(model_info, "level")
+  factor_names <- names(names_list)
+  factor_mat <- if (!is.null(schema$factor_struct_matrix)) {
+    cs2step_neural_align_struct_matrix(
+      schema$factor_struct_matrix,
+      row_names = factor_names,
+      feature_names = factor_features,
+      field = "factor_struct_matrix"
+    )
+  } else {
+    cs2step_neural_default_factor_struct_matrix(names_list, factor_features)
+  }
+  level_input <- schema$level_struct_matrices %||% NULL
+  level_mats <- if (!is.null(level_input)) {
+    if (is.matrix(level_input) && length(factor_names) == 1L) {
+      level_input <- setNames(list(level_input), factor_names)
+    }
+    if (!is.list(level_input)) {
+      stop("'factor_schema$level_struct_matrices' must be a list of matrices.", call. = FALSE)
+    }
+    setNames(lapply(seq_along(factor_names), function(i) {
+      factor_name <- factor_names[[i]]
+      level_rows <- c(as.character(names_list[[factor_name]][[1]]), "__holdout__")
+      x <- if (!is.null(names(level_input)) && factor_name %in% names(level_input)) {
+        level_input[[factor_name]]
+      } else {
+        level_input[[i]]
+      }
+      if (is.null(x)) {
+        stop(
+          sprintf("Missing level_struct_matrices for factor '%s'.", factor_name),
+          call. = FALSE
+        )
+      }
+      x <- as.matrix(x)
+      storage.mode(x) <- "double"
+      if (nrow(x) == length(level_rows) - 1L) {
+        holdout <- matrix(0, nrow = 1L, ncol = ncol(x))
+        colnames(holdout) <- colnames(x)
+        x <- rbind(x, holdout)
+        rownames(x) <- level_rows
+      }
+      cs2step_neural_align_struct_matrix(
+        x,
+        row_names = level_rows,
+        feature_names = level_features,
+        field = sprintf("level_struct_matrices[[%s]]", factor_name)
+      )
+    }), factor_names)
+  } else {
+    cs2step_neural_default_level_struct_matrices(names_list, level_features)
+  }
+  list(
+    factor_struct_matrix = factor_mat,
+    factor_struct_feature_names = factor_features,
+    level_struct_matrices = level_mats,
+    level_struct_feature_names = level_features
+  )
+}
+
+cs2step_neural_prediction_factor_index_list <- function(factor_levels, implicit = FALSE) {
+  factor_levels <- as.integer(factor_levels)
+  out <- vector("list", length(factor_levels))
+  offset <- 0L
+  for (i in seq_along(factor_levels)) {
+    n_i <- max(0L, factor_levels[[i]] - as.integer(isTRUE(implicit)))
+    out[[i]] <- if (n_i > 0L) as.integer(offset + seq_len(n_i) - 1L) else integer(0)
+    offset <- offset + n_i
+  }
+  out
+}
+
+cs2step_neural_prepare_factor_schema_prediction <- function(object,
+                                                            W,
+                                                            model_info,
+                                                            params,
+                                                            factor_schema = NULL,
+                                                            text_embedding_fn = NULL) {
+  if (is.null(factor_schema)) {
+    return(NULL)
+  }
+  if (!identical(neural_factor_tokenization(model_info), "fused")) {
+    stop("Prediction-time factor_schema requires factor_tokenization = 'fused'.", call. = FALSE)
+  }
+  text_dim <- cs2step_neural_schema_text_dim(model_info, params = params)
+  if (text_dim < 1L) {
+    stop("Prediction-time factor_schema requires a predictor trained with text semantics.", call. = FALSE)
+  }
+  if (is.null(params$W_factor_name_text) || is.null(params$W_level_name_text)) {
+    stop(
+      "Prediction-time factor_schema requires learned factor and level text projection parameters.",
+      call. = FALSE
+    )
+  }
+
+  schema <- factor_schema
+  W_df <- as.data.frame(W, check.names = FALSE)
+  if (ncol(W_df) < 1L) {
+    stop("'W' must contain at least one factor column.", call. = FALSE)
+  }
+  names_list <- cs_foundation_normalize_names_list_local(
+    names_list = schema$names_list %||% NULL,
+    W = W_df,
+    p_list = schema$p_list %||% NULL
+  )
+  factor_names <- names(names_list)
+  if (is.null(factor_names) || any(is.na(factor_names) | !nzchar(factor_names))) {
+    stop("'factor_schema' must define non-empty factor names.", call. = FALSE)
+  }
+  W_cols <- colnames(W_df)
+  has_w_names <- !is.null(W_cols) &&
+    length(W_cols) > 0L &&
+    any(!is.na(W_cols) & nzchar(W_cols))
+  if (!isTRUE(has_w_names)) {
+    if (ncol(W_df) != length(factor_names)) {
+      stop("Unnamed prediction-time W must match factor_schema width exactly.", call. = FALSE)
+    }
+    colnames(W_df) <- factor_names
+  }
+  missing_cols <- setdiff(factor_names, colnames(W_df))
+  if (length(missing_cols) > 0L) {
+    stop(
+      "Missing factor columns in newdata for factor_schema: ",
+      paste(missing_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  W_use <- W_df[, factor_names, drop = FALSE]
+  factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
+  neural_validate_factor_token_budget(
+    n_factors = length(factor_names),
+    max_factor_tokens = model_info$max_factor_tokens %||% NULL,
+    context = "Prediction-time factor_schema"
+  )
+
+  text_fn <- text_embedding_fn %||%
+    schema$text_embedding_fn %||%
+    object$metadata$text_embedding_fn %||%
+    NULL
+  factor_name_text <- cs2step_neural_schema_factor_text(
+    schema,
+    factor_names = factor_names,
+    text_dim = text_dim,
+    text_embedding_fn = text_fn
+  )
+  level_name_text <- cs2step_neural_schema_level_text(
+    schema,
+    names_list = names_list,
+    text_dim = text_dim,
+    text_embedding_fn = text_fn
+  )
+  structural_info <- cs2step_neural_schema_structural_info(
+    schema,
+    names_list = names_list,
+    model_info = model_info
+  )
+  neural_validate_fused_structural_info(
+    factor_struct_matrix = structural_info$factor_struct_matrix,
+    level_struct_matrices = structural_info$level_struct_matrices,
+    factor_struct_feature_names = structural_info$factor_struct_feature_names,
+    level_struct_feature_names = structural_info$level_struct_feature_names,
+    factor_name_text = factor_name_text,
+    level_name_text = level_name_text,
+    context = "prediction-time factor_schema"
+  )
+
+  model_info_new <- model_info
+  model_info_new$factor_levels <- as.integer(factor_levels)
+  model_info_new$n_factors <- as.integer(length(factor_names))
+  model_info_new$factor_index_list <- cs2step_neural_prediction_factor_index_list(
+    factor_levels,
+    implicit = isTRUE(model_info$implicit)
+  )
+  model_info_new$factor_name_text <- factor_name_text
+  model_info_new$level_name_text <- level_name_text
+  model_info_new$factor_struct_matrix <- structural_info$factor_struct_matrix
+  model_info_new$factor_struct_feature_names <- structural_info$factor_struct_feature_names
+  model_info_new$factor_struct_dim <- as.integer(ncol(structural_info$factor_struct_matrix))
+  model_info_new$level_struct_matrices <- structural_info$level_struct_matrices
+  model_info_new$level_struct_feature_names <- structural_info$level_struct_feature_names
+  model_info_new$level_struct_dim <- as.integer(ncol(structural_info$level_struct_matrices[[1L]]))
+  model_info_new$factor_schema_supplied <- TRUE
+  model_info_new$default_factor_order <- seq.int(0L, length(factor_names) - 1L)
+  model_info_new$factor_order_by_experiment <- NULL
+  model_info_new$n_candidate_tokens <- neural_active_candidate_token_budget(model_info_new)
+  model_info_new$text_semantic_dim <- as.integer(text_dim)
+
+  list(
+    W = W_use,
+    W_idx = cs2step_encode_W_indices(
+      W_use,
+      names_list,
+      unknown = "holdout",
+      pad_unknown = 1L
+    ),
+    model_info = model_info_new,
+    names_list = names_list,
+    factor_names = factor_names,
+    factor_order_new = NULL
+  )
 }
 
 cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
@@ -2094,7 +2745,9 @@ cs2step_neural_predict_internal <- function(object,
                                            interval = c("none", "ci", "draws"),
                                            level = 0.95,
                                            n_draws = 0L,
-                                           seed = NULL) {
+                                           seed = NULL,
+                                           factor_schema = NULL,
+                                           text_embedding_fn = NULL) {
   type <- match.arg(type)
   interval <- match.arg(interval)
   if (interval != "none" && (is.null(n_draws) || n_draws < 1L)) {
@@ -2105,12 +2758,31 @@ cs2step_neural_predict_internal <- function(object,
   enc <- object$encoder
   model_info <- object$fit$neural_model_info
   factor_order_new <- NULL
-  W_new <- if (identical(neural_factor_tokenization(model_info), "fused")) {
-    cs2step_neural_prepare_W_for_prediction(W_new, enc$factor_names)
+  prep_params <- NULL
+  schema_prediction <- NULL
+  if (!is.null(factor_schema)) {
+    prep_params <- cs2step_neural_prepare_params(object)
+    model_info <- prep_params$model_info
+    schema_prediction <- cs2step_neural_prepare_factor_schema_prediction(
+      object = object,
+      W = W_new,
+      model_info = model_info,
+      params = prep_params$params,
+      factor_schema = factor_schema,
+      text_embedding_fn = text_embedding_fn
+    )
+    W_new <- schema_prediction$W
+    W_idx <- schema_prediction$W_idx
+    model_info <- schema_prediction$model_info
+    factor_order_new <- schema_prediction$factor_order_new
   } else {
-    cs2step_align_W(W_new, enc$factor_names)
+    W_new <- if (identical(neural_factor_tokenization(model_info), "fused")) {
+      cs2step_neural_prepare_W_for_prediction(W_new, enc$factor_names)
+    } else {
+      cs2step_align_W(W_new, enc$factor_names)
+    }
+    W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
   }
-  W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
   if (!is.null(competing_group_variable_candidate) &&
       length(competing_group_variable_candidate) != nrow(W_idx)) {
     stop(
@@ -2134,7 +2806,8 @@ cs2step_neural_predict_internal <- function(object,
     )
   }
 
-  use_internal <- is.function(object$fit$my_model) &&
+  use_internal <- is.null(schema_prediction) &&
+    is.function(object$fit$my_model) &&
     is.null(experiment_description) &&
     is.null(experiment_country) &&
     is.null(experiment_year)
@@ -2243,8 +2916,10 @@ cs2step_neural_predict_internal <- function(object,
         target_n_outcomes = target_n_outcomes
       )
     } else {
-      prep_params <- cs2step_neural_prepare_params(object)
-      model_info <- prep_params$model_info
+      if (is.null(prep_params)) {
+        prep_params <- cs2step_neural_prepare_params(object)
+        model_info <- prep_params$model_info
+      }
       cs2step_neural_validate_place_context_request(
         experiment_country,
         model_info,
@@ -2254,7 +2929,7 @@ cs2step_neural_predict_internal <- function(object,
         model_info = model_info,
         experiment_description = experiment_description,
         n_rows = nrow(X_left),
-        text_embedding_fn = object$metadata$text_embedding_fn %||% NULL
+        text_embedding_fn = text_embedding_fn %||% object$metadata$text_embedding_fn %||% NULL
       )
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
@@ -2311,8 +2986,10 @@ cs2step_neural_predict_internal <- function(object,
         target_n_outcomes = target_n_outcomes
       )
     } else {
-      prep_params <- cs2step_neural_prepare_params(object)
-      model_info <- prep_params$model_info
+      if (is.null(prep_params)) {
+        prep_params <- cs2step_neural_prepare_params(object)
+        model_info <- prep_params$model_info
+      }
       cs2step_neural_validate_place_context_request(
         experiment_country,
         model_info,
@@ -2322,7 +2999,7 @@ cs2step_neural_predict_internal <- function(object,
         model_info = model_info,
         experiment_description = experiment_description,
         n_rows = nrow(W_idx),
-        text_embedding_fn = object$metadata$text_embedding_fn %||% NULL
+        text_embedding_fn = text_embedding_fn %||% object$metadata$text_embedding_fn %||% NULL
       )
       prep <- cs2step_neural_prepare_prediction_data(
         W_idx = W_idx,
@@ -2490,6 +3167,11 @@ cs2step_neural_predict_internal <- function(object,
 #' @param level Credible interval level for draws.
 #' @param n_draws Number of posterior draws when \code{interval!="none"}.
 #' @param seed Optional seed for draws.
+#' @param factor_schema Optional explicit prediction-time factor schema for fused
+#'   neural predictors. Supply a list with \code{names_list} or \code{p_list},
+#'   and optionally precomputed factor/level text or structural matrices.
+#' @param text_embedding_fn Optional text embedding function used with
+#'   \code{factor_schema} and prediction-time \code{experiment_description}.
 #' @param ... Unused.
 #' @export
 #' @method predict strategic_predictor
@@ -2500,6 +3182,8 @@ predict.strategic_predictor <- function(object,
                                         level = 0.95,
                                         n_draws = 0L,
                                         seed = NULL,
+                                        factor_schema = NULL,
+                                        text_embedding_fn = NULL,
                                         ...) {
   type <- match.arg(type)
   interval <- match.arg(interval)
@@ -2507,7 +3191,19 @@ predict.strategic_predictor <- function(object,
     stop("predict.strategic_predictor requires a strategic_predictor object.", call. = FALSE)
   }
 
-  unpacked <- cs2step_unpack_newdata(newdata, object$encoder$factor_names, object$mode)
+  unpack_schema <- cs2step_neural_factor_schema_from_inputs(factor_schema)
+  unpacked <- cs2step_unpack_newdata(
+    newdata,
+    object$encoder$factor_names,
+    object$mode,
+    factor_schema = unpack_schema
+  )
+  factor_schema_use <- cs2step_neural_merge_factor_schema(
+    newdata_schema = unpacked$factor_schema,
+    newdata_names_list = unpacked$names_list,
+    newdata_p_list = unpacked$p_list,
+    explicit_schema = factor_schema
+  )
   W_new <- unpacked$W
   X_new <- unpacked$X
   pair_id <- unpacked$pair_id
@@ -2520,6 +3216,9 @@ predict.strategic_predictor <- function(object,
   experiment_year <- unpacked$experiment_year
 
   if (identical(object$model_type, "glm")) {
+    if (!is.null(factor_schema_use)) {
+      stop("Prediction-time factor_schema is only supported for neural predictors.", call. = FALSE)
+    }
     if (!is.null(experiment_country)) {
       stop(
         "Prediction-time experiment_country requires a neural predictor trained with place context.",
@@ -2554,7 +3253,9 @@ predict.strategic_predictor <- function(object,
     interval = interval,
     level = level,
     n_draws = n_draws,
-    seed = seed
+    seed = seed,
+    factor_schema = factor_schema_use,
+    text_embedding_fn = text_embedding_fn
   )
 }
 

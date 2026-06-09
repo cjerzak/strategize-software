@@ -11,6 +11,8 @@ extract_embeddings(object, ...)
   object,
   newdata,
   level = c("candidate", "respondent_context", "all"),
+  factor_schema = NULL,
+  text_embedding_fn = NULL,
   ...
 )
 
@@ -62,6 +64,13 @@ selection.}
 \item{level}{Embedding level to return. \code{"candidate"} preserves the
 historical candidate/profile output, \code{"respondent_context"} returns one
 respondent-context matrix, and \code{"all"} returns both.}
+
+\item{factor_schema}{Optional explicit prediction-time factor schema for fused
+neural predictors. Supply a list with \code{names_list} or \code{p_list},
+and optionally precomputed factor/level text or structural matrices.}
+
+\item{text_embedding_fn}{Optional text embedding function used with
+\code{factor_schema} and prediction-time \code{experiment_description}.}
 
 \item{experiment_id}{Optional experiment identifier used for experiment-token
 lookup.}

@@ -12,6 +12,8 @@
   level = 0.95,
   n_draws = 0L,
   seed = NULL,
+  factor_schema = NULL,
+  text_embedding_fn = NULL,
   ...
 )
 }
@@ -38,6 +40,13 @@ row.}
 \item{n_draws}{Number of posterior draws when \code{interval!="none"}.}
 
 \item{seed}{Optional seed for draws.}
+
+\item{factor_schema}{Optional explicit prediction-time factor schema for fused
+neural predictors. Supply a list with \code{names_list} or \code{p_list},
+and optionally precomputed factor/level text or structural matrices.}
+
+\item{text_embedding_fn}{Optional text embedding function used with
+\code{factor_schema} and prediction-time \code{experiment_description}.}
 
 \item{...}{Unused.}
 }
