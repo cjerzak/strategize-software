@@ -1065,14 +1065,14 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
 }
 
 cs2step_neural_prepare_factor_order <- function(factor_order_new, model_info, n_rows) {
-  if (!identical(neural_factor_tokenization(model_info), "language_span")) {
+  if (!identical(neural_factor_tokenization(model_info), "fused")) {
     return(NULL)
   }
   if (is.null(factor_order_new)) {
     return(NULL)
   }
 
-  max_spans <- neural_max_factor_spans(model_info = model_info)
+  max_token_slots <- neural_max_factor_token_slots(model_info = model_info)
   if (is.data.frame(factor_order_new)) {
     factor_order_new <- as.matrix(factor_order_new)
   }
@@ -1092,18 +1092,18 @@ cs2step_neural_prepare_factor_order <- function(factor_order_new, model_info, n_
         call. = FALSE
       )
     }
-    if (ncol(order_mat) > max_spans) {
+    if (ncol(order_mat) > max_token_slots) {
       stop(
         sprintf(
-          "Prediction-time factor_order has %d columns but max_factor_tokens=%d only supports %d factor spans.",
+          "Prediction-time factor_order has %d columns but max_factor_tokens=%d only supports %d fused factor tokens.",
           ncol(order_mat),
           model_info$max_factor_tokens %||% neural_default_max_factor_tokens(),
-          max_spans
+          max_token_slots
         ),
         call. = FALSE
       )
     }
-    out <- matrix(-1L, nrow = n_rows, ncol = max_spans)
+    out <- matrix(-1L, nrow = n_rows, ncol = max_token_slots)
     if (ncol(order_mat) > 0L) {
       order_mat[is.na(order_mat) | order_mat < 0L] <- -1L
       out[, seq_len(ncol(order_mat))] <- order_mat
@@ -1661,9 +1661,9 @@ cs2step_neural_prepare_params <- function(object,
   object$fit$neural_model_info <- model_info
   if (identical(neural_covariate_value_encoding(model_info), "shared_projection") &&
       cs2step_neural_has_resp_covariates(model_info) &&
-      !isTRUE(model_info$has_covariate_span_tokens)) {
+      !isTRUE(model_info$has_covariate_fused_tokens)) {
     stop(
-      "This shared_projection predictor uses the pre-span covariate encoder. Refit under the updated architecture.",
+      "This shared_projection predictor uses the pre-fused covariate encoder. Refit under the updated architecture.",
       call. = FALSE
     )
   }
@@ -2061,7 +2061,7 @@ cs2step_neural_predict_internal <- function(object,
   enc <- object$encoder
   model_info <- object$fit$neural_model_info
   W_raw <- as.data.frame(W_new, check.names = FALSE)
-  factor_order_new <- if (identical(neural_factor_tokenization(model_info), "language_span")) {
+  factor_order_new <- if (identical(neural_factor_tokenization(model_info), "fused")) {
     neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
   } else {
     NULL
@@ -3096,6 +3096,48 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   if (is.null(out$default_time_present)) {
     out$default_time_present <- FALSE
   }
+  out$factor_tokenization <- neural_factor_tokenization(
+    mode = out$factor_tokenization %||% "fused"
+  )
+  out$factor_schema_supplied <- neural_model_info_factor_schema_supplied(out)
+  out$covariate_value_encoding <- neural_resolve_covariate_value_encoding(
+    out$covariate_value_encoding %||% "shared_projection"
+  )
+  old_factor_params <- c("E_factor_start", "E_factor_end", "E_factor_role", "E_feature_id")
+  old_covariate_params <- c(
+    "E_covariate_start",
+    "E_covariate_end",
+    "E_covariate_role",
+    "E_covariate_id",
+    "E_covariate_present",
+    "V_covariate_value"
+  )
+  if (!is.null(out$params) &&
+      any(c(old_factor_params, old_covariate_params) %in% names(out$params))) {
+    stop(
+      "This neural model uses span or legacy attribute parameters. Refit under fused attribute tokenization.",
+      call. = FALSE
+    )
+  }
+  if (isTRUE(out$has_factor_span_tokens) || isTRUE(out$has_feature_id_embedding)) {
+    stop(
+      "This neural model uses span or legacy factor tokens. Refit under fused attribute tokenization.",
+      call. = FALSE
+    )
+  }
+  if (isTRUE(out$has_covariate_span_tokens)) {
+    stop(
+      "This neural model uses span covariate tokens. Refit under fused attribute tokenization.",
+      call. = FALSE
+    )
+  }
+  out$has_factor_fused_tokens <- isTRUE(out$has_factor_fused_tokens) ||
+    (!is.null(out$params) && !is.null(out$params$E_factor_fused_base))
+  out$has_factor_span_tokens <- FALSE
+  out$has_covariate_fused_tokens <- isTRUE(out$has_covariate_fused_tokens) ||
+    (!is.null(out$params) && !is.null(out$params$E_covariate_fused_base))
+  out$has_covariate_tokens <- isTRUE(out$has_covariate_fused_tokens)
+  out$has_covariate_span_tokens <- FALSE
   if (is.null(out$has_covariate_missing_token)) {
     out$has_covariate_missing_token <- FALSE
   }
@@ -3377,9 +3419,9 @@ cs2step_unpack_predictor <- function(bundle,
     neural_covariate_value_encoding(upgraded_model_info),
     "shared_projection"
   ) && cs2step_neural_has_resp_covariates(upgraded_model_info) &&
-      !isTRUE(upgraded_model_info$has_covariate_span_tokens)) {
+      !isTRUE(upgraded_model_info$has_covariate_fused_tokens)) {
     stop(
-      "This shared_projection bundle uses the pre-span covariate encoder. Refit the model under the updated architecture.",
+      "This shared_projection bundle uses the pre-fused covariate encoder. Refit the model under the updated architecture.",
       call. = FALSE
     )
   }

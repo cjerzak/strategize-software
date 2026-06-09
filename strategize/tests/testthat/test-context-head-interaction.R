@@ -21,8 +21,8 @@ test_that("readout cls token families are gated by low-rank rank", {
   )
 })
 
-context_head_language_span_fixture <- function(cross_mode = "attn",
-                                               residual_mode = "standard") {
+context_head_fused_fixture <- function(cross_mode = "attn",
+                                       residual_mode = "standard") {
   strenv <- strategize:::strenv
   jnp <- strenv$jnp
   dtj <- strenv$dtj
@@ -60,8 +60,8 @@ context_head_language_span_fixture <- function(cross_mode = "attn",
     factor_struct_feature_names = colnames(factor_struct),
     level_struct_feature_names = c("s1", "s2"),
     default_factor_order = c(0L),
-    factor_tokenization = "language_span",
-    max_factor_tokens = 8L,
+    factor_tokenization = "fused",
+    max_factor_tokens = 1L,
     token_family_levels = token_levels
   )
   transformer_info <- strategize:::neural_make_transformer_model_info(
@@ -81,13 +81,15 @@ context_head_language_span_fixture <- function(cross_mode = "attn",
   model_info$resp_party_levels <- c("A", "B")
   model_info$cand_party_to_resp_idx <- jnp$array(as.integer(c(0L)))
   model_info$cross_candidate_encoder_mode <- cross_mode
-  model_info$n_candidate_tokens <- 8L
+  model_info$n_candidate_tokens <- 1L
 
   params <- list(
     E_choice = jnp$array(c(1, 2), dtype = dtj),
-    E_factor_start = jnp$array(c(0, 0), dtype = dtj),
-    E_factor_end = jnp$array(c(0, 0), dtype = dtj),
-    E_factor_role = jnp$zeros(list(4L, 2L), dtype = dtj),
+    E_factor_fused_base = jnp$array(c(0, 0), dtype = dtj),
+    W_factor_fuse_1 = jnp$array(rbind(diag(2L), diag(2L), diag(2L), diag(2L)), dtype = dtj),
+    b_factor_fuse_1 = jnp$zeros(list(2L), dtype = dtj),
+    W_factor_fuse_2 = jnp$eye(2L, dtype = dtj),
+    b_factor_fuse_2 = jnp$zeros(list(2L), dtype = dtj),
     E_token_family = jnp$zeros(list(length(token_levels), 2L), dtype = dtj),
     E_sep = jnp$zeros(list(2L), dtype = dtj),
     E_segment = jnp$zeros(list(2L, 2L), dtype = dtj),
@@ -157,6 +159,10 @@ test_that("pairwise logits are utility differences and swap invariant", {
     cand_party_to_resp_idx = strenv$jnp$array(as.integer(c(0L))),
     params = NULL
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L
+  )
 
   params_base <- list(
     E_choice = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
@@ -181,6 +187,10 @@ test_that("pairwise logits are utility differences and swap invariant", {
     W_out = strenv$jnp$ones(list(model_dims, 1L), dtype = strenv$dtj),
     b_out = strenv$jnp$zeros(list(1L), dtype = strenv$dtj)
   )
+  params_base <- neural_test_add_fused_factor_params(
+    params_base,
+    model_dims = model_dims
+  )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
   pi_right <- strenv$jnp$array(c(0, 1), dtype = strenv$dtj)
@@ -197,24 +207,19 @@ test_that("pairwise logits are utility differences and swap invariant", {
     return_logits = TRUE
   )
 
-  u_left <- strategize:::neural_candidate_utility_soft(
-    pi_left,
-    party_idx = 0L,
+  phi_pair <- strategize:::neural_encode_pair_soft_batched(
+    pi_left, pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    model_info = model_info,
     resp_party_idx = 1L,
     stage_idx = 1L,
-    model_info = model_info,
+    matchup_idx = NULL,
     resp_cov_vec = NULL,
     params = params_base
   )
-  u_right <- strategize:::neural_candidate_utility_soft(
-    pi_right,
-    party_idx = 0L,
-    resp_party_idx = 1L,
-    stage_idx = 1L,
-    model_info = model_info,
-    resp_cov_vec = NULL,
-    params = params_base
-  )
+  u_left <- strenv$jnp$einsum("nm,mo->no", phi_pair$phi_left, params_base$W_out) + params_base$b_out
+  u_right <- strenv$jnp$einsum("nm,mo->no", phi_pair$phi_right, params_base$W_out) + params_base$b_out
   expected_logits <- u_left - u_right
 
   expect_equal(
@@ -268,6 +273,10 @@ test_that("pairwise logits include cross-candidate interaction terms when enable
     cross_candidate_encoder = TRUE,
     params = NULL
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L
+  )
 
   params_base <- list(
     E_choice = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
@@ -294,38 +303,41 @@ test_that("pairwise logits include cross-candidate interaction terms when enable
     M_cross = strenv$jnp$ones(list(model_dims, model_dims), dtype = strenv$dtj),
     W_cross_out = strenv$jnp$array(c(0.25), dtype = strenv$dtj)
   )
+  params_base <- neural_test_add_fused_factor_params(
+    params_base,
+    model_dims = model_dims
+  )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
   pi_right <- strenv$jnp$array(c(0, 1), dtype = strenv$dtj)
 
-  phi_left <- strategize:::neural_encode_candidate_soft(
-    pi_left,
-    party_idx = 0L,
+  phi_pair <- strategize:::neural_encode_pair_soft_batched(
+    pi_left, pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    model_info = model_info,
     resp_party_idx = 1L,
     stage_idx = 1L,
-    model_info = model_info,
+    matchup_idx = NULL,
     resp_cov_vec = NULL,
-    params = params_base,
-    matchup_idx = NULL
+    params = params_base
   )
-  phi_right <- strategize:::neural_encode_candidate_soft(
-    pi_right,
-    party_idx = 0L,
-    resp_party_idx = 1L,
-    stage_idx = 1L,
-    model_info = model_info,
-    resp_cov_vec = NULL,
-    params = params_base,
-    matchup_idx = NULL
-  )
+  phi_left <- phi_pair$phi_left
+  phi_right <- phi_pair$phi_right
 
   u_left <- strenv$jnp$einsum("nm,mo->no", phi_left, params_base$W_out) + params_base$b_out
   u_right <- strenv$jnp$einsum("nm,mo->no", phi_right, params_base$W_out) + params_base$b_out
   base_logits <- u_left - u_right
   cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_left, params_base$M_cross, phi_right)
   cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
-  cross_out <- strenv$jnp$reshape(params_base$W_cross_out, list(1L, -1L))
-  expected_logits <- base_logits + cross_term * cross_out
+  expected_logits <- strategize:::neural_apply_cross_term(
+    base_logits,
+    phi_left,
+    phi_right,
+    params_base$M_cross,
+    params_base$W_cross_out,
+    out_dim = 1L
+  )
 
   logits_lr <- strategize:::neural_predict_pair_soft(
     pi_left = pi_left,
@@ -374,6 +386,10 @@ test_that("pairwise logits ignore cross-candidate interaction terms when disable
     cross_candidate_encoder = FALSE,
     params = NULL
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L
+  )
 
   params_base <- list(
     E_choice = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
@@ -400,30 +416,27 @@ test_that("pairwise logits ignore cross-candidate interaction terms when disable
     M_cross = strenv$jnp$ones(list(model_dims, model_dims), dtype = strenv$dtj),
     W_cross_out = strenv$jnp$array(c(0.25), dtype = strenv$dtj)
   )
+  params_base <- neural_test_add_fused_factor_params(
+    params_base,
+    model_dims = model_dims
+  )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
   pi_right <- strenv$jnp$array(c(0, 1), dtype = strenv$dtj)
 
-  phi_left <- strategize:::neural_encode_candidate_soft(
-    pi_left,
-    party_idx = 0L,
+  phi_pair <- strategize:::neural_encode_pair_soft_batched(
+    pi_left, pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    model_info = model_info,
     resp_party_idx = 1L,
     stage_idx = 1L,
-    model_info = model_info,
+    matchup_idx = NULL,
     resp_cov_vec = NULL,
-    params = params_base,
-    matchup_idx = NULL
+    params = params_base
   )
-  phi_right <- strategize:::neural_encode_candidate_soft(
-    pi_right,
-    party_idx = 0L,
-    resp_party_idx = 1L,
-    stage_idx = 1L,
-    model_info = model_info,
-    resp_cov_vec = NULL,
-    params = params_base,
-    matchup_idx = NULL
-  )
+  phi_left <- phi_pair$phi_left
+  phi_right <- phi_pair$phi_right
 
   u_left <- strenv$jnp$einsum("nm,mo->no", phi_left, params_base$W_out) + params_base$b_out
   u_right <- strenv$jnp$einsum("nm,mo->no", phi_right, params_base$W_out) + params_base$b_out
@@ -484,6 +497,10 @@ test_that("pairwise logits use full cross-candidate encoder when mode is full", 
     cross_candidate_encoder_mode = "full",
     params = NULL
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L
+  )
 
   params_base <- list(
     E_choice = strenv$jnp$array(c(1, 2), dtype = strenv$dtj),
@@ -506,6 +523,10 @@ test_that("pairwise logits use full cross-candidate encoder when mode is full", 
     W_out = strenv$jnp$ones(list(model_dims, 1L), dtype = strenv$dtj),
     b_out = strenv$jnp$zeros(list(1L), dtype = strenv$dtj),
     RMS_final = NULL
+  )
+  params_base <- neural_test_add_fused_factor_params(
+    params_base,
+    model_dims = model_dims
   )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
@@ -583,6 +604,11 @@ test_that("attn mode logits are antisymmetric across likelihoods (soft path)", {
       cross_candidate_encoder_mode = "attn",
       params = NULL
     )
+    model_info <- neural_test_add_fused_factor_schema(
+      model_info,
+      factor_levels = 2L,
+      max_factor_tokens = 3L
+    )
 
     W_out <- strenv$jnp$ones(list(model_dims, n_outcomes), dtype = strenv$dtj)
     b_out <- strenv$jnp$zeros(list(n_outcomes), dtype = strenv$dtj)
@@ -616,6 +642,10 @@ test_that("attn mode logits are antisymmetric across likelihoods (soft path)", {
       W_k_cross = strenv$jnp$eye(model_dims, dtype = strenv$dtj),
       W_v_cross = strenv$jnp$eye(model_dims, dtype = strenv$dtj),
       W_o_cross = strenv$jnp$eye(model_dims, dtype = strenv$dtj)
+    )
+    params <- neural_test_add_fused_factor_params(
+      params,
+      model_dims = model_dims
     )
 
     list(model_info = model_info, params = params)
@@ -685,6 +715,10 @@ test_that("attn candidate token slicing is stable with context tokens", {
     W_out = strenv$jnp$ones(list(model_dims, 1L), dtype = strenv$dtj),
     b_out = strenv$jnp$zeros(list(1L), dtype = strenv$dtj)
   )
+  base_params <- neural_test_add_fused_factor_params(
+    base_params,
+    model_dims = model_dims
+  )
 
   scenarios <- list(
     list(has_ctx = FALSE, has_matchup = FALSE, has_resp_cov = FALSE),
@@ -724,6 +758,11 @@ test_that("attn candidate token slicing is stable with context tokens", {
       cross_candidate_encoder_mode = "attn",
       params = NULL
     )
+    model_info <- neural_test_add_fused_factor_schema(
+      model_info,
+      factor_levels = 2L,
+      max_factor_tokens = 3L
+    )
 
     pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
     pi_right <- strenv$jnp$array(c(0, 1), dtype = strenv$dtj)
@@ -744,8 +783,8 @@ test_that("attn candidate token slicing is stable with context tokens", {
       return_tokens = TRUE
     )
 
-    expect_equal(as.integer(out$cand_left_out$shape[[2]]), 3L)
-    expect_equal(as.integer(out$cand_right_out$shape[[2]]), 3L)
+    expect_equal(as.integer(out$cand_left_out$shape[[2]]), 1L)
+    expect_equal(as.integer(out$cand_right_out$shape[[2]]), 1L)
   }
 })
 
@@ -776,6 +815,11 @@ test_that("full attention residual attn pair encoding uses readout candidate tok
   model_info$cand_party_to_resp_idx <- jnp$array(as.integer(c(0L)))
   model_info$n_candidate_tokens <- 3L
   model_info$cross_candidate_encoder_mode <- "attn"
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L,
+    max_factor_tokens = 3L
+  )
 
   params <- list(
     E_choice = jnp$ones(reticulate::tuple(1L), dtype = dtj) * 10,
@@ -809,6 +853,10 @@ test_that("full attention residual attn pair encoding uses readout candidate tok
     W_out = jnp$ones(reticulate::tuple(1L, 1L), dtype = dtj),
     b_out = jnp$zeros(reticulate::tuple(1L), dtype = dtj)
   )
+  params <- neural_test_add_fused_factor_params(
+    params,
+    model_dims = 1L
+  )
 
   pi_left <- jnp$array(c(1, 0), dtype = dtj)
   pi_right <- jnp$array(c(0, 1), dtype = dtj)
@@ -827,43 +875,67 @@ test_that("full attention residual attn pair encoding uses readout candidate tok
   )
 
   choice_tok <- strategize:::neural_build_choice_token(model_info, params)
-  resp_tokens <- strategize:::neural_build_context_tokens(
+  choice_mask <- jnp$ones(list(1L, 1L), dtype = dtj)
+  resp_info <- strategize:::neural_build_context_tokens(
     model_info,
     resp_party_idx = 1L,
     stage_idx = 1L,
     matchup_idx = NULL,
     resp_cov_vec = NULL,
-    params = params
+    params = params,
+    return_mask = TRUE
   )
-  left_tokens <- strategize:::neural_build_candidate_tokens_soft(
+  left_info <- strategize:::neural_build_candidate_tokens_soft(
     pi_left,
     party_idx = 0L,
     role_id = 0L,
     model_info = model_info,
     params = params,
-    resp_party_idx = 1L
+    resp_party_idx = 1L,
+    return_mask = TRUE
   )
-  right_tokens <- strategize:::neural_build_candidate_tokens_soft(
+  right_info <- strategize:::neural_build_candidate_tokens_soft(
     pi_right,
     party_idx = 0L,
     role_id = 0L,
     model_info = model_info,
     params = params,
-    resp_party_idx = 1L
+    resp_party_idx = 1L,
+    return_mask = TRUE
   )
-  tokens_left <- jnp$concatenate(list(choice_tok, resp_tokens, left_tokens), axis = 1L)
-  tokens_right <- jnp$concatenate(list(choice_tok, resp_tokens, right_tokens), axis = 1L)
+  left_seq <- strategize:::neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    ctx_tokens = resp_info$tokens,
+    ctx_mask = resp_info$mask,
+    cand_tokens = left_info$tokens,
+    cand_mask = left_info$mask,
+    model_info = model_info,
+    preserve_candidate_tail = TRUE
+  )
+  right_seq <- strategize:::neural_pack_candidate_sequence(
+    choice_tok = choice_tok,
+    choice_mask = choice_mask,
+    ctx_tokens = resp_info$tokens,
+    ctx_mask = resp_info$mask,
+    cand_tokens = right_info$tokens,
+    cand_mask = right_info$mask,
+    model_info = model_info,
+    preserve_candidate_tail = TRUE
+  )
   transformer_out <- strategize:::neural_run_transformer(
-    jnp$concatenate(list(tokens_left, tokens_right), axis = 0L),
+    jnp$concatenate(list(left_seq$tokens, right_seq$tokens), axis = 0L),
     model_info,
     params,
+    token_mask = jnp$concatenate(list(left_seq$mask, right_seq$mask), axis = 0L),
     return_details = TRUE
   )
 
   state_tokens <- strategize:::neural_transformer_state_tokens(transformer_out)
   readout_tokens <- strategize:::neural_transformer_readout_tokens(transformer_out)
   t_total <- as.integer(state_tokens$shape[[2]])
-  cand_idx <- jnp$arange(as.integer(t_total - model_info$n_candidate_tokens), as.integer(t_total))
+  cand_width <- as.integer(left_seq$cand_mask$shape[[2]])
+  cand_idx <- jnp$arange(as.integer(t_total - cand_width), as.integer(t_total))
   state_candidates <- jnp$take(state_tokens, cand_idx, axis = 1L)
   readout_candidates <- jnp$take(readout_tokens, cand_idx, axis = 1L)
 
@@ -880,12 +952,12 @@ test_that("full attention residual attn pair encoding uses readout candidate tok
   expect_gt(max(abs(readout_right - state_right)), 1e-6)
 })
 
-test_that("attn mode packs language-span candidates before extraction", {
+test_that("attn mode packs fused candidates before extraction", {
   skip_on_cran()
   skip_if_no_jax()
 
   strategize:::initialize_jax()
-  fx <- context_head_language_span_fixture(cross_mode = "attn")
+  fx <- context_head_fused_fixture(cross_mode = "attn")
 
   out <- strategize:::neural_encode_pair_soft_batched(
     pi_left = fx$pi_left,
@@ -901,13 +973,13 @@ test_that("attn mode packs language-span candidates before extraction", {
     return_tokens = TRUE
   )
 
-  expect_equal(as.integer(out$cand_left_out$shape[[2]]), 4L)
-  expect_equal(as.integer(out$cand_right_out$shape[[2]]), 4L)
-  expect_equal(as.integer(out$cand_left_mask$shape[[2]]), 4L)
-  expect_equal(as.integer(out$cand_right_mask$shape[[2]]), 4L)
+  expect_equal(as.integer(out$cand_left_out$shape[[2]]), 1L)
+  expect_equal(as.integer(out$cand_right_out$shape[[2]]), 1L)
+  expect_equal(as.integer(out$cand_left_mask$shape[[2]]), 1L)
+  expect_equal(as.integer(out$cand_right_mask$shape[[2]]), 1L)
 })
 
-test_that("full attention residual attn extracts packed language-span readout candidates", {
+test_that("full attention residual attn extracts packed fused readout candidates", {
   skip_on_cran()
   skip_if_no_jax()
 
@@ -915,7 +987,7 @@ test_that("full attention residual attn extracts packed language-span readout ca
   strenv <- strategize:::strenv
   jnp <- strenv$jnp
   np <- strenv$np
-  fx <- context_head_language_span_fixture(
+  fx <- context_head_fused_fixture(
     cross_mode = "attn",
     residual_mode = "full_attn"
   )
@@ -1001,13 +1073,13 @@ test_that("full attention residual attn extracts packed language-span readout ca
   expect_gt(max(abs(readout_right - state_right)), 1e-6)
 })
 
-test_that("pairwise full mode handles packed language-span candidate blocks", {
+test_that("pairwise full mode handles packed fused candidate blocks", {
   skip_on_cran()
   skip_if_no_jax()
 
   strategize:::initialize_jax()
   strenv <- strategize:::strenv
-  fx <- context_head_language_span_fixture(cross_mode = "full")
+  fx <- context_head_fused_fixture(cross_mode = "full")
 
   logits_full <- strategize:::neural_predict_pair_soft(
     pi_left = fx$pi_left,

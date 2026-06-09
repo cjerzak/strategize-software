@@ -127,12 +127,11 @@ The target-study data contract mirrors the per-experiment contract used by
   \item pairwise studies require \code{pair_id};
   \item \code{X}, when supplied, must be numeric and row-aligned to
   \code{W}; raw numeric values remain unchanged during adaptation. Under the
-  default FM covariate path, shared covariate spans are aligned by pooled
-  \code{X} name, name tokens optionally receive rebuilt \code{X}-name text
-  embeddings, and value tokens are rebuilt from standardized numeric values
-  plus local adaptation-study distribution summaries. Absent covariates are
-  masked structurally rather than represented with a separate presence
-  embedding;
+  default FM covariate path, shared fused covariate/value tokens are aligned
+  by pooled \code{X} name, optionally receive rebuilt \code{X}-name text
+  embeddings, and are rebuilt from standardized numeric values plus local
+  adaptation-study distribution summaries. Absent covariates are masked
+  structurally rather than represented with a separate presence embedding;
   \item categorical adaptation follows the same \code{n_outcomes} rule as
   pooled training.
 }
@@ -151,7 +150,7 @@ The \code{foundation_adaptation_control} list supports:
   \item{\code{strict_schema_match}}{Require every local factor to match a
   pooled foundation slot. Default \code{FALSE}.}
   \item{\code{allow_extra_covariates}}{Allow local covariates that were not
-  present during pooled training. Extra local covariate spans are appended
+  present during pooled training. Extra local covariate tokens are appended
   after the shared pooled covariate vocabulary. Default \code{TRUE}.}
   \item{\code{use_text_semantics}}{Reuse token-native text semantics during
   adaptation when the foundation object includes them, including factor-name,

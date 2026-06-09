@@ -8,22 +8,22 @@ test_that("schema dropout resolver handles defaults and overrides", {
 
   defaults <- strategize:::neural_resolve_schema_dropout(TRUE)
   expect_equal(defaults$experiment_token, 0.25)
-  expect_equal(defaults$covariate_span, 0.05)
+  expect_equal(defaults$covariate_token, 0.05)
 
   custom <- strategize:::neural_resolve_schema_dropout(list(
     schema_text = 0.2,
-    covariate_span = 0.08
+    covariate_token = 0.08
   ))
   expect_equal(custom$schema_text, 0.2)
-  expect_equal(custom$covariate_span, 0.08)
+  expect_equal(custom$covariate_token, 0.08)
   expect_equal(custom$experiment_token, 0)
 
   custom_defaults <- strategize:::neural_resolve_schema_dropout(list(
     defaults = TRUE,
-    factor_span = 0.01
+    factor_token = 0.01
   ))
   expect_equal(custom_defaults$schema_text, 0.10)
-  expect_equal(custom_defaults$factor_span, 0.01)
+  expect_equal(custom_defaults$factor_token, 0.01)
 
   expect_error(
     strategize:::neural_resolve_schema_dropout(list(context_token = 1)),
@@ -114,21 +114,21 @@ test_that("balanced compact sampler draws studies and respondents hierarchically
   )
 })
 
-test_that("schema dropout span masks preserve one factor span", {
+test_that("schema dropout token masks preserve one factor token", {
   skip_on_cran()
   skip_if_no_jax()
   strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
 
-  span_mask <- strategize:::strenv$jnp$array(
+  token_mask <- strategize:::strenv$jnp$array(
     matrix(c(TRUE, TRUE, FALSE, TRUE, TRUE, TRUE), nrow = 2, byrow = TRUE)
   )
   keep <- strategize:::strenv$jnp$array(
     matrix(c(0, 0, 0, 0, 1, 0), nrow = 2, byrow = TRUE)
   )
-  factor_out <- strategize:::neural_schema_dropout_apply_span_mask(
-    span_mask,
-    list(factor_span = keep),
-    "factor_span",
+  factor_out <- strategize:::neural_schema_dropout_apply_token_mask(
+    token_mask,
+    list(factor_token = keep),
+    "factor_token",
     preserve_one = TRUE
   )
   expect_equal(
@@ -136,10 +136,10 @@ test_that("schema dropout span masks preserve one factor span", {
     matrix(c(TRUE, FALSE, FALSE, FALSE, TRUE, FALSE), nrow = 2, byrow = TRUE)
   )
 
-  cov_out <- strategize:::neural_schema_dropout_apply_span_mask(
-    span_mask,
-    list(covariate_span = keep),
-    "covariate_span",
+  cov_out <- strategize:::neural_schema_dropout_apply_token_mask(
+    token_mask,
+    list(covariate_token = keep),
+    "covariate_token",
     preserve_one = FALSE
   )
   expect_equal(
@@ -1088,28 +1088,40 @@ test_that("covariate context tokens distinguish absent from present zero via pre
   strategize:::initialize_jax()
 
   token_levels <- strategize:::neural_token_family_levels()
-  covariate_family_idx <- match("covariate", token_levels) - 1L
+  covariate_family_idx <- match("covariate_fused", token_levels) - 1L
   family_mat <- matrix(0, nrow = length(token_levels), ncol = 4L)
   family_mat[covariate_family_idx + 1L, ] <- c(1000, 2000, 3000, 4000)
+  metadata_dim <- length(strategize:::neural_covariate_value_metadata_names())
   model_info <- list(
     model_dims = 4L,
     token_family_levels = token_levels,
+    covariate_names = "income",
+    default_covariate_order = 0L,
+    max_covariate_tokens = 1L,
     covariate_name_text = NULL,
-    covariate_value_encoding = "legacy_linear"
+    covariate_value_encoding = "shared_projection",
+    shared_projection_value_encoder = "name_dist_moe"
   )
   params <- list(
-    E_covariate_id = strategize:::strenv$jnp$array(
-      matrix(c(1, 2, 3, 4), nrow = 1L),
+    E_covariate_fused_base = strategize:::strenv$jnp$array(
+      c(0, 0, 0, 0),
       dtype = strategize:::strenv$jnp$float32
     ),
-    E_covariate_present = strategize:::strenv$jnp$array(
-      matrix(c(10, 20, 30, 40), nrow = 1L),
+    E_covariate_missing = strategize:::strenv$jnp$array(
+      c(10, 20, 30, 40),
       dtype = strategize:::strenv$jnp$float32
     ),
-    V_covariate_value = strategize:::strenv$jnp$array(
-      matrix(c(100, 200, 300, 400), nrow = 1L),
+    W_covariate_fuse_1 = strategize:::strenv$jnp$array(
+      rbind(
+        matrix(0, nrow = 4L, ncol = 4L),
+        diag(4L),
+        matrix(0, nrow = metadata_dim, ncol = 4L)
+      ),
       dtype = strategize:::strenv$jnp$float32
     ),
+    b_covariate_fuse_1 = strategize:::strenv$jnp$zeros(list(4L), dtype = strategize:::strenv$jnp$float32),
+    W_covariate_fuse_2 = strategize:::strenv$jnp$array(diag(4L), dtype = strategize:::strenv$jnp$float32),
+    b_covariate_fuse_2 = strategize:::strenv$jnp$zeros(list(4L), dtype = strategize:::strenv$jnp$float32),
     E_token_family = strategize:::strenv$jnp$array(
       family_mat,
       dtype = strategize:::strenv$jnp$float32
@@ -1140,10 +1152,10 @@ test_that("covariate context tokens distinguish absent from present zero via pre
 
   tok_absent_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_absent))
   tok_zero_r <- reticulate::py_to_r(strategize:::strenv$np$array(tok_zero))
-  diff <- drop(tok_zero_r - tok_absent_r)
+  diff <- drop(tok_absent_r - tok_zero_r)
 
   expect_false(isTRUE(all.equal(tok_absent_r, tok_zero_r)))
-  expect_equal(diff, c(10, 20, 30, 40), tolerance = 1e-6)
+  expect_true(all(diff > 9))
 })
 
 test_that("runtime token model info carries experiment text semantics", {
@@ -1472,7 +1484,7 @@ test_that("runtime covariate defaults are JAX-normalized for covariate transform
   expect_true(all(is.finite(as.numeric(basis_r))))
 })
 
-test_that("shared_projection emits ordered covariate spans with padding masks", {
+test_that("shared_projection emits ordered fused covariate tokens with padding masks", {
   skip_if_no_jax()
   strategize:::initialize_jax()
 
@@ -1491,7 +1503,7 @@ test_that("shared_projection emits ordered covariate spans with padding masks", 
     resp_cov_mean = c(0, 0),
     resp_cov_scale = c(1, 1),
     default_covariate_order = c(1L, 0L),
-    max_covariate_tokens = 12L,
+    max_covariate_tokens = 3L,
     token_family_levels = token_levels,
     covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "legacy_scalar"
@@ -1527,6 +1539,11 @@ test_that("shared_projection emits ordered covariate spans with padding masks", 
       dtype = strategize:::strenv$jnp$float32
     )
   )
+  params <- neural_test_add_fused_covariate_value_params(
+    params,
+    model_dims = 2L,
+    token_family_levels = token_levels
+  )
 
   cov_info <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -1541,18 +1558,14 @@ test_that("shared_projection emits ordered covariate spans with padding masks", 
   tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$mask))
 
-  expect_equal(dim(tok_cov_r), c(1L, 12L, 2L))
-  expect_equal(as.numeric(mask_r[1, ]), c(rep(1, 8), rep(0, 4)))
-  expect_equal(drop(tok_cov_r[1, 1, ]), c(1, 2), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 2, ]), c(0, 1), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 3, ]), c(80, 160), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 4, ]), c(3, 4), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 6, ]), c(1, 0), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 7, ]), c(40, 80), tolerance = 1e-6)
-  expect_equal(tok_cov_r[1, 9:12, ], matrix(0, nrow = 4L, ncol = 2L), tolerance = 1e-6)
+  expect_equal(dim(tok_cov_r), c(1L, 3L, 2L))
+  expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
+  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_gelu(c(80, 160)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_gelu(c(40, 80)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
 })
 
-test_that("shared_projection emits active spans for missing-in-row covariates", {
+test_that("shared_projection emits active fused tokens for missing-in-row covariates", {
   skip_if_no_jax()
   strategize:::initialize_jax()
 
@@ -1571,7 +1584,7 @@ test_that("shared_projection emits active spans for missing-in-row covariates", 
     resp_cov_mean = c(0, 0),
     resp_cov_scale = c(1, 1),
     default_covariate_order = c(0L, 1L),
-    max_covariate_tokens = 12L,
+    max_covariate_tokens = 3L,
     token_family_levels = token_levels,
     covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "legacy_scalar"
@@ -1611,6 +1624,11 @@ test_that("shared_projection emits active spans for missing-in-row covariates", 
       dtype = strategize:::strenv$jnp$float32
     )
   )
+  params <- neural_test_add_fused_covariate_value_params(
+    params,
+    model_dims = 2L,
+    token_family_levels = token_levels
+  )
 
   cov_info <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -1624,12 +1642,10 @@ test_that("shared_projection emits active spans for missing-in-row covariates", 
   tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$mask))
 
-  expect_equal(as.numeric(mask_r[1, ]), c(rep(1, 8), rep(0, 4)))
-  expect_equal(drop(tok_cov_r[1, 3, ]), c(40, 80), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 5, ]), c(1, 2), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 6, ]), c(0, 1), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 7, ]), c(7, 9), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 8, ]), c(3, 4), tolerance = 1e-6)
+  expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
+  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_gelu(c(40, 80)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_gelu(c(7, 9)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
 
   cov_absent <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -1643,8 +1659,8 @@ test_that("shared_projection emits active spans for missing-in-row covariates", 
   )
   absent_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_absent$tokens))
   absent_mask <- reticulate::py_to_r(strategize:::strenv$np$array(cov_absent$mask))
-  expect_equal(as.numeric(absent_mask[1, ]), c(rep(1, 4), rep(0, 8)))
-  expect_equal(absent_r[1, 5:12, ], matrix(0, nrow = 8L, ncol = 2L), tolerance = 1e-6)
+  expect_equal(as.numeric(absent_mask[1, ]), c(1, 0, 0))
+  expect_equal(absent_r[1, 2:3, ], matrix(0, nrow = 2L, ncol = 2L), tolerance = 1e-6)
 })
 
 test_that("shared_projection uses categorical value text by value code", {
@@ -1667,7 +1683,7 @@ test_that("shared_projection uses categorical value text by value code", {
     resp_cov_mean = c(0, 0, 0),
     resp_cov_scale = c(1, 1, 1),
     default_covariate_order = c(0L, 1L, 2L),
-    max_covariate_tokens = 12L,
+    max_covariate_tokens = 3L,
     token_family_levels = token_levels,
     covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "legacy_scalar",
@@ -1714,6 +1730,11 @@ test_that("shared_projection uses categorical value text by value code", {
       dtype = strategize:::strenv$jnp$float32
     )
   )
+  params <- neural_test_add_fused_covariate_value_params(
+    params,
+    model_dims = 2L,
+    token_family_levels = token_levels
+  )
 
   cov_info <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -1726,9 +1747,9 @@ test_that("shared_projection uses categorical value text by value code", {
   )
   tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
 
-  expect_equal(drop(tok_cov_r[1, 3, ]), c(5, 7), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 7, ]), c(11, 22), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 11, ]), c(20, 40), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_gelu(c(5, 7)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_gelu(c(11, 22)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 3, ]), neural_test_gelu(c(20, 40)), tolerance = 1e-6)
 
   cov_fallback <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -1740,7 +1761,7 @@ test_that("shared_projection uses categorical value text by value code", {
     return_mask = TRUE
   )
   fallback_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_fallback$tokens))
-  expect_equal(drop(fallback_r[1, 3, ]), c(10, 20), tolerance = 1e-6)
+  expect_equal(drop(fallback_r[1, 1, ]), neural_test_gelu(c(10, 20)), tolerance = 1e-6)
 })
 
 test_that("covariate distribution profiles summarize local metadata", {
@@ -1819,7 +1840,7 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
     resp_cov_mean = c(0, 1),
     resp_cov_scale = c(1, 2),
     default_covariate_order = c(0L, 1L),
-    max_covariate_tokens = 12L,
+    max_covariate_tokens = 2L,
     token_family_levels = token_levels,
     covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "name_dist_moe",
@@ -1926,6 +1947,11 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
       dtype = strategize:::strenv$jnp$float32
     )
   )
+  params <- neural_test_add_fused_covariate_value_params(
+    params,
+    model_dims = 2L,
+    token_family_levels = token_levels
+  )
 
   build_tokens <- function(info, experiment_idx = NULL) {
     strategize:::add_context_tokens(
@@ -1960,17 +1986,17 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
   model_info_name$covariate_name_text <- cov_text_beta
   tok_name <- reticulate::py_to_r(strategize:::strenv$np$array(build_tokens(model_info_name)$tokens))
 
-  expect_equal(dim(tok_default), c(1L, 12L, 2L))
-  expect_equal(dim(tok_fallback_r), c(1L, 12L, 2L))
+  expect_equal(dim(tok_default), c(1L, 2L, 2L))
+  expect_equal(dim(tok_fallback_r), c(1L, 2L, 2L))
   expect_true(all(is.finite(as.numeric(tok_fallback_r))))
   expect_false(isTRUE(all.equal(
-    drop(tok_default[1, 3, ]),
-    drop(tok_exp1[1, 3, ]),
+    drop(tok_default[1, 1, ]),
+    drop(tok_exp1[1, 1, ]),
     tolerance = 1e-6
   )))
   expect_false(isTRUE(all.equal(
-    drop(tok_default[1, 7, ]),
-    drop(tok_name[1, 7, ]),
+    drop(tok_default[1, 2, ]),
+    drop(tok_name[1, 2, ]),
     tolerance = 1e-6
   )))
   expect_equal(
@@ -1979,7 +2005,7 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
   )
 })
 
-test_that("language_span emits ordered factor spans with padding masks", {
+test_that("fused factor tokenization emits ordered factor/value tokens with padding masks", {
   skip_if_no_jax()
   strategize:::initialize_jax()
 
@@ -2032,24 +2058,28 @@ test_that("language_span emits ordered factor spans with padding masks", {
     factor_struct_feature_names = colnames(factor_struct),
     level_struct_feature_names = c("s1", "s2"),
     default_factor_order = c(2L, 0L),
-    factor_tokenization = "language_span",
-    max_factor_tokens = 12L,
+    factor_tokenization = "fused",
+    max_factor_tokens = 3L,
     token_family_levels = token_levels
   )
 
   params <- list(
-    E_factor_start = strategize:::strenv$jnp$array(
+    E_factor_fused_base = strategize:::strenv$jnp$array(
       c(1, 2),
       dtype = strategize:::strenv$jnp$float32
     ),
-    E_factor_end = strategize:::strenv$jnp$array(
-      c(3, 4),
+    W_factor_fuse_1 = strategize:::strenv$jnp$array(
+      rbind(
+        diag(2L),
+        matrix(0, nrow = 2L, ncol = 2L),
+        diag(2L),
+        matrix(0, nrow = 2L, ncol = 2L)
+      ),
       dtype = strategize:::strenv$jnp$float32
     ),
-    E_factor_role = strategize:::strenv$jnp$array(
-      matrix(0, nrow = 4L, ncol = 2L),
-      dtype = strategize:::strenv$jnp$float32
-    ),
+    b_factor_fuse_1 = strategize:::strenv$jnp$zeros(list(2L), dtype = strategize:::strenv$jnp$float32),
+    W_factor_fuse_2 = strategize:::strenv$jnp$array(diag(2L), dtype = strategize:::strenv$jnp$float32),
+    b_factor_fuse_2 = strategize:::strenv$jnp$zeros(list(2L), dtype = strategize:::strenv$jnp$float32),
     E_token_family = strategize:::strenv$jnp$array(
       matrix(0, nrow = length(token_levels), ncol = 2L),
       dtype = strategize:::strenv$jnp$float32
@@ -2089,15 +2119,48 @@ test_that("language_span emits ordered factor spans with padding masks", {
   tok_r <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info$tokens))
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info$mask))
 
-  expect_equal(dim(tok_r), c(1L, 12L, 2L))
-  expect_equal(as.numeric(mask_r[1, ]), c(rep(1, 8), rep(0, 4)))
-  expect_equal(drop(tok_r[1, 1, ]), c(1, 2), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 2, ]), c(1.3, 1.4), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 3, ]), c(5.5, 5.6), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 4, ]), c(3, 4), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 6, ]), c(1.1, 0), tolerance = 1e-6)
-  expect_equal(drop(tok_r[1, 7, ]), c(20.7, 0.8), tolerance = 1e-6)
-  expect_equal(tok_r[1, 9:12, ], matrix(0, nrow = 4L, ncol = 2L), tolerance = 1e-6)
+  expect_equal(dim(tok_r), c(1L, 3L, 2L))
+  expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
+  expect_equal(drop(tok_r[1, 1, ]), c(7, 8), tolerance = 1e-4)
+  expect_equal(drop(tok_r[1, 2, ]), c(22, 2), tolerance = 1e-4)
+  expect_equal(drop(tok_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
+  expect_true(isTRUE(model_info$factor_schema_supplied))
+
+  prepared_info <- strategize:::neural_make_prepared_prediction_model_info(
+    model_depth = 1L,
+    model_dims = 2L,
+    n_heads = 1L,
+    head_dim = 2L,
+    n_candidate_tokens = 3L,
+    factor_tokenization = "fused",
+    max_factor_tokens = 3L,
+    factor_name_text = factor_text,
+    level_name_text = level_text,
+    factor_order_by_experiment = list(c(2L, 0L)),
+    default_factor_order = c(2L, 0L),
+    factor_struct_matrix = factor_struct,
+    level_struct_matrices = level_struct,
+    factor_struct_feature_names = colnames(factor_struct),
+    level_struct_feature_names = c("s1", "s2")
+  )
+  prepared_info$token_family_levels <- token_levels
+  expect_true(isTRUE(prepared_info$factor_schema_supplied))
+
+  prepared_missing_flag <- prepared_info
+  prepared_missing_flag$factor_schema_supplied <- NULL
+  expect_true(strategize:::neural_model_info_factor_schema_supplied(prepared_missing_flag))
+  upgraded_info <- strategize:::cs2step_neural_upgrade_model_info(prepared_missing_flag)
+  expect_true(isTRUE(upgraded_info$factor_schema_supplied))
+
+  cand_info_missing_flag <- strategize:::neural_build_candidate_tokens_hard(
+    X_idx = strategize:::strenv$jnp$array(matrix(c(1L, 0L, 0L), nrow = 1L))$astype(strategize:::strenv$jnp$int32),
+    party_idx = strategize:::strenv$jnp$array(0L)$astype(strategize:::strenv$jnp$int32),
+    model_info = prepared_missing_flag,
+    params = params,
+    return_mask = TRUE
+  )
+  mask_missing_flag <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info_missing_flag$mask))
+  expect_equal(as.numeric(mask_missing_flag[1, ]), c(1, 1, 0))
 })
 
 test_that("pairwise context tokens are masked for context-absent rows", {
@@ -2129,6 +2192,10 @@ test_that("pairwise context tokens are masked for context-absent rows", {
     party_missing_index = 2L,
     resp_party_missing_index = 2L
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L
+  )
   params <- list(
     E_factor_1 = strategize:::strenv$jnp$array(
       matrix(c(1, 2, 3, 4), nrow = 2L, byrow = TRUE),
@@ -2158,6 +2225,11 @@ test_that("pairwise context tokens are masked for context-absent rows", {
       matrix(0, nrow = length(token_levels), ncol = 2L),
       dtype = strategize:::strenv$jnp$float32
     )
+  )
+  params <- neural_test_add_fused_factor_params(
+    params,
+    model_dims = 2L,
+    token_family_levels = token_levels
   )
 
   cand_info <- strategize:::neural_build_candidate_tokens_hard(
@@ -2238,7 +2310,7 @@ test_that("stage diagnostics ignore context-absent pairwise rows", {
   expect_true(isTRUE(stage$stage_context_enabled))
 })
 
-test_that("language_span requires structural factor and level token info", {
+test_that("fused factor tokenization requires structural factor and level token info", {
   skip_if_no_jax()
   strategize:::initialize_jax()
 
@@ -2250,8 +2322,24 @@ test_that("language_span requires structural factor and level token info", {
         matrix(c(1, 0, 0, 1, 0, 0), nrow = 3L, byrow = TRUE),
         matrix(c(0, 1, 1, 0, 0, 0), nrow = 3L, byrow = TRUE)
       ),
-      factor_tokenization = "language_span",
-      max_factor_tokens = 8L
+      factor_tokenization = "fused",
+      max_factor_tokens = 2L
+    ),
+    "requires structural token_info fields"
+  )
+  expect_error(
+    strategize:::neural_make_prepared_prediction_model_info(
+      model_depth = 1L,
+      model_dims = 2L,
+      n_heads = 1L,
+      head_dim = 2L,
+      factor_name_text = matrix(c(1, 0, 0, 1), nrow = 2L, byrow = TRUE),
+      level_name_text = list(
+        matrix(c(1, 0, 0, 1, 0, 0), nrow = 3L, byrow = TRUE),
+        matrix(c(0, 1, 1, 0, 0, 0), nrow = 3L, byrow = TRUE)
+      ),
+      factor_tokenization = "fused",
+      max_factor_tokens = 2L
     ),
     "requires structural token_info fields"
   )

@@ -26,6 +26,10 @@ test_that("learned choice token receives gradients and mixes information", {
     cand_party_to_resp_idx = strenv$jnp$array(as.integer(0L)),
     params = NULL
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 2L
+  )
 
   params_base <- list(
     E_choice = strenv$jnp$zeros(list(model_dims), dtype = strenv$dtj),
@@ -52,9 +56,13 @@ test_that("learned choice token receives gradients and mixes information", {
     W_out = strenv$jnp$ones(list(model_dims, 1L), dtype = strenv$dtj),
     b_out = strenv$jnp$zeros(list(1L), dtype = strenv$dtj)
   )
+  params_base <- neural_test_add_fused_factor_params(
+    params_base,
+    model_dims = model_dims
+  )
 
-  pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
-  pi_right <- strenv$jnp$array(c(0, 1), dtype = strenv$dtj)
+  pi_left <- strenv$jnp$array(c(0.8, 0.2), dtype = strenv$dtj)
+  pi_right <- strenv$jnp$array(c(0.2, 0.8), dtype = strenv$dtj)
 
   logit_sum <- function(E_choice, pi_left_in, pi_right_in) {
     params <- params_base

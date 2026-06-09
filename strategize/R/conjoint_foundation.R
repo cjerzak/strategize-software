@@ -26,10 +26,10 @@
 #'
 #' Cross-study sharing is driven by explicit canonical ids. Raw label equality
 #' alone does not force two studies to share factor or level identities.
-#' Optional text embeddings now enter the FM encoder directly: factor spans use
-#' language-native factor-name and level-label tokens, and covariate spans use
-#' covariate-name tokens plus value tokens conditioned on local covariate
-#' distributions. Canonical ids still determine schema sharing across studies.
+#' Optional text embeddings now enter the FM encoder directly: each candidate
+#' attribute is represented by one fused factor/value token, and each respondent
+#' covariate is represented by one fused covariate/value token. Canonical ids
+#' still determine schema sharing across studies.
 #'
 #' \code{\link{fit_conjoint_foundation_model}()} and
 #' \code{\link{save_conjoint_foundation_bundle}()} are retained as migration
@@ -46,7 +46,7 @@ cs_foundation_default_control <- function() {
     add_text_semantics = TRUE,
     text_embedding_fn = NULL,
     experiment_token_mode = "description",
-    factor_tokenization = "language_span",
+    factor_tokenization = "fused",
     max_factor_tokens = 256L,
     covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "name_dist_moe",
@@ -68,7 +68,7 @@ cs_foundation_default_adaptation_control <- function() {
     use_text_semantics = TRUE,
     text_embedding_fn = NULL,
     experiment_token_mode = "description",
-    factor_tokenization = "language_span",
+    factor_tokenization = "fused",
     max_factor_tokens = 256L,
     covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "name_dist_moe",
@@ -140,9 +140,9 @@ cs_foundation_experiment_token_mode <- function(mode) {
 
 cs_foundation_covariate_value_encoding <- function(mode) {
   mode_use <- tolower(as.character(mode %||% "shared_projection"))
-  if (!mode_use %in% c("shared_projection", "legacy_linear")) {
+  if (!identical(mode_use, "shared_projection")) {
     stop(
-      "'covariate_value_encoding' must be one of 'shared_projection' or 'legacy_linear'.",
+      "'covariate_value_encoding' must be 'shared_projection'.",
       call. = FALSE
     )
   }
@@ -154,10 +154,10 @@ cs_foundation_shared_projection_value_encoder <- function(mode) {
 }
 
 cs_foundation_factor_tokenization <- function(mode) {
-  mode_use <- tolower(as.character(mode %||% "language_span"))
-  if (!mode_use %in% c("language_span", "legacy_indexed")) {
+  mode_use <- tolower(as.character(mode %||% "fused"))
+  if (!identical(mode_use, "fused")) {
     stop(
-      "'factor_tokenization' must be one of 'language_span' or 'legacy_indexed'.",
+      "'factor_tokenization' must be 'fused'.",
       call. = FALSE
     )
   }
@@ -955,7 +955,7 @@ cs_foundation_build_token_info <- function(names_list,
                                            experiment_levels = character(0),
                                            experiment_index = NULL,
                                            experiment_token_mode = "description",
-                                           factor_tokenization = "language_span",
+                                           factor_tokenization = "fused",
                                            max_factor_tokens = 256L,
                                            covariate_value_encoding = "shared_projection",
                                            shared_projection_value_encoder = "name_dist_moe",
@@ -1076,11 +1076,24 @@ cs_foundation_build_token_info <- function(names_list,
     shared_projection_value_encoder
   )
   max_covariate_tokens <- neural_resolve_max_covariate_tokens(max_covariate_tokens)
+  structural_level_names <- setNames(lapply(factor_names, function(factor_name) {
+    c(as.character(names_list[[factor_name]][[1]] %||% character(0)), "__holdout__")
+  }), factor_names)
+  structural_token_info <- neural_make_default_fused_structural_info(
+    names_list = NULL,
+    factor_names = factor_names,
+    factor_levels = vapply(structural_level_names, length, integer(1)),
+    level_names_list = structural_level_names
+  )
 
   list(
     text_dim = as.integer(dim_use),
     factor_name_text = factor_name_text,
     level_name_text = level_name_text,
+    factor_struct_matrix = structural_token_info$factor_struct_matrix,
+    factor_struct_feature_names = structural_token_info$factor_struct_feature_names,
+    level_struct_matrices = structural_token_info$level_struct_matrices,
+    level_struct_feature_names = structural_token_info$level_struct_feature_names,
     factor_name_text_present = factor_name_text_present,
     level_name_text_present = level_name_text_present,
     factor_order_by_experiment = factor_order_by_experiment,
@@ -1105,9 +1118,9 @@ cs_foundation_build_token_info <- function(names_list,
   )
 }
 
-cs_foundation_validate_language_span_text <- function(token_info,
-                                                      context = "Foundation model") {
-  if (!identical(token_info$factor_tokenization %||% NULL, "language_span")) {
+cs_foundation_validate_fused_text <- function(token_info,
+                                              context = "Foundation model") {
+  if (!identical(token_info$factor_tokenization %||% NULL, "fused")) {
     return(invisible(token_info))
   }
   if (as.integer(token_info$text_dim %||% 0L) < 1L ||
@@ -1115,7 +1128,7 @@ cs_foundation_validate_language_span_text <- function(token_info,
       is.null(token_info$level_name_text)) {
     stop(
       sprintf(
-        "%s requires token-native factor and level text embeddings under factor_tokenization='language_span'.",
+        "%s requires token-native factor and level text embeddings under factor_tokenization='fused'.",
         context
       ),
       call. = FALSE
@@ -1130,7 +1143,7 @@ cs_foundation_validate_language_span_text <- function(token_info,
   if (!isTRUE(factor_ok) || !isTRUE(level_ok)) {
     stop(
       sprintf(
-        "%s requires complete factor and level text coverage under factor_tokenization='language_span'. Supply a compatible text_embedding_fn.",
+        "%s requires complete factor and level text coverage under factor_tokenization='fused'. Supply a compatible text_embedding_fn.",
         context
       ),
       call. = FALSE
@@ -1236,7 +1249,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     control$experiment_token_mode %||% "description"
   )
   factor_tokenization <- cs_foundation_factor_tokenization(
-    control$factor_tokenization %||% "language_span"
+    control$factor_tokenization %||% "fused"
   )
   max_factor_tokens <- neural_resolve_max_factor_tokens(
     control$max_factor_tokens %||% NULL
@@ -1291,12 +1304,6 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
   }, integer(1)))
   single_null_candidate_label <- "__fm_single_null__"
 
-  if (identical(factor_tokenization, "language_span")) {
-    if (is.null(text_registry) || as.integer(text_registry$dim %||% 0L) < 1L) {
-      factor_tokenization <- "legacy_indexed"
-    }
-  }
-
   for (i in seq_along(experiments)) {
     exp <- experiments[[i]]
     exp_map <- registry$experiment_maps[[exp$experiment_id]]
@@ -1316,7 +1323,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
       }, character(1)),
       slot_names
     )
-    if (identical(factor_tokenization, "language_span")) {
+    if (identical(factor_tokenization, "fused")) {
       neural_validate_factor_token_budget(
         n_factors = length(factor_order_by_experiment[[i]]),
         max_factor_tokens = max_factor_tokens,
@@ -1447,7 +1454,7 @@ cs_foundation_build_group_training_data <- function(experiments, registry, contr
     shared_projection_value_encoder = shared_projection_value_encoder,
     max_covariate_tokens = control$max_covariate_tokens %||% NULL
   )
-  cs_foundation_validate_language_span_text(
+  cs_foundation_validate_fused_text(
     token_info = token_info,
     context = "Foundation pooled training"
   )
@@ -1707,14 +1714,14 @@ cs_foundation_build_adaptation_x <- function(group,
     max_covariate_tokens = adaptation_control$max_covariate_tokens %||% NULL,
     default_experiment_key = experiment$experiment_id
   )
-  if (identical(adaptation_control$factor_tokenization, "language_span")) {
+  if (identical(adaptation_control$factor_tokenization, "fused")) {
     neural_validate_factor_token_budget(
       n_factors = length(experiment$factor_names),
       max_factor_tokens = adaptation_control$max_factor_tokens %||% NULL,
       context = sprintf("Adaptation experiment '%s'", experiment$experiment_id)
     )
   }
-  cs_foundation_validate_language_span_text(
+  cs_foundation_validate_fused_text(
     token_info = token_info,
     context = sprintf("Adaptation experiment '%s'", experiment$experiment_id)
   )
@@ -1744,11 +1751,6 @@ cs_foundation_build_init_site_values <- function(group,
   )
   params <- group_prepped$fit$neural_model_info$params
   registry <- group$schema_registry
-  factor_tokenization <- cs_foundation_factor_tokenization(
-    group$token_control$factor_tokenization %||%
-      group_prepped$fit$neural_model_info$factor_tokenization %||%
-      "legacy_indexed"
-  )
   exp_map <- cs_foundation_build_local_factor_map(experiment)
   slot_table <- registry$slot_table %||% data.frame(
     slot_name = character(0),
@@ -1788,10 +1790,7 @@ cs_foundation_build_init_site_values <- function(group,
   init_values <- list()
 
   direct_names <- setdiff(names(params), c(
-    grep("^E_factor_[0-9]+$", names(params), value = TRUE),
-    "W_out", "b_out", "sigma",
-    "E_feature_id", "E_segment", "E_covariate_id",
-    "E_covariate_present", "V_covariate_value", "M_cross"
+    "W_out", "b_out", "sigma", "E_segment", "M_cross"
   ))
   for (name in direct_names) {
     init_values <- cs_foundation_add_init_value(
@@ -1799,58 +1798,6 @@ cs_foundation_build_init_site_values <- function(group,
       name = name,
       value = cs2step_neural_to_r_array(params[[name]])
     )
-  }
-
-  feature_id_src <- if (!identical(factor_tokenization, "language_span") &&
-                        !is.null(params$E_feature_id)) {
-    cs2step_neural_to_r_array(params$E_feature_id)
-  } else {
-    NULL
-  }
-  if (!is.null(feature_id_src)) {
-    feature_id_tgt <- matrix(0, nrow = length(experiment$factor_names), ncol = ncol(feature_id_src))
-    for (j in seq_along(experiment$factor_names)) {
-      factor_name <- experiment$factor_names[[j]]
-      slot_name <- lookup_slot(exp_map$factor_map[[factor_name]]$slot_key)
-      if (is.null(slot_name)) {
-        next
-      }
-      src_idx <- match(slot_name, registry$slot_table$slot_name)
-      if (!is.na(src_idx) && src_idx <= nrow(feature_id_src)) {
-        feature_id_tgt[j, ] <- feature_id_src[src_idx, ]
-      }
-    }
-    init_values[["E_feature_id_raw"]] <- feature_id_tgt
-  }
-
-  if (!identical(factor_tokenization, "language_span")) {
-    for (j in seq_along(experiment$factor_names)) {
-      factor_name <- experiment$factor_names[[j]]
-      slot_name <- lookup_slot(exp_map$factor_map[[factor_name]]$slot_key)
-      local_levels <- experiment$names_list[[factor_name]][[1]]
-      model_dims <- as.integer(group$fit$neural_model_info$model_dims)
-      tgt <- matrix(0, nrow = length(local_levels) + 1L, ncol = model_dims)
-      if (!is.null(slot_name)) {
-        src_idx <- match(slot_name, registry$slot_table$slot_name)
-        src_name <- paste0("E_factor_", src_idx)
-        src_val <- params[[src_name]]
-        if (!is.null(src_val)) {
-          src_mat <- cs2step_neural_to_r_array(src_val)
-          src_level_keys <- registry$slot_level_keys[[slot_name]]
-          local_level_keys <- exp_map$level_map[[factor_name]]
-          for (lvl in local_levels) {
-            src_row <- match(local_level_keys[[lvl]], src_level_keys)
-            if (!is.na(src_row) && src_row <= nrow(src_mat)) {
-              tgt[match(lvl, local_levels), ] <- src_mat[src_row, ]
-            }
-          }
-          if (nrow(src_mat) >= length(src_level_keys) + 1L) {
-            tgt[nrow(tgt), ] <- src_mat[nrow(src_mat), ]
-          }
-        }
-      }
-      init_values[[paste0("E_factor_", j, "_raw")]] <- tgt
-    }
   }
 
   if (!is.null(params$E_segment)) {
@@ -1899,23 +1846,6 @@ cs_foundation_build_init_site_values <- function(group,
       name = "sigma",
       value = as.numeric(cs2step_neural_to_r_array(params$sigma))
     )
-  }
-
-  covariate_param_names <- c("E_covariate_id", "E_covariate_present", "V_covariate_value")
-  for (param_name in covariate_param_names) {
-    if (is.null(params[[param_name]]) || length(local_x_feature_names) < 1L) {
-      next
-    }
-    src_mat <- cs2step_neural_to_r_array(params[[param_name]])
-    tgt <- matrix(0, nrow = length(local_x_feature_names), ncol = ncol(src_mat))
-    rownames(tgt) <- local_x_feature_names
-    src_names <- group$x_feature_names %||% character(0)
-    idx <- match(src_names, local_x_feature_names)
-    ok <- which(!is.na(idx) & seq_along(src_names) <= nrow(src_mat))
-    if (length(ok) > 0L) {
-      tgt[idx[ok], ] <- src_mat[ok, , drop = FALSE]
-    }
-    init_values[[param_name]] <- tgt
   }
 
   init_values
@@ -2038,11 +1968,10 @@ cs_foundation_unpack_group <- function(group,
 #'   unchanged at the API boundary. In the default FM covariate path
 #'   (\code{covariate_value_encoding = "shared_projection"} with
 #'   \code{shared_projection_value_encoder = "name_dist_moe"}), each present
-#'   covariate is emitted as a 4-token span
-#'   \code{<start_covariate, covariate_name_token, value_token, end_covariate>}.
-#'   The name token can include projected \code{X}-name text embeddings, and
-#'   the value token combines the standardized numeric value with local
-#'   study-specific distribution summaries and covariate-name semantics.
+#'   covariate is emitted as one fused covariate/value token. The fused token can
+#'   include projected \code{X}-name text embeddings and combines the
+#'   standardized numeric value with local study-specific distribution summaries
+#'   and covariate-name semantics.
 #'   Absent covariates are masked structurally rather than represented by a
 #'   separate learned presence embedding.}
 #'   \item{\code{respondent_id}, \code{respondent_task_id}}{Optional row-aligned
@@ -2106,26 +2035,23 @@ cs_foundation_unpack_group <- function(group,
 #'   combines description text and learned pooled experiment ids, and
 #'   \code{"legacy_id"} uses only learned pooled experiment ids. Default
 #'   \code{"description"}.}
-#'   \item{\code{factor_tokenization}}{FM factor tokenizer. The default
-#'   \code{"language_span"} emits factor spans as
-#'   \code{<start_factor, factor_name_token, factor_level_token, end_factor>}.
-#'   \code{"legacy_indexed"} retains the older fixed one-token-per-factor
-#'   encoder for ablations. Default \code{"language_span"}.}
+#'   \item{\code{factor_tokenization}}{FM factor tokenizer. The required
+#'   \code{"fused"} mode emits one fused factor/value token per candidate
+#'   attribute.}
 #'   \item{\code{max_factor_tokens}}{Total factor-token budget used by the FM
-#'   factor span encoder. The default \code{256L} supports up to 64 factor
-#'   spans per profile.}
+#'   fused factor encoder. The default \code{256L} supports up to 256 factor
+#'   attributes per profile.}
 #'   \item{\code{covariate_value_encoding}}{FM covariate encoder family.
-#'   \code{"shared_projection"} is the span-based default. \code{"legacy_linear"}
-#'   retains the older fixed-width covariate path for ablations. Default
-#'   \code{"shared_projection"}.}
+#'   The required \code{"shared_projection"} mode emits one fused covariate/value
+#'   token per respondent covariate.}
 #'   \item{\code{shared_projection_value_encoder}}{Value-token generator used
 #'   inside \code{"shared_projection"}. The default \code{"name_dist_moe"}
 #'   conditions each covariate value token on covariate-name semantics and
 #'   local distribution summaries. \code{"legacy_scalar"} falls back to the
 #'   older standardized scalar projection.}
 #'   \item{\code{max_covariate_tokens}}{Total covariate-token budget used by
-#'   the FM covariate span encoder. The default \code{512L} supports up to 128
-#'   covariate spans per row.}
+#'   the FM fused covariate encoder. The default \code{512L} supports up to 512
+#'   covariates per row.}
 #'   \item{\code{neural_mcmc_control}}{Optional list passed to the existing
 #'   neural outcome backend. Defaults to a pooled SVI configuration using
 #'   output-only uncertainty.}
@@ -2360,12 +2286,11 @@ cs_foundation_match_group <- function(foundation_model,
 #'   \item pairwise studies require \code{pair_id};
 #'   \item \code{X}, when supplied, must be numeric and row-aligned to
 #'   \code{W}; raw numeric values remain unchanged during adaptation. Under the
-#'   default FM covariate path, shared covariate spans are aligned by pooled
-#'   \code{X} name, name tokens optionally receive rebuilt \code{X}-name text
-#'   embeddings, and value tokens are rebuilt from standardized numeric values
-#'   plus local adaptation-study distribution summaries. Absent covariates are
-#'   masked structurally rather than represented with a separate presence
-#'   embedding;
+#'   default FM covariate path, shared fused covariate/value tokens are aligned
+#'   by pooled \code{X} name, optionally receive rebuilt \code{X}-name text
+#'   embeddings, and are rebuilt from standardized numeric values plus local
+#'   adaptation-study distribution summaries. Absent covariates are masked
+#'   structurally rather than represented with a separate presence embedding;
 #'   \item categorical adaptation follows the same \code{n_outcomes} rule as
 #'   pooled training.
 #' }
@@ -2384,7 +2309,7 @@ cs_foundation_match_group <- function(foundation_model,
 #'   \item{\code{strict_schema_match}}{Require every local factor to match a
 #'   pooled foundation slot. Default \code{FALSE}.}
 #'   \item{\code{allow_extra_covariates}}{Allow local covariates that were not
-#'   present during pooled training. Extra local covariate spans are appended
+#'   present during pooled training. Extra local covariate tokens are appended
 #'   after the shared pooled covariate vocabulary. Default \code{TRUE}.}
 #'   \item{\code{use_text_semantics}}{Reuse token-native text semantics during
 #'   adaptation when the foundation object includes them, including factor-name,

@@ -77,8 +77,7 @@ cs2step_embedding_context_availability <- function(model_info, params = NULL) {
     place = !is.null(params$W_place_context),
     time = !is.null(params$W_time_context),
     respondent_group = !is.null(params$E_resp_party),
-    respondent_covariates = !is.null(params$E_covariate_start) ||
-      !is.null(params$E_covariate_id),
+    respondent_covariates = !is.null(params$E_covariate_fused_base),
     stage = !is.null(params$E_stage),
     matchup = !is.null(params$E_matchup)
   )
@@ -643,7 +642,7 @@ cs2step_neural_extract_internal <- function(object,
     competing_group_variable_respondent = competing_group_variable_respondent,
     resp_cov_new = X_new,
     factor_order_new = factor_order_new %||%
-      if (identical(neural_factor_tokenization(model_info), "language_span")) {
+      if (identical(neural_factor_tokenization(model_info), "fused")) {
         neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
       } else {
         NULL
