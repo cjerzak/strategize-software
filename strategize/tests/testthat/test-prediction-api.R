@@ -35,7 +35,13 @@ prediction_test_experiment <- function(seed, experiment_id) {
 }
 
 prediction_test_cache_model_info <- function() {
-  list(
+  factor_names <- c("price", "message")
+  factor_levels <- c(2L, 2L)
+  struct <- strategize:::neural_make_default_fused_structural_info(
+    factor_names = factor_names,
+    factor_levels = factor_levels
+  )
+  model_info <- list(
     model_depth = 1L,
     model_dims = 8L,
     n_heads = 1L,
@@ -44,9 +50,20 @@ prediction_test_cache_model_info <- function() {
     cross_candidate_encoder_mode = "none",
     likelihood = "bernoulli",
     experiment_token_mode = "description",
-    factor_tokenization = "index",
+    factor_tokenization = "fused",
+    n_factors = 2L,
+    factor_levels = factor_levels,
+    factor_struct_matrix = struct$factor_struct_matrix,
+    factor_struct_feature_names = struct$factor_struct_feature_names,
+    factor_struct_dim = ncol(struct$factor_struct_matrix),
+    level_struct_matrices = struct$level_struct_matrices,
+    level_struct_feature_names = struct$level_struct_feature_names,
+    level_struct_dim = ncol(struct$level_struct_matrices[[1L]]),
+    factor_schema_supplied = TRUE,
+    default_factor_order = seq.int(0L, length(factor_names) - 1L),
+    token_family_levels = strategize:::neural_token_family_levels(),
     max_factor_tokens = 2L,
-    covariate_value_encoding = "legacy_linear",
+    covariate_value_encoding = "shared_projection",
     shared_projection_value_encoder = "none",
     max_covariate_tokens = 0L,
     n_candidate_tokens = 2L,
@@ -54,6 +71,7 @@ prediction_test_cache_model_info <- function() {
     cand_party_to_resp_idx = c(0L, 1L),
     text_semantic_dim = 2L
   )
+  model_info
 }
 
 prediction_test_text_embedding <- function(text) {
@@ -63,6 +81,39 @@ prediction_test_text_embedding <- function(text) {
     c(sum(bytes), length(bytes))
   }, numeric(2)))
 }
+
+test_that("neural prediction W preparation defaults unnamed matrices and rejects partial names", {
+  factor_names <- c("price", "message")
+
+  unnamed <- matrix(c("low", "high", "short", "long"), nrow = 2L)
+  prepped_unnamed <- strategize:::cs2step_neural_prepare_W_for_prediction(
+    unnamed,
+    factor_names
+  )
+  testthat::expect_identical(colnames(prepped_unnamed), factor_names)
+
+  reordered <- data.frame(
+    message = c("short", "long"),
+    price = c("low", "high"),
+    check.names = FALSE
+  )
+  prepped_reordered <- strategize:::cs2step_neural_prepare_W_for_prediction(
+    reordered,
+    factor_names
+  )
+  testthat::expect_identical(colnames(prepped_reordered), factor_names)
+  testthat::expect_identical(as.character(prepped_reordered$price), c("low", "high"))
+
+  partial <- data.frame(
+    price = c("low", "high"),
+    other = c("x", "y"),
+    check.names = FALSE
+  )
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_W_for_prediction(partial, factor_names),
+    "either all match"
+  )
+})
 
 test_that("strategic_prediction() fits GLM predictor (pairwise) and predicts probabilities", {
   data <- generate_test_data(n = 400, n_factors = 3, n_levels = 2, seed = 101)
@@ -412,8 +463,18 @@ test_that("pairwise row-aligned experiment_country uses the left profile row", {
     covariate_names = character(0),
     place_context_enabled = TRUE,
     place_feature_names = strategize:::neural_place_feature_names(),
-    factor_tokenization = "legacy_indexed"
+    factor_tokenization = "fused",
+    max_factor_tokens = 1L
   )
+  model_info <- neural_test_add_fused_factor_schema(
+    model_info,
+    factor_levels = 1L,
+    factor_names = "factor_1",
+    max_factor_tokens = 1L
+  )
+  model_info$place_context_enabled <- TRUE
+  model_info$has_place_context <- TRUE
+  model_info$place_feature_names <- strategize:::neural_place_feature_names()
   prep <- strategize:::cs2step_neural_prepare_prediction_data(
     W_idx = matrix(1L, nrow = 4L, ncol = 1L),
     model_info = model_info,

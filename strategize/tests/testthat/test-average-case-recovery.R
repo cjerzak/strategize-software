@@ -29,6 +29,7 @@ extract_average_case_neural_mu_hat <- function(res, W) {
     level_names <- names(res$p_list[[d_]])
     match(as.character(W_df[[d_]]), level_names)
   }, numeric(nrow(W_df))))
+  colnames(W_num) <- names(res$p_list)
 
   pred <- model(X_new = W_num)
   if (is.list(pred) && !is.null(pred$mu)) {

@@ -8,6 +8,14 @@ neural_test_projection_matrix <- function(n_features, model_dims) {
   out
 }
 
+neural_test_matrix_ncol <- function(x) {
+  x_r <- tryCatch(
+    strategize:::cs2step_neural_to_r_array(x),
+    error = function(e) x
+  )
+  ncol(as.matrix(x_r))
+}
+
 neural_test_add_fused_factor_schema <- function(model_info,
                                                 factor_levels = NULL,
                                                 factor_names = NULL,
@@ -49,11 +57,27 @@ neural_test_add_fused_factor_schema <- function(model_info,
 
 neural_test_add_fused_factor_params <- function(params,
                                                 model_dims,
-                                                factor_struct_dim = 10L,
-                                                level_struct_dim = 7L,
+                                                model_info = NULL,
+                                                factor_struct_dim = NULL,
+                                                level_struct_dim = NULL,
                                                 token_family_levels = strategize:::neural_token_family_levels()) {
   strenv <- strategize:::strenv
   dims <- as.integer(model_dims)
+  if (is.null(factor_struct_dim)) {
+    factor_struct_dim <- if (!is.null(model_info$factor_struct_matrix)) {
+      neural_test_matrix_ncol(model_info$factor_struct_matrix)
+    } else {
+      length(strategize:::neural_fused_default_factor_struct_feature_names()) + 1L
+    }
+  }
+  if (is.null(level_struct_dim)) {
+    level_struct_dim <- if (!is.null(model_info$level_struct_matrices) &&
+                            length(model_info$level_struct_matrices) > 0L) {
+      neural_test_matrix_ncol(model_info$level_struct_matrices[[1L]])
+    } else {
+      length(strategize:::neural_fused_default_level_struct_feature_names())
+    }
+  }
   params$E_factor_fused_base <- params$E_factor_fused_base %||%
     strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
   params$W_factor_fuse_1 <- params$W_factor_fuse_1 %||%

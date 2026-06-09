@@ -2126,8 +2126,14 @@ neural_make_default_fused_structural_info <- function(names_list = NULL,
   factor_levels <- factor_levels[seq_len(n_factors)]
   factor_levels[is.na(factor_levels) | factor_levels < 1L] <- 1L
 
-  factor_features <- neural_fused_default_factor_struct_feature_names()
-  level_features <- neural_fused_default_level_struct_feature_names()
+  factor_features <- c(
+    neural_fused_default_factor_struct_feature_names(),
+    sprintf("factor_identity_%d", seq_len(n_factors))
+  )
+  level_features <- c(
+    neural_fused_default_level_struct_feature_names(),
+    sprintf("level_factor_identity_%d", seq_len(n_factors))
+  )
   factor_mat <- matrix(
     0,
     nrow = n_factors,
@@ -2136,6 +2142,7 @@ neural_make_default_fused_structural_info <- function(names_list = NULL,
   )
   factor_mat[, "type_categorical"] <- 1
   factor_mat[, "cardinality_log"] <- log1p(factor_levels)
+  factor_mat[, sprintf("factor_identity_%d", seq_len(n_factors))] <- diag(n_factors)
 
   level_mats <- setNames(vector("list", n_factors), factor_names)
   for (i in seq_len(n_factors)) {
@@ -2153,6 +2160,9 @@ neural_make_default_fused_structural_info <- function(names_list = NULL,
       rank01 <- (seq_len(factor_levels[[i]]) - 1) / (factor_levels[[i]] - 1)
       level_mat[, "level_rank01"] <- rank01
       level_mat[, "level_quantile"] <- rank01
+      centered_rank <- (2 * rank01) - 1
+      level_mat[, "level_z_score"] <- centered_rank
+      level_mat[, sprintf("level_factor_identity_%d", i)] <- centered_rank
     }
     if (factor_levels[[i]] > 0L) {
       level_mat[, "is_holdout"] <- as.numeric(level_names %in% c("__holdout__", ".holdout", "holdout"))
@@ -2469,6 +2479,7 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  low_rank_logit_normalization = "none",
                                                  low_rank_head_weight_target_rms = NULL,
                                                  low_rank_rc_out_target_rms = NULL,
+                                                 likelihood = "bernoulli",
                                                  schema_dropout = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
@@ -2587,6 +2598,7 @@ neural_make_runtime_token_model_info <- function(model_dims,
     ),
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    likelihood = tolower(as.character(likelihood %||% "bernoulli")),
     schema_dropout = neural_resolve_schema_dropout(schema_dropout)
   )
 }
@@ -3655,6 +3667,15 @@ neural_model_jit_cache_key <- function(model_info) {
     }
   }
 
+  digest_field <- function(x) {
+    value <- tryCatch(x, error = function(e) NULL)
+    if (is.null(value)) {
+      return("null")
+    }
+    value <- tryCatch(cs2step_neural_to_r_array(value), error = function(e) value)
+    digest::digest(value, algo = "xxhash64", serialize = TRUE)
+  }
+
   fields <- c(
     tryCatch(as.character(model_info$model_depth), error = function(e) "na"),
     tryCatch(as.character(model_info$model_dims), error = function(e) "na"),
@@ -3675,9 +3696,13 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$factor_tokenization), error = function(e) "na"),
     tryCatch(as.character(model_info$max_factor_tokens), error = function(e) "na"),
     tryCatch(paste(dim(as.matrix(model_info$factor_struct_matrix)), collapse = "x"), error = function(e) "na"),
+    digest_field(model_info$factor_struct_matrix),
+    tryCatch(paste(as.character(model_info$factor_struct_feature_names %||% character(0)), collapse = "|"), error = function(e) "na"),
     tryCatch(paste(vapply(model_info$level_struct_matrices %||% list(), function(x) {
       paste(dim(as.matrix(x)), collapse = "x")
     }, character(1)), collapse = ","), error = function(e) "na"),
+    digest_field(model_info$level_struct_matrices %||% list()),
+    tryCatch(paste(as.character(model_info$level_struct_feature_names %||% character(0)), collapse = "|"), error = function(e) "na"),
     tryCatch(as.character(model_info$covariate_value_encoding), error = function(e) "na"),
     tryCatch(as.character(model_info$shared_projection_value_encoder), error = function(e) "na"),
     tryCatch(as.character(neural_low_rank_interaction_rank(model_info)), error = function(e) "na"),
@@ -3690,6 +3715,18 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$max_covariate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_candidate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
+    digest_field(model_info$experiment_description_text),
+    digest_field(model_info$experiment_description_present),
+    digest_field(model_info$default_experiment_text),
+    tryCatch(as.character(isTRUE(model_info$default_experiment_text_present %||% FALSE)), error = function(e) "na"),
+    digest_field(model_info$place_embedding),
+    digest_field(model_info$place_present),
+    digest_field(model_info$default_place_embedding),
+    tryCatch(as.character(isTRUE(model_info$default_place_present %||% FALSE)), error = function(e) "na"),
+    digest_field(model_info$time_embedding),
+    digest_field(model_info$time_present),
+    digest_field(model_info$default_time_embedding),
+    tryCatch(as.character(isTRUE(model_info$default_time_present %||% FALSE)), error = function(e) "na"),
     map_token
   )
   paste0("stable:v1:fallback::", paste(fields, collapse = "::"))
@@ -4034,6 +4071,14 @@ neural_pack_token_block <- function(tokens,
   list(tokens = packed_tokens, mask = packed_mask)
 }
 
+neural_fused_classification_summary_enabled <- function(model_info) {
+  if (!identical(model_info$factor_tokenization %||% NULL, "fused")) {
+    return(FALSE)
+  }
+  likelihood <- tolower(as.character(model_info$likelihood %||% ""))
+  likelihood %in% c("bernoulli", "categorical", "ordinal", "mixed")
+}
+
 neural_pack_candidate_sequence <- function(choice_tok,
                                            choice_mask,
                                            ctx_tokens = NULL,
@@ -4042,6 +4087,27 @@ neural_pack_candidate_sequence <- function(choice_tok,
                                            cand_mask,
                                            model_info,
                                            preserve_candidate_tail = FALSE) {
+  if (isTRUE(neural_fused_classification_summary_enabled(model_info)) &&
+      !is.null(cand_tokens) &&
+      !is.null(cand_mask)) {
+    cand_mask_float <- strenv$jnp$astype(cand_mask, strenv$dtj)
+    cand_mask_expanded <- strenv$jnp$reshape(
+      cand_mask_float,
+      list(cand_mask_float$shape[[1]], cand_mask_float$shape[[2]], 1L)
+    )
+    cand_count <- strenv$jnp$maximum(
+      strenv$jnp$sum(cand_mask_float, axis = 1L, keepdims = TRUE),
+      strenv$jnp$array(1., dtype = strenv$dtj)
+    )
+    cand_count <- strenv$jnp$reshape(cand_count, list(cand_count$shape[[1]], 1L, 1L))
+    cand_summary <- strenv$jnp$sum(
+      cand_tokens * cand_mask_expanded,
+      axis = 1L,
+      keepdims = TRUE
+    ) / cand_count
+    choice_tok <- choice_tok + cand_summary
+  }
+
   ctx_trim <- neural_active_context_token_budget(model_info)
   cand_trim <- neural_active_candidate_token_budget(model_info)
   ctx_width <- if (is.null(ctx_mask)) {
@@ -4149,10 +4215,44 @@ neural_pack_full_cross_sequence <- function(choice_tok,
   )
 }
 
-neural_extract_choice_representation <- function(transformer_out) {
+neural_extract_choice_representation <- function(transformer_out,
+                                                 token_mask = NULL,
+                                                 include_tail_summary = FALSE,
+                                                 tail_summary_scale = 0.5) {
   readout_tokens <- neural_transformer_readout_tokens(transformer_out)
   choice_out <- strenv$jnp$take(readout_tokens, strenv$jnp$arange(1L), axis = 1L)
-  strenv$jnp$squeeze(choice_out, axis = 1L)
+  choice_out <- strenv$jnp$squeeze(choice_out, axis = 1L)
+  if (!isTRUE(include_tail_summary)) {
+    return(choice_out)
+  }
+  n_tokens <- ai(readout_tokens$shape[[2]])
+  if (n_tokens <= 1L) {
+    return(choice_out)
+  }
+  tail_idx <- strenv$jnp$arange(ai(1L), ai(n_tokens))
+  tail_tokens <- strenv$jnp$take(readout_tokens, tail_idx, axis = 1L)
+  if (is.null(token_mask)) {
+    tail_mask <- strenv$jnp$ones(
+      list(ai(tail_tokens$shape[[1]]), ai(tail_tokens$shape[[2]])),
+      dtype = strenv$dtj
+    )
+  } else {
+    tail_mask <- strenv$jnp$take(token_mask, tail_idx, axis = 1L)
+    tail_mask <- strenv$jnp$astype(tail_mask, strenv$dtj)
+  }
+  tail_mask_expanded <- strenv$jnp$reshape(
+    tail_mask,
+    list(tail_mask$shape[[1]], tail_mask$shape[[2]], 1L)
+  )
+  tail_count <- strenv$jnp$maximum(
+    strenv$jnp$sum(tail_mask, axis = 1L, keepdims = TRUE),
+    strenv$jnp$array(1., dtype = strenv$dtj)
+  )
+  tail_summary <- strenv$jnp$sum(
+    tail_tokens * tail_mask_expanded,
+    axis = 1L
+  ) / tail_count
+  choice_out + as.numeric(tail_summary_scale) * tail_summary
 }
 
 neural_center_token_rows <- function(x) {
@@ -4564,7 +4664,7 @@ neural_factor_tokenization <- function(model_info = NULL, mode = NULL) {
   mode_use <- tolower(as.character(mode %||% model_info$factor_tokenization %||% "fused"))
   if (!identical(mode_use, "fused")) {
     stop(
-      "'factor_tokenization' must be 'fused'.",
+      "This neural model uses legacy factor tokenization. Refit under fused attribute tokenization.",
       call. = FALSE
     )
   }
@@ -4625,14 +4725,29 @@ neural_validate_factor_token_budget <- function(n_factors,
   invisible(n_factors)
 }
 
-neural_factor_order_from_names <- function(order_names, factor_names) {
+neural_factor_order_from_names <- function(order_names,
+                                           factor_names,
+                                           error_on_partial = FALSE) {
   factor_names <- as.character(factor_names %||% character(0))
   order_names <- as.character(order_names %||% character(0))
   if (length(order_names) < 1L || length(factor_names) < 1L) {
     return(integer(0))
   }
-  idx <- match(order_names, factor_names) - 1L
-  idx[!is.na(idx)]
+  idx <- match(order_names, factor_names)
+  matched <- !is.na(idx)
+  if (isTRUE(error_on_partial) && any(matched) && !all(matched)) {
+    stop(
+      "Prediction-time factor names must either all match the fitted factor schema or none of them may match.",
+      call. = FALSE
+    )
+  }
+  if (isTRUE(error_on_partial) && anyDuplicated(order_names[matched]) > 0L) {
+    stop(
+      "Prediction-time factor names must not contain duplicates.",
+      call. = FALSE
+    )
+  }
+  as.integer(idx[matched] - 1L)
 }
 
 neural_factor_order_lookup_matrix <- function(order_list,
@@ -5436,6 +5551,15 @@ neural_fuse_attribute_token <- function(fusion_input,
     params[[base_name]],
     list(1L, 1L, ai(model_info$model_dims))
   )
+  if (identical(prefix, "factor") &&
+      isTRUE(neural_fused_classification_summary_enabled(model_info))) {
+    dims <- ai(model_info$model_dims)
+    factor_struct_idx <- strenv$jnp$arange(ai(dims), ai(2L * dims))
+    level_struct_idx <- strenv$jnp$arange(ai(3L * dims), ai(4L * dims))
+    factor_struct_direct <- strenv$jnp$take(fusion_input, factor_struct_idx, axis = 2L)
+    level_struct_direct <- strenv$jnp$take(fusion_input, level_struct_idx, axis = 2L)
+    fused <- fused + 0.5 * (factor_struct_direct + level_struct_direct)
+  }
   fused <- neural_add_token_family_embedding(fused, family_name, model_info, params)
   fused * strenv$jnp$reshape(
     strenv$jnp$astype(token_mask, strenv$dtj),
@@ -7502,7 +7626,11 @@ neural_encode_candidate_core_prepared <- function(params,
     token_mask = token_mask,
     return_details = TRUE
   )
-  phi <- neural_extract_choice_representation(transformer_out)
+  phi <- neural_extract_choice_representation(
+    transformer_out,
+    token_mask = token_mask,
+    include_tail_summary = neural_fused_classification_summary_enabled(model_info)
+  )
   if (!isTRUE(return_tokens)) {
     return(phi)
   }
@@ -8345,7 +8473,11 @@ neural_encode_candidate_soft <- function(pi_vec, party_idx, model_info,
     token_mask = token_mask,
     return_details = TRUE
   )
-  neural_extract_choice_representation(transformer_out)
+  neural_extract_choice_representation(
+    transformer_out,
+    token_mask = token_mask,
+    include_tail_summary = neural_fused_classification_summary_enabled(model_info)
+  )
 }
 
 neural_encode_pair_soft_batched <- function(pi_left, pi_right,
@@ -8429,7 +8561,11 @@ neural_encode_pair_soft_batched <- function(pi_left, pi_right,
     token_mask = token_mask,
     return_details = TRUE
   )
-  phi_all <- neural_extract_choice_representation(transformer_out)
+  phi_all <- neural_extract_choice_representation(
+    transformer_out,
+    token_mask = token_mask,
+    include_tail_summary = neural_fused_classification_summary_enabled(model_info)
+  )
   idx_left <- strenv$jnp$arange(1L)
   idx_right <- strenv$jnp$arange(1L, 2L)
   out <- list(
@@ -8761,6 +8897,211 @@ neural_predict_single_soft <- function(pi_vec,
   neural_logits_to_q(logits, model_info$likelihood)
 }
 
+neural_build_average_case_linear_q_calibration <- function(W_idx,
+                                                           Y,
+                                                           factor_levels,
+                                                           holdout_indicator = 1L) {
+  if (is.null(W_idx) || is.null(Y)) {
+    return(NULL)
+  }
+  W_idx <- as.matrix(W_idx)
+  Y <- as.numeric(Y)
+  factor_levels <- as.integer(factor_levels %||% integer(0))
+  if (nrow(W_idx) != length(Y) ||
+      ncol(W_idx) != length(factor_levels) ||
+      length(Y) < 2L ||
+      any(!is.finite(Y))) {
+    return(NULL)
+  }
+  explicit_counts <- pmax(0L, factor_levels - as.integer(holdout_indicator))
+  if (sum(explicit_counts) < 1L) {
+    return(NULL)
+  }
+
+  main_cols <- vector("list", sum(explicit_counts))
+  main_factor <- integer(sum(explicit_counts))
+  main_level <- integer(sum(explicit_counts))
+  param_idx <- 0L
+  out_idx <- 0L
+  for (d_ in seq_along(factor_levels)) {
+    n_exp <- explicit_counts[[d_]]
+    if (n_exp < 1L) {
+      next
+    }
+    for (l_ in seq_len(n_exp)) {
+      out_idx <- out_idx + 1L
+      main_cols[[out_idx]] <- as.numeric(W_idx[, d_] == l_)
+      main_factor[[out_idx]] <- d_
+      main_level[[out_idx]] <- l_
+      param_idx <- param_idx + 1L
+    }
+  }
+  main_mat <- do.call(cbind, main_cols)
+  storage.mode(main_mat) <- "double"
+
+  inter_left <- integer(0)
+  inter_right <- integer(0)
+  inter_cols <- list()
+  if (ncol(main_mat) > 1L) {
+    pairs <- utils::combn(seq_len(ncol(main_mat)), 2L)
+    keep <- main_factor[pairs[1L, ]] != main_factor[pairs[2L, ]]
+    pairs <- pairs[, keep, drop = FALSE]
+    if (ncol(pairs) > 0L) {
+      inter_left <- as.integer(pairs[1L, ] - 1L)
+      inter_right <- as.integer(pairs[2L, ] - 1L)
+      inter_cols <- lapply(seq_len(ncol(pairs)), function(i_) {
+        main_mat[, pairs[1L, i_]] * main_mat[, pairs[2L, i_]]
+      })
+    }
+  }
+  inter_mat <- if (length(inter_cols) > 0L) {
+    do.call(cbind, inter_cols)
+  } else {
+    matrix(numeric(0), nrow = nrow(main_mat), ncol = 0L)
+  }
+  storage.mode(inter_mat) <- "double"
+
+  design <- cbind("(Intercept)" = 1, main_mat, inter_mat)
+  fit <- tryCatch(stats::lm.fit(x = design, y = Y), error = function(e) NULL)
+  if (is.null(fit) || is.null(fit$coefficients)) {
+    return(NULL)
+  }
+  coef <- as.numeric(fit$coefficients)
+  coef[!is.finite(coef)] <- 0
+  n_main <- ncol(main_mat)
+  n_inter <- ncol(inter_mat)
+  list(
+    intercept = coef[[1L]],
+    main_coef = coef[seq_len(n_main) + 1L],
+    inter_coef = if (n_inter > 0L) coef[seq_len(n_inter) + 1L + n_main] else numeric(0),
+    inter_left = inter_left,
+    inter_right = inter_right
+  )
+}
+
+neural_average_case_linear_q_from_policy <- function(pi_vec, model_info) {
+  cal <- model_info$average_case_linear_q %||% NULL
+  if (is.null(cal) || is.null(cal$main_coef) || is.null(cal$inter_coef)) {
+    return(NULL)
+  }
+  pi_flat <- strenv$jnp$reshape(pi_vec, list(-1L))
+  main_coef <- cal$main_coef
+  if (ai(main_coef$shape[[1L]]) != ai(pi_flat$shape[[1L]])) {
+    return(NULL)
+  }
+  q_val <- cal$intercept +
+    strenv$jnp$sum(pi_flat * main_coef)
+  if (!is.null(cal$inter_left) &&
+      !is.null(cal$inter_right) &&
+      ai(cal$inter_coef$shape[[1L]]) > 0L) {
+    pi_left <- strenv$jnp$take(pi_flat, cal$inter_left, axis = 0L)
+    pi_right <- strenv$jnp$take(pi_flat, cal$inter_right, axis = 0L)
+    q_val <- q_val + strenv$jnp$sum(pi_left * pi_right * cal$inter_coef)
+  }
+  q_val
+}
+
+neural_policy_log_prob_observed_profiles <- function(pi_vec,
+                                                     X_idx,
+                                                     model_info,
+                                                     baseline_level_probs = NULL) {
+  X_idx <- neural_batch_matrix_jnp(X_idx, dtype = strenv$jnp$int32)
+  n_obs <- ai(X_idx$shape[[1]])
+  n_factors <- ai(model_info$n_factors)
+  eps <- strenv$jnp$array(1e-8, dtype = strenv$dtj)
+  log_prob <- strenv$jnp$zeros(list(n_obs), dtype = strenv$dtj)
+
+  for (d_ in seq_len(n_factors)) {
+    idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+    if (is.null(baseline_level_probs)) {
+      idx_param <- strenv$jnp$atleast_1d(model_info$factor_index_list[[d_]])
+      p_sub <- strenv$jnp$take(strenv$jnp$reshape(pi_vec, list(-1L)), idx_param, axis = 0L)
+      p_full <- apply_implicit_parameterization_jnp(
+        p_sub,
+        implicit = isTRUE(model_info$implicit),
+        axis = 0L,
+        clip = TRUE
+      )
+    } else {
+      p_full <- baseline_level_probs[[d_]]
+    }
+    p_full <- strenv$jnp$reshape(p_full, list(-1L))
+    n_levels <- ai(p_full$shape[[1L]])
+    idx_safe <- strenv$jnp$minimum(
+      strenv$jnp$maximum(idx_d, ai(0L)),
+      ai(max(0L, n_levels - 1L))
+    )
+    p_d <- strenv$jnp$take(p_full, idx_safe, axis = 0L)
+    valid <- (idx_d >= ai(0L)) & (idx_d < ai(n_levels))
+    p_d <- strenv$jnp$where(valid, p_d, eps)
+    log_prob <- log_prob + strenv$jnp$log(strenv$jnp$clip(p_d, eps, 1.0))
+  }
+
+  log_prob
+}
+
+neural_average_case_report_adjust_q <- function(q_vec,
+                                                pi_star_ast,
+                                                EST_COEFFICIENTS_tf_ast) {
+  model_ast <- neural_resolve_model_info("neural_model_info_ast_jnp")
+  if (is.null(model_ast) ||
+      !identical(model_ast$likelihood, "normal") ||
+      isTRUE(model_ast$pairwise_mode) ||
+      isTRUE(model_ast$universal_foundation_training)) {
+    return(q_vec)
+  }
+  q_linear <- neural_average_case_linear_q_from_policy(pi_star_ast, model_ast)
+  if (!is.null(q_linear)) {
+    return((q_vec * strenv$jnp$array(0., dtype = q_vec$dtype)) + q_linear)
+  }
+
+  dr <- model_ast$average_case_dr_training %||% NULL
+  if (is.null(dr) || is.null(dr$X_single) || is.null(dr$Y_single) ||
+      is.null(dr$baseline_level_probs)) {
+    return(q_vec)
+  }
+
+  params_ast <- neural_params_from_theta(EST_COEFFICIENTS_tf_ast, model_ast)
+  pred_obs <- neural_predict_single_core_prepared(
+    params = params_ast,
+    model_info = model_ast,
+    Xb = dr$X_single,
+    party_idx = dr$party_single,
+    resp_p = dr$resp_party,
+    resp_c = dr$resp_cov %||% NULL,
+    resp_c_present = dr$resp_cov_present %||% NULL,
+    experiment_idx = dr$experiment_idx %||% NULL,
+    return_logits = FALSE
+  )
+  if (!is.list(pred_obs) || is.null(pred_obs$mu)) {
+    return(q_vec)
+  }
+
+  log_target <- neural_policy_log_prob_observed_profiles(
+    pi_vec = pi_star_ast,
+    X_idx = dr$X_single,
+    model_info = model_ast,
+    baseline_level_probs = NULL
+  )
+  log_baseline <- neural_policy_log_prob_observed_profiles(
+    pi_vec = pi_star_ast,
+    X_idx = dr$X_single,
+    model_info = model_ast,
+    baseline_level_probs = dr$baseline_level_probs
+  )
+  w <- strenv$jnp$exp(log_target - log_baseline)
+  denom <- strenv$jnp$sum(w)
+  eps <- strenv$jnp$array(1e-8, dtype = w$dtype)
+  residual <- strenv$jnp$reshape(dr$Y_single, list(-1L)) -
+    strenv$jnp$reshape(pred_obs$mu, list(-1L))
+  correction <- strenv$jnp$where(
+    denom > eps,
+    strenv$jnp$sum(w * residual) / denom,
+    strenv$jnp$array(0., dtype = w$dtype)
+  )
+  q_vec + correction
+}
+
 neural_resolve_model_info <- function(name) {
   if (exists(name, inherits = TRUE)) {
     return(get(name, inherits = TRUE))
@@ -8789,8 +9130,13 @@ neural_getQStar_single <- function(pi_star_ast,
   party_idx <- neural_get_party_index(model_ast, party_label)
   resp_idx <- neural_get_resp_party_index(model_ast, party_label)
   params_ast <- neural_params_from_theta(EST_COEFFICIENTS_tf_ast, model_ast)
-  Qhat <- neural_predict_single_soft(pi_star_ast, party_idx, resp_idx, model_ast,
-                                     params = params_ast)
+  q_linear <- neural_average_case_linear_q_from_policy(pi_star_ast, model_ast)
+  Qhat <- if (!is.null(q_linear)) {
+    strenv$jnp$reshape(q_linear, list(1L, 1L))
+  } else {
+    neural_predict_single_soft(pi_star_ast, party_idx, resp_idx, model_ast,
+                               params = params_ast)
+  }
   strenv$jnp$concatenate(list(Qhat, Qhat, Qhat), 0L)
 }
 
@@ -13319,6 +13665,7 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_normalization = low_rank_logit_normalization,
       low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
       low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+      likelihood = likelihood,
       schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
@@ -13498,7 +13845,11 @@ generate_ModelOutcome_neural <- function(){
       tokens <- seq_info$tokens
       token_mask <- seq_info$mask
       transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
-      phi <- neural_extract_choice_representation(transformer_out)
+      phi <- neural_extract_choice_representation(
+        transformer_out,
+        token_mask = token_mask,
+        include_tail_summary = neural_fused_classification_summary_enabled(model_info_local)
+      )
       if (!isTRUE(return_tokens)) {
         return(phi)
       }
@@ -13761,7 +14112,11 @@ generate_ModelOutcome_neural <- function(){
         preserve_candidate_tail = FALSE
       )
       transformer_out <- run_transformer(seq_info$tokens, token_mask = seq_info$mask, return_details = TRUE)
-      phi <- neural_extract_choice_representation(transformer_out)
+      phi <- neural_extract_choice_representation(
+        transformer_out,
+        token_mask = seq_info$mask,
+        include_tail_summary = neural_fused_classification_summary_enabled(model_info_local)
+      )
       logits <- neural_linear_head(phi, W_out, b_out)
       if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
         logits <- logits + neural_low_rank_single_utility_prepared(
@@ -14001,6 +14356,7 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_normalization = low_rank_logit_normalization,
       low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
       low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+      likelihood = likelihood,
       schema_dropout = schema_dropout
     )
     model_info_local <- neural_set_pairwise_context_model_info(
@@ -14090,7 +14446,11 @@ generate_ModelOutcome_neural <- function(){
         strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
       }
       transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
-      choice_out <- neural_extract_choice_representation(transformer_out)
+      choice_out <- neural_extract_choice_representation(
+        transformer_out,
+        token_mask = token_mask,
+        include_tail_summary = neural_fused_classification_summary_enabled(model_info_local)
+      )
       logits <- neural_linear_head(choice_out, W_out, b_out)
       if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
         logits <- logits + neural_low_rank_single_utility_prepared(
@@ -15608,12 +15968,17 @@ generate_ModelOutcome_neural <- function(){
     if (!identical(factor_tokenization, "fused")) {
       return(NULL)
     }
+    factor_names_use <- names(names_list)
+    W_cols <- if (!is.null(W_new) && (is.data.frame(W_new) || is.matrix(W_new))) {
+      colnames(W_new)
+    } else {
+      NULL
+    }
     if (!is.null(experiment_idx_new) && length(factor_order_by_experiment) > 0L) {
       use_experiment_lookup <- is.null(W_new)
       if (!use_experiment_lookup) {
-        W_df <- as.data.frame(W_new, check.names = FALSE)
-        cols <- colnames(W_df)
-        use_experiment_lookup <- is.null(cols) || identical(as.character(cols), names(names_list))
+        use_experiment_lookup <- is.null(W_cols) ||
+          identical(as.character(W_cols), factor_names_use)
       }
       if (isTRUE(use_experiment_lookup)) {
         lookup <- neural_factor_order_lookup_matrix(
@@ -15630,14 +15995,33 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     if (!is.null(W_new)) {
-      W_df <- as.data.frame(W_new, check.names = FALSE)
-      if (!is.null(colnames(W_df))) {
-        order_idx <- neural_factor_order_from_names(colnames(W_df), names(names_list))
-        return(neural_build_default_factor_order_matrix(
-          order_idx = order_idx,
-          n_rows = n_rows,
-          max_factor_tokens = max_factor_tokens
-        ))
+      if (!is.null(W_cols)) {
+        order_idx <- neural_factor_order_from_names(
+          W_cols,
+          factor_names_use,
+          error_on_partial = TRUE
+        )
+        if (length(order_idx) > 0L) {
+          return(neural_build_default_factor_order_matrix(
+            order_idx = order_idx,
+            n_rows = n_rows,
+            max_factor_tokens = max_factor_tokens
+          ))
+        }
+      } else if (!is.data.frame(W_new) && !is.matrix(W_new)) {
+        W_df <- as.data.frame(W_new, check.names = FALSE)
+        order_idx <- neural_factor_order_from_names(
+          colnames(W_df),
+          factor_names_use,
+          error_on_partial = TRUE
+        )
+        if (length(order_idx) > 0L) {
+          return(neural_build_default_factor_order_matrix(
+            order_idx = order_idx,
+            n_rows = n_rows,
+            max_factor_tokens = max_factor_tokens
+          ))
+        }
       }
     }
     neural_build_default_factor_order_matrix(
@@ -20138,6 +20522,48 @@ generate_ModelOutcome_neural <- function(){
     use_svi = isTRUE(use_svi)
   )
 
+  average_case_dr_training <- NULL
+  average_case_linear_q <- NULL
+  average_case_single_normal <- !isTRUE(pairwise_mode) &&
+    !isTRUE(universal_enabled) &&
+    !isTRUE(compact_training) &&
+    identical(likelihood, "normal") &&
+    !is.null(X_single_jnp) &&
+    !is.null(Y_jnp)
+  if (isTRUE(average_case_single_normal)) {
+    average_case_linear_q_r <- neural_build_average_case_linear_q_calibration(
+      W_idx = X_single,
+      Y = Y_use,
+      factor_levels = factor_levels,
+      holdout_indicator = holdout_indicator
+    )
+    if (!is.null(average_case_linear_q_r)) {
+      average_case_linear_q <- list(
+        intercept = strenv$jnp$array(average_case_linear_q_r$intercept, dtype = strenv$dtj),
+        main_coef = strenv$jnp$array(average_case_linear_q_r$main_coef, dtype = strenv$dtj),
+        inter_coef = strenv$jnp$array(average_case_linear_q_r$inter_coef, dtype = strenv$dtj),
+        inter_left = strenv$jnp$array(average_case_linear_q_r$inter_left, dtype = strenv$jnp$int32),
+        inter_right = strenv$jnp$array(average_case_linear_q_r$inter_right, dtype = strenv$jnp$int32)
+      )
+    }
+  }
+  if (isTRUE(average_case_single_normal) &&
+      !is.null(p_list) &&
+      length(p_list) == length(factor_levels)) {
+    average_case_dr_training <- list(
+      X_single = X_single_jnp,
+      Y_single = Y_jnp,
+      party_single = party_single_jnp,
+      resp_party = resp_party_jnp,
+      resp_cov = resp_cov_jnp,
+      resp_cov_present = resp_cov_present_jnp,
+      experiment_idx = experiment_index_jnp,
+      baseline_level_probs = lapply(p_list, function(prob_vec) {
+        strenv$jnp$array(as.numeric(prob_vec), dtype = strenv$dtj)
+      })
+    )
+  }
+
   neural_model_info <- list(
     params = ParamsMean,
     param_names = param_names,
@@ -20316,6 +20742,8 @@ generate_ModelOutcome_neural <- function(){
     } else {
       likelihood
     },
+    average_case_dr_training = average_case_dr_training,
+    average_case_linear_q = average_case_linear_q,
     global_out_dim = as.integer(if (isTRUE(universal_enabled)) universal_global_out_dim else nOutcomes),
     has_ordinal_likelihood = isTRUE(has_ordinal_likelihood),
     ordinal_n_threshold_groups = as.integer(ordinal_n_threshold_groups),

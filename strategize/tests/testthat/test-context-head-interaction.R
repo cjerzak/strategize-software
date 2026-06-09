@@ -189,7 +189,8 @@ test_that("pairwise logits are utility differences and swap invariant", {
   )
   params_base <- neural_test_add_fused_factor_params(
     params_base,
-    model_dims = model_dims
+    model_dims = model_dims,
+    model_info = model_info
   )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
@@ -305,7 +306,8 @@ test_that("pairwise logits include cross-candidate interaction terms when enable
   )
   params_base <- neural_test_add_fused_factor_params(
     params_base,
-    model_dims = model_dims
+    model_dims = model_dims,
+    model_info = model_info
   )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
@@ -418,7 +420,8 @@ test_that("pairwise logits ignore cross-candidate interaction terms when disable
   )
   params_base <- neural_test_add_fused_factor_params(
     params_base,
-    model_dims = model_dims
+    model_dims = model_dims,
+    model_info = model_info
   )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
@@ -526,7 +529,8 @@ test_that("pairwise logits use full cross-candidate encoder when mode is full", 
   )
   params_base <- neural_test_add_fused_factor_params(
     params_base,
-    model_dims = model_dims
+    model_dims = model_dims,
+    model_info = model_info
   )
 
   pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
@@ -645,7 +649,8 @@ test_that("attn mode logits are antisymmetric across likelihoods (soft path)", {
     )
     params <- neural_test_add_fused_factor_params(
       params,
-      model_dims = model_dims
+      model_dims = model_dims,
+      model_info = model_info
     )
 
     list(model_info = model_info, params = params)
@@ -715,11 +720,6 @@ test_that("attn candidate token slicing is stable with context tokens", {
     W_out = strenv$jnp$ones(list(model_dims, 1L), dtype = strenv$dtj),
     b_out = strenv$jnp$zeros(list(1L), dtype = strenv$dtj)
   )
-  base_params <- neural_test_add_fused_factor_params(
-    base_params,
-    model_dims = model_dims
-  )
-
   scenarios <- list(
     list(has_ctx = FALSE, has_matchup = FALSE, has_resp_cov = FALSE),
     list(has_ctx = TRUE, has_matchup = TRUE, has_resp_cov = TRUE)
@@ -762,6 +762,11 @@ test_that("attn candidate token slicing is stable with context tokens", {
       model_info,
       factor_levels = 2L,
       max_factor_tokens = 3L
+    )
+    params <- neural_test_add_fused_factor_params(
+      params,
+      model_dims = model_dims,
+      model_info = model_info
     )
 
     pi_left <- strenv$jnp$array(c(1, 0), dtype = strenv$dtj)
@@ -855,7 +860,8 @@ test_that("full attention residual attn pair encoding uses readout candidate tok
   )
   params <- neural_test_add_fused_factor_params(
     params,
-    model_dims = 1L
+    model_dims = 1L,
+    model_info = model_info
   )
 
   pi_left <- jnp$array(c(1, 0), dtype = dtj)
@@ -1114,6 +1120,25 @@ test_that("pairwise full mode handles packed fused candidate blocks", {
   )
   expect_equal(
     as.numeric(strenv$np$array(logits_none)),
+    -15,
+    tolerance = 1e-6
+  )
+
+  model_info_none_normal <- model_info_none
+  model_info_none_normal$likelihood <- "normal"
+  logits_none_normal <- strategize:::neural_predict_pair_soft(
+    pi_left = fx$pi_left,
+    pi_right = fx$pi_right,
+    party_left_idx = 0L,
+    party_right_idx = 0L,
+    resp_party_idx = NULL,
+    model_info = model_info_none_normal,
+    resp_cov_vec = NULL,
+    params = fx$params,
+    return_logits = TRUE
+  )
+  expect_equal(
+    as.numeric(strenv$np$array(logits_none_normal)),
     0,
     tolerance = 1e-6
   )

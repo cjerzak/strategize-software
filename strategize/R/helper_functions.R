@@ -1278,6 +1278,16 @@ evaluate_average_case_q <- function(pi_star_ast,
     )
   }
 
+  if (identical(phase, "report") &&
+      identical(outcome_model_type, "neural") &&
+      exists("neural_average_case_report_adjust_q", mode = "function")) {
+    q_vec <- neural_average_case_report_adjust_q(
+      q_vec = q_vec,
+      pi_star_ast = pi_star_ast,
+      EST_COEFFICIENTS_tf_ast = COEFFICIENTS_ast_
+    )
+  }
+
   list(
     q_vec = q_vec,
     q_max = strenv$jnp$take(q_vec, 0L),

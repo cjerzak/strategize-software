@@ -36,6 +36,50 @@ cs2step_align_W <- function(W, factor_names) {
   W[, factor_names, drop = FALSE]
 }
 
+cs2step_neural_prepare_W_for_prediction <- function(W, factor_names) {
+  if (is.null(W)) {
+    stop("'W' is required.", call. = FALSE)
+  }
+  if (!is.data.frame(W) && !is.matrix(W)) {
+    stop("'W' must be a data.frame or matrix.", call. = FALSE)
+  }
+  factor_names <- as.character(factor_names %||% character(0))
+  W_cols <- colnames(W)
+  W_df <- as.data.frame(W, check.names = FALSE)
+  if (length(factor_names) < 1L) {
+    return(W_df)
+  }
+
+  if (is.null(W_cols) || length(W_cols) < 1L) {
+    if (ncol(W_df) != length(factor_names)) {
+      stop(
+        "Unnamed prediction-time W must match the fitted factor width exactly.",
+        call. = FALSE
+      )
+    }
+    colnames(W_df) <- factor_names
+    return(W_df)
+  }
+
+  order_idx <- neural_factor_order_from_names(
+    W_cols,
+    factor_names,
+    error_on_partial = TRUE
+  )
+  if (length(order_idx) < 1L) {
+    if (ncol(W_df) != length(factor_names)) {
+      stop(
+        "Prediction-time W with unmatched factor names must match the fitted factor width exactly.",
+        call. = FALSE
+      )
+    }
+    colnames(W_df) <- factor_names
+    return(W_df)
+  }
+
+  cs2step_align_W(W_df, factor_names)
+}
+
 cs2step_encode_W_indices <- function(W, names_list, unknown = c("holdout", "error"), pad_unknown = 0L) {
   enc <- cs_encode_W_indices(
     W = W,
@@ -2060,13 +2104,12 @@ cs2step_neural_predict_internal <- function(object,
 
   enc <- object$encoder
   model_info <- object$fit$neural_model_info
-  W_raw <- as.data.frame(W_new, check.names = FALSE)
-  factor_order_new <- if (identical(neural_factor_tokenization(model_info), "fused")) {
-    neural_factor_order_from_names(colnames(W_raw), enc$factor_names)
+  factor_order_new <- NULL
+  W_new <- if (identical(neural_factor_tokenization(model_info), "fused")) {
+    cs2step_neural_prepare_W_for_prediction(W_new, enc$factor_names)
   } else {
-    NULL
+    cs2step_align_W(W_new, enc$factor_names)
   }
-  W_new <- cs2step_align_W(W_new, enc$factor_names)
   W_idx <- cs2step_encode_W_indices(W_new, enc$names_list, unknown = "holdout", pad_unknown = 1L)
   if (!is.null(competing_group_variable_candidate) &&
       length(competing_group_variable_candidate) != nrow(W_idx)) {

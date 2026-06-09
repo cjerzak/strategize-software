@@ -58,7 +58,8 @@ test_that("learned choice token receives gradients and mixes information", {
   )
   params_base <- neural_test_add_fused_factor_params(
     params_base,
-    model_dims = model_dims
+    model_dims = model_dims,
+    model_info = model_info
   )
 
   pi_left <- strenv$jnp$array(c(0.8, 0.2), dtype = strenv$dtj)

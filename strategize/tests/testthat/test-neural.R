@@ -2060,7 +2060,8 @@ test_that("fused factor tokenization emits ordered factor/value tokens with padd
     default_factor_order = c(2L, 0L),
     factor_tokenization = "fused",
     max_factor_tokens = 3L,
-    token_family_levels = token_levels
+    token_family_levels = token_levels,
+    likelihood = "bernoulli"
   )
 
   params <- list(
@@ -2121,10 +2122,23 @@ test_that("fused factor tokenization emits ordered factor/value tokens with padd
 
   expect_equal(dim(tok_r), c(1L, 3L, 2L))
   expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
-  expect_equal(drop(tok_r[1, 1, ]), c(7, 8), tolerance = 1e-4)
-  expect_equal(drop(tok_r[1, 2, ]), c(22, 2), tolerance = 1e-4)
+  expect_equal(drop(tok_r[1, 1, ]), c(7.4, 8.5), tolerance = 1e-4)
+  expect_equal(drop(tok_r[1, 2, ]), c(22.4, 2.4), tolerance = 1e-4)
   expect_equal(drop(tok_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
   expect_true(isTRUE(model_info$factor_schema_supplied))
+
+  model_info_normal <- model_info
+  model_info_normal$likelihood <- "normal"
+  cand_info_normal <- strategize:::neural_build_candidate_tokens_hard(
+    X_idx = strategize:::strenv$jnp$array(matrix(c(1L, 0L, 0L), nrow = 1L))$astype(strategize:::strenv$jnp$int32),
+    party_idx = strategize:::strenv$jnp$array(0L)$astype(strategize:::strenv$jnp$int32),
+    model_info = model_info_normal,
+    params = params,
+    return_mask = TRUE
+  )
+  tok_normal <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info_normal$tokens))
+  expect_equal(drop(tok_normal[1, 1, ]), c(7, 8), tolerance = 1e-4)
+  expect_equal(drop(tok_normal[1, 2, ]), c(22, 2), tolerance = 1e-4)
 
   prepared_info <- strategize:::neural_make_prepared_prediction_model_info(
     model_depth = 1L,
@@ -2161,6 +2175,23 @@ test_that("fused factor tokenization emits ordered factor/value tokens with padd
   )
   mask_missing_flag <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info_missing_flag$mask))
   expect_equal(as.numeric(mask_missing_flag[1, ]), c(1, 1, 0))
+})
+
+test_that("default fused structural metadata distinguishes same-cardinality factors", {
+  struct <- strategize:::neural_make_default_fused_structural_info(
+    factor_names = c("price", "message", "brand"),
+    factor_levels = c(2L, 2L, 2L)
+  )
+
+  factor_mat <- struct$factor_struct_matrix
+  identity_cols <- grep("^factor_identity_", colnames(factor_mat), value = TRUE)
+
+  expect_length(identity_cols, 3L)
+  expect_equal(unname(factor_mat[, identity_cols, drop = FALSE]), diag(3L))
+  expect_false(isTRUE(all.equal(
+    unname(factor_mat["price", ]),
+    unname(factor_mat["message", ])
+  )))
 })
 
 test_that("pairwise context tokens are masked for context-absent rows", {
@@ -2229,6 +2260,7 @@ test_that("pairwise context tokens are masked for context-absent rows", {
   params <- neural_test_add_fused_factor_params(
     params,
     model_dims = 2L,
+    model_info = model_info,
     token_family_levels = token_levels
   )
 
@@ -3861,10 +3893,11 @@ test_that("output-only neural early stopping validates ordered factor and covari
 
   expect_true(isTRUE(model_info$early_stopping$enabled))
   expect_true(isTRUE(model_info$early_stopping$active))
-  expect_identical(model_info$factor_tokenization, "legacy_indexed")
+  expect_identical(model_info$factor_tokenization, "fused")
   expect_identical(model_info$covariate_value_encoding, "shared_projection")
   expect_false(isTRUE(model_info$has_factor_span_tokens))
-  expect_true(isTRUE(model_info$has_covariate_span_tokens))
+  expect_true(isTRUE(model_info$has_covariate_fused_tokens))
+  expect_false(isTRUE(model_info$has_covariate_span_tokens))
   expect_true(isTRUE(model_info$has_shared_covariate_value_projection))
   expect_null(model_info$early_stopping$error_message)
   expect_false(identical(model_info$early_stopping$reason, "validation_error"))
@@ -4501,48 +4534,25 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
   }
 
   prior_predictive_probs <- function(trace) {
-    params <- build_params_from_trace(trace)
-    if (pairwise_mode) {
-      stage_idx <- strenv$jnp$equal(party_left_jnp, party_right_jnp)
-      stage_idx <- strenv$jnp$astype(stage_idx, strenv$jnp$int32)
-      matchup_idx <- NULL
-      if (!is.null(params$E_matchup)) {
-        n_party_levels <- if (!is.null(model_info$n_party_levels)) {
-          as.integer(model_info$n_party_levels)
-        } else if (!is.null(model_info$party_levels)) {
-          length(model_info$party_levels)
-        } else {
-          1L
-        }
-        p_min <- strenv$jnp$minimum(party_left_jnp, party_right_jnp)
-        p_max <- strenv$jnp$maximum(party_left_jnp, party_right_jnp)
-        half_term <- strenv$jnp$floor_divide(p_min * (p_min - 1L), as.integer(2L))
-        matchup_idx <- strenv$jnp$astype(
-          p_min * as.integer(n_party_levels) - half_term + (p_max - p_min),
-          strenv$jnp$int32
-        )
-      }
-      phi_left <- encode_candidate(X_left_jnp, party_left_jnp, resp_party_jnp, resp_cov_jnp,
-                                   stage_idx, matchup_idx, params)
-      phi_right <- encode_candidate(X_right_jnp, party_right_jnp, resp_party_jnp, resp_cov_jnp,
-                                    stage_idx, matchup_idx, params)
-      u_left <- strenv$jnp$einsum("nm,mo->no", phi_left, params$W_out) + params$b_out
-      u_right <- strenv$jnp$einsum("nm,mo->no", phi_right, params$W_out) + params$b_out
-      logits <- u_left - u_right
-      if (isTRUE(cross_candidate_encoder) && !is.null(params$M_cross) && !is.null(params$W_cross_out)) {
-        cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_left, params$M_cross, phi_right)
-        cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
-        cross_out <- strenv$jnp$reshape(params$W_cross_out, list(1L, -1L))
-        logits <- logits + cross_term * cross_out
-      }
-    } else {
-      phi_single <- encode_candidate(X_single_jnp, party_single_jnp, resp_party_jnp, resp_cov_jnp,
-                                     stage_idx = NULL, matchup_idx = NULL, params = params)
-      logits <- strenv$jnp$einsum("nm,mo->no", phi_single, params$W_out) + params$b_out
+    site_name <- if (pairwise_mode) "obs_pair" else "obs_single"
+    obs_site <- tryCatch(trace[[site_name]], error = function(e) NULL)
+    if (is.null(obs_site)) {
+      return(NULL)
+    }
+    obs_dist <- tryCatch(obs_site$fn, error = function(e) NULL)
+    if (is.null(obs_dist)) {
+      return(NULL)
+    }
+    probs <- tryCatch(obs_dist$probs, error = function(e) NULL)
+    if (!is.null(probs)) {
+      return(probs)
+    }
+    logits <- tryCatch(obs_dist$logits, error = function(e) NULL)
+    if (is.null(logits)) {
+      return(NULL)
     }
     if (likelihood == "bernoulli") {
-      logits_vec <- strenv$jnp$squeeze(logits, axis = 1L)
-      return(strenv$jax$nn$sigmoid(logits_vec))
+      return(strenv$jax$nn$sigmoid(logits))
     }
     strenv$jax$nn$softmax(logits, axis = -1L)
   }
