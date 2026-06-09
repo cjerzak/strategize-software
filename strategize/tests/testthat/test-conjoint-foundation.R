@@ -13,6 +13,32 @@ test_that("pooled foundation training and writing stubs point to preference.fm",
   )
 })
 
+test_that("current semantic foundation adaptation is routed to preference.fm", {
+  group_key <- strategize:::cs_foundation_universal_group_key()
+  fake <- structure(
+    list(
+      groups = stats::setNames(
+        list(list(group_key = group_key, transfer_mode = "semantic_zero_overlap")),
+        group_key
+      )
+    ),
+    class = "conjoint_foundation_model"
+  )
+
+  expect_error(
+    adapt_conjoint_foundation_model(
+      foundation_model = fake,
+      Y = c(0, 1),
+      W = data.frame(price = c("Low", "High"), stringsAsFactors = FALSE),
+      mode = "pairwise",
+      pair_id = c(1, 1),
+      profile_order = c(1, 2)
+    ),
+    "preference.fm::adapt_conjoint_foundation_model",
+    fixed = TRUE
+  )
+})
+
 test_that("foundation adaptation outcome normalization rejects invalid targets", {
   base <- list(
     experiment_id = "invalid_adapt_outcome",

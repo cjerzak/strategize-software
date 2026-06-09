@@ -437,6 +437,22 @@ cs_foundation_universal_group_key <- function() {
   "universal::mixed::v1"
 }
 
+cs_foundation_is_current_semantic_model <- function(foundation_model) {
+  groups <- foundation_model$groups %||% list()
+  if (cs_foundation_universal_group_key() %in% names(groups)) {
+    return(TRUE)
+  }
+  any(vapply(groups, function(group) {
+    token_info <- group$token_info %||% list()
+    token_control <- group$token_control %||% list()
+    x_schema <- group$x_schema %||% list()
+    identical(group$transfer_mode %||% NULL, "semantic_zero_overlap") ||
+      identical(token_info$transfer_mode %||% NULL, "semantic_zero_overlap") ||
+      identical(token_control$transfer_mode %||% NULL, "semantic_zero_overlap") ||
+      identical(x_schema$transfer_mode %||% NULL, "semantic_zero_overlap")
+  }, logical(1)))
+}
+
 cs_foundation_group_aliases <- function(mode,
                                         likelihood,
                                         n_outcomes,
@@ -2263,9 +2279,10 @@ cs_foundation_match_group <- function(foundation_model,
 #' @details
 #' Current semantic zero-overlap foundation models are adapted canonically with
 #' \code{preference.fm::adapt_conjoint_foundation_model()}. This helper is
-#' retained for legacy runtime compatibility and reuses the package's existing
-#' Bayesian neural outcome model rather than fitting a separate downstream
-#' architecture. Internally, this function:
+#' retained for legacy runtime compatibility and errors when called on current
+#' semantic foundation objects. For legacy objects, it reuses the package's
+#' existing Bayesian neural outcome model rather than fitting a separate
+#' downstream architecture. Internally, this function:
 #'
 #' \enumerate{
 #'   \item normalizes the target study into the same local schema representation
@@ -2437,6 +2454,14 @@ adapt_conjoint_foundation_model <- function(foundation_model,
         conda_env_required = conda_env_required
       ))
     }
+  }
+  if (cs_foundation_is_current_semantic_model(foundation_model)) {
+    stop(
+      "Current semantic zero-overlap conjoint foundation models must be adapted with ",
+      "preference.fm::adapt_conjoint_foundation_model(). Use strategize to load bundles, ",
+      "run saved adapted predictors, and extract embeddings.",
+      call. = FALSE
+    )
   }
 
   experiment <- cs_foundation_normalize_experiment(

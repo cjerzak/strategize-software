@@ -9,6 +9,11 @@
 # Y and W Validation
 # =============================================================================
 
+test_that("check_jax_available is exported", {
+  expect_true("check_jax_available" %in% getNamespaceExports("strategize"))
+  expect_true(is.function(strategize::check_jax_available))
+})
+
 test_that("validate_strategize_inputs catches missing Y", {
   skip_on_cran()
 

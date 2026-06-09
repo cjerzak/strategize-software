@@ -1204,6 +1204,7 @@ validate_cv_strategize_inputs <- function(Y, W, lambda_seq = NULL, folds = 2L) {
 #' @param required If TRUE, stops with error; if FALSE, returns FALSE
 #' @return TRUE if available, FALSE otherwise (or stops if required)
 #' @keywords internal
+#' @export
 check_jax_available <- function(conda_env = "strategize_env", required = FALSE) {
   # Check if strenv exists and has jnp
   if (exists("strenv", envir = .GlobalEnv) || exists("strenv", envir = parent.frame())) {

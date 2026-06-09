@@ -1588,6 +1588,112 @@ cs2step_neural_prepare_factor_schema_prediction <- function(object,
   )
 }
 
+cs2step_neural_covariate_aliases <- function(model_info) {
+  schema <- model_info$foundation_prediction_schema %||% list()
+  aliases <- model_info$covariate_aliases %||%
+    schema$covariate_raw_to_internal %||%
+    character(0)
+  alias_names <- names(aliases)
+  aliases <- as.character(aliases)
+  if (is.null(alias_names)) {
+    alias_names <- rep.int("", length(aliases))
+  }
+  names(aliases) <- alias_names
+  keep <- nzchar(alias_names) & !is.na(aliases) & nzchar(aliases)
+  aliases <- aliases[keep]
+  aliases[!duplicated(names(aliases))]
+}
+
+cs2step_neural_strict_prediction_covariate_schema <- function(model_info) {
+  schema <- model_info$foundation_prediction_schema %||% list()
+  isTRUE(model_info$strict_prediction_covariate_schema) ||
+    isTRUE(schema$strict_covariate_schema)
+}
+
+cs2step_neural_format_covariate_names <- function(x) {
+  paste(dQuote(as.character(x)), collapse = ", ")
+}
+
+cs2step_neural_conflicting_covariate_values <- function(a, b) {
+  a_num <- suppressWarnings(as.numeric(a))
+  b_num <- suppressWarnings(as.numeric(b))
+  if (length(a_num) != length(b_num)) {
+    return(TRUE)
+  }
+  same <- (is.na(a_num) & is.na(b_num)) |
+    (!is.na(a_num) & !is.na(b_num) & a_num == b_num)
+  !all(same)
+}
+
+cs2step_neural_map_resp_cov_columns <- function(resp_cov_new,
+                                                covariate_names,
+                                                model_info) {
+  input_names <- colnames(resp_cov_new)
+  aliases <- cs2step_neural_covariate_aliases(model_info)
+  strict <- cs2step_neural_strict_prediction_covariate_schema(model_info)
+
+  direct_idx <- match(input_names, covariate_names)
+  alias_targets <- aliases[input_names]
+  alias_idx <- match(as.character(alias_targets), covariate_names)
+  ambiguous <- which(!is.na(direct_idx) & !is.na(alias_idx) & direct_idx != alias_idx)
+  if (length(ambiguous) > 0L) {
+    stop(
+      sprintf(
+        "Prediction-time X column %s is ambiguous because it matches both a fitted covariate and a raw covariate alias.",
+        cs2step_neural_format_covariate_names(input_names[ambiguous])
+      ),
+      call. = FALSE
+    )
+  }
+
+  target_idx <- direct_idx
+  use_alias <- is.na(target_idx) & !is.na(alias_idx)
+  target_idx[use_alias] <- alias_idx[use_alias]
+
+  unknown <- input_names[is.na(target_idx)]
+  if (strict && length(unknown) > 0L) {
+    stop(
+      sprintf(
+        "Unknown prediction-time X columns for foundation predictor: %s.",
+        cs2step_neural_format_covariate_names(unknown)
+      ),
+      call. = FALSE
+    )
+  }
+
+  ok <- which(!is.na(target_idx))
+  if (length(ok) < 1L) {
+    return(list(data = resp_cov_new[, integer(0), drop = FALSE], idx = integer(0)))
+  }
+
+  keep_cols <- integer(0)
+  keep_idx <- integer(0)
+  for (k in ok) {
+    existing <- match(target_idx[[k]], keep_idx)
+    if (is.na(existing)) {
+      keep_cols <- c(keep_cols, k)
+      keep_idx <- c(keep_idx, target_idx[[k]])
+      next
+    }
+    if (cs2step_neural_conflicting_covariate_values(
+      resp_cov_new[[keep_cols[[existing]]]],
+      resp_cov_new[[k]]
+    )) {
+      stop(
+        sprintf(
+          "Conflicting prediction-time X columns for fitted covariate %s.",
+          dQuote(covariate_names[[target_idx[[k]]]])
+        ),
+        call. = FALSE
+      )
+    }
+  }
+
+  mapped <- resp_cov_new[, keep_cols, drop = FALSE]
+  colnames(mapped) <- covariate_names[keep_idx]
+  list(data = mapped, idx = keep_idx)
+}
+
 cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
                                             model_info,
                                             n_rows,
@@ -1702,9 +1808,14 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
     colnames(resp_cov_new) <- covariate_names
   }
 
-  idx <- match(colnames(resp_cov_new), covariate_names)
-  ok <- which(!is.na(idx))
-  if (length(ok) < 1L) {
+  mapped_cov <- cs2step_neural_map_resp_cov_columns(
+    resp_cov_new = resp_cov_new,
+    covariate_names = covariate_names,
+    model_info = model_info
+  )
+  resp_cov_new <- mapped_cov$data
+  idx <- mapped_cov$idx
+  if (length(idx) < 1L) {
     return(list(
       values = values,
       present = present,
@@ -1720,7 +1831,7 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
     ))
   }
 
-  for (k in ok) {
+  for (k in seq_along(idx)) {
     col_vals <- suppressWarnings(as.numeric(resp_cov_new[[k]]))
     if (identical(encoding, "shared_projection")) {
       if (any(!is.finite(col_vals))) {
@@ -1741,7 +1852,7 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
   }
 
   if (identical(encoding, "shared_projection")) {
-    order_idx <- as.integer(idx[ok] - 1L)
+    order_idx <- as.integer(idx - 1L)
   }
 
   list(

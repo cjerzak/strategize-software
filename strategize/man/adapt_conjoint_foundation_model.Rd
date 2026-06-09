@@ -104,8 +104,9 @@ Adapt a pooled conjoint foundation model to a single study
 \details{
 Current semantic zero-overlap foundation models are adapted canonically with
 \code{preference.fm::adapt_conjoint_foundation_model()}. This helper is
-retained for legacy runtime compatibility and reuses the package's existing
-Bayesian neural outcome model rather than fitting a separate downstream
+retained for legacy runtime compatibility and errors when called on current
+semantic foundation objects. For legacy objects, it reuses the package's
+existing Bayesian neural outcome model rather than fitting a separate downstream
 architecture. Internally, this function:
 
 \enumerate{

@@ -74,6 +74,28 @@ prediction_test_cache_model_info <- function() {
   model_info
 }
 
+prediction_test_resp_cov_model_info <- function(strict = TRUE) {
+  model_info <- prediction_test_cache_model_info()
+  covariate_names <- c("local::target::income", "local::target::local_bonus")
+  model_info$covariate_names <- covariate_names
+  model_info$n_resp_covariates <- length(covariate_names)
+  model_info$resp_cov_mean <- rep(0, length(covariate_names))
+  model_info$resp_cov_default_present <- rep(0, length(covariate_names))
+  model_info$default_covariate_order <- seq.int(0L, length(covariate_names) - 1L)
+  model_info$max_covariate_tokens <- 4L
+  model_info$shared_projection_value_encoder <- "legacy_scalar"
+  model_info$covariate_aliases <- c(
+    income = "local::target::income",
+    local_bonus = "local::target::local_bonus"
+  )
+  model_info$foundation_prediction_schema <- list(
+    strict_covariate_schema = strict,
+    covariate_raw_to_internal = model_info$covariate_aliases
+  )
+  model_info$strict_prediction_covariate_schema <- strict
+  model_info
+}
+
 prediction_test_text_embedding <- function(text) {
   text <- as.character(text)
   t(vapply(text, function(x) {
@@ -122,6 +144,95 @@ test_that("neural prediction W preparation defaults unnamed matrices and rejects
   testthat::expect_error(
     strategize:::cs2step_neural_prepare_W_for_prediction(unmatched, factor_names),
     "factor names do not match"
+  )
+})
+
+test_that("prediction-time X raw aliases activate foundation covariate tokens", {
+  model_info <- prediction_test_resp_cov_model_info(strict = TRUE)
+  x_new <- data.frame(
+    income = c(1, 2),
+    local_bonus = c(0.5, 0.75),
+    check.names = FALSE
+  )
+
+  prepped <- strategize:::cs2step_neural_prepare_resp_cov(
+    resp_cov_new = x_new,
+    model_info = model_info,
+    n_rows = 2L
+  )
+  expected_values <- as.matrix(x_new)
+  colnames(expected_values) <- model_info$covariate_names
+  expected_present <- matrix(
+    1,
+    nrow = 2L,
+    ncol = 2L,
+    dimnames = list(NULL, model_info$covariate_names)
+  )
+
+  testthat::expect_equal(
+    prepped$values[, model_info$covariate_names, drop = FALSE],
+    expected_values
+  )
+  testthat::expect_equal(
+    prepped$present[, model_info$covariate_names],
+    expected_present
+  )
+  testthat::expect_equal(prepped$order[, 1:2, drop = FALSE], cbind(c(0L, 0L), c(1L, 1L)))
+})
+
+test_that("prediction-time X rejects conflicting raw and internal covariate aliases", {
+  model_info <- prediction_test_resp_cov_model_info(strict = TRUE)
+  x_new <- data.frame(
+    income = c(1, 2),
+    check.names = FALSE
+  )
+  x_new[["local::target::income"]] <- c(1, 3)
+
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_resp_cov(
+      resp_cov_new = x_new,
+      model_info = model_info,
+      n_rows = 2L
+    ),
+    "Conflicting prediction-time X columns"
+  )
+})
+
+test_that("strict foundation predictors reject unknown prediction-time X columns", {
+  model_info <- prediction_test_resp_cov_model_info(strict = TRUE)
+  x_new <- data.frame(
+    income = c(1, 2),
+    unknown_covariate = c(9, 9),
+    check.names = FALSE
+  )
+
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_resp_cov(
+      resp_cov_new = x_new,
+      model_info = model_info,
+      n_rows = 2L
+    ),
+    "Unknown prediction-time X columns"
+  )
+})
+
+test_that("legacy predictors keep permissive no-match prediction-time X behavior", {
+  model_info <- prediction_test_resp_cov_model_info(strict = FALSE)
+  model_info$foundation_prediction_schema <- NULL
+  model_info$covariate_aliases <- NULL
+  model_info$strict_prediction_covariate_schema <- NULL
+  x_new <- data.frame(income = c(1, 2), check.names = FALSE)
+
+  prepped <- strategize:::cs2step_neural_prepare_resp_cov(
+    resp_cov_new = x_new,
+    model_info = model_info,
+    n_rows = 2L
+  )
+
+  testthat::expect_true(all(prepped$order == -1L))
+  testthat::expect_equal(
+    prepped$values,
+    matrix(0, nrow = 2L, ncol = 2L, dimnames = list(NULL, model_info$covariate_names))
   )
 })
 

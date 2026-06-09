@@ -10,7 +10,7 @@ Today the package supports:
 - adversarial optimization for two-player settings
 - prediction-only outcome modeling with `strategic_prediction()`
 - cached predictor and neural bundle I/O with `save_strategic_predictor()`, `load_strategic_predictor()`, `save_neural_outcome_bundle()`, and `load_neural_outcome_bundle()`
-- foundation-model runtime support: load trained `preference.fm` checkpoints, adapt them to target studies, extract embeddings, and run predictors
+- foundation-model runtime support: load trained `preference.fm` checkpoints, run saved adapted predictors, and extract embeddings
 
 # Installation
 
@@ -125,7 +125,7 @@ Predictors can be cached and reused with `save_strategic_predictor()` and `load_
 
 ## Foundation-model workflow
 
-Pooled foundation-model training now lives in the separate `preference.fm` package. Use `preference.fm::fit_conjoint_foundation_model()` and `preference.fm::save_conjoint_foundation_bundle()` to train and write checkpoint directories. Use `strategize::load_conjoint_foundation_bundle()`, `adapt_conjoint_foundation_model()`, and `extract_embeddings()` to consume trained artifacts.
+Pooled foundation-model training and current semantic zero-overlap adaptation now live in the separate `preference.fm` package. Use `preference.fm::fit_conjoint_foundation_model()`, `preference.fm::save_conjoint_foundation_bundle()`, and `preference.fm::adapt_conjoint_foundation_model()` to train, write, and adapt checkpoint directories. Use `strategize::load_conjoint_foundation_bundle()`, `load_strategic_predictor()`, `predict()`, and `extract_embeddings()` to consume trained or adapted artifacts.
 
 # Documentation
 

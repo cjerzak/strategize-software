@@ -20,8 +20,8 @@ knitr::opts_chunk$set(
 
 Foundation-model ownership is split across two packages:
 
-- `preference.fm` trains pooled preference foundation models and writes checkpoint directories.
-- `strategize` loads trained artifacts, adapts them to target studies, extracts embeddings, and runs predictors.
+- `preference.fm` trains pooled preference foundation models, writes checkpoint directories, and adapts current semantic zero-overlap models to target studies.
+- `strategize` loads trained artifacts, extracts embeddings, and runs saved adapted predictors.
 
 This keeps `strategize` focused on runtime use of trained representations. The
 old `strategize::fit_conjoint_foundation_model()` and
@@ -68,24 +68,27 @@ New artifacts are directories with `manifest.json` and an Orbax checkpoint under
 `arrays/`. Legacy `.rds` foundation bundles remain loadable by `strategize`, but
 new large pooled FM bundles should be written by `preference.fm`.
 
-# Load And Adapt With strategize
+# Load With strategize, Adapt With preference.fm
 
 ```{r load-adapt, eval=FALSE}
 library(strategize)
+library(preference.fm)
 
 foundation_fit <- strategize::load_conjoint_foundation_bundle(
   file = "foundation_bundle",
   preload_params = FALSE
 )
 
-adapted_fit <- strategize::adapt_conjoint_foundation_model(
+adapted_fit <- preference.fm::adapt_conjoint_foundation_model(
   foundation_model = foundation_fit,
   Y = target_y,
   W = target_w,
+  X = target_x,
   mode = "pairwise",
   pair_id = target_pair_id,
   profile_order = target_profile_order,
   experiment_id = "target_study",
+  foundation_adaptation_control = list(text_embedding_fn = text_embedding_fn),
   conda_env = "strategize_env"
 )
 
@@ -93,11 +96,15 @@ predict(
   adapted_fit,
   newdata = list(
     W = target_w,
+    X = target_x,
     pair_id = target_pair_id,
     profile_order = target_profile_order
   )
 )
 ```
+
+Adapted semantic foundation predictors record the target-study prediction
+schema, so prediction-time `X` can use the raw target covariate names.
 
 # Embeddings
 
@@ -120,4 +127,5 @@ emb <- strategize::extract_embeddings(
 - Calling `strategize::fit_conjoint_foundation_model()` for new pooled training.
 - Calling `strategize::save_conjoint_foundation_bundle()` for new artifacts.
 - Loading a checkpoint directory before installing `orbax-checkpoint`.
+- Calling `strategize::adapt_conjoint_foundation_model()` on current semantic zero-overlap foundation models instead of `preference.fm::adapt_conjoint_foundation_model()`.
 - Attempting adaptation when the trained foundation object has no compatible group for the target study.
