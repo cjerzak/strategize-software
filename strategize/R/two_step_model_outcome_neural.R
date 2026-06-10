@@ -1097,6 +1097,148 @@ neural_resolve_balanced_sampling <- function(config = NULL) {
   )
 }
 
+neural_resolve_universal_loss_weighting <- function(value = NULL) {
+  if (is.null(value)) {
+    return("empirical")
+  }
+  mode <- tolower(trimws(as.character(value)))
+  if (length(mode) != 1L || is.na(mode) || !nzchar(mode) ||
+      !mode %in% c("empirical", "balanced_cell")) {
+    stop(
+      "'neural_mcmc_control$universal_loss_weighting' must be one of 'empirical' or 'balanced_cell'.",
+      call. = FALSE
+    )
+  }
+  mode
+}
+
+neural_resolve_universal_loss_weight_clip <- function(value = NULL) {
+  clip <- suppressWarnings(as.numeric(value %||% c(0.25, 4.0)))
+  if (length(clip) < 2L || any(!is.finite(clip[seq_len(2L)])) ||
+      clip[[1L]] <= 0 || clip[[2L]] < clip[[1L]]) {
+    return(c(0.25, 4.0))
+  }
+  as.numeric(clip[seq_len(2L)])
+}
+
+neural_universal_loss_weighting <- function(task_mode,
+                                            likelihood_code,
+                                            policy = NULL,
+                                            clip = NULL) {
+  policy <- neural_resolve_universal_loss_weighting(policy)
+  task_mode <- as.character(task_mode)
+  likelihood_code <- as.character(likelihood_code)
+  if (length(task_mode) != length(likelihood_code)) {
+    stop("Universal loss weighting requires row-aligned task modes and likelihood codes.",
+         call. = FALSE)
+  }
+  n_obs <- length(task_mode)
+  if (n_obs < 1L) {
+    return(list(
+      policy = policy,
+      weights = NULL,
+      observation_weights = numeric(0),
+      diagnostics = list(
+        policy = policy,
+        n_observations = 0L,
+        n_cells = 0L,
+        clip = NULL,
+        cells = data.frame()
+      )
+    ))
+  }
+  if (any(is.na(task_mode) | is.na(likelihood_code))) {
+    stop("Universal loss weighting requires non-missing task modes and likelihood codes.",
+         call. = FALSE)
+  }
+
+  cell_label <- paste(task_mode, likelihood_code, sep = "::")
+  cell_n <- table(cell_label)
+  weights <- rep.int(1, n_obs)
+  raw_weight <- rep.int(1, n_obs)
+  clip_use <- NULL
+  if (identical(policy, "balanced_cell")) {
+    clip_use <- neural_resolve_universal_loss_weight_clip(clip)
+    raw_weight <- as.numeric(n_obs) /
+      (as.numeric(length(cell_n)) * as.numeric(cell_n[cell_label]))
+    weights <- pmin(pmax(raw_weight, clip_use[[1L]]), clip_use[[2L]])
+    weights <- weights / mean(weights)
+  }
+
+  cell_counts <- as.integer(cell_n)
+  cell_names <- names(cell_n)
+  cell_task <- vapply(strsplit(cell_names, "::", fixed = TRUE), `[[`, character(1), 1L)
+  cell_likelihood_code <- vapply(strsplit(cell_names, "::", fixed = TRUE), `[[`, character(1), 2L)
+  cell_weight_mean <- as.numeric(tapply(weights, cell_label, mean)[cell_names])
+  cell_weight_raw <- as.numeric(tapply(raw_weight, cell_label, mean)[cell_names])
+  cell_effective_mass <- as.numeric(tapply(weights, cell_label, sum)[cell_names])
+  effective_total <- sum(cell_effective_mass)
+  cells <- data.frame(
+    cell = cell_names,
+    task_mode = cell_task,
+    likelihood_code = cell_likelihood_code,
+    n_observations = cell_counts,
+    raw_observation_share = as.numeric(cell_counts) / as.numeric(n_obs),
+    raw_inverse_cell_weight = cell_weight_raw,
+    effective_observation_weight = cell_weight_mean,
+    effective_weighted_mass = cell_effective_mass,
+    effective_weighted_share = if (effective_total > 0) {
+      cell_effective_mass / effective_total
+    } else {
+      rep.int(NA_real_, length(cell_effective_mass))
+    },
+    stringsAsFactors = FALSE
+  )
+
+  list(
+    policy = policy,
+    weights = if (identical(policy, "balanced_cell")) weights else NULL,
+    observation_weights = weights,
+    diagnostics = list(
+      policy = policy,
+      n_observations = as.integer(n_obs),
+      n_cells = as.integer(length(cell_n)),
+      clip = clip_use,
+      cells = cells
+    )
+  )
+}
+
+neural_compact_mixed_branch_loss_scales <- function(n_pair,
+                                                    n_single,
+                                                    pair_batch_n,
+                                                    single_batch_n,
+                                                    total_n = NULL,
+                                                    batch_n = NULL,
+                                                    balanced_sampling = FALSE) {
+  n_pair <- as.integer(n_pair %||% 0L)
+  n_single <- as.integer(n_single %||% 0L)
+  pair_batch_n <- as.integer(pair_batch_n %||% 0L)
+  single_batch_n <- as.integer(single_batch_n %||% 0L)
+  if (isTRUE(balanced_sampling)) {
+    total_n <- as.integer(total_n %||% (n_pair + n_single))
+    batch_n <- as.integer(batch_n %||% (pair_batch_n + single_batch_n))
+    scale <- if (!is.na(batch_n) && batch_n > 0L) {
+      as.numeric(total_n) / as.numeric(batch_n)
+    } else {
+      0
+    }
+    return(list(pair = scale, single = scale))
+  }
+  list(
+    pair = if (!is.na(pair_batch_n) && pair_batch_n > 0L) {
+      as.numeric(n_pair) / as.numeric(pair_batch_n)
+    } else {
+      0
+    },
+    single = if (!is.na(single_batch_n) && single_batch_n > 0L) {
+      as.numeric(n_single) / as.numeric(single_batch_n)
+    } else {
+      0
+    }
+  )
+}
+
 neural_sample_one <- function(x) {
   if (length(x) < 1L) {
     stop("Cannot sample from an empty vector.", call. = FALSE)
@@ -9679,6 +9821,7 @@ generate_ModelOutcome_neural <- function(){
     attention_padding_multiple = 8L,
     learned_pairwise_bernoulli_logit_scale = FALSE,
     pairwise_bernoulli_logit_scale_prior_sd = 0.5,
+    universal_loss_weighting = "empirical",
     balanced_sampling = NULL
   )
   RMS_scale = 0.5
@@ -11319,39 +11462,33 @@ generate_ModelOutcome_neural <- function(){
   universal_loss_weights <- NULL
   universal_loss_weights_pair <- NULL
   universal_loss_weights_single <- NULL
+  universal_loss_weighting_info <- NULL
+  universal_loss_weighting_diagnostics <- NULL
   if (isTRUE(universal_enabled) &&
       !is.null(universal_task_mode_use) &&
       !is.null(universal_likelihood_code_use)) {
-    cell_label <- paste(
-      as.character(universal_task_mode_use),
-      as.character(universal_likelihood_code_use),
-      sep = "::"
+    universal_loss_weighting_info <- neural_universal_loss_weighting(
+      task_mode = universal_task_mode_use,
+      likelihood_code = universal_likelihood_code_use,
+      policy = mcmc_control$universal_loss_weighting %||% NULL,
+      clip = mcmc_control$universal_loss_weight_clip %||% NULL
     )
-    cell_n <- table(cell_label)
-    n_obs_weight <- length(cell_label)
-    n_cells_weight <- length(cell_n)
-    raw_weight <- as.numeric(n_obs_weight) /
-      (as.numeric(n_cells_weight) * as.numeric(cell_n[cell_label]))
-    clip <- suppressWarnings(as.numeric(
-      (mcmc_control$universal_loss_weight_clip %||% c(0.25, 4.0))
-    ))
-    if (length(clip) < 2L || any(!is.finite(clip[seq_len(2L)])) ||
-        clip[[1L]] <= 0 || clip[[2L]] < clip[[1L]]) {
-      clip <- c(0.25, 4.0)
-    }
-    universal_loss_weights <- pmin(pmax(raw_weight, clip[[1L]]), clip[[2L]])
-    universal_loss_weights <- universal_loss_weights / mean(universal_loss_weights)
-    if (isTRUE(universal_mixed_mode)) {
-      universal_loss_weights_pair <- universal_loss_weights[seq_len(n_universal_pair_obs)]
-      universal_loss_weights_single <- universal_loss_weights[
-        n_universal_pair_obs + seq_len(n_universal_single_obs)
-      ]
-    } else if (pairwise_mode) {
-      universal_loss_weights_pair <- universal_loss_weights
-    } else {
-      universal_loss_weights_single <- universal_loss_weights
+    universal_loss_weights <- universal_loss_weighting_info$weights
+    universal_loss_weighting_diagnostics <- universal_loss_weighting_info$diagnostics
+    if (!is.null(universal_loss_weights)) {
+      if (isTRUE(universal_mixed_mode)) {
+        universal_loss_weights_pair <- universal_loss_weights[seq_len(n_universal_pair_obs)]
+        universal_loss_weights_single <- universal_loss_weights[
+          n_universal_pair_obs + seq_len(n_universal_single_obs)
+        ]
+      } else if (pairwise_mode) {
+        universal_loss_weights_pair <- universal_loss_weights
+      } else {
+        universal_loss_weights_single <- universal_loss_weights
+      }
     }
   }
+  low_rank_logit_model_info$universal_loss_weighting <- universal_loss_weighting_diagnostics
 
   mixed_row_is_valid_r <- function(y,
                                    likelihood_code_obs,
@@ -15773,18 +15910,33 @@ generate_ModelOutcome_neural <- function(){
       cov_single <- materialize_cov(single_rows)
       pair_global_obs <- pair_obs_idx
       single_global_obs <- n_universal_pair_obs + single_obs_idx
-      loss_scale <- as.numeric(compact_sampling_n_obs()) / as.numeric(obs_idx_n)
+      pool <- compact_sampling_pool()
+      branch_scales <- neural_compact_mixed_branch_loss_scales(
+        n_pair = sum(pool <= n_universal_pair_obs),
+        n_single = sum(pool > n_universal_pair_obs),
+        pair_batch_n = length(pair_obs_idx_active),
+        single_batch_n = length(single_obs_idx_active),
+        total_n = compact_sampling_n_obs(),
+        batch_n = obs_idx_n,
+        balanced_sampling = isTRUE(compact_balanced_sampling$enabled)
+      )
+      observation_weights <- function(global_obs_idx) {
+        if (is.null(universal_loss_weights)) {
+          return(rep.int(1, length(global_obs_idx)))
+        }
+        as.numeric(universal_loss_weights[global_obs_idx])
+      }
       pair_obs_scale <- rep(0, length(pair_global_obs))
       if (isTRUE(pair_active)) {
         pair_global_obs_active <- pair_obs_idx_active
         pair_obs_scale[seq_along(pair_global_obs_active)] <-
-          loss_scale * as.numeric(universal_loss_weights[pair_global_obs_active] %||% rep(1, length(pair_global_obs_active)))
+          branch_scales$pair * observation_weights(pair_global_obs_active)
       }
       single_obs_scale <- rep(0, length(single_global_obs))
       if (isTRUE(single_active)) {
         single_global_obs_active <- n_universal_pair_obs + single_obs_idx_active
         single_obs_scale[seq_along(single_global_obs_active)] <-
-          loss_scale * as.numeric(universal_loss_weights[single_global_obs_active] %||% rep(1, length(single_global_obs_active)))
+          branch_scales$single * observation_weights(single_global_obs_active)
       }
       return(list(
         X_left = strenv$jnp$array(to_index_matrix(
@@ -19221,6 +19373,7 @@ generate_ModelOutcome_neural <- function(){
     optimizer_diagnostics$lr_trace <- lr_trace_info$lr_trace
     optimizer_diagnostics$lr_trace_status <- lr_trace_info$lr_trace_status
     optimizer_diagnostics$optimizer_status <- "ok"
+    optimizer_diagnostics$universal_loss_weighting <- universal_loss_weighting_diagnostics
     params <- if (!is.null(SVIParams)) {
       SVIParams
     } else {
@@ -20510,6 +20663,12 @@ generate_ModelOutcome_neural <- function(){
       fit_metrics <- c(fit_metrics, svi_summary)
     }
   }
+  if (!is.null(universal_loss_weighting_diagnostics)) {
+    if (is.null(fit_metrics)) {
+      fit_metrics <- list()
+    }
+    fit_metrics$universal_loss_weighting <- universal_loss_weighting_diagnostics
+  }
 
   parameter_diagnostics <- neural_build_parameter_diagnostics(ParamsMean)
   convergence_diagnostics <- neural_build_convergence_diagnostics(
@@ -20730,6 +20889,7 @@ generate_ModelOutcome_neural <- function(){
     likelihood = likelihood,
     universal_foundation_training = isTRUE(universal_enabled),
     universal_mixed_mode = isTRUE(universal_mixed_mode),
+    universal_loss_weighting = universal_loss_weighting_diagnostics,
     supported_modes = if (isTRUE(universal_enabled)) {
       unique(universal_task_mode_all)
     } else if (isTRUE(pairwise_mode)) {

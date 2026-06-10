@@ -106,8 +106,8 @@ Current semantic zero-overlap foundation models are adapted canonically with
 \code{preference.fm::adapt_conjoint_foundation_model()}. This helper is
 retained for legacy runtime compatibility and errors when called on current
 semantic foundation objects. For legacy objects, it reuses the package's
-existing Bayesian neural outcome model rather than fitting a separate downstream
-architecture. Internally, this function:
+existing Bayesian neural outcome model rather than fitting a separate
+downstream architecture. Internally, this function:
 
 \enumerate{
   \item normalizes the target study into the same local schema representation

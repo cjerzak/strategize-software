@@ -89,6 +89,11 @@ NULL
 #'   cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
 #'   and are evaluated at the early-stopping checkpoint cadence; set
 #'   \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
+#'   Universal mixed-likelihood fits use
+#'   \code{neural_mcmc_control$universal_loss_weighting = "empirical"} by
+#'   default so objective mass follows SVI observation counts; set
+#'   \code{"balanced_cell"} to reproduce clipped inverse-frequency weighting
+#'   across task-mode/likelihood cells.
 #'   Advanced restart checkpoints can be enabled with
 #'   \code{neural_mcmc_control$checkpoint_path}; rerunning with the same data and
 #'   controls resumes from \code{latest.rds} and promotes the best validation
@@ -889,6 +894,40 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         is.na(gradient_diagnostics)) {
       stop(
         "'neural_mcmc_control$gradient_diagnostics' must be TRUE or FALSE.",
+        call. = FALSE
+      )
+    }
+  }
+  universal_loss_weighting <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["universal_loss_weighting"]]
+  } else {
+    NULL
+  }
+  if (!is.null(universal_loss_weighting)) {
+    weighting_mode <- tolower(trimws(as.character(universal_loss_weighting)))
+    if (length(weighting_mode) != 1L ||
+        is.na(weighting_mode) ||
+        !nzchar(weighting_mode) ||
+        !weighting_mode %in% c("empirical", "balanced_cell")) {
+      stop(
+        "'neural_mcmc_control$universal_loss_weighting' must be one of 'empirical' or 'balanced_cell'.",
+        call. = FALSE
+      )
+    }
+  }
+  universal_loss_weight_clip <- if (!is.null(neural_mcmc_control)) {
+    neural_mcmc_control[["universal_loss_weight_clip"]]
+  } else {
+    NULL
+  }
+  if (!is.null(universal_loss_weight_clip)) {
+    clip <- suppressWarnings(as.numeric(universal_loss_weight_clip))
+    if (length(clip) != 2L ||
+        any(!is.finite(clip)) ||
+        clip[[1L]] <= 0 ||
+        clip[[2L]] < clip[[1L]]) {
+      stop(
+        "'neural_mcmc_control$universal_loss_weight_clip' must be two positive finite numbers with min <= max.",
         call. = FALSE
       )
     }

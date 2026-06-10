@@ -714,6 +714,47 @@ test_that("validate_strategize_inputs rejects invalid gradient_diagnostics value
   )
 })
 
+test_that("validate_strategize_inputs validates universal loss weighting controls", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  for (policy in c("empirical", "balanced_cell")) {
+    expect_true(
+      validate_strategize_inputs(
+        Y = Y,
+        W = W,
+        lambda = 0.1,
+        neural_mcmc_control = list(
+          universal_loss_weighting = policy,
+          universal_loss_weight_clip = c(0.25, 4)
+        )
+      ),
+      info = sprintf("Expected universal_loss_weighting=%s to be accepted", policy)
+    )
+  }
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y,
+      W = W,
+      lambda = 0.1,
+      neural_mcmc_control = list(universal_loss_weighting = "equal_cells")
+    ),
+    "universal_loss_weighting"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y,
+      W = W,
+      lambda = 0.1,
+      neural_mcmc_control = list(universal_loss_weight_clip = c(4, 0.25))
+    ),
+    "universal_loss_weight_clip"
+  )
+})
+
 test_that("validate_strategize_inputs accepts early stopping validation size controls", {
   skip_on_cran()
 

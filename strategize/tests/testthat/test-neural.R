@@ -114,6 +114,106 @@ test_that("balanced compact sampler draws studies and respondents hierarchically
   )
 })
 
+test_that("universal mixed loss weighting supports empirical and balanced-cell policies", {
+  counts <- c(
+    pair_bernoulli = 2291L,
+    single_bernoulli = 43L,
+    single_categorical = 36L,
+    single_normal = 68L,
+    single_ordinal = 39L
+  )
+  task_mode <- rep(
+    c("pairwise", "single", "single", "single", "single"),
+    counts
+  )
+  likelihood_code <- rep(c(0L, 0L, 1L, 2L, 3L), counts)
+
+  empirical <- strategize:::neural_universal_loss_weighting(
+    task_mode = task_mode,
+    likelihood_code = likelihood_code,
+    policy = "empirical"
+  )
+  expect_null(empirical$weights)
+  expect_equal(empirical$observation_weights, rep(1, sum(counts)))
+  empirical_cells <- empirical$diagnostics$cells
+  expect_equal(
+    empirical_cells$effective_weighted_share,
+    empirical_cells$raw_observation_share,
+    tolerance = 1e-12
+  )
+
+  balanced <- strategize:::neural_universal_loss_weighting(
+    task_mode = task_mode,
+    likelihood_code = likelihood_code,
+    policy = "balanced_cell",
+    clip = c(0.25, 4.0)
+  )
+  balanced_cells <- balanced$diagnostics$cells
+  names(counts) <- c("pairwise::0", "single::0", "single::1", "single::2", "single::3")
+  counts <- counts[balanced_cells$cell]
+  raw_weight <- sum(counts) / (length(counts) * counts)
+  clipped_weight <- pmin(pmax(raw_weight, 0.25), 4.0)
+  normalized_weight <- clipped_weight / sum(clipped_weight * counts) * sum(counts)
+  expected_share <- counts * normalized_weight / sum(counts * normalized_weight)
+
+  expect_equal(
+    balanced_cells$effective_observation_weight,
+    as.numeric(normalized_weight),
+    tolerance = 1e-12
+  )
+  expect_equal(
+    balanced_cells$effective_weighted_share,
+    as.numeric(expected_share),
+    tolerance = 1e-12
+  )
+  expect_lt(
+    balanced_cells$effective_weighted_share[balanced_cells$cell == "pairwise::0"],
+    balanced_cells$raw_observation_share[balanced_cells$cell == "pairwise::0"]
+  )
+  expect_gt(
+    balanced_cells$effective_weighted_share[balanced_cells$cell == "single::2"],
+    balanced_cells$raw_observation_share[balanced_cells$cell == "single::2"]
+  )
+
+  expect_error(
+    strategize:::neural_resolve_universal_loss_weighting("equal_cells"),
+    "universal_loss_weighting"
+  )
+})
+
+test_that("compact mixed branch loss scales preserve empirical branch mass", {
+  scales <- strategize:::neural_compact_mixed_branch_loss_scales(
+    n_pair = 92L,
+    n_single = 8L,
+    pair_batch_n = 9L,
+    single_batch_n = 1L
+  )
+  expect_equal(scales$pair, 92 / 9)
+  expect_equal(scales$single, 8)
+  expect_equal(scales$pair * 9, 92)
+  expect_equal(scales$single * 1, 8)
+
+  padded <- strategize:::neural_compact_mixed_branch_loss_scales(
+    n_pair = 92L,
+    n_single = 8L,
+    pair_batch_n = 9L,
+    single_batch_n = 0L
+  )
+  expect_equal(padded$single, 0)
+
+  balanced_sampler <- strategize:::neural_compact_mixed_branch_loss_scales(
+    n_pair = 92L,
+    n_single = 8L,
+    pair_batch_n = 9L,
+    single_batch_n = 1L,
+    total_n = 100L,
+    batch_n = 10L,
+    balanced_sampling = TRUE
+  )
+  expect_equal(balanced_sampler$pair, 10)
+  expect_equal(balanced_sampler$single, 10)
+})
+
 test_that("schema dropout token masks preserve one factor token", {
   skip_on_cran()
   skip_if_no_jax()
