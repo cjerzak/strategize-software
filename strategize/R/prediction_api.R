@@ -3482,6 +3482,13 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
       as.numeric(cs2step_neural_to_r_array(out$params$log_pairwise_bernoulli_logit_scale))[[1L]]
     )
   }
+  if (is.null(out$calibration_scale) &&
+      !is.null(out$params$log_calibration_scale)) {
+    out$calibration_scale <- exp(
+      as.numeric(cs2step_neural_to_r_array(out$params$log_calibration_scale))[[1L]]
+    )
+  }
+  has_additive_param <- !is.null((out$params %||% list())$W_add_out)
 
   if (!is.null(out$params)) {
     out$params <- if (isTRUE(drop_params)) {
@@ -3726,6 +3733,29 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     out$pairwise_bernoulli_logit_scale_prior_sd <- NULL
     out$pairwise_bernoulli_logit_scale <- 1.0
   }
+  out$pairwise_antisymmetry <- neural_resolve_pairwise_antisymmetry(
+    out$pairwise_antisymmetry %||% "legacy"
+  )
+  out$additive_utility_mode <- neural_resolve_additive_utility_mode(
+    out$additive_utility_mode %||% "off",
+    factor_tokenization = out$factor_tokenization %||% NULL
+  )
+  out$has_additive_utility <- if (is.null(out$has_additive_utility)) {
+    isTRUE(has_additive_param)
+  } else {
+    isTRUE(out$has_additive_utility)
+  }
+  out$calibration_enabled <- isTRUE(out$calibration_enabled)
+  out$calibration_method <- if (isTRUE(out$calibration_enabled)) {
+    neural_resolve_calibration_method(out$calibration_method %||% "logit_scale")
+  } else {
+    "none"
+  }
+  scale <- suppressWarnings(as.numeric(out$calibration_scale %||% 1.0))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    scale <- 1.0
+  }
+  out$calibration_scale <- as.numeric(scale)
   if (!is.null(out$attention_backend)) {
     out$attention_backend <- neural_normalize_attention_backend(out$attention_backend)
   }
@@ -3884,6 +3914,15 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
     out$pairwise_bernoulli_logit_scale <- exp(
       as.numeric(cs2step_neural_to_r_array(out$params$log_pairwise_bernoulli_logit_scale))[[1L]]
     )
+  }
+  if (is.null(out$calibration_scale) &&
+      !is.null(out$params$log_calibration_scale)) {
+    out$calibration_scale <- exp(
+      as.numeric(cs2step_neural_to_r_array(out$params$log_calibration_scale))[[1L]]
+    )
+    if (is.null(out$calibration_enabled)) {
+      out$calibration_enabled <- TRUE
+    }
   }
   if (is.null(out$pairwise_context_mode)) {
     out$pairwise_context_mode <- "stage_free"
@@ -4112,6 +4151,39 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   } else {
     out$pairwise_bernoulli_logit_scale_prior_sd <- NULL
     out$pairwise_bernoulli_logit_scale <- 1.0
+  }
+  out$pairwise_antisymmetry <- neural_resolve_pairwise_antisymmetry(
+    out$pairwise_antisymmetry %||% "legacy"
+  )
+  out$additive_utility_mode <- neural_resolve_additive_utility_mode(
+    out$additive_utility_mode %||% "off",
+    factor_tokenization = out$factor_tokenization %||% NULL
+  )
+  if (is.null(out$has_additive_utility)) {
+    out$has_additive_utility <- !is.null((out$params %||% list())$W_add_out)
+  } else {
+    out$has_additive_utility <- isTRUE(out$has_additive_utility)
+  }
+  out$calibration_enabled <- isTRUE(out$calibration_enabled)
+  out$calibration_method <- if (isTRUE(out$calibration_enabled)) {
+    neural_resolve_calibration_method(out$calibration_method %||% "logit_scale")
+  } else {
+    "none"
+  }
+  scale <- suppressWarnings(as.numeric(out$calibration_scale %||% 1.0))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    scale <- 1.0
+  }
+  out$calibration_scale <- as.numeric(scale)
+  if (!is.null(out$calibration_prior_sd)) {
+    prior_sd <- suppressWarnings(as.numeric(out$calibration_prior_sd))
+    out$calibration_prior_sd <- if (length(prior_sd) == 1L &&
+                                    is.finite(prior_sd) &&
+                                    prior_sd > 0) {
+      as.numeric(prior_sd)
+    } else {
+      NULL
+    }
   }
   if (!is.null(out$token_family_levels) && out$low_rank_interaction_rank <= 0L) {
     out$token_family_levels <- setdiff(

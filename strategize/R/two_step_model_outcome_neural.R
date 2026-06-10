@@ -1502,6 +1502,9 @@ neural_params_from_theta <- function(theta_vec, model_info){
       params$log_pairwise_bernoulli_logit_scale
     )
   }
+  if (!is.null(params$log_calibration_scale)) {
+    params$calibration_scale <- strenv$jnp$exp(params$log_calibration_scale)
+  }
   params
 }
 
@@ -1620,6 +1623,9 @@ neural_build_param_schema <- function(params,
   if (!is.null(params$log_pairwise_bernoulli_logit_scale)) {
     param_names <- c(param_names, "log_pairwise_bernoulli_logit_scale")
   }
+  if (!is.null(params$log_calibration_scale)) {
+    param_names <- c(param_names, "log_calibration_scale")
+  }
   if (isTRUE(neural_has_stacked_standard_transformer(params))) {
     param_names <- c(param_names, neural_standard_transformer_stack_names(params))
   } else {
@@ -1651,7 +1657,7 @@ neural_build_param_schema <- function(params,
                    "W_k_cross",
                    "W_v_cross",
                    "W_o_cross")
-  param_names <- c(param_names, "pseudo_query_final", "RMS_final", "W_out", "b_out")
+  param_names <- c(param_names, "pseudo_query_final", "RMS_final", "W_add_out", "W_out", "b_out")
   if (!is.null(params$sigma)) {
     param_names <- c(param_names, "sigma")
   }
@@ -2357,6 +2363,11 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        low_rank_logit_normalization = "none",
                                                        low_rank_head_weight_target_rms = NULL,
                                                        low_rank_rc_out_target_rms = NULL,
+                                                       pairwise_antisymmetry = NULL,
+                                                       additive_utility_mode = NULL,
+                                                       calibration_enabled = NULL,
+                                                       calibration_method = NULL,
+                                                       calibration_scale = NULL,
                                                        stage_mode = NULL,
                                                        attention_backend = "auto",
                                                        attention_dtype = "auto",
@@ -2435,6 +2446,21 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   )
   info$low_rank_head_weight_target_rms <- low_rank_head_weight_target_rms
   info$low_rank_rc_out_target_rms <- low_rank_rc_out_target_rms
+  if (!is.null(pairwise_antisymmetry)) {
+    info$pairwise_antisymmetry <- neural_resolve_pairwise_antisymmetry(pairwise_antisymmetry)
+  }
+  if (!is.null(additive_utility_mode)) {
+    info$additive_utility_mode <- neural_resolve_additive_utility_mode(additive_utility_mode)
+  }
+  if (!is.null(calibration_enabled)) {
+    info$calibration_enabled <- isTRUE(calibration_enabled)
+  }
+  if (!is.null(calibration_method)) {
+    info$calibration_method <- neural_resolve_calibration_method(calibration_method)
+  }
+  if (!is.null(calibration_scale)) {
+    info$calibration_scale <- calibration_scale
+  }
   if (!is.null(stage_mode)) {
     info$stage_mode <- stage_mode
   }
@@ -2623,6 +2649,12 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  low_rank_logit_normalization = "none",
                                                  low_rank_head_weight_target_rms = NULL,
                                                  low_rank_rc_out_target_rms = NULL,
+                                                 pairwise_antisymmetry = NULL,
+                                                 additive_utility_mode = NULL,
+                                                 calibration_enabled = NULL,
+                                                 calibration_method = NULL,
+                                                 calibration_scale = NULL,
+                                                 calibration_prior_sd = NULL,
                                                  likelihood = "bernoulli",
                                                  schema_dropout = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
@@ -2743,6 +2775,17 @@ neural_make_runtime_token_model_info <- function(model_dims,
     ),
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    pairwise_antisymmetry = neural_resolve_pairwise_antisymmetry(pairwise_antisymmetry %||% "legacy"),
+    additive_utility_mode = neural_resolve_additive_utility_mode(
+      additive_utility_mode %||% "off",
+      factor_tokenization = factor_tokenization
+    ),
+    calibration_enabled = isTRUE(calibration_enabled),
+    calibration_method = neural_resolve_calibration_method(
+      calibration_method %||% if (isTRUE(calibration_enabled)) "logit_scale" else "none"
+    ),
+    calibration_scale = calibration_scale,
+    calibration_prior_sd = calibration_prior_sd,
     likelihood = tolower(as.character(likelihood %||% "bernoulli")),
     schema_dropout = neural_resolve_schema_dropout(schema_dropout)
   )
@@ -2823,6 +2866,150 @@ neural_resolve_low_rank_interaction_rank <- function(value = NULL) {
     )
   }
   as.integer(rank)
+}
+
+neural_resolve_pairwise_antisymmetry <- function(value = NULL) {
+  if (is.null(value)) {
+    return("strict")
+  }
+  if (isTRUE(value)) {
+    return("strict")
+  }
+  if (identical(value, FALSE)) {
+    return("legacy")
+  }
+  if (is.character(value)) {
+    mode <- tolower(trimws(as.character(value[[1L]])))
+    if (mode %in% c("strict", "on", "true", "yes", "antisymmetric", "antisym")) {
+      return("strict")
+    }
+    if (mode %in% c("legacy", "off", "false", "no", "none")) {
+      return("legacy")
+    }
+  }
+  stop(
+    "'pairwise_antisymmetry' must be TRUE/FALSE or one of 'strict'/'legacy'.",
+    call. = FALSE
+  )
+}
+
+neural_pairwise_antisymmetry_strict <- function(model_info = NULL) {
+  if (is.null(model_info)) {
+    return(FALSE)
+  }
+  identical(
+    neural_resolve_pairwise_antisymmetry(model_info$pairwise_antisymmetry %||% "legacy"),
+    "strict"
+  )
+}
+
+neural_resolve_additive_utility_mode <- function(value = NULL,
+                                                 factor_tokenization = NULL,
+                                                 pairwise_mode = FALSE) {
+  if (is.null(value)) {
+    value <- "auto"
+  }
+  if (isTRUE(value)) {
+    return("on")
+  }
+  if (identical(value, FALSE)) {
+    return("off")
+  }
+  if (is.character(value)) {
+    mode <- tolower(trimws(as.character(value[[1L]])))
+    if (mode %in% c("on", "true", "yes", "additive", "main_effects", "main-effects")) {
+      return("on")
+    }
+    if (mode %in% c("off", "false", "no", "none")) {
+      return("off")
+    }
+    if (mode %in% c("auto", "default")) {
+      factor_mode <- tolower(as.character(factor_tokenization %||% "fused"))
+      return(if (identical(factor_mode, "fused")) "on" else "off")
+    }
+  }
+  stop(
+    "'additive_utility' must be TRUE/FALSE or one of 'auto', 'on', or 'off'.",
+    call. = FALSE
+  )
+}
+
+neural_additive_utility_enabled <- function(model_info = NULL, params = NULL) {
+  if (is.null(model_info)) {
+    return(FALSE)
+  }
+  mode <- neural_resolve_additive_utility_mode(
+    model_info$additive_utility_mode %||% "off",
+    factor_tokenization = model_info$factor_tokenization %||% NULL
+  )
+  identical(mode, "on") &&
+    !is.null(params) &&
+    !is.null(params$W_add_out)
+}
+
+neural_resolve_calibration_method <- function(value = NULL) {
+  if (is.null(value)) {
+    return("logit_scale")
+  }
+  if (isTRUE(value)) {
+    return("logit_scale")
+  }
+  if (identical(value, FALSE)) {
+    return("none")
+  }
+  if (is.character(value)) {
+    mode <- tolower(trimws(as.character(value[[1L]])))
+    if (mode %in% c("logit_scale", "logit-scale", "temperature", "scale")) {
+      return("logit_scale")
+    }
+    if (mode %in% c("none", "off", "false")) {
+      return("none")
+    }
+  }
+  stop(
+    "'calibration$method' must be 'logit_scale' or 'none'.",
+    call. = FALSE
+  )
+}
+
+neural_resolve_calibration_control <- function(value = NULL,
+                                               likelihood = NULL,
+                                               legacy_pairwise_scale = FALSE,
+                                               prior_sd_fallback = 0.5) {
+  value <- value %||% list()
+  if (isTRUE(value)) {
+    value <- list(enabled = TRUE)
+  } else if (identical(value, FALSE)) {
+    value <- list(enabled = FALSE)
+  } else if (!is.list(value)) {
+    stop("'neural_mcmc_control$calibration' must be TRUE/FALSE or a list.", call. = FALSE)
+  }
+  likelihood_use <- tolower(as.character(likelihood %||% "bernoulli"))
+  eligible <- likelihood_use %in% c("bernoulli", "categorical", "ordinal", "mixed")
+  enabled_raw <- value$enabled %||% "auto"
+  enabled <- if (is.character(enabled_raw)) {
+    tag <- tolower(trimws(as.character(enabled_raw[[1L]])))
+    if (tag %in% c("auto", "default")) {
+      eligible || isTRUE(legacy_pairwise_scale)
+    } else if (tag %in% c("true", "t", "yes", "y", "1", "on", "learned")) {
+      TRUE
+    } else if (tag %in% c("false", "f", "no", "n", "0", "off", "none")) {
+      FALSE
+    } else {
+      stop("'calibration$enabled' must be TRUE/FALSE or 'auto'.", call. = FALSE)
+    }
+  } else {
+    isTRUE(enabled_raw)
+  }
+  method <- neural_resolve_calibration_method(value$method %||% "logit_scale")
+  if (!isTRUE(enabled) || identical(method, "none") || !isTRUE(eligible || legacy_pairwise_scale)) {
+    return(list(enabled = FALSE, method = "none", prior_sd = NULL))
+  }
+  prior_sd <- suppressWarnings(as.numeric(value$prior_sd %||% prior_sd_fallback))
+  if (length(prior_sd) != 1L || is.na(prior_sd) || !is.finite(prior_sd) || prior_sd <= 0) {
+    stop("'calibration$prior_sd' must be a positive finite scalar.", call. = FALSE)
+  }
+  list(enabled = TRUE, method = method, prior_sd = as.numeric(prior_sd))
 }
 
 neural_resolve_learned_pairwise_bernoulli_logit_scale <- function(value = NULL) {
@@ -3098,6 +3285,56 @@ neural_pairwise_bernoulli_logit_scale_from_params <- function(params = NULL,
     return(NULL)
   }
   strenv$jnp$array(scale, dtype = strenv$dtj)
+}
+
+neural_calibration_scale_from_params <- function(params = NULL,
+                                                 model_info = NULL) {
+  if (is.null(model_info) ||
+      !isTRUE(model_info$calibration_enabled) ||
+      !identical(model_info$calibration_method %||% NULL, "logit_scale")) {
+    return(NULL)
+  }
+  if (!is.null(params$calibration_scale)) {
+    return(params$calibration_scale)
+  }
+  if (!is.null(params$log_calibration_scale)) {
+    return(strenv$jnp$exp(params$log_calibration_scale))
+  }
+  scale <- suppressWarnings(as.numeric(model_info$calibration_scale %||% NA_real_))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    return(NULL)
+  }
+  strenv$jnp$array(scale, dtype = strenv$dtj)
+}
+
+neural_apply_classification_logit_calibration <- function(logits,
+                                                          model_info = NULL,
+                                                          params = NULL,
+                                                          likelihood_code_obs = NULL) {
+  scale <- neural_calibration_scale_from_params(params = params, model_info = model_info)
+  if (is.null(scale)) {
+    return(logits)
+  }
+  scale <- strenv$jnp$array(scale, dtype = logits$dtype %||% strenv$dtj)
+  likelihood <- tolower(as.character(model_info$likelihood %||% "bernoulli"))
+  if (likelihood %in% c("bernoulli", "categorical", "ordinal")) {
+    return(logits * scale)
+  }
+  if (!identical(likelihood, "mixed") || is.null(likelihood_code_obs)) {
+    return(logits)
+  }
+  class_mask <- strenv$jnp$logical_or(
+    strenv$jnp$equal(likelihood_code_obs, ai(0L)),
+    strenv$jnp$logical_or(
+      strenv$jnp$equal(likelihood_code_obs, ai(1L)),
+      strenv$jnp$equal(likelihood_code_obs, ai(3L))
+    )
+  )
+  strenv$jnp$where(
+    strenv$jnp$reshape(class_mask, list(-1L, 1L)),
+    logits * scale,
+    logits
+  )
 }
 
 neural_softclip_jnp <- function(x, low, high, softness) {
@@ -4710,6 +4947,122 @@ neural_linear_head <- function(phi,
     b_out <- strenv$jnp$zeros(list(ai(W_use$shape[[2]])), dtype = dtype_use)
   }
   logits + b_out
+}
+
+neural_additive_logits_from_candidate_tokens <- function(tokens,
+                                                         token_mask,
+                                                         params,
+                                                         model_info,
+                                                         out_dim = NULL,
+                                                         dtype = NULL) {
+  if (!isTRUE(neural_additive_utility_enabled(model_info, params))) {
+    n_batch <- tryCatch(ai(tokens$shape[[1]]), error = function(e) 1L)
+    out_dim_use <- out_dim %||% tryCatch(ai(params$W_out$shape[[2]]), error = function(e) 1L)
+    return(strenv$jnp$zeros(list(ai(n_batch), ai(out_dim_use)), dtype = dtype %||% strenv$dtj))
+  }
+  if (is.null(tokens) || is.null(token_mask)) {
+    out_dim_use <- out_dim %||% tryCatch(ai(params$W_add_out$shape[[2]]), error = function(e) 1L)
+    return(strenv$jnp$zeros(list(1L, ai(out_dim_use)), dtype = dtype %||% strenv$dtj))
+  }
+  mask <- strenv$jnp$astype(token_mask > 0, tokens$dtype %||% strenv$dtj)
+  mask_exp <- strenv$jnp$reshape(mask, list(mask$shape[[1]], mask$shape[[2]], 1L))
+  denom <- strenv$jnp$maximum(
+    strenv$jnp$sum(mask, axis = 1L, keepdims = TRUE),
+    strenv$jnp$array(1., dtype = tokens$dtype %||% strenv$dtj)
+  )
+  pooled <- strenv$jnp$sum(tokens * mask_exp, axis = 1L) / denom
+  neural_linear_head(
+    pooled,
+    params$W_add_out,
+    b_out = NULL,
+    dtype = dtype,
+    model_info = NULL,
+    pairwise_obs = FALSE
+  )
+}
+
+neural_additive_single_logits_prepared <- function(params,
+                                                   model_info,
+                                                   X_idx,
+                                                   party_idx,
+                                                   resp_party_idx,
+                                                   experiment_idx = NULL,
+                                                   factor_order = NULL,
+                                                   context_present = NULL,
+                                                   schema_dropout_masks = NULL,
+                                                   out_dim = NULL,
+                                                   dtype = NULL) {
+  if (!isTRUE(neural_additive_utility_enabled(model_info, params))) {
+    n_batch <- tryCatch(ai(X_idx$shape[[1]]), error = function(e) 1L)
+    return(strenv$jnp$zeros(list(ai(n_batch), ai(out_dim %||% 1L)), dtype = dtype %||% strenv$dtj))
+  }
+  cand_info <- neural_build_candidate_tokens_hard(
+    X_idx,
+    party_idx,
+    model_info = model_info,
+    resp_party_idx = resp_party_idx,
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    params = params,
+    return_mask = TRUE,
+    context_present = context_present,
+    schema_dropout_masks = schema_dropout_masks
+  )
+  neural_additive_logits_from_candidate_tokens(
+    tokens = cand_info$tokens,
+    token_mask = cand_info$mask,
+    params = params,
+    model_info = model_info,
+    out_dim = out_dim,
+    dtype = dtype
+  )
+}
+
+neural_additive_pair_delta_prepared <- function(params,
+                                                model_info,
+                                                Xl,
+                                                Xr,
+                                                pl,
+                                                pr,
+                                                resp_p,
+                                                experiment_idx = NULL,
+                                                factor_order = NULL,
+                                                context_present = NULL,
+                                                schema_dropout_left = NULL,
+                                                schema_dropout_right = NULL,
+                                                out_dim = NULL,
+                                                dtype = NULL) {
+  if (!isTRUE(neural_additive_utility_enabled(model_info, params))) {
+    n_batch <- tryCatch(ai(Xl$shape[[1]]), error = function(e) 1L)
+    return(strenv$jnp$zeros(list(ai(n_batch), ai(out_dim %||% 1L)), dtype = dtype %||% strenv$dtj))
+  }
+  left <- neural_additive_single_logits_prepared(
+    params = params,
+    model_info = model_info,
+    X_idx = Xl,
+    party_idx = pl,
+    resp_party_idx = resp_p,
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    context_present = context_present,
+    schema_dropout_masks = schema_dropout_left,
+    out_dim = out_dim,
+    dtype = dtype
+  )
+  right <- neural_additive_single_logits_prepared(
+    params = params,
+    model_info = model_info,
+    X_idx = Xr,
+    party_idx = pr,
+    resp_party_idx = resp_p,
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    context_present = context_present,
+    schema_dropout_masks = schema_dropout_right,
+    out_dim = out_dim,
+    dtype = dtype
+  )
+  left - right
 }
 
 neural_apply_cross_term <- function(logits, phi_left, phi_right,
@@ -8010,6 +8363,34 @@ neural_predict_pair_core_prepared <- function(params,
       matchup_idx = matchup_idx,
       context_present = context_present
     )
+    if (isTRUE(neural_pairwise_antisymmetry_strict(model_info))) {
+      stage_idx_rev <- neural_stage_index(pr, pl, model_info)
+      matchup_idx_rev <- NULL
+      if (!is.null(params$E_matchup)) {
+        matchup_idx_rev <- neural_matchup_index(pr, pl, model_info)
+      }
+      context_present_rev <- neural_pair_context_present(pr, pl, resp_p, model_info)
+      logits_rev <- neural_predict_pair_cross_core_prepared(
+        params = params,
+        model_info = model_info,
+        Xl = Xr,
+        Xr = Xl,
+        pl = pr,
+        pr = pl,
+        resp_p = resp_p,
+        resp_c = resp_c,
+        resp_c_present = resp_c_present,
+        resp_c_order = resp_c_order,
+        experiment_idx = experiment_idx,
+        place_embedding = place_embedding,
+        time_embedding = time_embedding,
+        factor_order = factor_order,
+        stage_idx = stage_idx_rev,
+        matchup_idx = matchup_idx_rev,
+        context_present = context_present_rev
+      )
+      logits <- 0.5 * (logits - logits_rev)
+    }
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
       logits <- logits + neural_low_rank_pair_delta_prepared(
         params = params,
@@ -8033,6 +8414,20 @@ neural_predict_pair_core_prepared <- function(params,
         dtype = logits$dtype
       )
     }
+    logits <- logits + neural_additive_pair_delta_prepared(
+      params = params,
+      model_info = model_info,
+      Xl = Xl,
+      Xr = Xr,
+      pl = pl,
+      pr = pr,
+      resp_p = resp_p,
+      experiment_idx = experiment_idx,
+      factor_order = factor_order,
+      context_present = context_present,
+      out_dim = ai(logits$shape[[2]]),
+      dtype = logits$dtype
+    )
   } else {
     n_batch <- ai(Xl$shape[[1]])
     X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
@@ -8201,6 +8596,20 @@ neural_predict_pair_core_prepared <- function(params,
         out_dim = ai(params$W_out$shape[[2]])
       )
     }
+    logits <- logits + neural_additive_pair_delta_prepared(
+      params = params,
+      model_info = model_info,
+      Xl = Xl,
+      Xr = Xr,
+      pl = pl,
+      pr = pr,
+      resp_p = resp_p,
+      experiment_idx = experiment_idx,
+      factor_order = factor_order,
+      context_present = context_present,
+      out_dim = ai(logits$shape[[2]]),
+      dtype = logits$dtype
+    )
   }
 
   logits <- neural_apply_pairwise_classification_logit_transform(
@@ -8208,9 +8617,6 @@ neural_predict_pair_core_prepared <- function(params,
     model_info = model_info,
     pairwise_obs = TRUE
   )
-  if (isTRUE(return_logits)) {
-    return(logits)
-  }
   logits <- neural_apply_pairwise_bernoulli_logit_scale(
     logits,
     model_info = model_info,
@@ -8220,6 +8626,14 @@ neural_predict_pair_core_prepared <- function(params,
     ),
     pairwise_obs = TRUE
   )
+  logits <- neural_apply_classification_logit_calibration(
+    logits,
+    model_info = model_info,
+    params = params
+  )
+  if (isTRUE(return_logits)) {
+    return(logits)
+  }
   if (model_info$likelihood == "bernoulli") {
     return(strenv$jax$nn$sigmoid(strenv$jnp$squeeze(logits, axis = 1L)))
   }
@@ -8306,6 +8720,22 @@ neural_predict_single_core_prepared <- function(params,
       dtype = logits$dtype
     )
   }
+  logits <- logits + neural_additive_single_logits_prepared(
+    params = params,
+    model_info = model_info,
+    X_idx = Xb,
+    party_idx = party_idx,
+    resp_party_idx = resp_p,
+    experiment_idx = experiment_idx,
+    factor_order = factor_order,
+    out_dim = ai(logits$shape[[2]]),
+    dtype = logits$dtype
+  )
+  logits <- neural_apply_classification_logit_calibration(
+    logits,
+    model_info = model_info,
+    params = params
+  )
 
   if (isTRUE(return_logits)) {
     return(logits)
@@ -9836,6 +10266,13 @@ generate_ModelOutcome_neural <- function(){
     attention_padding_multiple = 8L,
     learned_pairwise_bernoulli_logit_scale = FALSE,
     pairwise_bernoulli_logit_scale_prior_sd = 0.5,
+    pairwise_antisymmetry = "strict",
+    additive_utility = "auto",
+    calibration = list(
+      enabled = "auto",
+      method = "logit_scale",
+      prior_sd = 0.5
+    ),
     universal_loss_weighting = "empirical",
     balanced_sampling = NULL
   )
@@ -9869,6 +10306,13 @@ generate_ModelOutcome_neural <- function(){
   low_rank_logit_normalization <- "none"
   low_rank_head_weight_target_rms <- NULL
   low_rank_rc_out_target_rms <- NULL
+  pairwise_antisymmetry_control <- mcmc_control$pairwise_antisymmetry
+  pairwise_antisymmetry_mode <- "strict"
+  additive_utility_control <- mcmc_control$additive_utility
+  additive_utility_mode <- "off"
+  calibration_control_raw <- mcmc_control$calibration
+  calibration_control_supplied <- FALSE
+  calibration_control <- list(enabled = FALSE, method = "none", prior_sd = NULL)
   warn_stage_imbalance_pct <- 0.10
   warn_min_cell_n <- 50L
   neural_oos_eval_internal_flag <- exists("neural_oos_eval_internal", inherits = TRUE) &&
@@ -10062,6 +10506,16 @@ generate_ModelOutcome_neural <- function(){
         neural_mcmc_control$cross_candidate_encoder
       )
     }
+    if ("pairwise_antisymmetry" %in% names(neural_mcmc_control)) {
+      pairwise_antisymmetry_control <- neural_mcmc_control$pairwise_antisymmetry
+    }
+    if ("additive_utility" %in% names(neural_mcmc_control)) {
+      additive_utility_control <- neural_mcmc_control$additive_utility
+    }
+    if ("calibration" %in% names(neural_mcmc_control)) {
+      calibration_control_supplied <- TRUE
+      calibration_control_raw <- neural_mcmc_control$calibration
+    }
     if ("low_rank_logit_transform" %in% names(neural_mcmc_control)) {
       low_rank_logit_transform_supplied <- TRUE
       low_rank_logit_transform_control <- neural_mcmc_control$low_rank_logit_transform
@@ -10103,6 +10557,9 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$attention_dtype <- NULL
     mcmc_overrides$attention_padding_multiple <- NULL
     mcmc_overrides$cross_candidate_encoder <- NULL
+    mcmc_overrides$pairwise_antisymmetry <- NULL
+    mcmc_overrides$additive_utility <- NULL
+    mcmc_overrides$calibration <- NULL
     mcmc_overrides$low_rank_logit_transform <- NULL
     mcmc_overrides$low_rank_logit_bound <- NULL
     mcmc_overrides$low_rank_logit_softness <- NULL
@@ -10318,6 +10775,12 @@ generate_ModelOutcome_neural <- function(){
 
   # Pairwise mode for forced-choice
   pairwise_mode <- isTRUE(diff) && !is.null(pair_id_) && length(pair_id_) > 0
+  pairwise_antisymmetry_mode <- if (isTRUE(pairwise_mode)) {
+    neural_resolve_pairwise_antisymmetry(pairwise_antisymmetry_control)
+  } else {
+    "legacy"
+  }
+  mcmc_control$pairwise_antisymmetry <- pairwise_antisymmetry_mode
   if (!isTRUE(pairwise_mode)) {
     cross_candidate_encoder_mode <- "none"
   }
@@ -10521,6 +10984,12 @@ generate_ModelOutcome_neural <- function(){
   factor_tokenization <- neural_factor_tokenization(
     mode = neural_token_info_use$factor_tokenization %||% "fused"
   )
+  additive_utility_mode <- neural_resolve_additive_utility_mode(
+    additive_utility_control,
+    factor_tokenization = factor_tokenization,
+    pairwise_mode = pairwise_mode
+  )
+  mcmc_control$additive_utility <- additive_utility_mode
   factor_order_by_experiment <- lapply(
     neural_token_info_use$factor_order_by_experiment %||% list(),
     as.integer
@@ -10747,7 +11216,12 @@ generate_ModelOutcome_neural <- function(){
     low_rank_logit_softness = low_rank_logit_softness,
     low_rank_logit_normalization = low_rank_logit_normalization,
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
-    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    pairwise_antisymmetry = pairwise_antisymmetry_mode,
+    additive_utility_mode = additive_utility_mode,
+    calibration_enabled = isTRUE(calibration_control$enabled),
+    calibration_method = calibration_control$method %||% "none",
+    calibration_scale = NULL
   )
   universal_training <- neural_token_info_use$foundation_universal_training %||% NULL
   universal_enabled <- isTRUE(universal_training$enabled)
@@ -11422,6 +11896,18 @@ generate_ModelOutcome_neural <- function(){
   learned_pairwise_bernoulli_logit_scale <- isTRUE(
     learned_pairwise_bernoulli_logit_scale_requested
   ) && isTRUE(pairwise_mode) && likelihood %in% c("bernoulli", "mixed")
+  calibration_control_resolve <- calibration_control_raw
+  if (isTRUE(learned_pairwise_bernoulli_logit_scale) &&
+      !isTRUE(calibration_control_supplied)) {
+    calibration_control_resolve <- list(enabled = FALSE)
+  }
+  calibration_control <- neural_resolve_calibration_control(
+    value = calibration_control_resolve,
+    likelihood = likelihood,
+    legacy_pairwise_scale = FALSE,
+    prior_sd_fallback = 0.5
+  )
+  mcmc_control$calibration <- calibration_control
   pairwise_bernoulli_logit_scale_prior_sd <-
     neural_resolve_pairwise_bernoulli_logit_scale_prior_sd(
       value = mcmc_control$pairwise_bernoulli_logit_scale_prior_sd %||% NULL,
@@ -11444,6 +11930,11 @@ generate_ModelOutcome_neural <- function(){
     learned_pairwise_bernoulli_logit_scale
   low_rank_logit_model_info$pairwise_bernoulli_logit_scale_prior_sd <-
     pairwise_bernoulli_logit_scale_prior_sd
+  low_rank_logit_model_info$pairwise_antisymmetry <- pairwise_antisymmetry_mode
+  low_rank_logit_model_info$additive_utility_mode <- additive_utility_mode
+  low_rank_logit_model_info$calibration_enabled <- isTRUE(calibration_control$enabled)
+  low_rank_logit_model_info$calibration_method <- calibration_control$method %||% "none"
+  low_rank_logit_model_info$calibration_prior_sd <- calibration_control$prior_sd %||% NULL
   sigma_prior_scale <- 1.0
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     y_numeric <- if (isTRUE(universal_enabled) && any(universal_likelihood_use == "normal")) {
@@ -13188,6 +13679,14 @@ generate_ModelOutcome_neural <- function(){
     )
     W_out <- sample_loc_scale("W_out", tau_w_out,
                               reticulate::tuple(ModelDims, output_dim))
+    W_add_out <- NULL
+    if (identical(additive_utility_mode, "on")) {
+      W_add_out <- sample_loc_scale(
+        "W_add_out",
+        tau_w_out,
+        reticulate::tuple(ModelDims, output_dim)
+      )
+    }
     tau_b <- strenv$numpyro$sample(
       "tau_b",
       strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale))
@@ -13335,6 +13834,17 @@ generate_ModelOutcome_neural <- function(){
         )
       )
     }
+    log_calibration_scale <- NULL
+    if (isTRUE(calibration_control$enabled) &&
+        identical(calibration_control$method %||% NULL, "logit_scale")) {
+      log_calibration_scale <- strenv$numpyro$sample(
+        "log_calibration_scale",
+        strenv$numpyro$distributions$Normal(
+          0.,
+          as.numeric(calibration_control$prior_sd %||% 0.5)
+        )
+      )
+    }
 
     params_view <- if (isTRUE(pairwise)) {
       list(
@@ -13438,6 +13948,9 @@ generate_ModelOutcome_neural <- function(){
       params_view$pseudo_query_final <- pseudo_query_final
     }
     params_view$RMS_final <- RMS_final
+    if (!is.null(W_add_out)) {
+      params_view$W_add_out <- W_add_out
+    }
     params_view$W_out <- W_out
     params_view$b_out <- b_out
     if (!is.null(ordinal_threshold_raw)) {
@@ -13460,12 +13973,17 @@ generate_ModelOutcome_neural <- function(){
         log_pairwise_bernoulli_logit_scale
       )
     }
+    if (!is.null(log_calibration_scale)) {
+      params_view$log_calibration_scale <- log_calibration_scale
+      params_view$calibration_scale <- strenv$jnp$exp(log_calibration_scale)
+    }
 
     list(
       params_view = params_view,
       E_choice = E_choice,
       E_respondent_cls = E_respondent_cls,
       E_candidate_cls = E_candidate_cls,
+      W_add_out = W_add_out,
       W_out = W_out,
       b_out = b_out,
       ordinal_threshold_raw = ordinal_threshold_raw,
@@ -13473,7 +13991,8 @@ generate_ModelOutcome_neural <- function(){
       sigma = sigma,
       M_cross = M_cross,
       W_cross_out = W_cross_out,
-      log_pairwise_bernoulli_logit_scale = log_pairwise_bernoulli_logit_scale
+      log_pairwise_bernoulli_logit_scale = log_pairwise_bernoulli_logit_scale,
+      log_calibration_scale = log_calibration_scale
     )
   }
 
@@ -13577,7 +14096,8 @@ generate_ModelOutcome_neural <- function(){
                                            pairwise_obs = FALSE,
                                            pairwise_logit_scale = NULL,
                                            experiment_index_obs = NULL,
-                                           ordinal_thresholds = NULL) {
+                                           ordinal_thresholds = NULL,
+                                           params = NULL) {
     logits <- neural_apply_pairwise_classification_logit_transform(
       logits,
       model_info = low_rank_logit_model_info,
@@ -13590,6 +14110,12 @@ generate_ModelOutcome_neural <- function(){
       scale = pairwise_logit_scale,
       likelihood_code_obs = likelihood_code_obs,
       pairwise_obs = pairwise_obs
+    )
+    logits <- neural_apply_classification_logit_calibration(
+      logits,
+      model_info = low_rank_logit_model_info,
+      params = params,
+      likelihood_code_obs = likelihood_code_obs
     )
     scaled_observation_factor <- function(distribution, obs) {
       if (is.null(obs_scale)) {
@@ -13819,6 +14345,11 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_normalization = low_rank_logit_normalization,
       low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
       low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+      pairwise_antisymmetry = pairwise_antisymmetry_mode,
+      additive_utility_mode = additive_utility_mode,
+      calibration_enabled = isTRUE(calibration_control$enabled),
+      calibration_method = calibration_control$method %||% "none",
+      calibration_prior_sd = calibration_control$prior_sd %||% NULL,
       likelihood = likelihood,
       schema_dropout = schema_dropout
     )
@@ -14106,6 +14637,22 @@ generate_ModelOutcome_neural <- function(){
                                     schema_dropout_context = schema_dropout_context,
                                     schema_dropout_left = schema_dropout_left,
                                     schema_dropout_right = schema_dropout_right)
+        if (isTRUE(neural_pairwise_antisymmetry_strict(model_info_local))) {
+          stage_idx_rev <- neural_stage_index(pr, pl, model_info_local)
+          matchup_idx_rev <- NULL
+          if (isTRUE(use_matchup_token)) {
+            matchup_idx_rev <- compute_matchup_idx(pr, pl)
+          }
+          context_present_rev <- neural_pair_context_present(pr, pl, resp_p, model_info_local)
+          logits_rev <- encode_pair_cross(Xr, Xl, pr, pl, resp_p, resp_c,
+                                          resp_c_present, experiment_idx,
+                                          stage_idx_rev, matchup_idx_rev,
+                                          context_present = context_present_rev,
+                                          schema_dropout_context = schema_dropout_context,
+                                          schema_dropout_left = schema_dropout_right,
+                                          schema_dropout_right = schema_dropout_left)
+          logits <- 0.5 * (logits - logits_rev)
+        }
         if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
           logits <- logits + neural_low_rank_pair_delta_prepared(
             params = params_view,
@@ -14129,6 +14676,21 @@ generate_ModelOutcome_neural <- function(){
             dtype = logits$dtype
           )
         }
+        logits <- logits + neural_additive_pair_delta_prepared(
+          params = params_view,
+          model_info = model_info_local,
+          Xl = Xl,
+          Xr = Xr,
+          pl = pl,
+          pr = pr,
+          resp_p = resp_p,
+          experiment_idx = experiment_idx,
+          context_present = context_present,
+          schema_dropout_left = schema_dropout_left,
+          schema_dropout_right = schema_dropout_right,
+          out_dim = ai(logits$shape[[2]]),
+          dtype = logits$dtype
+        )
       } else {
         phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c,
                                           resp_c_present, experiment_idx,
@@ -14198,6 +14760,21 @@ generate_ModelOutcome_neural <- function(){
                                             M_cross, W_cross_out,
                                             out_dim = ai(W_out$shape[[2]]))
         }
+        logits <- logits + neural_additive_pair_delta_prepared(
+          params = params_view,
+          model_info = model_info_local,
+          Xl = Xl,
+          Xr = Xr,
+          pl = pl,
+          pr = pr,
+          resp_p = resp_p,
+          experiment_idx = experiment_idx,
+          context_present = context_present,
+          schema_dropout_left = schema_dropout_left,
+          schema_dropout_right = schema_dropout_right,
+          out_dim = ai(logits$shape[[2]]),
+          dtype = logits$dtype
+        )
       }
 
       apply_observation_likelihood(
@@ -14214,7 +14791,8 @@ generate_ModelOutcome_neural <- function(){
           model_info = low_rank_logit_model_info
         ),
         experiment_index_obs = experiment_idx,
-        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL
+        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL,
+        params = params_view
       )
     }
 
@@ -14289,6 +14867,18 @@ generate_ModelOutcome_neural <- function(){
           dtype = logits$dtype
         )
       }
+      logits <- logits + neural_additive_single_logits_prepared(
+        params = params_view,
+        model_info = model_info_local,
+        X_idx = Xb,
+        party_idx = pb,
+        resp_party_idx = resp_p,
+        experiment_idx = experiment_idx,
+        context_present = NULL,
+        schema_dropout_masks = schema_dropout_candidate,
+        out_dim = ai(logits$shape[[2]]),
+        dtype = logits$dtype
+      )
       apply_observation_likelihood(
         logits = logits,
         Yb = Yb,
@@ -14299,7 +14889,8 @@ generate_ModelOutcome_neural <- function(){
         obs_scale = obs_scale_b,
         pairwise_obs = FALSE,
         experiment_index_obs = experiment_idx,
-        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL
+        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL,
+        params = params_view
       )
     }
 
@@ -14510,6 +15101,11 @@ generate_ModelOutcome_neural <- function(){
       low_rank_logit_normalization = low_rank_logit_normalization,
       low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
       low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+      pairwise_antisymmetry = pairwise_antisymmetry_mode,
+      additive_utility_mode = additive_utility_mode,
+      calibration_enabled = isTRUE(calibration_control$enabled),
+      calibration_method = calibration_control$method %||% "none",
+      calibration_prior_sd = calibration_control$prior_sd %||% NULL,
       likelihood = likelihood,
       schema_dropout = schema_dropout
     )
@@ -14623,6 +15219,18 @@ generate_ModelOutcome_neural <- function(){
           dtype = logits$dtype
         )
       }
+      logits <- logits + neural_additive_single_logits_prepared(
+        params = params_view,
+        model_info = model_info_local,
+        X_idx = Xb,
+        party_idx = pb,
+        resp_party_idx = resp_p,
+        experiment_idx = experiment_idx,
+        context_present = NULL,
+        schema_dropout_masks = schema_dropout_candidate,
+        out_dim = ai(logits$shape[[2]]),
+        dtype = logits$dtype
+      )
 
       apply_observation_likelihood(
         logits = logits,
@@ -14633,7 +15241,8 @@ generate_ModelOutcome_neural <- function(){
         site_name = "obs",
         obs_scale = obs_scale_b,
         experiment_index_obs = experiment_idx,
-        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL
+        ordinal_thresholds = params_view$ordinal_thresholds %||% NULL,
+        params = params_view
       )
     }
 
@@ -16212,13 +16821,15 @@ generate_ModelOutcome_neural <- function(){
       }
       dynamic_names <- c(
         "W_out", "W_out_decentered", "W_out_base", "W_out_z",
+        "W_add_out", "W_add_out_decentered", "W_add_out_base", "W_add_out_z",
         "b_out", "b_out_decentered", "b_out_base", "b_out_z",
         "tau_w_out", "tau_b",
         "sigma",
         "W_cross_out",
         "M_cross", "M_cross_raw", "tau_cross",
         "alpha_rc", "W_rc_out",
-        "log_pairwise_bernoulli_logit_scale"
+        "log_pairwise_bernoulli_logit_scale",
+        "log_calibration_scale"
       )
       !name %in% dynamic_names
     }
@@ -16346,6 +16957,8 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("E_segment", value = segment_value)
 
     params_out$W_out <- get_loc_scale_site_value("W_out", "tau_w_out")
+    W_add_out_value <- get_loc_scale_site_value("W_add_out", "tau_w_out")
+    maybe_site("W_add_out", value = W_add_out_value)
     params_out$b_out <- get_loc_scale_site_value("b_out", "tau_b")
     if (is.null(params_out$W_out) || is.null(params_out$b_out)) {
       return(NULL)
@@ -16374,6 +16987,10 @@ generate_ModelOutcome_neural <- function(){
       params_out$pairwise_bernoulli_logit_scale <- strenv$jnp$exp(
         params_out$log_pairwise_bernoulli_logit_scale
       )
+    }
+    maybe_site("log_calibration_scale")
+    if (!is.null(params_out$log_calibration_scale)) {
+      params_out$calibration_scale <- strenv$jnp$exp(params_out$log_calibration_scale)
     }
 
     if (likelihood == "normal" || isTRUE(universal_has_normal)) {
@@ -16468,7 +17085,12 @@ generate_ModelOutcome_neural <- function(){
     low_rank_logit_softness = low_rank_logit_softness,
     low_rank_logit_normalization = low_rank_logit_normalization,
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
-    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    pairwise_antisymmetry = pairwise_antisymmetry_mode,
+    additive_utility_mode = additive_utility_mode,
+    calibration_enabled = isTRUE(calibration_control$enabled),
+    calibration_method = calibration_control$method %||% "none",
+    calibration_scale = NULL
   )
   validation_model_info$learned_pairwise_bernoulli_logit_scale <-
     learned_pairwise_bernoulli_logit_scale
@@ -19608,6 +20230,9 @@ generate_ModelOutcome_neural <- function(){
     if (identical(name, "W_out")) {
       return(get_loc_scale_draws("W_out", "tau_w_out"))
     }
+    if (identical(name, "W_add_out")) {
+      return(get_loc_scale_draws("W_add_out", "tau_w_out"))
+    }
     if (identical(name, "b_out")) {
       return(get_loc_scale_draws("b_out", "tau_b"))
     }
@@ -19701,6 +20326,12 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(W_out_draws)) {
     ParamsMean$W_out <- mean_param(W_out_draws)
   }
+  W_add_out_draws <- get_loc_scale_draws("W_add_out", "tau_w_out")
+  if (!is.null(W_add_out_draws)) {
+    ParamsMean$W_add_out <- mean_param(W_add_out_draws)
+  } else {
+    maybe_site("W_add_out")
+  }
   b_out_draws <- get_loc_scale_draws("b_out", "tau_b")
   if (!is.null(b_out_draws)) {
     ParamsMean$b_out <- mean_param(b_out_draws)
@@ -19731,6 +20362,10 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_rc_c")
   maybe_site("W_rc_out")
   maybe_site("log_pairwise_bernoulli_logit_scale")
+  maybe_site("log_calibration_scale")
+  if (!is.null(ParamsMean$log_calibration_scale)) {
+    ParamsMean$calibration_scale <- strenv$jnp$exp(ParamsMean$log_calibration_scale)
+  }
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
     ParamsMean$sigma <- mean_param(PosteriorDraws$sigma)
   }
@@ -19810,6 +20445,17 @@ generate_ModelOutcome_neural <- function(){
   }
   low_rank_logit_model_info$pairwise_bernoulli_logit_scale <-
     pairwise_bernoulli_logit_scale_mean
+  calibration_scale_mean <- 1.0
+  if (!is.null(ParamsMean$log_calibration_scale)) {
+    calibration_scale_jnp <- strenv$jnp$exp(ParamsMean$log_calibration_scale)
+    calibration_scale_mean <- as.numeric(strenv$np$array(calibration_scale_jnp))[[1L]]
+  } else if (!is.null(ParamsMean$calibration_scale)) {
+    calibration_scale_mean <- as.numeric(strenv$np$array(ParamsMean$calibration_scale))[[1L]]
+  }
+  if (!is.finite(calibration_scale_mean) || calibration_scale_mean <= 0) {
+    calibration_scale_mean <- 1.0
+  }
+  low_rank_logit_model_info$calibration_scale <- calibration_scale_mean
 
   has_qk_norm <- !is.null(ParamsMean$RMS_q_layers) || !is.null(ParamsMean$RMS_k_layers)
   for (l_ in 1L:ModelDepth) {
@@ -19864,7 +20510,12 @@ generate_ModelOutcome_neural <- function(){
     low_rank_logit_softness = low_rank_logit_softness,
     low_rank_logit_normalization = low_rank_logit_normalization,
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
-    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms
+    low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    pairwise_antisymmetry = pairwise_antisymmetry_mode,
+    additive_utility_mode = additive_utility_mode,
+    calibration_enabled = isTRUE(calibration_control$enabled),
+    calibration_method = calibration_control$method %||% "none",
+    calibration_scale = calibration_scale_mean
   )
   predict_model_info <- neural_set_pairwise_context_model_info(
     info = predict_model_info,
@@ -20603,8 +21254,9 @@ generate_ModelOutcome_neural <- function(){
   }
   if (uncertainty_scope == "output") {
     keep <- param_names %in% c(
-      "W_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out",
-      "log_pairwise_bernoulli_logit_scale", "ordinal_threshold_raw", "ordinal_thresholds"
+      "W_out", "W_add_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out",
+      "log_pairwise_bernoulli_logit_scale", "log_calibration_scale",
+      "ordinal_threshold_raw", "ordinal_thresholds"
     )
     mask <- unlist(mapply(function(keep_i, size_i) rep(keep_i, size_i),
                           keep, param_sizes))
@@ -20843,9 +21495,16 @@ generate_ModelOutcome_neural <- function(){
     low_rank_logit_normalization = low_rank_logit_normalization,
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
+    pairwise_antisymmetry = pairwise_antisymmetry_mode,
+    additive_utility_mode = additive_utility_mode,
+    has_additive_utility = !is.null(ParamsMean$W_add_out),
     learned_pairwise_bernoulli_logit_scale = learned_pairwise_bernoulli_logit_scale,
     pairwise_bernoulli_logit_scale_prior_sd = pairwise_bernoulli_logit_scale_prior_sd,
     pairwise_bernoulli_logit_scale = pairwise_bernoulli_logit_scale_mean,
+    calibration_enabled = isTRUE(calibration_control$enabled),
+    calibration_method = calibration_control$method %||% "none",
+    calibration_prior_sd = calibration_control$prior_sd %||% NULL,
+    calibration_scale = calibration_scale_mean,
     schema_dropout = schema_dropout,
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),

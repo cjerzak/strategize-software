@@ -70,6 +70,39 @@ test_that("pairwise Bernoulli logit scale controls final R logits", {
   )
 })
 
+test_that("neural architecture control resolvers preserve legacy upgrade defaults", {
+  expect_identical(strategize:::neural_resolve_pairwise_antisymmetry(NULL), "strict")
+  expect_identical(strategize:::neural_resolve_pairwise_antisymmetry(FALSE), "legacy")
+  expect_true(strategize:::neural_pairwise_antisymmetry_strict(list(
+    pairwise_antisymmetry = "strict"
+  )))
+  expect_false(strategize:::neural_pairwise_antisymmetry_strict(list()))
+
+  expect_identical(
+    strategize:::neural_resolve_additive_utility_mode("auto", factor_tokenization = "fused"),
+    "on"
+  )
+  expect_identical(
+    strategize:::neural_resolve_additive_utility_mode("auto", factor_tokenization = "legacy"),
+    "off"
+  )
+
+  calibration <- strategize:::neural_resolve_calibration_control(
+    list(enabled = "auto", prior_sd = 0.25),
+    likelihood = "categorical"
+  )
+  expect_true(calibration$enabled)
+  expect_identical(calibration$method, "logit_scale")
+  expect_equal(calibration$prior_sd, 0.25)
+
+  no_calibration <- strategize:::neural_resolve_calibration_control(
+    list(enabled = "auto"),
+    likelihood = "normal"
+  )
+  expect_false(no_calibration$enabled)
+  expect_identical(no_calibration$method, "none")
+})
+
 test_that("balanced compact sampler draws studies and respondents hierarchically", {
   config <- strategize:::neural_resolve_balanced_sampling(list(
     scheme = "study_equal_respondent",

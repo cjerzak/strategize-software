@@ -554,6 +554,30 @@ test_that("canonical text embedding width truncates larger matrices", {
   expect_equal(out[, 1024], emb[, 1024])
 })
 
+test_that("normalized text embedding specs produce unit-length frozen embeddings", {
+  spec <- strategize:::cs2step_normalize_text_embedding_spec(list(
+    family = "qwen3",
+    profile = "portable",
+    runtime = "auto",
+    backend = "sentence_transformers",
+    label = "sentence_transformers_cpu",
+    model_id = "Qwen/Qwen3-Embedding-0.6B",
+    conda_env = "strategize_env",
+    conda = "/usr/bin/conda",
+    canonical_dim = 3L,
+    raw_dim = 3L,
+    normalize = TRUE
+  ))
+  emb <- rbind(c(3, 4, 0), c(0, 0, 0))
+  out <- strategize:::cs2step_text_embedding_canonicalize_matrix(emb, spec)
+
+  expect_equal(drop(sqrt(rowSums(out[1, , drop = FALSE]^2))), 1)
+  expect_equal(out[1, ], c(0.6, 0.8, 0))
+  expect_equal(out[2, ], c(0, 0, 0))
+  expect_true(isTRUE(spec$frozen))
+  expect_false(isTRUE(spec$trainable))
+})
+
 test_that("legacy text embedding metadata preserves embedding_dim during normalization", {
   testthat::local_mocked_bindings(
     cs2step_resolve_conda_binary = function(conda = "auto") "/usr/bin/conda",

@@ -56,6 +56,7 @@ inspect_text_embedding_backend <- function(conda_env = "strategize_torch_env",
 #' @param cache_only Logical; if \code{TRUE}, missing cache entries error before
 #'   a model runtime is imported.
 #' @param batch_size Number of texts to encode per model call.
+#' @param normalize Logical; if \code{TRUE}, L2-normalize canonical embeddings.
 #' @param required Logical; if \code{TRUE}, ensure the selected runtime is usable
 #'   immediately. If \code{FALSE}, return a lazy backend that validates on first use.
 #' @param verbose Logical; if \code{TRUE}, print install milestones and stream
@@ -72,6 +73,7 @@ build_text_embedding_backend <- function(conda_env = "strategize_torch_env",
                                          cache_dir = NULL,
                                          cache_only = FALSE,
                                          batch_size = 64L,
+                                         normalize = TRUE,
                                          required = TRUE,
                                          verbose = TRUE,
                                          conda = "auto") {
@@ -136,6 +138,12 @@ build_text_embedding_backend <- function(conda_env = "strategize_torch_env",
     }
   }
 
+  spec <- modifyList(spec, list(
+    normalize = isTRUE(normalize),
+    frozen = TRUE,
+    trainable = FALSE,
+    embedding_strategy = "frozen_pretrained_schema_text"
+  ))
   fn <- cs2step_build_text_embedding_fn(
     spec = spec,
     cache_dir = cache_dir,
@@ -194,7 +202,7 @@ cs2step_text_embedding_profile_registry <- function() {
       profile = "portable",
       family = "qwen3",
       canonical_dim = 1024L,
-      cache_key_version = 1L,
+      cache_key_version = cs2step_text_embedding_backend_version(),
       auto_cpu_fallback = TRUE,
       candidates = list(
         mlx = list(
@@ -243,7 +251,7 @@ cs2step_text_embedding_profile_registry <- function() {
       profile = "harrier_oss_v1_0.6b_1024",
       family = "harrier",
       canonical_dim = 1024L,
-      cache_key_version = 1L,
+      cache_key_version = cs2step_text_embedding_backend_version(),
       auto_cpu_fallback = TRUE,
       candidates = list(
         cuda = list(
@@ -279,7 +287,7 @@ cs2step_text_embedding_profile_registry <- function() {
       profile = "qwen3_8b_4096",
       family = "qwen3",
       canonical_dim = 4096L,
-      cache_key_version = 1L,
+      cache_key_version = cs2step_text_embedding_backend_version(),
       auto_cpu_fallback = FALSE,
       candidates = list(
         mlx = list(
@@ -383,7 +391,9 @@ cs2step_text_embedding_request <- function(text_embeddings = NULL,
       profile = cs2step_text_embedding_profile(value),
       runtime = runtime_default,
       family = NULL,
-      model_id = NULL
+      model_id = NULL,
+      normalize = TRUE,
+      frozen = TRUE
     ))
   }
   if (!is.list(text_embeddings)) {
@@ -405,11 +415,14 @@ cs2step_text_embedding_request <- function(text_embeddings = NULL,
       stop("text_embeddings$model_id must be a non-empty scalar string when supplied.", call. = FALSE)
     }
   }
+  normalize <- isTRUE(text_embeddings$normalize %||% TRUE)
   list(
     profile = profile,
     runtime = runtime,
     family = family,
-    model_id = model_id
+    model_id = model_id,
+    normalize = normalize,
+    frozen = TRUE
   )
 }
 
@@ -485,6 +498,12 @@ cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
       )
     }
   }
+  spec <- modifyList(spec, list(
+    normalize = isTRUE(request$normalize),
+    frozen = TRUE,
+    trainable = FALSE,
+    embedding_strategy = "frozen_pretrained_schema_text"
+  ))
   cs2step_backend_message(
     verbose,
     "Text embedding backend '%s' is ready (profile=%s, runtime=%s, model=%s).",
@@ -496,7 +515,7 @@ cs2step_ensure_text_embedding_request <- function(text_embeddings = NULL,
   invisible(spec)
 }
 
-cs2step_text_embedding_backend_version <- function() 1L
+cs2step_text_embedding_backend_version <- function() 2L
 
 cs2step_resolve_conda_binary <- function(conda = "auto") {
   if (!cs2step_has_reticulate()) {
@@ -1570,7 +1589,15 @@ cs2step_normalize_text_embedding_spec <- function(spec) {
   spec$conda_env <- as.character(spec$conda_env %||% "strategize_torch_env")
   spec$conda <- cs2step_resolve_conda_binary(spec$conda %||% "auto")
   spec$install_packages <- as.character(spec$install_packages %||% character(0))
-  spec$cache_key_version <- as.integer(spec$cache_key_version %||% 1L)
+  spec$normalize <- isTRUE(spec$normalize %||% TRUE)
+  spec$frozen <- TRUE
+  spec$trainable <- FALSE
+  spec$embedding_strategy <- as.character(
+    spec$embedding_strategy %||% "frozen_pretrained_schema_text"
+  )
+  spec$cache_key_version <- as.integer(
+    spec$cache_key_version %||% cs2step_text_embedding_backend_version()
+  )
   spec
 }
 
@@ -1593,6 +1620,9 @@ cs2step_text_embedding_cache_file <- function(spec, cache_dir = NULL) {
         device = spec$device,
         model = spec$model_id,
         dim = spec$canonical_dim,
+        normalize = isTRUE(spec$normalize),
+        frozen = isTRUE(spec$frozen),
+        strategy = spec$embedding_strategy,
         version = spec$cache_key_version
       ))
     )
@@ -1616,6 +1646,11 @@ cs2step_text_embedding_canonicalize_matrix <- function(emb, spec) {
   }
   if (ncol(emb) > target_dim) {
     emb <- emb[, seq_len(target_dim), drop = FALSE]
+  }
+  if (isTRUE(spec$normalize)) {
+    norms <- sqrt(rowSums(emb * emb))
+    norms[!is.finite(norms) | norms <= 0] <- 1
+    emb <- emb / norms
   }
   emb
 }
@@ -1756,7 +1791,9 @@ cs2step_build_text_embedding_fn <- function(spec,
   attr(fn, "text_embedding_cache") <- list(
     cache_path = normalizePath(cache_file(), mustWork = FALSE),
     cache_only = cache_only,
-    batch_size = batch_size
+    batch_size = batch_size,
+    normalize = isTRUE(spec$normalize),
+    frozen = isTRUE(spec$frozen)
   )
   class(fn) <- c("strategize_text_embedding_fn", class(fn))
   fn
