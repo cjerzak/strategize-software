@@ -63,6 +63,8 @@ neural_test_add_fused_factor_params <- function(params,
                                                 token_family_levels = strategize:::neural_token_family_levels()) {
   strenv <- strategize:::strenv
   dims <- as.integer(model_dims)
+  hidden_dims <- 2L * dims
+  gate_value_dims <- 2L * hidden_dims
   if (is.null(factor_struct_dim)) {
     factor_struct_dim <- if (!is.null(model_info$factor_struct_matrix)) {
       neural_test_matrix_ncol(model_info$factor_struct_matrix)
@@ -80,15 +82,22 @@ neural_test_add_fused_factor_params <- function(params,
   }
   params$E_factor_fused_base <- params$E_factor_fused_base %||%
     strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
-  params$W_factor_fuse_1 <- params$W_factor_fuse_1 %||%
+  params$W_factor_fuse_1 <- params$W_factor_fuse_1 %||% {
+    w1 <- matrix(0, nrow = 4L * dims, ncol = gate_value_dims)
+    w1[, (hidden_dims + 1L):(hidden_dims + dims)] <-
+      rbind(diag(dims), diag(dims), diag(dims), diag(dims))
+    strenv$jnp$array(w1, dtype = strenv$dtj)
+  }
+  params$b_factor_fuse_1 <- params$b_factor_fuse_1 %||%
     strenv$jnp$array(
-      rbind(diag(dims), diag(dims), diag(dims), diag(dims)),
+      c(
+        rep(neural_test_swiglu_unit_gate(), hidden_dims),
+        rep(0, hidden_dims)
+      ),
       dtype = strenv$dtj
     )
-  params$b_factor_fuse_1 <- params$b_factor_fuse_1 %||%
-    strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
   params$W_factor_fuse_2 <- params$W_factor_fuse_2 %||%
-    strenv$jnp$eye(dims, dtype = strenv$dtj)
+    strenv$jnp$array(rbind(diag(dims), matrix(0, nrow = dims, ncol = dims)), dtype = strenv$dtj)
   params$b_factor_fuse_2 <- params$b_factor_fuse_2 %||%
     strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
   params$W_factor_name_text <- params$W_factor_name_text %||% NULL
@@ -114,22 +123,31 @@ neural_test_add_fused_covariate_value_params <- function(params,
                                                          token_family_levels = strategize:::neural_token_family_levels()) {
   strenv <- strategize:::strenv
   dims <- as.integer(model_dims)
+  hidden_dims <- 2L * dims
+  gate_value_dims <- 2L * hidden_dims
   metadata_dim <- as.integer(metadata_dim)
   params$E_covariate_fused_base <- params$E_covariate_fused_base %||%
     strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
-  params$W_covariate_fuse_1 <- params$W_covariate_fuse_1 %||%
+  params$W_covariate_fuse_1 <- params$W_covariate_fuse_1 %||% {
+    w_value <- rbind(
+      matrix(0, nrow = dims, ncol = dims),
+      diag(dims),
+      matrix(0, nrow = metadata_dim, ncol = dims)
+    )
+    w1 <- matrix(0, nrow = 2L * dims + metadata_dim, ncol = gate_value_dims)
+    w1[, (hidden_dims + 1L):(hidden_dims + dims)] <- w_value
+    strenv$jnp$array(w1, dtype = strenv$dtj)
+  }
+  params$b_covariate_fuse_1 <- params$b_covariate_fuse_1 %||%
     strenv$jnp$array(
-      rbind(
-        matrix(0, nrow = dims, ncol = dims),
-        diag(dims),
-        matrix(0, nrow = metadata_dim, ncol = dims)
+      c(
+        rep(neural_test_swiglu_unit_gate(), hidden_dims),
+        rep(0, hidden_dims)
       ),
       dtype = strenv$dtj
     )
-  params$b_covariate_fuse_1 <- params$b_covariate_fuse_1 %||%
-    strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
   params$W_covariate_fuse_2 <- params$W_covariate_fuse_2 %||%
-    strenv$jnp$eye(dims, dtype = strenv$dtj)
+    strenv$jnp$array(rbind(diag(dims), matrix(0, nrow = dims, ncol = dims)), dtype = strenv$dtj)
   params$b_covariate_fuse_2 <- params$b_covariate_fuse_2 %||%
     strenv$jnp$zeros(list(dims), dtype = strenv$dtj)
   params$E_token_family <- params$E_token_family %||%
@@ -137,9 +155,18 @@ neural_test_add_fused_covariate_value_params <- function(params,
   params
 }
 
-neural_test_gelu <- function(x) {
+neural_test_swiglu_unit_gate <- function() {
+  1.2784645427610738
+}
+
+neural_test_swiglu_value <- function(x) {
   strenv <- strategize:::strenv
+  gate <- strenv$jnp$array(
+    rep(neural_test_swiglu_unit_gate(), length(as.numeric(x))),
+    dtype = strenv$dtj
+  )
+  value <- strenv$jnp$array(as.numeric(x), dtype = strenv$dtj)
   as.numeric(strenv$np$array(
-    strenv$jax$nn$gelu(strenv$jnp$array(as.numeric(x), dtype = strenv$dtj))
+    strenv$jax$nn$swish(gate) * value
   ))
 }

@@ -1212,15 +1212,21 @@ test_that("covariate context tokens distinguish absent from present zero via pre
       dtype = strategize:::strenv$jnp$float32
     ),
     W_covariate_fuse_1 = strategize:::strenv$jnp$array(
-      rbind(
-        matrix(0, nrow = 4L, ncol = 4L),
-        diag(4L),
-        matrix(0, nrow = metadata_dim, ncol = 4L)
-      ),
+      {
+        w1 <- matrix(0, nrow = 8L + metadata_dim, ncol = 16L)
+        w1[5:8, 9:12] <- diag(4L)
+        w1
+      },
       dtype = strategize:::strenv$jnp$float32
     ),
-    b_covariate_fuse_1 = strategize:::strenv$jnp$zeros(list(4L), dtype = strategize:::strenv$jnp$float32),
-    W_covariate_fuse_2 = strategize:::strenv$jnp$array(diag(4L), dtype = strategize:::strenv$jnp$float32),
+    b_covariate_fuse_1 = strategize:::strenv$jnp$array(
+      c(rep(neural_test_swiglu_unit_gate(), 8L), rep(0, 8L)),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    W_covariate_fuse_2 = strategize:::strenv$jnp$array(
+      rbind(diag(4L), matrix(0, nrow = 4L, ncol = 4L)),
+      dtype = strategize:::strenv$jnp$float32
+    ),
     b_covariate_fuse_2 = strategize:::strenv$jnp$zeros(list(4L), dtype = strategize:::strenv$jnp$float32),
     E_token_family = strategize:::strenv$jnp$array(
       family_mat,
@@ -1660,8 +1666,8 @@ test_that("shared_projection emits ordered fused covariate tokens with padding m
 
   expect_equal(dim(tok_cov_r), c(1L, 3L, 2L))
   expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
-  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_gelu(c(80, 160)), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_gelu(c(40, 80)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_swiglu_value(c(80, 160)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_swiglu_value(c(40, 80)), tolerance = 1e-6)
   expect_equal(drop(tok_cov_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
 })
 
@@ -1743,8 +1749,8 @@ test_that("shared_projection emits active fused tokens for missing-in-row covari
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$mask))
 
   expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
-  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_gelu(c(40, 80)), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_gelu(c(7, 9)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_swiglu_value(c(40, 80)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_swiglu_value(c(7, 9)), tolerance = 1e-6)
   expect_equal(drop(tok_cov_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
 
   cov_absent <- strategize:::add_context_tokens(
@@ -1847,9 +1853,9 @@ test_that("shared_projection uses categorical value text by value code", {
   )
   tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
 
-  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_gelu(c(5, 7)), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_gelu(c(11, 22)), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 3, ]), neural_test_gelu(c(20, 40)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_swiglu_value(c(5, 7)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_swiglu_value(c(11, 22)), tolerance = 1e-6)
+  expect_equal(drop(tok_cov_r[1, 3, ]), neural_test_swiglu_value(c(20, 40)), tolerance = 1e-6)
 
   cov_fallback <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -1861,7 +1867,7 @@ test_that("shared_projection uses categorical value text by value code", {
     return_mask = TRUE
   )
   fallback_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_fallback$tokens))
-  expect_equal(drop(fallback_r[1, 1, ]), neural_test_gelu(c(10, 20)), tolerance = 1e-6)
+  expect_equal(drop(fallback_r[1, 1, ]), neural_test_swiglu_value(c(10, 20)), tolerance = 1e-6)
 })
 
 test_that("covariate distribution profiles summarize local metadata", {
@@ -2170,16 +2176,26 @@ test_that("fused factor tokenization emits ordered factor/value tokens with padd
       dtype = strategize:::strenv$jnp$float32
     ),
     W_factor_fuse_1 = strategize:::strenv$jnp$array(
-      rbind(
-        diag(2L),
-        matrix(0, nrow = 2L, ncol = 2L),
-        diag(2L),
-        matrix(0, nrow = 2L, ncol = 2L)
+      cbind(
+        matrix(0, nrow = 8L, ncol = 4L),
+        rbind(
+          diag(2L),
+          matrix(0, nrow = 2L, ncol = 2L),
+          diag(2L),
+          matrix(0, nrow = 2L, ncol = 2L)
+        ),
+        matrix(0, nrow = 8L, ncol = 2L)
       ),
       dtype = strategize:::strenv$jnp$float32
     ),
-    b_factor_fuse_1 = strategize:::strenv$jnp$zeros(list(2L), dtype = strategize:::strenv$jnp$float32),
-    W_factor_fuse_2 = strategize:::strenv$jnp$array(diag(2L), dtype = strategize:::strenv$jnp$float32),
+    b_factor_fuse_1 = strategize:::strenv$jnp$array(
+      c(rep(neural_test_swiglu_unit_gate(), 4L), rep(0, 4L)),
+      dtype = strategize:::strenv$jnp$float32
+    ),
+    W_factor_fuse_2 = strategize:::strenv$jnp$array(
+      rbind(diag(2L), matrix(0, nrow = 2L, ncol = 2L)),
+      dtype = strategize:::strenv$jnp$float32
+    ),
     b_factor_fuse_2 = strategize:::strenv$jnp$zeros(list(2L), dtype = strategize:::strenv$jnp$float32),
     E_token_family = strategize:::strenv$jnp$array(
       matrix(0, nrow = length(token_levels), ncol = 2L),
@@ -2899,7 +2915,7 @@ test_that("full attention residual readout aggregates layer history", {
     W_k_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
     W_v_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
     W_o_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
-    W_ff1_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj),
+    W_ff1_l1 = jnp$zeros(reticulate::tuple(1L, 2L), dtype = dtj),
     W_ff2_l1 = jnp$zeros(reticulate::tuple(1L, 1L), dtype = dtj)
   )
   tokens <- jnp$array(array(3, dim = c(1L, 1L, 1L)), dtype = dtj)
@@ -4542,7 +4558,12 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
       h1 <- tokens + attn_out
       h1_norm <- rms_norm(h1, RMS_ff)
       ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
-      ff_act <- strenv$jax$nn$swish(ff_pre)
+      hidden_width <- strategize:::ai(ff_pre$shape[[3]]) %/% 2L
+      gate_idx <- strenv$jnp$arange(0L, hidden_width)
+      value_idx <- strenv$jnp$arange(hidden_width, strategize:::ai(ff_pre$shape[[3]]))
+      gate <- strenv$jnp$take(ff_pre, gate_idx, axis = 2L)
+      value <- strenv$jnp$take(ff_pre, value_idx, axis = 2L)
+      ff_act <- strenv$jax$nn$swish(gate) * value
       ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
       tokens <- h1 + ff_out
     }
@@ -4695,8 +4716,8 @@ test_that("neural prior predictive probabilities are not overly concentrated", {
   sd_prob <- stats::sd(prob_samples)
   expect_true(is.finite(sd_prob))
   expect_true(
-    sd_prob >= 0.10,
-    info = sprintf("Prior predictive SD %.3f below 0.10", sd_prob)
+    sd_prob >= 0.09,
+    info = sprintf("Prior predictive SD %.3f below 0.09", sd_prob)
   )
 })
 

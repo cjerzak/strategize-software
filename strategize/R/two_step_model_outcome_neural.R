@@ -2128,6 +2128,7 @@ neural_make_transformer_model_info <- function(model_depth,
     model_dims = model_dims,
     n_heads = n_heads,
     head_dim = head_dim,
+    transformer_ffn = "swiglu",
     residual_mode = neural_normalize_residual_mode(residual_mode),
     attention_backend = neural_normalize_attention_backend(attention_backend),
     attention_dtype = neural_normalize_attention_dtype(attention_dtype),
@@ -2399,6 +2400,7 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
   info$n_party_levels <- n_party_levels
   info$n_candidate_tokens <- n_candidate_tokens
   info$factor_tokenization <- factor_tokenization
+  info$fused_token_mlp <- "swiglu"
   info$max_factor_tokens <- max_factor_tokens
   info$factor_name_text <- factor_name_text
   info$level_name_text <- level_name_text
@@ -2674,6 +2676,7 @@ neural_make_runtime_token_model_info <- function(model_dims,
       as.integer(default_factor_order)
     },
     factor_tokenization = factor_tokenization,
+    fused_token_mlp = "swiglu",
     max_factor_tokens = if (is.null(max_factor_tokens)) {
       NULL
     } else {
@@ -4535,6 +4538,18 @@ neural_muon_target_name_regex <- function() {
   "^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross|W_factor_struct|W_level_struct|W_out|M_cross_raw|W_rc_(r|c|out))$"
 }
 
+neural_swiglu <- function(x) {
+  ndim <- length(x$shape)
+  width <- ai(x$shape[[ndim]])
+  hidden <- ai(width / 2L)
+  gate_idx <- strenv$jnp$arange(ai(0L), hidden)
+  value_idx <- strenv$jnp$arange(hidden, width)
+  axis <- ai(ndim - 1L)
+  gate <- strenv$jnp$take(x, gate_idx, axis = axis)
+  value <- strenv$jnp$take(x, value_idx, axis = axis)
+  strenv$jax$nn$swish(gate) * value
+}
+
 neural_muon_normalize_param_name <- function(name) {
   if (length(name) != 1L || is.na(name) || !nzchar(name)) {
     return(NULL)
@@ -5672,7 +5687,7 @@ neural_fuse_attribute_token <- function(fusion_input,
     )
   }
 
-  hidden <- strenv$jnp$einsum(
+  hidden_pre <- strenv$jnp$einsum(
     "nsi,ih->nsh",
     fusion_input,
     params[[paste0("W_", prefix, "_fuse_1")]]
@@ -5680,7 +5695,7 @@ neural_fuse_attribute_token <- function(fusion_input,
     params[[paste0("b_", prefix, "_fuse_1")]],
     list(1L, 1L, -1L)
   )
-  hidden <- strenv$jax$nn$gelu(hidden)
+  hidden <- neural_swiglu(hidden_pre)
   fused <- strenv$jnp$einsum(
     "nsh,hm->nsm",
     hidden,
@@ -7574,7 +7589,7 @@ neural_run_transformer <- function(tokens,
       h1_norm <- neural_rms_norm(h1, RMS_ff, model_info$model_dims)
       ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
     }
-    ff_act <- strenv$jax$nn$swish(ff_pre)
+    ff_act <- neural_swiglu(ff_pre)
     ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
     if (isTRUE(use_full_attn_residual)) {
       residual_history <- neural_append_residual_history(residual_history, ff_out)
@@ -12068,8 +12083,9 @@ generate_ModelOutcome_neural <- function(){
       factor_base_shape <- reticulate::tuple(ModelDims)
       factor_fuse_input_dim <- ai(4L * as.integer(ModelDims))
       factor_fuse_hidden_dim <- ai(2L * as.integer(ModelDims))
-      factor_fuse_w1_shape <- reticulate::tuple(factor_fuse_input_dim, factor_fuse_hidden_dim)
-      factor_fuse_b1_shape <- reticulate::tuple(factor_fuse_hidden_dim)
+      factor_fuse_gate_dim <- ai(2L * factor_fuse_hidden_dim)
+      factor_fuse_w1_shape <- reticulate::tuple(factor_fuse_input_dim, factor_fuse_gate_dim)
+      factor_fuse_b1_shape <- reticulate::tuple(factor_fuse_gate_dim)
       factor_fuse_w2_shape <- reticulate::tuple(factor_fuse_hidden_dim, ModelDims)
       factor_fuse_b2_shape <- reticulate::tuple(ModelDims)
       factor_fuse_w1_sd <- tau_context / sqrt(as.numeric(factor_fuse_input_dim))
@@ -12507,11 +12523,12 @@ generate_ModelOutcome_neural <- function(){
         2L * as.integer(ModelDims) + length(neural_covariate_value_metadata_names())
       )
       covariate_fuse_hidden_dim <- ai(2L * as.integer(ModelDims))
+      covariate_fuse_gate_dim <- ai(2L * covariate_fuse_hidden_dim)
       covariate_fuse_w1_shape <- reticulate::tuple(
         covariate_fuse_input_dim,
-        covariate_fuse_hidden_dim
+        covariate_fuse_gate_dim
       )
-      covariate_fuse_b1_shape <- reticulate::tuple(covariate_fuse_hidden_dim)
+      covariate_fuse_b1_shape <- reticulate::tuple(covariate_fuse_gate_dim)
       covariate_fuse_w2_shape <- reticulate::tuple(covariate_fuse_hidden_dim, ModelDims)
       covariate_fuse_b2_shape <- reticulate::tuple(ModelDims)
       covariate_fuse_w1_sd <- tau_context / sqrt(as.numeric(covariate_fuse_input_dim))
@@ -12933,7 +12950,7 @@ generate_ModelOutcome_neural <- function(){
       )
 
       W_ff1_name <- paste0("W_ff1_l", l_)
-      W_ff1_shape <- reticulate::tuple(ModelDims, FFDim)
+      W_ff1_shape <- reticulate::tuple(ModelDims, ai(2L * FFDim))
       W_ff1_l <- p2d(
         name = W_ff1_name,
         sample_fxn = function() {
@@ -20731,6 +20748,8 @@ generate_ModelOutcome_neural <- function(){
     param_offsets = param_offsets,
     n_params = ai(param_total),
     uncertainty_scope = uncertainty_scope,
+    transformer_ffn = "swiglu",
+    fused_token_mlp = "swiglu",
     factor_levels = factor_levels,
     factor_index_list = factor_index_list,
     implicit = isTRUE(holdout_indicator == 1L),

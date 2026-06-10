@@ -139,7 +139,8 @@ The \code{foundation_control} list supports:
   \code{"description"}.}
   \item{\code{factor_tokenization}}{FM factor tokenizer. The required
   \code{"fused"} mode emits one fused factor/value token per candidate
-  attribute.}
+  attribute. Factor and level information is fused by a two-layer SwiGLU
+  MLP.}
   \item{\code{max_factor_tokens}}{Total factor-token budget used by the FM
   fused factor encoder. The default \code{256L} supports up to 256 factor
   attributes per profile.}

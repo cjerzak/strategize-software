@@ -28,8 +28,9 @@
 #' alone does not force two studies to share factor or level identities.
 #' Optional text embeddings now enter the FM encoder directly: each candidate
 #' attribute is represented by one fused factor/value token, and each respondent
-#' covariate is represented by one fused covariate/value token. Canonical ids
-#' still determine schema sharing across studies.
+#' covariate is represented by one fused covariate/value token. Factor and
+#' level information is fused by a two-layer SwiGLU MLP. Canonical ids still
+#' determine schema sharing across studies.
 #'
 #' \code{\link{fit_conjoint_foundation_model}()} and
 #' \code{\link{save_conjoint_foundation_bundle}()} are retained as migration
@@ -2053,7 +2054,8 @@ cs_foundation_unpack_group <- function(group,
 #'   \code{"description"}.}
 #'   \item{\code{factor_tokenization}}{FM factor tokenizer. The required
 #'   \code{"fused"} mode emits one fused factor/value token per candidate
-#'   attribute.}
+#'   attribute. Factor and level information is fused by a two-layer SwiGLU
+#'   MLP.}
 #'   \item{\code{max_factor_tokens}}{Total factor-token budget used by the FM
 #'   fused factor encoder. The default \code{256L} supports up to 256 factor
 #'   attributes per profile.}

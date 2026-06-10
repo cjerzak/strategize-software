@@ -51,7 +51,7 @@ test_that("learned choice token receives gradients and mixes information", {
     RMS_attn_l1 = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
     RMS_ff_l1 = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
     RMS_final = strenv$jnp$ones(list(model_dims), dtype = strenv$dtj),
-    W_ff1_l1 = strenv$jnp$zeros(list(model_dims, ff_dim), dtype = strenv$dtj),
+    W_ff1_l1 = strenv$jnp$zeros(list(model_dims, 2L * ff_dim), dtype = strenv$dtj),
     W_ff2_l1 = strenv$jnp$zeros(list(ff_dim, model_dims), dtype = strenv$dtj),
     W_out = strenv$jnp$ones(list(model_dims, 1L), dtype = strenv$dtj),
     b_out = strenv$jnp$zeros(list(1L), dtype = strenv$dtj)
