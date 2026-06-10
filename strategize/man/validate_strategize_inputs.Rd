@@ -132,6 +132,11 @@ sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
 cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
 and are evaluated at the early-stopping checkpoint cadence; set
 \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
+Universal mixed-likelihood fits use
+\code{neural_mcmc_control$universal_loss_weighting = "empirical"} by
+default so objective mass follows SVI observation counts; set
+\code{"balanced_cell"} to reproduce clipped inverse-frequency weighting
+across task-mode/likelihood cells.
 Advanced restart checkpoints can be enabled with
 \code{neural_mcmc_control$checkpoint_path}; rerunning with the same data and
 controls resumes from \code{latest.rds} and promotes the best validation

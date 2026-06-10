@@ -31,9 +31,9 @@ Cross-study sharing is driven by explicit canonical ids. Raw label equality
 alone does not force two studies to share factor or level identities.
 Optional text embeddings now enter the FM encoder directly: each candidate
 attribute is represented by one fused factor/value token, and each respondent
-covariate is represented by one fused covariate/value token. Factor and level
-information is fused by a two-layer SwiGLU MLP. Canonical ids still determine
-schema sharing across studies.
+covariate is represented by one fused covariate/value token. Factor and
+level information is fused by a two-layer SwiGLU MLP. Canonical ids still
+determine schema sharing across studies.
 
 \code{\link{fit_conjoint_foundation_model}()} and
 \code{\link{save_conjoint_foundation_bundle}()} are retained as migration
