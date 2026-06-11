@@ -631,6 +631,7 @@ test_that("extract_embeddings auto-selects the universal group without ambiguity
 })
 
 test_that("saved and loaded foundation bundles preserve extracted embeddings", {
+  skip("Foundation bundle save/load is owned by preference.fm.")
   foundation_fit <- embedding_test_pairwise_foundation_fit()
   study_a <- embedding_test_pairwise_experiment(
     seed = 9101,

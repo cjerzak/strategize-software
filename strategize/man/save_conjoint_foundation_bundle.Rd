@@ -27,9 +27,8 @@ The bundle path (invisibly).
 Conjoint foundation bundle writing moved to preference.fm
 }
 \details{
-This exported name is retained for migration guidance. New foundation
-artifacts are checkpoint directories written by
-\code{preference.fm::save_conjoint_foundation_bundle()}.
+This exported name is retained as a compatibility shim. New code should call
+\code{preference.fm::save_conjoint_foundation_bundle()} directly.
 }
 \examples{
 \dontrun{

@@ -1,16 +1,54 @@
-test_that("pooled foundation training and writing stubs point to preference.fm", {
+test_that("pooled foundation training stub points to preference.fm", {
   expect_error(
     fit_conjoint_foundation_model(experiments = list()),
     "preference.fm::fit_conjoint_foundation_model",
     fixed = TRUE
   )
+})
 
-  fake <- structure(list(groups = list()), class = "conjoint_foundation_model")
-  expect_error(
-    save_conjoint_foundation_bundle(tempfile(), fake),
-    "preference.fm::save_conjoint_foundation_bundle",
-    fixed = TRUE
+test_that("foundation bundle compatibility shims delegate to preference.fm", {
+  calls <- list()
+  testthat::local_mocked_bindings(
+    cs_foundation_preference_fm_export = function(name) {
+      function(...) {
+        calls[[name]] <<- list(...)
+        list(delegate = name)
+      }
+    },
+    .package = "strategize"
   )
+
+  save_out <- NULL
+  expect_warning(
+    save_out <- save_conjoint_foundation_bundle(
+      file = "foundation_bundle",
+      foundation_model = "fit",
+      overwrite = TRUE,
+      compress = FALSE
+    ),
+    "preference.fm::save_conjoint_foundation_bundle"
+  )
+  expect_identical(save_out$delegate, "save_conjoint_foundation_bundle")
+  expect_identical(calls$save_conjoint_foundation_bundle$file, "foundation_bundle")
+  expect_identical(calls$save_conjoint_foundation_bundle$foundation_model, "fit")
+  expect_true(calls$save_conjoint_foundation_bundle$overwrite)
+  expect_false(calls$save_conjoint_foundation_bundle$compress)
+
+  load_out <- NULL
+  expect_warning(
+    load_out <- load_conjoint_foundation_bundle(
+      file = "foundation_bundle",
+      conda_env = "unit_env",
+      conda_env_required = FALSE,
+      preload_params = TRUE
+    ),
+    "preference.fm::load_conjoint_foundation_bundle"
+  )
+  expect_identical(load_out$delegate, "load_conjoint_foundation_bundle")
+  expect_identical(calls$load_conjoint_foundation_bundle$file, "foundation_bundle")
+  expect_identical(calls$load_conjoint_foundation_bundle$conda_env, "unit_env")
+  expect_false(calls$load_conjoint_foundation_bundle$conda_env_required)
+  expect_true(calls$load_conjoint_foundation_bundle$preload_params)
 })
 
 test_that("foundation wrapper defaults use the stable pairwise neural path", {
@@ -87,26 +125,7 @@ test_that("foundation adaptation outcome normalization rejects invalid targets",
   )
 })
 
-test_that("legacy RDS foundation bundles still load", {
-  bundle <- structure(
-    list(
-      schema_version = 1L,
-      model_type = "conjoint_foundation",
-      groups = list(),
-      metadata = list(created_at = Sys.time())
-    ),
-    class = c("conjoint_foundation_bundle", "list")
-  )
-
-  tmp <- tempfile(fileext = ".rds")
-  saveRDS(bundle, tmp)
-  loaded <- load_conjoint_foundation_bundle(tmp, preload_params = FALSE)
-
-  expect_s3_class(loaded, "conjoint_foundation_model")
-  expect_identical(loaded$groups, list())
-})
-
-test_that("checkpoint directory loader restores direct params without preference.fm", {
+test_that("internal checkpoint directory loader restores direct params", {
   skip_on_cran()
   skip_if_no_jax()
   orbax_available <- tryCatch({
@@ -243,7 +262,7 @@ test_that("checkpoint directory loader restores direct params without preference
   }
   rewrite_checkpoint_sharding(file.path(tmp, "arrays"), "cuda:987654")
 
-  loaded <- load_conjoint_foundation_bundle(tmp, preload_params = TRUE)
+  loaded <- strategize:::cs_foundation_load_checkpoint_dir(tmp, preload_params = TRUE)
   expect_s3_class(loaded, "conjoint_foundation_model")
   expect_false(is.null(loaded$groups[[group_key]]$fit$neural_model_info$params$W_out))
   expect_false(is.null(loaded$groups[[group_key]]$fit$params$W_out))
@@ -278,7 +297,7 @@ test_that("checkpoint directory loader restores direct params without preference
   }
   rewrite_checkpoint_sharding(file.path(tmp_direct, "arrays"), "mps:987654")
 
-  loaded_direct <- load_conjoint_foundation_bundle(tmp_direct, preload_params = FALSE)
+  loaded_direct <- strategize:::cs_foundation_load_checkpoint_dir(tmp_direct, preload_params = FALSE)
   expect_s3_class(loaded_direct, "conjoint_foundation_model")
   expect_false(is.null(loaded_direct$groups[[group_key]]$fit$neural_model_info$params$W_out))
   expect_equal(loaded_direct$groups[[group_key]]$fit$theta_mean, 42)

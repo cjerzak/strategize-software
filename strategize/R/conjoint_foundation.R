@@ -12,9 +12,10 @@
 #'   \code{preference.fm::fit_conjoint_foundation_model()}.
 #'   \item Save them as checkpoint directories with
 #'   \code{preference.fm::save_conjoint_foundation_bundle()}.
-#'   \item Load bundles, extract embeddings, and run predictors with
-#'   \pkg{strategize}; adapt semantic foundation models with
+#'   \item Load bundles and adapt semantic foundation models with
 #'   \code{preference.fm::adapt_conjoint_foundation_model()}.
+#'   Use \pkg{strategize} for embedding extraction and prediction from loaded
+#'   artifacts.
 #' }
 #'
 #' Pooled training does not force every experiment into one universal output
@@ -1961,9 +1962,9 @@ cs_foundation_unpack_group <- function(group,
 #' This exported name is retained for migration guidance. Pooled training is
 #' now owned by \pkg{preference.fm}. Use
 #' \code{preference.fm::fit_conjoint_foundation_model()} to train pooled
-#' models, \code{preference.fm::adapt_conjoint_foundation_model()} for semantic
-#' adaptation, and \pkg{strategize} for loading, embedding extraction, and
-#' prediction.
+#' models and \code{preference.fm::adapt_conjoint_foundation_model()} for
+#' semantic adaptation. Use \pkg{strategize} for embedding extraction and
+#' prediction from loaded artifacts.
 #'
 #' Each element of \code{experiments} is a per-study specification with the
 #' following contract.
@@ -2152,8 +2153,8 @@ fit_conjoint_foundation_model <- function(experiments,
     "Pooled conjoint foundation-model training has moved to preference.fm.\n",
     "Use preference.fm::fit_conjoint_foundation_model() to train pooled models, ",
     "preference.fm::adapt_conjoint_foundation_model() for semantic adaptation, ",
-    "and strategize::load_conjoint_foundation_bundle() or strategize::extract_embeddings() ",
-    "with the trained checkpoint.",
+    "preference.fm::load_conjoint_foundation_bundle() to load trained checkpoints, ",
+    "and strategize::extract_embeddings() for runtime embedding extraction.",
     call. = FALSE
   )
 }
@@ -2464,8 +2465,9 @@ adapt_conjoint_foundation_model <- function(foundation_model,
   if (cs_foundation_is_current_semantic_model(foundation_model)) {
     stop(
       "Current semantic zero-overlap conjoint foundation models must be adapted with ",
-      "preference.fm::adapt_conjoint_foundation_model(). Use strategize to load bundles, ",
-      "run saved adapted predictors, and extract embeddings.",
+      "preference.fm::adapt_conjoint_foundation_model(). Use ",
+      "preference.fm::load_conjoint_foundation_bundle() to load bundles and ",
+      "strategize to run saved adapted predictors or extract embeddings.",
       call. = FALSE
     )
   }
@@ -2604,9 +2606,8 @@ adapt_conjoint_foundation_model <- function(foundation_model,
 #' @return The bundle path (invisibly).
 #'
 #' @details
-#' This exported name is retained for migration guidance. New foundation
-#' artifacts are checkpoint directories written by
-#' \code{preference.fm::save_conjoint_foundation_bundle()}.
+#' This exported name is retained as a compatibility shim. New code should call
+#' \code{preference.fm::save_conjoint_foundation_bundle()} directly.
 #'
 #' @examples
 #' \dontrun{
@@ -2623,10 +2624,17 @@ save_conjoint_foundation_bundle <- function(file,
                                             foundation_model,
                                             overwrite = FALSE,
                                             compress = TRUE) {
-  stop(
-    "Writing conjoint foundation bundles has moved to preference.fm and now uses ",
-    "checkpoint directories. Use preference.fm::save_conjoint_foundation_bundle().",
+  warning(
+    "strategize::save_conjoint_foundation_bundle() is deprecated; ",
+    "use preference.fm::save_conjoint_foundation_bundle().",
     call. = FALSE
+  )
+  save_fn <- cs_foundation_preference_fm_export("save_conjoint_foundation_bundle")
+  save_fn(
+    file = file,
+    foundation_model = foundation_model,
+    overwrite = overwrite,
+    compress = compress
   )
 }
 
@@ -2641,14 +2649,12 @@ save_conjoint_foundation_bundle <- function(file,
 #' @return A \code{conjoint_foundation_model}.
 #'
 #' @details
-#' Loading reconstructs a \code{conjoint_foundation_model} without importing or
-#' depending on \pkg{preference.fm}. New checkpoint directories restore direct
-#' neural parameter PyTrees from Orbax. Legacy \code{.rds} foundation bundles
-#' remain readable for older artifacts.
+#' This exported name is retained as a compatibility shim. New code should call
+#' \code{preference.fm::load_conjoint_foundation_bundle()} directly.
 #'
 #' @examples
 #' \dontrun{
-#' foundation_fit <- load_conjoint_foundation_bundle("foundation_bundle")
+#' foundation_fit <- preference.fm::load_conjoint_foundation_bundle("foundation_bundle")
 #' }
 #'
 #' @seealso \code{\link{save_conjoint_foundation_bundle}()}
@@ -2657,42 +2663,30 @@ load_conjoint_foundation_bundle <- function(file,
                                             conda_env = "strategize_env",
                                             conda_env_required = TRUE,
                                             preload_params = FALSE) {
-  file <- as.character(file)
-  if (length(file) != 1L || !nzchar(file)) {
-    stop("'file' must be a non-empty path.", call. = FALSE)
-  }
-  file <- path.expand(file)
-  if (!grepl("^(/|[A-Za-z]:[\\\\/])", file)) {
-    file <- file.path(getwd(), file)
-  }
-  file <- normalizePath(file, winslash = "/", mustWork = FALSE)
-  if (!file.exists(file)) {
-    stop("Bundle file does not exist.", call. = FALSE)
-  }
-  if (cs_foundation_is_checkpoint_dir(file)) {
-    return(cs_foundation_load_checkpoint_dir(
-      path = file,
-      conda_env = conda_env,
-      conda_env_required = conda_env_required,
-      preload_params = preload_params
-    ))
-  }
-  if (dir.exists(file)) {
-    stop("Directory is not a recognized conjoint foundation checkpoint.", call. = FALSE)
-  }
-  bundle <- readRDS(file)
-  if (!is.list(bundle) || is.null(bundle$groups)) {
-    stop("Unrecognized conjoint foundation bundle format.", call. = FALSE)
-  }
-  bundle$metadata <- cs2step_restore_text_embedding_metadata(
-    bundle$metadata %||% list(),
-    conda_env = conda_env,
-    required = FALSE
+  warning(
+    "strategize::load_conjoint_foundation_bundle() is deprecated; ",
+    "use preference.fm::load_conjoint_foundation_bundle().",
+    call. = FALSE
   )
-  bundle$groups <- lapply(bundle$groups, cs_foundation_unpack_group,
-                          conda_env = conda_env,
-                          conda_env_required = conda_env_required,
-                          preload_params = preload_params)
-  class(bundle) <- "conjoint_foundation_model"
-  bundle
+  load_fn <- cs_foundation_preference_fm_export("load_conjoint_foundation_bundle")
+  load_fn(
+    file = file,
+    conda_env = conda_env,
+    conda_env_required = conda_env_required,
+    preload_params = preload_params
+  )
+}
+
+cs_foundation_preference_fm_export <- function(name) {
+  if (!requireNamespace("preference.fm", quietly = TRUE)) {
+    stop(
+      sprintf(
+        "strategize::%s() is a compatibility shim. Install preference.fm and call preference.fm::%s() directly.",
+        name,
+        name
+      ),
+      call. = FALSE
+    )
+  }
+  getExportedValue("preference.fm", name)
 }

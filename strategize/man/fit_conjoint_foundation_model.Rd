@@ -42,9 +42,9 @@ Pooled conjoint foundation-model training moved to preference.fm
 This exported name is retained for migration guidance. Pooled training is
 now owned by \pkg{preference.fm}. Use
 \code{preference.fm::fit_conjoint_foundation_model()} to train pooled
-models, \code{preference.fm::adapt_conjoint_foundation_model()} for semantic
-adaptation, and \pkg{strategize} for loading, embedding extraction, and
-prediction.
+models and \code{preference.fm::adapt_conjoint_foundation_model()} for
+semantic adaptation. Use \pkg{strategize} for embedding extraction and
+prediction from loaded artifacts.
 
 Each element of \code{experiments} is a per-study specification with the
 following contract.

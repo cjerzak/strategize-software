@@ -21,11 +21,12 @@ knitr::opts_chunk$set(
 Foundation-model ownership is split across two packages:
 
 - `preference.fm` trains pooled preference foundation models, writes checkpoint directories, and adapts current semantic zero-overlap models to target studies.
-- `strategize` loads trained artifacts, extracts embeddings, and runs saved adapted predictors.
+- `strategize` extracts embeddings and runs saved adapted predictors from loaded artifacts.
 
 This keeps `strategize` focused on runtime use of trained representations. The
 old `strategize::fit_conjoint_foundation_model()` and
 `strategize::save_conjoint_foundation_bundle()` names are migration stubs.
+`strategize::load_conjoint_foundation_bundle()` is a migration shim.
 
 # Backend Setup
 
@@ -65,16 +66,16 @@ preference.fm::save_conjoint_foundation_bundle(
 ```
 
 New artifacts are directories with `manifest.json` and an Orbax checkpoint under
-`arrays/`. Legacy `.rds` foundation bundles remain loadable by `strategize`, but
-new large pooled FM bundles should be written by `preference.fm`.
+`arrays/`. Legacy `.rds` foundation bundles remain loadable through
+`preference.fm`, and new large pooled FM bundles should be written there too.
 
-# Load With strategize, Adapt With preference.fm
+# Load And Adapt With preference.fm
 
 ```{r load-adapt, eval=FALSE}
 library(strategize)
 library(preference.fm)
 
-foundation_fit <- strategize::load_conjoint_foundation_bundle(
+foundation_fit <- preference.fm::load_conjoint_foundation_bundle(
   file = "foundation_bundle",
   preload_params = FALSE
 )
@@ -125,7 +126,8 @@ emb <- strategize::extract_embeddings(
 # Common Failure Modes
 
 - Calling `strategize::fit_conjoint_foundation_model()` for new pooled training.
-- Calling `strategize::save_conjoint_foundation_bundle()` for new artifacts.
+- Calling `strategize::save_conjoint_foundation_bundle()` or
+  `strategize::load_conjoint_foundation_bundle()` for new artifacts.
 - Loading a checkpoint directory before installing `orbax-checkpoint`.
 - Calling `strategize::adapt_conjoint_foundation_model()` on current semantic zero-overlap foundation models instead of `preference.fm::adapt_conjoint_foundation_model()`.
 - Attempting adaptation when the trained foundation object has no compatible group for the target study.

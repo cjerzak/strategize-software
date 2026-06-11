@@ -29,14 +29,12 @@ A \code{conjoint_foundation_model}.
 Load a conjoint foundation bundle
 }
 \details{
-Loading reconstructs a \code{conjoint_foundation_model} without importing or
-depending on \pkg{preference.fm}. New checkpoint directories restore direct
-neural parameter PyTrees from Orbax. Legacy \code{.rds} foundation bundles
-remain readable for older artifacts.
+This exported name is retained as a compatibility shim. New code should call
+\code{preference.fm::load_conjoint_foundation_bundle()} directly.
 }
 \examples{
 \dontrun{
-foundation_fit <- load_conjoint_foundation_bundle("foundation_bundle")
+foundation_fit <- preference.fm::load_conjoint_foundation_bundle("foundation_bundle")
 }
 
 }

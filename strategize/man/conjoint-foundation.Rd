@@ -15,9 +15,10 @@ Foundation-model work now follows a split workflow:
   \code{preference.fm::fit_conjoint_foundation_model()}.
   \item Save them as checkpoint directories with
   \code{preference.fm::save_conjoint_foundation_bundle()}.
-  \item Load bundles, extract embeddings, and run predictors with
-  \pkg{strategize}; adapt semantic foundation models with
+  \item Load bundles and adapt semantic foundation models with
   \code{preference.fm::adapt_conjoint_foundation_model()}.
+  Use \pkg{strategize} for embedding extraction and prediction from loaded
+  artifacts.
 }
 
 Pooled training does not force every experiment into one universal output
