@@ -57,6 +57,10 @@ cs_foundation_default_control <- function() {
       uncertainty_scope = "output",
       optimizer = "muon",
       low_rank_interaction_rank = 16L,
+      low_rank_logit_normalization = "rms",
+      low_rank_logit_transform = "none",
+      additive_utility = "off",
+      calibration = list(enabled = FALSE),
       svi_lr_schedule = "warmup_cosine"
     )
   )

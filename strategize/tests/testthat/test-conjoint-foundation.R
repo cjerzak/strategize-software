@@ -13,6 +13,16 @@ test_that("pooled foundation training and writing stubs point to preference.fm",
   )
 })
 
+test_that("foundation wrapper defaults use the stable pairwise neural path", {
+  control <- strategize:::cs_foundation_default_control()
+
+  expect_identical(control$neural_mcmc_control$low_rank_interaction_rank, 16L)
+  expect_identical(control$neural_mcmc_control$low_rank_logit_normalization, "rms")
+  expect_identical(control$neural_mcmc_control$low_rank_logit_transform, "none")
+  expect_identical(control$neural_mcmc_control$additive_utility, "off")
+  expect_false(isTRUE(control$neural_mcmc_control$calibration$enabled))
+})
+
 test_that("current semantic foundation adaptation is routed to preference.fm", {
   group_key <- strategize:::cs_foundation_universal_group_key()
   fake <- structure(

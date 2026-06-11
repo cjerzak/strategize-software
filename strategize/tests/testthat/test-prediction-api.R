@@ -869,6 +869,9 @@ test_that("legacy neural model upgrades use portable attention defaults", {
   testthat::expect_identical(upgraded$low_rank_logit_normalization, "none")
   testthat::expect_null(upgraded$low_rank_head_weight_target_rms)
   testthat::expect_null(upgraded$low_rank_rc_out_target_rms)
+  testthat::expect_identical(upgraded$additive_utility_mode, "off")
+  testthat::expect_identical(upgraded$additive_utility_normalization, "none")
+  testthat::expect_null(upgraded$additive_head_weight_target_rms)
   testthat::expect_false(upgraded$learned_pairwise_bernoulli_logit_scale)
   testthat::expect_equal(upgraded$pairwise_bernoulli_logit_scale, 1)
   testthat::expect_null(upgraded$pairwise_bernoulli_logit_scale_prior_sd)
@@ -910,6 +913,10 @@ test_that("neural model packing preserves readout and low-rank metadata", {
     low_rank_logit_normalization = "rms",
     low_rank_head_weight_target_rms = 1 / (sqrt(2) * 16),
     low_rank_rc_out_target_rms = 1 / (sqrt(2) * 8),
+    additive_utility_mode = "on",
+    additive_utility_normalization = "rms",
+    additive_head_weight_target_rms = 0.25,
+    has_additive_utility = TRUE,
     learned_pairwise_bernoulli_logit_scale = TRUE,
     pairwise_bernoulli_logit_scale_prior_sd = 0.5,
     pairwise_bernoulli_logit_scale = 3.25,
@@ -928,6 +935,10 @@ test_that("neural model packing preserves readout and low-rank metadata", {
   testthat::expect_identical(packed$low_rank_logit_normalization, "rms")
   testthat::expect_equal(packed$low_rank_head_weight_target_rms, 1 / (sqrt(2) * 16))
   testthat::expect_equal(packed$low_rank_rc_out_target_rms, 1 / (sqrt(2) * 8))
+  testthat::expect_identical(packed$additive_utility_mode, "on")
+  testthat::expect_identical(packed$additive_utility_normalization, "rms")
+  testthat::expect_equal(packed$additive_head_weight_target_rms, 0.25)
+  testthat::expect_true(packed$has_additive_utility)
   testthat::expect_true(packed$learned_pairwise_bernoulli_logit_scale)
   testthat::expect_equal(packed$pairwise_bernoulli_logit_scale_prior_sd, 0.5)
   testthat::expect_equal(packed$pairwise_bernoulli_logit_scale, 3.25)

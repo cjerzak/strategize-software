@@ -2365,6 +2365,8 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        low_rank_rc_out_target_rms = NULL,
                                                        pairwise_antisymmetry = NULL,
                                                        additive_utility_mode = NULL,
+                                                       additive_utility_normalization = NULL,
+                                                       additive_head_weight_target_rms = NULL,
                                                        calibration_enabled = NULL,
                                                        calibration_method = NULL,
                                                        calibration_scale = NULL,
@@ -2450,7 +2452,21 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
     info$pairwise_antisymmetry <- neural_resolve_pairwise_antisymmetry(pairwise_antisymmetry)
   }
   if (!is.null(additive_utility_mode)) {
-    info$additive_utility_mode <- neural_resolve_additive_utility_mode(additive_utility_mode)
+    info$additive_utility_mode <- neural_resolve_additive_utility_mode(
+      additive_utility_mode,
+      factor_tokenization = factor_tokenization
+    )
+    info$additive_utility_normalization <- neural_resolve_additive_utility_normalization(
+      value = additive_utility_normalization,
+      additive_utility_mode = info$additive_utility_mode,
+      supplied = !is.null(additive_utility_normalization)
+    )
+    info$additive_head_weight_target_rms <- neural_resolve_additive_head_weight_target_rms(
+      value = additive_head_weight_target_rms,
+      model_dims = model_dims,
+      normalization = info$additive_utility_normalization,
+      supplied = !is.null(additive_head_weight_target_rms)
+    )
   }
   if (!is.null(calibration_enabled)) {
     info$calibration_enabled <- isTRUE(calibration_enabled)
@@ -2651,6 +2667,8 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  low_rank_rc_out_target_rms = NULL,
                                                  pairwise_antisymmetry = NULL,
                                                  additive_utility_mode = NULL,
+                                                 additive_utility_normalization = NULL,
+                                                 additive_head_weight_target_rms = NULL,
                                                  calibration_enabled = NULL,
                                                  calibration_method = NULL,
                                                  calibration_scale = NULL,
@@ -2689,6 +2707,21 @@ neural_make_runtime_token_model_info <- function(model_dims,
       level_name_text = level_name_text
     )
   }
+  additive_utility_mode_resolved <- neural_resolve_additive_utility_mode(
+    additive_utility_mode %||% "off",
+    factor_tokenization = factor_tokenization
+  )
+  additive_utility_normalization_resolved <- neural_resolve_additive_utility_normalization(
+    value = additive_utility_normalization,
+    additive_utility_mode = additive_utility_mode_resolved,
+    supplied = !is.null(additive_utility_normalization)
+  )
+  additive_head_weight_target_rms_resolved <- neural_resolve_additive_head_weight_target_rms(
+    value = additive_head_weight_target_rms,
+    model_dims = model_dims,
+    normalization = additive_utility_normalization_resolved,
+    supplied = !is.null(additive_head_weight_target_rms)
+  )
 
   list(
     model_dims = model_dims,
@@ -2776,10 +2809,9 @@ neural_make_runtime_token_model_info <- function(model_dims,
     low_rank_head_weight_target_rms = low_rank_head_weight_target_rms,
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     pairwise_antisymmetry = neural_resolve_pairwise_antisymmetry(pairwise_antisymmetry %||% "legacy"),
-    additive_utility_mode = neural_resolve_additive_utility_mode(
-      additive_utility_mode %||% "off",
-      factor_tokenization = factor_tokenization
-    ),
+    additive_utility_mode = additive_utility_mode_resolved,
+    additive_utility_normalization = additive_utility_normalization_resolved,
+    additive_head_weight_target_rms = additive_head_weight_target_rms_resolved,
     calibration_enabled = isTRUE(calibration_enabled),
     calibration_method = neural_resolve_calibration_method(
       calibration_method %||% if (isTRUE(calibration_enabled)) "logit_scale" else "none"
@@ -2945,6 +2977,139 @@ neural_additive_utility_enabled <- function(model_info = NULL, params = NULL) {
   identical(mode, "on") &&
     !is.null(params) &&
     !is.null(params$W_add_out)
+}
+
+neural_normalize_additive_utility_normalization <- function(value = NULL) {
+  if (is.null(value)) {
+    return("none")
+  }
+  if (isTRUE(value)) {
+    return("rms")
+  }
+  if (identical(value, FALSE)) {
+    return("none")
+  }
+  if (is.character(value)) {
+    mode <- tolower(as.character(value))
+    if (length(mode) == 1L && !is.na(mode) && nzchar(mode)) {
+      if (mode %in% c("rms", "rmsnorm", "rms_norm", "rms-normalize", "rms_normalize")) {
+        return("rms")
+      }
+      if (mode %in% c("none", "identity", "off", "false")) {
+        return("none")
+      }
+    }
+  }
+  NA_character_
+}
+
+neural_resolve_additive_utility_normalization <- function(value = NULL,
+                                                          additive_utility_mode = "off",
+                                                          supplied = FALSE) {
+  mode <- neural_resolve_additive_utility_mode(additive_utility_mode %||% "off")
+  if (!identical(mode, "on")) {
+    return("none")
+  }
+  normalization <- if (isTRUE(supplied)) {
+    neural_normalize_additive_utility_normalization(value)
+  } else {
+    "rms"
+  }
+  if (length(normalization) != 1L ||
+      is.na(normalization) ||
+      !normalization %in% c("rms", "none")) {
+    stop(
+      "'neural_mcmc_control$additive_utility_normalization' must be 'rms' or 'none'.",
+      call. = FALSE
+    )
+  }
+  normalization
+}
+
+neural_resolve_additive_head_weight_target_rms <- function(value = NULL,
+                                                           model_dims = NULL,
+                                                           normalization = "none",
+                                                           supplied = FALSE) {
+  if (!identical(normalization, "rms")) {
+    return(NULL)
+  }
+  if (!isTRUE(supplied) || is.null(value)) {
+    dims <- suppressWarnings(as.numeric(model_dims))
+    if (length(dims) != 1L || !is.finite(dims) || dims <= 0) {
+      dims <- 1
+    }
+    return(1 / sqrt(dims))
+  }
+  if (length(value) != 1L) {
+    stop("'additive_head_weight_target_rms' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  target <- suppressWarnings(as.numeric(value))
+  if (is.na(target) || !is.finite(target) || target <= 0) {
+    stop("'additive_head_weight_target_rms' must be a positive scalar numeric value.", call. = FALSE)
+  }
+  as.numeric(target)
+}
+
+neural_additive_utility_normalization_enabled <- function(model_info = NULL) {
+  if (is.null(model_info)) {
+    return(FALSE)
+  }
+  mode <- neural_resolve_additive_utility_mode(
+    model_info$additive_utility_mode %||% "off",
+    factor_tokenization = model_info$factor_tokenization %||% NULL
+  )
+  normalization <- neural_normalize_additive_utility_normalization(
+    model_info$additive_utility_normalization %||% "none"
+  )
+  target <- suppressWarnings(as.numeric(model_info$additive_head_weight_target_rms %||% NA_real_))
+  identical(mode, "on") &&
+    identical(normalization, "rms") &&
+    length(target) == 1L && is.finite(target) && target > 0
+}
+
+neural_coerce_additive_utility_metadata <- function(model_info,
+                                                    legacy_missing_normalization = "none") {
+  if (is.null(model_info)) {
+    return(NULL)
+  }
+  out <- model_info
+  out$additive_utility_mode <- neural_resolve_additive_utility_mode(
+    out$additive_utility_mode %||% "off",
+    factor_tokenization = out$factor_tokenization %||% NULL
+  )
+  normalization_supplied <- !is.null(out$additive_utility_normalization)
+  normalization <- if (isTRUE(normalization_supplied)) {
+    neural_normalize_additive_utility_normalization(out$additive_utility_normalization)
+  } else {
+    neural_normalize_additive_utility_normalization(legacy_missing_normalization)
+  }
+  if (length(normalization) != 1L ||
+      is.na(normalization) ||
+      !normalization %in% c("rms", "none")) {
+    normalization <- "none"
+  }
+  if (!identical(out$additive_utility_mode, "on")) {
+    normalization <- "none"
+  }
+  target <- NULL
+  if (identical(normalization, "rms")) {
+    target_supplied <- !is.null(out$additive_head_weight_target_rms)
+    target <- tryCatch(
+      neural_resolve_additive_head_weight_target_rms(
+        value = out$additive_head_weight_target_rms,
+        model_dims = out$model_dims %||% NULL,
+        normalization = normalization,
+        supplied = target_supplied
+      ),
+      error = function(e) NULL
+    )
+    if (is.null(target)) {
+      normalization <- "none"
+    }
+  }
+  out$additive_utility_normalization <- normalization
+  out$additive_head_weight_target_rms <- target
+  out
 }
 
 neural_resolve_calibration_method <- function(value = NULL) {
@@ -4094,6 +4259,9 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$low_rank_logit_normalization %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$low_rank_head_weight_target_rms %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$low_rank_rc_out_target_rms %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$additive_utility_mode %||% "off"), error = function(e) "na"),
+    tryCatch(as.character(model_info$additive_utility_normalization %||% "none"), error = function(e) "na"),
+    tryCatch(as.character(model_info$additive_head_weight_target_rms %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$max_covariate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_candidate_tokens), error = function(e) "na"),
     tryCatch(as.character(model_info$n_party_levels), error = function(e) "na"),
@@ -4949,6 +5117,29 @@ neural_linear_head <- function(phi,
   logits + b_out
 }
 
+neural_additive_linear_head <- function(pooled,
+                                        W_add_out,
+                                        dtype = NULL,
+                                        model_info = NULL) {
+  W_use <- W_add_out
+  if (isTRUE(neural_additive_utility_normalization_enabled(model_info))) {
+    pooled <- neural_rms_norm_no_scale(pooled)
+    W_use <- neural_column_rms_normalize(
+      W_add_out,
+      target_rms = as.numeric(model_info$additive_head_weight_target_rms)
+    )
+  }
+  logits <- strenv$jnp$einsum("nm,mo->no", pooled, W_use)
+  dtype_use <- dtype
+  if (is.null(dtype_use)) {
+    dtype_use <- tryCatch(W_use$dtype, error = function(e) NULL)
+  }
+  if (is.null(dtype_use)) {
+    dtype_use <- strenv$dtj
+  }
+  logits + strenv$jnp$zeros(list(ai(W_use$shape[[2]])), dtype = dtype_use)
+}
+
 neural_additive_logits_from_candidate_tokens <- function(tokens,
                                                          token_mask,
                                                          params,
@@ -4971,13 +5162,11 @@ neural_additive_logits_from_candidate_tokens <- function(tokens,
     strenv$jnp$array(1., dtype = tokens$dtype %||% strenv$dtj)
   )
   pooled <- strenv$jnp$sum(tokens * mask_exp, axis = 1L) / denom
-  neural_linear_head(
+  neural_additive_linear_head(
     pooled,
     params$W_add_out,
-    b_out = NULL,
     dtype = dtype,
-    model_info = NULL,
-    pairwise_obs = FALSE
+    model_info = model_info
   )
 }
 
@@ -10268,6 +10457,8 @@ generate_ModelOutcome_neural <- function(){
     pairwise_bernoulli_logit_scale_prior_sd = 0.5,
     pairwise_antisymmetry = "strict",
     additive_utility = "auto",
+    additive_utility_normalization = NULL,
+    additive_head_weight_target_rms = NULL,
     calibration = list(
       enabled = "auto",
       method = "logit_scale",
@@ -10310,6 +10501,12 @@ generate_ModelOutcome_neural <- function(){
   pairwise_antisymmetry_mode <- "strict"
   additive_utility_control <- mcmc_control$additive_utility
   additive_utility_mode <- "off"
+  additive_utility_normalization_control <- NULL
+  additive_utility_normalization_supplied <- FALSE
+  additive_head_weight_target_rms_control <- NULL
+  additive_head_weight_target_rms_supplied <- FALSE
+  additive_utility_normalization <- "none"
+  additive_head_weight_target_rms <- NULL
   calibration_control_raw <- mcmc_control$calibration
   calibration_control_supplied <- FALSE
   calibration_control <- list(enabled = FALSE, method = "none", prior_sd = NULL)
@@ -10512,6 +10709,14 @@ generate_ModelOutcome_neural <- function(){
     if ("additive_utility" %in% names(neural_mcmc_control)) {
       additive_utility_control <- neural_mcmc_control$additive_utility
     }
+    if ("additive_utility_normalization" %in% names(neural_mcmc_control)) {
+      additive_utility_normalization_supplied <- TRUE
+      additive_utility_normalization_control <- neural_mcmc_control$additive_utility_normalization
+    }
+    if ("additive_head_weight_target_rms" %in% names(neural_mcmc_control)) {
+      additive_head_weight_target_rms_supplied <- TRUE
+      additive_head_weight_target_rms_control <- neural_mcmc_control$additive_head_weight_target_rms
+    }
     if ("calibration" %in% names(neural_mcmc_control)) {
       calibration_control_supplied <- TRUE
       calibration_control_raw <- neural_mcmc_control$calibration
@@ -10559,6 +10764,8 @@ generate_ModelOutcome_neural <- function(){
     mcmc_overrides$cross_candidate_encoder <- NULL
     mcmc_overrides$pairwise_antisymmetry <- NULL
     mcmc_overrides$additive_utility <- NULL
+    mcmc_overrides$additive_utility_normalization <- NULL
+    mcmc_overrides$additive_head_weight_target_rms <- NULL
     mcmc_overrides$calibration <- NULL
     mcmc_overrides$low_rank_logit_transform <- NULL
     mcmc_overrides$low_rank_logit_bound <- NULL
@@ -10989,7 +11196,20 @@ generate_ModelOutcome_neural <- function(){
     factor_tokenization = factor_tokenization,
     pairwise_mode = pairwise_mode
   )
+  additive_utility_normalization <- neural_resolve_additive_utility_normalization(
+    value = additive_utility_normalization_control,
+    additive_utility_mode = additive_utility_mode,
+    supplied = additive_utility_normalization_supplied
+  )
+  additive_head_weight_target_rms <- neural_resolve_additive_head_weight_target_rms(
+    value = additive_head_weight_target_rms_control,
+    model_dims = ModelDims,
+    normalization = additive_utility_normalization,
+    supplied = additive_head_weight_target_rms_supplied
+  )
   mcmc_control$additive_utility <- additive_utility_mode
+  mcmc_control$additive_utility_normalization <- additive_utility_normalization
+  mcmc_control$additive_head_weight_target_rms <- additive_head_weight_target_rms
   factor_order_by_experiment <- lapply(
     neural_token_info_use$factor_order_by_experiment %||% list(),
     as.integer
@@ -11219,6 +11439,8 @@ generate_ModelOutcome_neural <- function(){
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     pairwise_antisymmetry = pairwise_antisymmetry_mode,
     additive_utility_mode = additive_utility_mode,
+    additive_utility_normalization = additive_utility_normalization,
+    additive_head_weight_target_rms = additive_head_weight_target_rms,
     calibration_enabled = isTRUE(calibration_control$enabled),
     calibration_method = calibration_control$method %||% "none",
     calibration_scale = NULL
@@ -11932,6 +12154,8 @@ generate_ModelOutcome_neural <- function(){
     pairwise_bernoulli_logit_scale_prior_sd
   low_rank_logit_model_info$pairwise_antisymmetry <- pairwise_antisymmetry_mode
   low_rank_logit_model_info$additive_utility_mode <- additive_utility_mode
+  low_rank_logit_model_info$additive_utility_normalization <- additive_utility_normalization
+  low_rank_logit_model_info$additive_head_weight_target_rms <- additive_head_weight_target_rms
   low_rank_logit_model_info$calibration_enabled <- isTRUE(calibration_control$enabled)
   low_rank_logit_model_info$calibration_method <- calibration_control$method %||% "none"
   low_rank_logit_model_info$calibration_prior_sd <- calibration_control$prior_sd %||% NULL
@@ -14347,6 +14571,8 @@ generate_ModelOutcome_neural <- function(){
       low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
       pairwise_antisymmetry = pairwise_antisymmetry_mode,
       additive_utility_mode = additive_utility_mode,
+      additive_utility_normalization = additive_utility_normalization,
+      additive_head_weight_target_rms = additive_head_weight_target_rms,
       calibration_enabled = isTRUE(calibration_control$enabled),
       calibration_method = calibration_control$method %||% "none",
       calibration_prior_sd = calibration_control$prior_sd %||% NULL,
@@ -15103,6 +15329,8 @@ generate_ModelOutcome_neural <- function(){
       low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
       pairwise_antisymmetry = pairwise_antisymmetry_mode,
       additive_utility_mode = additive_utility_mode,
+      additive_utility_normalization = additive_utility_normalization,
+      additive_head_weight_target_rms = additive_head_weight_target_rms,
       calibration_enabled = isTRUE(calibration_control$enabled),
       calibration_method = calibration_control$method %||% "none",
       calibration_prior_sd = calibration_control$prior_sd %||% NULL,
@@ -17088,6 +17316,8 @@ generate_ModelOutcome_neural <- function(){
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     pairwise_antisymmetry = pairwise_antisymmetry_mode,
     additive_utility_mode = additive_utility_mode,
+    additive_utility_normalization = additive_utility_normalization,
+    additive_head_weight_target_rms = additive_head_weight_target_rms,
     calibration_enabled = isTRUE(calibration_control$enabled),
     calibration_method = calibration_control$method %||% "none",
     calibration_scale = NULL
@@ -20513,6 +20743,8 @@ generate_ModelOutcome_neural <- function(){
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     pairwise_antisymmetry = pairwise_antisymmetry_mode,
     additive_utility_mode = additive_utility_mode,
+    additive_utility_normalization = additive_utility_normalization,
+    additive_head_weight_target_rms = additive_head_weight_target_rms,
     calibration_enabled = isTRUE(calibration_control$enabled),
     calibration_method = calibration_control$method %||% "none",
     calibration_scale = calibration_scale_mean
@@ -21497,6 +21729,8 @@ generate_ModelOutcome_neural <- function(){
     low_rank_rc_out_target_rms = low_rank_rc_out_target_rms,
     pairwise_antisymmetry = pairwise_antisymmetry_mode,
     additive_utility_mode = additive_utility_mode,
+    additive_utility_normalization = additive_utility_normalization,
+    additive_head_weight_target_rms = additive_head_weight_target_rms,
     has_additive_utility = !is.null(ParamsMean$W_add_out),
     learned_pairwise_bernoulli_logit_scale = learned_pairwise_bernoulli_logit_scale,
     pairwise_bernoulli_logit_scale_prior_sd = pairwise_bernoulli_logit_scale_prior_sd,

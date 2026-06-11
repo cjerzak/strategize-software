@@ -86,6 +86,46 @@ test_that("neural architecture control resolvers preserve legacy upgrade default
     strategize:::neural_resolve_additive_utility_mode("auto", factor_tokenization = "legacy"),
     "off"
   )
+  expect_identical(
+    strategize:::neural_resolve_additive_utility_normalization(
+      additive_utility_mode = "on"
+    ),
+    "rms"
+  )
+  expect_identical(
+    strategize:::neural_resolve_additive_utility_normalization(
+      value = "none",
+      additive_utility_mode = "on",
+      supplied = TRUE
+    ),
+    "none"
+  )
+  expect_identical(
+    strategize:::neural_resolve_additive_utility_normalization(
+      additive_utility_mode = "off"
+    ),
+    "none"
+  )
+  expect_equal(
+    strategize:::neural_resolve_additive_head_weight_target_rms(
+      model_dims = 16L,
+      normalization = "rms"
+    ),
+    0.25
+  )
+  expect_true(strategize:::neural_additive_utility_normalization_enabled(list(
+    additive_utility_mode = "on",
+    additive_utility_normalization = "rms",
+    additive_head_weight_target_rms = 0.25
+  )))
+  expect_error(
+    strategize:::neural_resolve_additive_utility_normalization(
+      value = "batchnorm",
+      additive_utility_mode = "on",
+      supplied = TRUE
+    ),
+    "additive_utility_normalization"
+  )
 
   calibration <- strategize:::neural_resolve_calibration_control(
     list(enabled = "auto", prior_sd = 0.25),
@@ -2676,6 +2716,10 @@ test_that("low-rank pairwise default disables the implicit cross term", {
   expect_identical(model_info$low_rank_logit_normalization, "rms")
   expect_equal(model_info$low_rank_head_weight_target_rms, 1 / (sqrt(2) * 8))
   expect_equal(model_info$low_rank_rc_out_target_rms, 1 / (sqrt(2) * 2))
+  expect_identical(model_info$additive_utility_mode, "on")
+  expect_identical(model_info$additive_utility_normalization, "rms")
+  expect_equal(model_info$additive_head_weight_target_rms, 1 / sqrt(8))
+  expect_true(isTRUE(model_info$has_additive_utility))
 })
 
 test_that("explicit term override remains honored with low-rank pairwise interaction", {
@@ -2904,6 +2948,51 @@ test_that("low-rank RMS logit normalization resolves defaults and column scales"
   scaled <- strategize:::neural_column_rms_normalize(W, target)
   scaled_r <- as.matrix(strenv$np$array(scaled))
   expect_equal(sqrt(colMeans(scaled_r ^ 2)), rep(target, 2L), tolerance = 1e-5)
+})
+
+test_that("additive utility RMS normalization bounds pooled-token head logits", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+
+  tokens <- strenv$jnp$array(array(100, dim = c(2L, 3L, 4L)), dtype = strenv$dtj)
+  token_mask <- strenv$jnp$ones(list(2L, 3L), dtype = strenv$jnp$int32)
+  params <- list(
+    W_out = strenv$jnp$zeros(list(4L, 1L), dtype = strenv$dtj),
+    W_add_out = strenv$jnp$array(matrix(100, nrow = 4L, ncol = 1L), dtype = strenv$dtj)
+  )
+  base_info <- list(
+    model_dims = 4L,
+    factor_tokenization = "fused",
+    additive_utility_mode = "on"
+  )
+  raw <- strategize:::neural_additive_logits_from_candidate_tokens(
+    tokens = tokens,
+    token_mask = token_mask,
+    params = params,
+    model_info = modifyList(base_info, list(additive_utility_normalization = "none")),
+    out_dim = 1L,
+    dtype = strenv$dtj
+  )
+  normalized <- strategize:::neural_additive_logits_from_candidate_tokens(
+    tokens = tokens,
+    token_mask = token_mask,
+    params = params,
+    model_info = modifyList(base_info, list(
+      additive_utility_normalization = "rms",
+      additive_head_weight_target_rms = 0.5
+    )),
+    out_dim = 1L,
+    dtype = strenv$dtj
+  )
+
+  raw_values <- as.numeric(strenv$np$array(raw))
+  normalized_values <- as.numeric(strenv$np$array(normalized))
+  expect_true(all(is.finite(raw_values)))
+  expect_true(all(is.finite(normalized_values)))
+  expect_gt(max(abs(raw_values)), 1000)
+  expect_equal(normalized_values, rep(2, 2L), tolerance = 1e-4)
 })
 
 test_that("full attention residual mode exposes depth-attention metadata", {

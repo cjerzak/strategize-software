@@ -3740,6 +3740,10 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
     out$additive_utility_mode %||% "off",
     factor_tokenization = out$factor_tokenization %||% NULL
   )
+  out <- neural_coerce_additive_utility_metadata(
+    out,
+    legacy_missing_normalization = "none"
+  )
   out$has_additive_utility <- if (is.null(out$has_additive_utility)) {
     isTRUE(has_additive_param)
   } else {
@@ -4158,6 +4162,10 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   out$additive_utility_mode <- neural_resolve_additive_utility_mode(
     out$additive_utility_mode %||% "off",
     factor_tokenization = out$factor_tokenization %||% NULL
+  )
+  out <- neural_coerce_additive_utility_metadata(
+    out,
+    legacy_missing_normalization = "none"
   )
   if (is.null(out$has_additive_utility)) {
     out$has_additive_utility <- !is.null((out$params %||% list())$W_add_out)

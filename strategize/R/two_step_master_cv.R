@@ -251,7 +251,10 @@ cs_prepare_cv_folds <- function(folds, Y, W, respondent_id = NULL, respondent_ta
 #'   logits use RMS logit normalization by default; set
 #'   \code{neural_mcmc_control$low_rank_logit_normalization = "none"} to
 #'   disable it. Explicit \code{low_rank_logit_transform = "softclip"} remains
-#'   supported for compatibility.
+#'   supported for compatibility. When additive utility is enabled, its output
+#'   head uses RMS normalization by default; set
+#'   \code{neural_mcmc_control$additive_utility_normalization = "none"} to
+#'   restore the raw additive head.
 #'   For variational inference (subsample_method = "batch_vi"), set
 #'   \code{neural_mcmc_control$optimizer} to \code{"muon"} (default when \code{optax.contrib.muon} is available),
 #'   \code{"adam"} (numpyro.optim), \code{"adamw"} (AdamW), or \code{"adabelief"} (optax).
