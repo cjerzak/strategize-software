@@ -554,6 +554,46 @@ test_that("canonical text embedding width truncates larger matrices", {
   expect_equal(out[, 1024], emb[, 1024])
 })
 
+test_that("canonical text embedding width preserves single target-width vectors", {
+  spec <- list(
+    family = "harrier",
+    profile = "harrier_oss_v1_0.6b_1024",
+    runtime = "auto",
+    backend = "sentence_transformers",
+    label = "sentence_transformers_cuda_harrier_oss_v1_0.6b_1024",
+    model_id = "microsoft/harrier-oss-v1-0.6b",
+    conda_env = "strategize_torch_env",
+    conda = "/usr/bin/conda",
+    canonical_dim = 1024L,
+    raw_dim = 1024L
+  )
+  emb <- seq_len(1024L)
+  out <- strategize:::cs2step_text_embedding_canonicalize_matrix(emb, spec)
+
+  expect_equal(dim(out), c(1L, 1024L))
+  expect_equal(out[1, ], emb)
+})
+
+test_that("canonical text embedding width truncates single raw-width vectors", {
+  spec <- list(
+    family = "qwen3",
+    profile = "portable",
+    runtime = "auto",
+    backend = "mlx",
+    label = "mlx",
+    model_id = "mlx-community/Qwen3-Embedding-8B-mxfp8",
+    conda_env = "strategize_env",
+    conda = "/usr/bin/conda",
+    canonical_dim = 1024L,
+    raw_dim = 4096L
+  )
+  emb <- seq_len(4096L)
+  out <- strategize:::cs2step_text_embedding_canonicalize_matrix(emb, spec)
+
+  expect_equal(dim(out), c(1L, 1024L))
+  expect_equal(out[1, ], emb[seq_len(1024L)])
+})
+
 test_that("normalized text embedding specs produce unit-length frozen embeddings", {
   spec <- strategize:::cs2step_normalize_text_embedding_spec(list(
     family = "qwen3",

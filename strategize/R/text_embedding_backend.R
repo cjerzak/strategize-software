@@ -1630,9 +1630,15 @@ cs2step_text_embedding_cache_file <- function(spec, cache_dir = NULL) {
 }
 
 cs2step_text_embedding_canonicalize_matrix <- function(emb, spec) {
-  emb <- as.matrix(emb)
-  storage.mode(emb) <- "double"
   target_dim <- as.integer(spec$canonical_dim %||% 1024L)
+  raw_dim <- as.integer(spec$raw_dim %||% target_dim)
+  emb_dim <- dim(emb)
+  if ((is.null(emb_dim) || length(emb_dim) == 1L) && length(emb) %in% c(target_dim, raw_dim)) {
+    emb <- matrix(emb, nrow = 1L)
+  } else {
+    emb <- as.matrix(emb)
+  }
+  storage.mode(emb) <- "double"
   if (ncol(emb) < target_dim) {
     stop(
       sprintf(
@@ -1737,7 +1743,7 @@ cs2step_build_text_embedding_fn <- function(spec,
   encode_sentence_transformers <- function(texts) {
     emb <- reticulate::py_to_r(
       state$model$encode(
-        texts,
+        as.list(texts),
         show_progress_bar = FALSE,
         convert_to_numpy = TRUE,
         batch_size = batch_size
