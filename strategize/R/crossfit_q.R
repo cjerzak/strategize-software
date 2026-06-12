@@ -67,6 +67,7 @@ cs_crossfit_q_default_control <- function(control = NULL) {
 
 cs_crossfit_q_validate <- function(Y, W, pair_id, profile_order, p_list,
                                    diff, adversarial, K, outcome_model_type,
+                                   X = NULL,
                                    force_gaussian = FALSE,
                                    adversarial_model_strategy = "four",
                                    competing_group_variable_respondent = NULL,
@@ -77,8 +78,19 @@ cs_crossfit_q_validate <- function(Y, W, pair_id, profile_order, p_list,
   if (!isTRUE(diff)) {
     stop("crossfit_q currently requires diff = TRUE.", call. = FALSE)
   }
-  if (as.integer(K) != 1L) {
-    stop("crossfit_q currently supports K = 1 only.", call. = FALSE)
+  K <- as.integer(K)
+  if (is.na(K) || K < 1L) {
+    stop("crossfit_q requires K to be a positive integer.", call. = FALSE)
+  }
+  if (isTRUE(adversarial) && K != 1L) {
+    stop("crossfit_q with adversarial = TRUE currently supports K = 1 only.", call. = FALSE)
+  }
+  if (!isTRUE(adversarial) && K > 1L && is.null(X)) {
+    stop("crossfit_q with K > 1 requires non-null respondent covariates X.", call. = FALSE)
+  }
+  if (!isTRUE(adversarial) && K > 1L && is.null(respondent_id)) {
+    stop("crossfit_q with K > 1 requires respondent_id for heldout membership prediction.",
+         call. = FALSE)
   }
   if (!identical(tolower(as.character(outcome_model_type)), "glm")) {
     stop("crossfit_q currently supports outcome_model_type = 'glm' only.", call. = FALSE)
@@ -119,9 +131,10 @@ cs_crossfit_q_validate <- function(Y, W, pair_id, profile_order, p_list,
 
   if (!isTRUE(adversarial)) {
     return(list(
-      mode = "average_pairwise_glm",
+      mode = if (K > 1L) "covariate_sensitive_pairwise_glm" else "average_pairwise_glm",
       pair_mat = pair_mat,
-      pair_info = pair_info
+      pair_info = pair_info,
+      K = K
     ))
   }
 
@@ -669,6 +682,574 @@ cs_crossfit_q_policy_model_mu <- function(policy, opponent_W, result, p_list,
   out
 }
 
+cs_crossfit_q_make_factorhet_design <- function(Y, W, X, respondent_id,
+                                                respondent_task_id,
+                                                profile_order) {
+  W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
+  n <- nrow(W)
+  if (is.null(X)) {
+    X <- matrix(nrow = n, ncol = 0L)
+  } else {
+    X <- as.matrix(X)
+  }
+  if (nrow(X) != n) {
+    stop("FactorHet membership prediction requires X to have one row per W row.",
+         call. = FALSE)
+  }
+  if (is.null(colnames(X))) {
+    colnames(X) <- paste0("X", seq_len(ncol(X)))
+  }
+  data.frame(
+    Yobs = as.numeric(Y),
+    respondent_id = as.character(respondent_id),
+    respondent_task_id = as.character(respondent_task_id),
+    profile_order = as.integer(profile_order),
+    W,
+    as.data.frame(X, stringsAsFactors = FALSE, check.names = FALSE),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+cs_crossfit_q_cluster_params <- function(result) {
+  info <- result$heterogeneity_info
+  if (!is.null(info$cluster_params) && length(info$cluster_params)) {
+    return(info$cluster_params)
+  }
+  coef_mat <- info$coefficient_matrix
+  if (is.null(coef_mat)) {
+    stop("K > 1 crossfit_q requires cluster coefficient metadata.", call. = FALSE)
+  }
+  coef_mat <- as.matrix(coef_mat)
+  cluster_names <- info$cluster_names %||% paste0("k", seq_len(ncol(coef_mat)))
+  out <- lapply(seq_len(ncol(coef_mat)), function(k) {
+    list(intercept = as.numeric(coef_mat[1L, k]), beta = as.numeric(coef_mat[-1L, k]))
+  })
+  names(out) <- cluster_names
+  out
+}
+
+cs_crossfit_q_cluster_policies <- function(result) {
+  policies <- result$pi_star_point
+  if (!is.list(policies) || !length(policies)) {
+    stop("K > 1 crossfit_q requires cluster-specific policies.", call. = FALSE)
+  }
+  keep <- vapply(policies, function(x) {
+    is.list(x) && length(x) > 0L && all(vapply(x, is.numeric, logical(1)))
+  }, logical(1))
+  policies <- policies[keep]
+  if (!length(policies)) {
+    stop("K > 1 crossfit_q could not extract cluster-specific policies.",
+         call. = FALSE)
+  }
+  policies
+}
+
+cs_crossfit_q_predict_cluster_membership <- function(result, Y, W, X,
+                                                     respondent_id,
+                                                     respondent_task_id,
+                                                     profile_order) {
+  info <- result$heterogeneity_info
+  model <- info$factorhet_model
+  if (is.null(model)) {
+    stop("K > 1 crossfit_q requires a stored FactorHet model.", call. = FALSE)
+  }
+  design <- cs_crossfit_q_make_factorhet_design(
+    Y = Y,
+    W = W,
+    X = X,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    profile_order = profile_order
+  )
+  post <- tryCatch(
+    stats::predict(
+      model,
+      newdata = design,
+      type = "posterior_predictive",
+      return = "postpred_only"
+    ),
+    error = function(e) {
+      stop(
+        sprintf("FactorHet heldout membership prediction failed: %s", conditionMessage(e)),
+        call. = FALSE
+      )
+    }
+  )
+  post <- as.matrix(post)
+  if (!nrow(post) || !ncol(post)) {
+    stop("FactorHet heldout membership prediction returned an empty matrix.",
+         call. = FALSE)
+  }
+  cluster_names <- info$cluster_names %||% paste0("k", seq_len(ncol(post)))
+  colnames(post) <- cluster_names
+  row_group <- as.character(respondent_id)
+  unique_group <- attr(post, "unique_group")
+  if (!is.null(unique_group) && length(unique_group) == nrow(post)) {
+    rho <- post[match(row_group, as.character(unique_group)), , drop = FALSE]
+  } else if (nrow(post) == length(row_group)) {
+    rho <- post
+  } else {
+    group_order <- unique(row_group)
+    if (nrow(post) == length(group_order)) {
+      rho <- post[match(row_group, group_order), , drop = FALSE]
+    } else {
+      stop(
+        "Could not align FactorHet membership predictions to heldout rows.",
+        call. = FALSE
+      )
+    }
+  }
+  rho <- as.matrix(rho)
+  colnames(rho) <- cluster_names
+  bad <- !is.finite(rho)
+  if (any(bad)) {
+    rho[bad] <- 0
+  }
+  row_sum <- rowSums(rho)
+  zero_rows <- !is.finite(row_sum) | row_sum <= 0
+  if (any(zero_rows)) {
+    rho[zero_rows, ] <- 1 / ncol(rho)
+    row_sum <- rowSums(rho)
+  }
+  rho / row_sum
+}
+
+cs_crossfit_q_policy_matrix <- function(policies, factor_name, p_list) {
+  levels <- names(p_list[[factor_name]])
+  mat <- do.call(rbind, lapply(policies, function(policy) {
+    p <- as.numeric(policy[[factor_name]][levels])
+    p[!is.finite(p)] <- 0
+    p
+  }))
+  colnames(mat) <- levels
+  rownames(mat) <- names(policies)
+  mat
+}
+
+cs_crossfit_q_row_soft_policy_probs <- function(policies, rho, p_list) {
+  out <- vector("list", length(p_list))
+  names(out) <- names(p_list)
+  for (factor_name in names(p_list)) {
+    policy_mat <- cs_crossfit_q_policy_matrix(policies, factor_name, p_list)
+    q <- rho[, rownames(policy_mat), drop = FALSE] %*% policy_mat
+    q <- as.matrix(q)
+    q[!is.finite(q)] <- 0
+    row_sum <- rowSums(q)
+    zero_rows <- !is.finite(row_sum) | row_sum <= 0
+    if (any(zero_rows)) {
+      q[zero_rows, ] <- matrix(
+        rep(as.numeric(p_list[[factor_name]]), times = sum(zero_rows)),
+        nrow = sum(zero_rows),
+        byrow = TRUE
+      )
+      row_sum <- rowSums(q)
+    }
+    q <- q / row_sum
+    colnames(q) <- names(p_list[[factor_name]])
+    out[[factor_name]] <- q
+  }
+  out
+}
+
+cs_crossfit_q_constant_row_policy_probs <- function(policy, n, p_list) {
+  out <- vector("list", length(p_list))
+  names(out) <- names(p_list)
+  for (factor_name in names(p_list)) {
+    p <- as.numeric(policy[[factor_name]][names(p_list[[factor_name]])])
+    p[!is.finite(p)] <- 0
+    if (sum(p) <= 0) {
+      p <- as.numeric(p_list[[factor_name]])
+    }
+    p <- p / sum(p)
+    out[[factor_name]] <- matrix(
+      rep(p, each = n),
+      nrow = n,
+      dimnames = list(NULL, names(p_list[[factor_name]]))
+    )
+  }
+  out
+}
+
+cs_crossfit_q_row_policy_prob <- function(W, row_policy_probs, p_list) {
+  W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
+  n <- nrow(W)
+  probs <- rep(1, n)
+  for (factor_name in names(p_list)) {
+    levels <- names(p_list[[factor_name]])
+    idx <- match(as.character(W[[factor_name]]), levels)
+    factor_probs <- rep(0, n)
+    ok <- !is.na(idx)
+    factor_probs[ok] <- row_policy_probs[[factor_name]][cbind(which(ok), idx[ok])]
+    probs <- probs * factor_probs
+  }
+  probs
+}
+
+cs_crossfit_q_sample_row_policy_profiles <- function(row_policy_probs, p_list,
+                                                     n_draws) {
+  n <- nrow(row_policy_probs[[1L]])
+  out <- vector("list", length(p_list))
+  names(out) <- names(p_list)
+  for (factor_name in names(p_list)) {
+    probs <- row_policy_probs[[factor_name]]
+    levels <- colnames(probs)
+    cdf <- t(apply(probs, 1L, cumsum))
+    u <- matrix(stats::runif(n * n_draws), nrow = n, ncol = n_draws)
+    idx <- matrix(1L, nrow = n, ncol = n_draws)
+    if (ncol(cdf) > 1L) {
+      for (level in seq_len(ncol(cdf) - 1L)) {
+        idx <- idx + (u > cdf[, level])
+      }
+    }
+    idx <- pmin(pmax(idx, 1L), length(levels))
+    out[[factor_name]] <- levels[as.vector(t(idx))]
+  }
+  as.data.frame(out, stringsAsFactors = FALSE, check.names = FALSE)
+}
+
+cs_crossfit_q_factorhet_pair_design <- function(focal_W, opponent_W, X = NULL) {
+  focal_W <- as.data.frame(focal_W, stringsAsFactors = FALSE, check.names = FALSE)
+  opponent_W <- as.data.frame(opponent_W, stringsAsFactors = FALSE, check.names = FALSE)
+  n <- nrow(focal_W)
+  if (nrow(opponent_W) != n) {
+    stop("FactorHet pair prediction requires focal_W and opponent_W to have the same number of rows.",
+         call. = FALSE)
+  }
+  if (is.null(X)) {
+    X <- matrix(nrow = n, ncol = 0L)
+  } else {
+    X <- as.matrix(X)
+  }
+  if (nrow(X) != n) {
+    stop("FactorHet pair prediction requires X to have one row per focal profile.",
+         call. = FALSE)
+  }
+  if (is.null(colnames(X))) {
+    colnames(X) <- paste0("X", seq_len(ncol(X)))
+  }
+
+  pair_row <- rep(seq_len(n), each = 2L)
+  opponent_rows <- seq.int(1L, 2L * n, by = 2L)
+  focal_rows <- opponent_rows + 1L
+  W_pair <- focal_W[pair_row, , drop = FALSE]
+  W_pair[opponent_rows, ] <- opponent_W
+  W_pair[focal_rows, ] <- focal_W
+  X_pair <- X[pair_row, , drop = FALSE]
+  data.frame(
+    Yobs = rep(c(0, 1), n),
+    respondent_id = paste0("__cf_group_", pair_row),
+    respondent_task_id = paste0("__cf_task_", pair_row),
+    profile_order = rep(c(1L, 2L), n),
+    W_pair,
+    as.data.frame(X_pair, stringsAsFactors = FALSE, check.names = FALSE),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+cs_crossfit_q_factorhet_pair_predict_by_cluster <- function(result, focal_W,
+                                                            opponent_W,
+                                                            X = NULL) {
+  info <- result$heterogeneity_info
+  model <- info$factorhet_model
+  if (is.null(model)) {
+    stop("K > 1 crossfit_q requires a stored FactorHet model.", call. = FALSE)
+  }
+  design <- cs_crossfit_q_factorhet_pair_design(
+    focal_W = focal_W,
+    opponent_W = opponent_W,
+    X = X
+  )
+  pred <- tryCatch(
+    stats::predict(
+      model,
+      newdata = design,
+      type = "posterior_predictive",
+      by_group = TRUE,
+      return = "prediction"
+    ),
+    error = function(e) {
+      stop(
+        sprintf("FactorHet heldout pair prediction failed: %s", conditionMessage(e)),
+        call. = FALSE
+      )
+    }
+  )
+  pred <- as.matrix(pred)
+  n <- nrow(as.data.frame(focal_W))
+  if (nrow(pred) == 2L * n) {
+    pred <- pred[seq.int(2L, 2L * n, by = 2L), , drop = FALSE]
+  }
+  if (nrow(pred) != n) {
+    stop("Could not align FactorHet pair predictions to heldout profile rows.",
+         call. = FALSE)
+  }
+  cluster_names <- info$cluster_names %||% paste0("k", seq_len(ncol(pred)))
+  if (length(cluster_names) == ncol(pred)) {
+    colnames(pred) <- cluster_names
+  }
+  pred[!is.finite(pred)] <- NA_real_
+  pmin(pmax(pred, 0), 1)
+}
+
+cs_crossfit_q_heterogeneous_pair_predict <- function(focal_W, opponent_W, rho,
+                                                     result, X = NULL,
+                                                     p_list = NULL,
+                                                     feature_info = NULL) {
+  pred_by_cluster <- cs_crossfit_q_factorhet_pair_predict_by_cluster(
+    result = result,
+    focal_W = focal_W,
+    opponent_W = opponent_W,
+    X = X
+  )
+  common <- intersect(colnames(rho), colnames(pred_by_cluster))
+  if (!length(common)) {
+    stop("K > 1 crossfit_q could not align memberships with FactorHet predictions.",
+         call. = FALSE)
+  }
+  weighted <- rho[, common, drop = FALSE] * pred_by_cluster[, common, drop = FALSE]
+  out <- rowSums(weighted, na.rm = TRUE)
+  out[rowSums(is.finite(weighted)) == 0L] <- NA_real_
+  out
+}
+
+cs_crossfit_q_heterogeneous_policy_model_mu <- function(row_policy_probs, rho,
+                                                        opponent_W, X, result,
+                                                        p_list, n_draws,
+                                                        seed, chunk_size) {
+  if (!is.null(seed)) {
+    set.seed(as.integer(seed))
+  }
+  opponent_W <- as.data.frame(opponent_W, stringsAsFactors = FALSE, check.names = FALSE)
+  X <- as.matrix(X)
+  n <- nrow(opponent_W)
+  out <- numeric(n)
+  max_long_rows <- 200000L
+  chunk_rows <- max(1L, min(as.integer(chunk_size), floor(max_long_rows / as.integer(n_draws))))
+  starts <- seq.int(1L, n, by = chunk_rows)
+  for (start in starts) {
+    end <- min(n, start + chunk_rows - 1L)
+    idx <- start:end
+    row_probs_chunk <- lapply(row_policy_probs, function(x) x[idx, , drop = FALSE])
+    draws <- cs_crossfit_q_sample_row_policy_profiles(
+      row_policy_probs = row_probs_chunk,
+      p_list = p_list,
+      n_draws = as.integer(n_draws)
+    )
+    opponent_rep <- opponent_W[rep(idx, each = as.integer(n_draws)), , drop = FALSE]
+    X_rep <- X[rep(idx, each = as.integer(n_draws)), , drop = FALSE]
+    pred_by_cluster <- cs_crossfit_q_factorhet_pair_predict_by_cluster(
+      result = result,
+      focal_W = draws,
+      opponent_W = opponent_rep,
+      X = X_rep
+    )
+    common <- intersect(colnames(rho), colnames(pred_by_cluster))
+    if (!length(common)) {
+      stop("K > 1 crossfit_q could not align memberships with FactorHet predictions.",
+           call. = FALSE)
+    }
+    for (cluster in common) {
+      pred_mat <- matrix(
+        pred_by_cluster[, cluster],
+        nrow = length(idx),
+        byrow = TRUE
+      )
+      out[idx] <- out[idx] + rho[idx, cluster] * rowMeans(pred_mat, na.rm = TRUE)
+    }
+  }
+  out
+}
+
+cs_crossfit_q_cluster_diagnostics <- function(rho, w, w_used) {
+  cluster_names <- colnames(rho) %||% paste0("k", seq_len(ncol(rho)))
+  map <- max.col(rho, ties.method = "first")
+  entropy <- -rowSums(ifelse(rho > 0, rho * log(rho), 0))
+  rows <- lapply(seq_along(cluster_names), function(k) {
+    idx <- which(map == k)
+    diag <- if (length(idx)) {
+      cs_crossfit_q_weight_diagnostics(w[idx], w_used[idx])
+    } else {
+      list(
+        weight_sum = 0,
+        weight_mean = NA_real_,
+        weight_sum_ratio = NA_real_,
+        hajek_denominator_ok = FALSE,
+        ess = 0,
+        ess_fraction = 0,
+        mean_weight = NA_real_,
+        max_weight = NA_real_,
+        p50 = NA_real_,
+        p90 = NA_real_,
+        p95 = NA_real_,
+        p99 = NA_real_,
+        p999 = NA_real_,
+        clipped = FALSE
+      )
+    }
+    data.frame(
+      cluster = cluster_names[[k]],
+      n_oriented = length(idx),
+      membership_mass = sum(rho[, k], na.rm = TRUE),
+      hard_share = length(idx) / nrow(rho),
+      mean_membership = mean(rho[, k], na.rm = TRUE),
+      entropy_mean = mean(entropy, na.rm = TRUE),
+      weight_sum = diag$weight_sum,
+      ess = diag$ess,
+      ess_fraction = diag$ess_fraction,
+      max_weight = diag$max_weight,
+      weight_sum_ratio = diag$weight_sum_ratio,
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows)
+}
+
+cs_crossfit_q_heterogeneous_fold_eval <- function(train_result, Y, W, X,
+                                                  pair_mat, test_pair_rows,
+                                                  p_list, control, fold,
+                                                  respondent_id,
+                                                  respondent_task_id,
+                                                  profile_order) {
+  W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
+  X <- as.matrix(X)
+  pair_mat_test <- pair_mat[test_pair_rows, , drop = FALSE]
+  focal_idx <- c(pair_mat_test[, 1], pair_mat_test[, 2])
+  opponent_idx <- c(pair_mat_test[, 2], pair_mat_test[, 1])
+  y_oriented <- as.numeric(Y[focal_idx])
+  focal_W <- W[focal_idx, , drop = FALSE]
+  opponent_W <- W[opponent_idx, , drop = FALSE]
+  rho <- cs_crossfit_q_predict_cluster_membership(
+    result = train_result,
+    Y = Y[focal_idx],
+    W = focal_W,
+    X = X[focal_idx, , drop = FALSE],
+    respondent_id = respondent_id[focal_idx],
+    respondent_task_id = respondent_task_id[focal_idx],
+    profile_order = profile_order[focal_idx]
+  )
+  policies <- cs_crossfit_q_cluster_policies(train_result)
+  missing_policies <- setdiff(colnames(rho), names(policies))
+  if (length(missing_policies)) {
+    stop(sprintf(
+      "K > 1 crossfit_q fold result is missing cluster policy/policies: %s.",
+      paste(missing_policies, collapse = ", ")
+    ), call. = FALSE)
+  }
+  policies <- policies[colnames(rho)]
+  m_obs <- cs_crossfit_q_heterogeneous_pair_predict(
+    focal_W = focal_W,
+    opponent_W = opponent_W,
+    rho = rho,
+    result = train_result,
+    X = X[focal_idx, , drop = FALSE],
+    p_list = p_list
+  )
+  row_policy_probs <- cs_crossfit_q_row_soft_policy_probs(
+    policies = policies,
+    rho = rho,
+    p_list = p_list
+  )
+  reference_policy_probs <- cs_crossfit_q_constant_row_policy_probs(
+    policy = p_list,
+    n = nrow(focal_W),
+    p_list = p_list
+  )
+  mu_policy <- cs_crossfit_q_heterogeneous_policy_model_mu(
+    row_policy_probs = row_policy_probs,
+    rho = rho,
+    opponent_W = opponent_W,
+    X = X[focal_idx, , drop = FALSE],
+    result = train_result,
+    p_list = p_list,
+    n_draws = control$n_policy_draws,
+    seed = control$seed + 1009L * fold,
+    chunk_size = control$chunk_size
+  )
+  mu_reference <- cs_crossfit_q_heterogeneous_policy_model_mu(
+    row_policy_probs = reference_policy_probs,
+    rho = rho,
+    opponent_W = opponent_W,
+    X = X[focal_idx, , drop = FALSE],
+    result = train_result,
+    p_list = p_list,
+    n_draws = control$n_policy_draws,
+    seed = control$seed + 2003L * fold,
+    chunk_size = control$chunk_size
+  )
+
+  p_focal <- cs_crossfit_q_policy_prob(focal_W, p_list, p_list)
+  pi_focal <- cs_crossfit_q_row_policy_prob(focal_W, row_policy_probs, p_list)
+  w <- ifelse(p_focal > 0, pi_focal / p_focal, 0)
+  w_ref <- ifelse(p_focal > 0, 1, 0)
+  w_used <- pmin(w, control$weight_clip)
+  w_ref_used <- pmin(w_ref, control$weight_clip)
+  diagnostics <- cs_crossfit_q_weight_diagnostics(w, w_used)
+  reference_diagnostics <- cs_crossfit_q_weight_diagnostics(w_ref, w_ref_used)
+  cluster_diag <- cs_crossfit_q_cluster_diagnostics(rho, w, w_used)
+  hajek_denominator_ok <- isTRUE(diagnostics$hajek_denominator_ok) &&
+    isTRUE(reference_diagnostics$hajek_denominator_ok)
+
+  estimates <- list(
+    dr_hajek = cs_crossfit_q_dr_hajek(mu_policy, w_used, y_oriented, m_obs),
+    ips = mean(w_used * y_oriented, na.rm = TRUE),
+    snips = if (sum(w_used, na.rm = TRUE) > 0) {
+      sum(w_used * y_oriented, na.rm = TRUE) / sum(w_used, na.rm = TRUE)
+    } else {
+      NA_real_
+    },
+    model = mean(mu_policy, na.rm = TRUE),
+    dr = mean(mu_policy + w_used * (y_oriented - m_obs), na.rm = TRUE)
+  )
+  reference <- list(
+    dr_hajek = cs_crossfit_q_dr_hajek(mu_reference, w_ref_used, y_oriented, m_obs),
+    ips = mean(w_ref_used * y_oriented, na.rm = TRUE),
+    snips = if (sum(w_ref_used, na.rm = TRUE) > 0) {
+      sum(w_ref_used * y_oriented, na.rm = TRUE) / sum(w_ref_used, na.rm = TRUE)
+    } else {
+      NA_real_
+    },
+    model = mean(mu_reference, na.rm = TRUE),
+    dr = mean(mu_reference + w_ref_used * (y_oriented - m_obs), na.rm = TRUE)
+  )
+  estimates <- estimates[control$estimators]
+  reference <- reference[control$estimators]
+  values <- data.frame(
+    fold = fold,
+    n_pairs = nrow(pair_mat_test),
+    n_oriented = length(y_oriented),
+    estimator = names(estimates),
+    Q_crossfit = as.numeric(unlist(estimates, use.names = FALSE)),
+    Q_reference_crossfit = as.numeric(unlist(reference, use.names = FALSE)),
+    Q_gain_crossfit = as.numeric(unlist(estimates, use.names = FALSE)) -
+      as.numeric(unlist(reference, use.names = FALSE)),
+    weight_sum = diagnostics$weight_sum,
+    weight_mean = diagnostics$weight_mean,
+    weight_sum_ratio = diagnostics$weight_sum_ratio,
+    hajek_denominator_ok = hajek_denominator_ok,
+    p50 = diagnostics$p50,
+    p90 = diagnostics$p90,
+    p95 = diagnostics$p95,
+    p99 = diagnostics$p99,
+    p999 = diagnostics$p999,
+    ess = diagnostics$ess,
+    ess_fraction = diagnostics$ess_fraction,
+    max_weight = diagnostics$max_weight,
+    mean_weight = diagnostics$mean_weight,
+    min_cluster_ess = min(cluster_diag$ess, na.rm = TRUE),
+    min_cluster_ess_fraction = min(cluster_diag$ess_fraction, na.rm = TRUE),
+    min_cluster_n_oriented = min(cluster_diag$n_oriented, na.rm = TRUE),
+    max_cluster_weight = max(cluster_diag$max_weight, na.rm = TRUE),
+    cluster_entropy_mean = mean(cluster_diag$entropy_mean, na.rm = TRUE),
+    weight_clipped = diagnostics$clipped,
+    stringsAsFactors = FALSE
+  )
+  cluster_diag$fold <- fold
+  cluster_diag <- cluster_diag[, c("fold", setdiff(names(cluster_diag), "fold")), drop = FALSE]
+  list(values = values, clusters = cluster_diag)
+}
+
 cs_crossfit_q_adversarial_extract_policies <- function(result, groups) {
   pi_point <- result$pi_star_point
   if (is.null(pi_point) || !is.list(pi_point)) {
@@ -1151,6 +1732,7 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
     diff = diff,
     adversarial = adversarial,
     K = K,
+    X = X,
     outcome_model_type = outcome_model_type,
     force_gaussian = force_gaussian,
     adversarial_model_strategy = adversarial_model_strategy,
@@ -1280,6 +1862,21 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
         groups = validation$groups,
         perspective_group = validation$perspective_group
       )
+    } else if (validation$K > 1L) {
+      fold_results[[fold]] <- cs_crossfit_q_heterogeneous_fold_eval(
+        train_result = train_result,
+        Y = Y,
+        W = W,
+        X = X,
+        pair_mat = pair_mat,
+        test_pair_rows = test_pair_rows,
+        p_list = p_list,
+        control = control,
+        fold = fold,
+        respondent_id = respondent_id,
+        respondent_task_id = respondent_task_id,
+        profile_order = profile_order
+      )
     } else {
       fold_results[[fold]] <- cs_crossfit_q_fold_eval(
         train_result = train_result,
@@ -1317,6 +1914,114 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
       reference_summary = agg$reference_summary,
       folds = if (isTRUE(control$return_fold_results)) agg$folds else NULL,
       records = if (isTRUE(control$return_fold_results)) agg$records else NULL,
+      control = control,
+      split = list(
+        split_by = control$split_by,
+        n_folds = fold_obj$n_folds,
+        fold_id_by_pair = fold_obj$fold_id,
+        pair_id = pair_id[pair_mat[, 1]]
+      )
+    ))
+  }
+
+  if (validation$K > 1L) {
+    fold_df <- do.call(rbind, lapply(fold_results, `[[`, "values"))
+    cluster_fold_df <- do.call(rbind, lapply(fold_results, `[[`, "clusters"))
+    aggregate_cols <- c("Q_crossfit", "Q_reference_crossfit", "Q_gain_crossfit")
+    summary_rows <- lapply(split(fold_df, fold_df$estimator), function(df) {
+      weights <- df$n_oriented / sum(df$n_oriented)
+      vals <- vapply(aggregate_cols, function(nm) {
+        if (any(!is.finite(df[[nm]]))) {
+          NA_real_
+        } else {
+          sum(df[[nm]] * weights)
+        }
+      }, numeric(1))
+      weight_sum <- sum(df$weight_sum, na.rm = TRUE)
+      n_oriented <- sum(df$n_oriented)
+      ess <- sum(df$ess, na.rm = TRUE)
+      data.frame(
+        estimator = df$estimator[[1L]],
+        Q_crossfit = vals[["Q_crossfit"]],
+        Q_reference_crossfit = vals[["Q_reference_crossfit"]],
+        Q_gain_crossfit = vals[["Q_gain_crossfit"]],
+        n_folds = length(unique(df$fold)),
+        n_oriented = n_oriented,
+        weight_sum = weight_sum,
+        weight_mean = if (n_oriented > 0) weight_sum / n_oriented else NA_real_,
+        weight_sum_ratio = if (n_oriented > 0) weight_sum / n_oriented else NA_real_,
+        hajek_denominator_ok = all(df$hajek_denominator_ok),
+        p50 = stats::weighted.mean(df$p50, weights, na.rm = TRUE),
+        p90 = stats::weighted.mean(df$p90, weights, na.rm = TRUE),
+        p95 = stats::weighted.mean(df$p95, weights, na.rm = TRUE),
+        p99 = stats::weighted.mean(df$p99, weights, na.rm = TRUE),
+        p999 = stats::weighted.mean(df$p999, weights, na.rm = TRUE),
+        ess = ess,
+        ess_fraction = if (n_oriented > 0) ess / n_oriented else NA_real_,
+        mean_ess_fraction = mean(df$ess_fraction, na.rm = TRUE),
+        max_weight = max(df$max_weight, na.rm = TRUE),
+        mean_weight = stats::weighted.mean(df$mean_weight, weights, na.rm = TRUE),
+        min_cluster_ess = min(df$min_cluster_ess, na.rm = TRUE),
+        min_cluster_ess_fraction = min(df$min_cluster_ess_fraction, na.rm = TRUE),
+        min_cluster_n_oriented = min(df$min_cluster_n_oriented, na.rm = TRUE),
+        max_cluster_weight = max(df$max_cluster_weight, na.rm = TRUE),
+        cluster_entropy_mean = stats::weighted.mean(df$cluster_entropy_mean, weights, na.rm = TRUE),
+        any_weight_clipped = any(df$weight_clipped),
+        stringsAsFactors = FALSE
+      )
+    })
+    summary_df <- do.call(rbind, summary_rows)
+    summary_df <- summary_df[match(control$estimators, summary_df$estimator), , drop = FALSE]
+
+    cluster_summary <- data.frame()
+    if (!is.null(cluster_fold_df) && nrow(cluster_fold_df)) {
+      cluster_summary <- do.call(rbind, lapply(split(cluster_fold_df, cluster_fold_df$cluster), function(df) {
+        n_oriented <- sum(df$n_oriented, na.rm = TRUE)
+        membership_mass <- sum(df$membership_mass, na.rm = TRUE)
+        weights <- if (sum(df$n_oriented, na.rm = TRUE) > 0) {
+          df$n_oriented / sum(df$n_oriented, na.rm = TRUE)
+        } else {
+          rep(1 / nrow(df), nrow(df))
+        }
+        data.frame(
+          cluster = df$cluster[[1L]],
+          n_folds = length(unique(df$fold)),
+          n_oriented = n_oriented,
+          membership_mass = membership_mass,
+          hard_share = if (sum(cluster_fold_df$n_oriented, na.rm = TRUE) > 0) {
+            n_oriented / sum(cluster_fold_df$n_oriented, na.rm = TRUE)
+          } else {
+            NA_real_
+          },
+          mean_membership = if (sum(cluster_fold_df$membership_mass, na.rm = TRUE) > 0) {
+            membership_mass / sum(cluster_fold_df$membership_mass, na.rm = TRUE)
+          } else {
+            NA_real_
+          },
+          entropy_mean = stats::weighted.mean(df$entropy_mean, weights, na.rm = TRUE),
+          weight_sum = sum(df$weight_sum, na.rm = TRUE),
+          ess = sum(df$ess, na.rm = TRUE),
+          ess_fraction = if (n_oriented > 0) sum(df$ess, na.rm = TRUE) / n_oriented else NA_real_,
+          max_weight = max(df$max_weight, na.rm = TRUE),
+          weight_sum_ratio = stats::weighted.mean(df$weight_sum_ratio, weights, na.rm = TRUE),
+          stringsAsFactors = FALSE
+        )
+      }))
+    }
+
+    headline_row <- summary_df[summary_df$estimator == control$headline, , drop = FALSE]
+    return(list(
+      Q_crossfit = headline_row$Q_crossfit[[1L]],
+      Q_reference_crossfit = headline_row$Q_reference_crossfit[[1L]],
+      Q_gain_crossfit = headline_row$Q_gain_crossfit[[1L]],
+      estimator = control$headline,
+      mode = validation$mode,
+      K = validation$K,
+      assignment_assumption = "independent_product_p_list",
+      summary = summary_df,
+      folds = if (isTRUE(control$return_fold_results)) fold_df else NULL,
+      cluster_folds = if (isTRUE(control$return_fold_results)) cluster_fold_df else NULL,
+      cluster_summary = cluster_summary,
       control = control,
       split = list(
         split_by = control$split_by,

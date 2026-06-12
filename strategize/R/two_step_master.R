@@ -2632,6 +2632,38 @@ strategize       <-          function(
                   })
                   )  # end output list
 
+  if (K > 1L && !isTRUE(adversarial) && exists("factorhet_cache", inherits = TRUE)) {
+    factorhet_cache_out <- get("factorhet_cache", inherits = TRUE)
+    coefficient_matrix <- factorhet_cache_out$my_mean_full
+    if (!is.null(coefficient_matrix)) {
+      coefficient_matrix <- as.matrix(coefficient_matrix)
+      cluster_names <- paste0("k", seq_len(ncol(coefficient_matrix)))
+      cluster_params <- lapply(seq_len(ncol(coefficient_matrix)), function(k_cluster) {
+        list(
+          intercept = as.numeric(coefficient_matrix[1L, k_cluster]),
+          beta = as.numeric(coefficient_matrix[-1L, k_cluster])
+        )
+      })
+      names(cluster_params) <- cluster_names
+      result_out$heterogeneity_info <- list(
+        K = as.integer(K),
+        cluster_names = cluster_names,
+        model_type = "FactorHet_mbo",
+        membership_type = "posterior_predictive",
+        factorhet_model = factorhet_cache_out$my_model,
+        posterior = if (!is.null(factorhet_cache_out$my_model)) {
+          factorhet_cache_out$my_model$posterior
+        } else {
+          NULL
+        },
+        coefficient_matrix = coefficient_matrix,
+        cluster_params = cluster_params
+      )
+      result_out$outcome_model_view$metadata$K <- as.integer(K)
+      result_out$outcome_model_view$metadata$heterogeneity_model <- "FactorHet_mbo"
+    }
+  }
+
   if (!is.null(crossfit_q_result)) {
     result_out$Q_crossfit <- crossfit_q_result$Q_crossfit
     result_out$Q_reference_crossfit <- crossfit_q_result$Q_reference_crossfit

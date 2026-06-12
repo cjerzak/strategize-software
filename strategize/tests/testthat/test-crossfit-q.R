@@ -120,8 +120,24 @@ test_that("crossfit Q validation enforces pairwise v1 constraints", {
       p_list = p_list, diff = TRUE, adversarial = FALSE, K = 2,
       outcome_model_type = "glm", control = control
     ),
-    "K = 1"
+    "requires non-null respondent covariates X"
   )
+  k3_validated <- cs_crossfit_q_validate(
+    Y = Y,
+    W = W,
+    X = cbind(Z = c(0, 0, 1, 1)),
+    pair_id = pair_id,
+    profile_order = profile_order,
+    p_list = p_list,
+    diff = TRUE,
+    adversarial = FALSE,
+    K = 3,
+    outcome_model_type = "glm",
+    respondent_id = c(1, 1, 2, 2),
+    control = control
+  )
+  expect_equal(k3_validated$mode, "covariate_sensitive_pairwise_glm")
+  expect_equal(k3_validated$K, 3L)
   expect_error(
     cs_crossfit_q_validate(
       Y = Y, W = W, pair_id = pair_id, profile_order = profile_order,
@@ -159,6 +175,45 @@ test_that("crossfit Q probability weights and diagnostics are computed", {
   expect_equal(diagnostics$weight_sum_ratio, 5 / 3)
   expect_true(is.finite(diagnostics$p999))
   expect_true(diagnostics$clipped)
+})
+
+test_that("covariate-sensitive policy probabilities mix cluster policies row-wise", {
+  p_list <- list(
+    A = c(a = 0.5, b = 0.5),
+    B = c(x = 0.25, y = 0.75)
+  )
+  policies <- list(
+    k1 = list(A = c(a = 0.8, b = 0.2), B = c(x = 0.1, y = 0.9)),
+    k2 = list(A = c(a = 0.2, b = 0.8), B = c(x = 0.6, y = 0.4)),
+    k3 = list(A = c(a = 0.5, b = 0.5), B = c(x = 0.3, y = 0.7))
+  )
+  rho <- rbind(
+    c(k1 = 1.0, k2 = 0.0, k3 = 0.0),
+    c(k1 = 0.0, k2 = 1.0, k3 = 0.0),
+    c(k1 = 0.25, k2 = 0.25, k3 = 0.50)
+  )
+
+  row_probs <- cs_crossfit_q_row_soft_policy_probs(policies, rho, p_list)
+  expect_equal(row_probs$A[1, ], c(a = 0.8, b = 0.2), tolerance = 1e-8)
+  expect_equal(row_probs$A[2, ], c(a = 0.2, b = 0.8), tolerance = 1e-8)
+  expect_equal(row_probs$A[3, ], c(a = 0.5, b = 0.5), tolerance = 1e-8)
+  expect_equal(row_probs$B[3, ], c(x = 0.325, y = 0.675), tolerance = 1e-8)
+
+  W <- data.frame(A = c("a", "b", "a"), B = c("x", "y", "y"), stringsAsFactors = FALSE)
+  expect_equal(
+    cs_crossfit_q_row_policy_prob(W, row_probs, p_list),
+    c(0.8 * 0.1, 0.8 * 0.4, 0.5 * 0.675),
+    tolerance = 1e-8
+  )
+
+  diag <- cs_crossfit_q_cluster_diagnostics(
+    rho = rho,
+    w = c(2, 4, 6),
+    w_used = c(2, 3, 3)
+  )
+  expect_equal(diag$cluster, c("k1", "k2", "k3"))
+  expect_equal(diag$n_oriented, c(1, 1, 1))
+  expect_true(all(is.finite(diag$membership_mass)))
 })
 
 test_that("Hajek-normalized DR is stable under extreme weights and flags zero denominators", {
@@ -448,6 +503,81 @@ test_that("strategize can return first-class crossfit Q fields", {
   expect_s3_class(res$Q_crossfit_info$summary, "data.frame")
   expect_true(all(c("dr_hajek", "dr", "ips", "snips", "model") %in%
                     res$Q_crossfit_info$summary$estimator))
+})
+
+test_that("strategize can return K > 1 covariate-sensitive crossfit Q fields", {
+  skip_on_cran()
+  skip_if_no_jax()
+  skip_if_not_installed("FactorHet")
+
+  set.seed(9292)
+  n_pairs <- 24L
+  sample_profiles <- function(n) {
+    data.frame(
+      A = sample(c("a", "b"), n, replace = TRUE),
+      B = sample(c("x", "y"), n, replace = TRUE),
+      stringsAsFactors = FALSE
+    )
+  }
+  W_left <- sample_profiles(n_pairs)
+  W_right <- sample_profiles(n_pairs)
+  eta <- ifelse(W_left$A == "a", 0.5, -0.2) -
+    ifelse(W_right$A == "a", 0.5, -0.2)
+  Y_left <- stats::rbinom(n_pairs, size = 1L, prob = stats::plogis(eta))
+
+  W <- rbind(W_left, W_right)
+  Y <- c(Y_left, 1L - Y_left)
+  pair_id <- c(seq_len(n_pairs), seq_len(n_pairs))
+  respondent_id <- pair_id
+  respondent_task_id <- pair_id
+  profile_order <- c(rep(1L, n_pairs), rep(2L, n_pairs))
+  X_pair <- data.frame(
+    z1 = stats::rnorm(n_pairs),
+    z2 = rep(c(0, 1, 2), length.out = n_pairs)
+  )
+  X <- X_pair[match(pair_id, seq_len(n_pairs)), , drop = FALSE]
+
+  plot_sink <- tempfile(fileext = ".pdf")
+  grDevices::pdf(plot_sink)
+  on.exit({
+    grDevices::dev.off()
+    unlink(plot_sink)
+  }, add = TRUE)
+
+  res <- strategize(
+    Y = Y,
+    W = W,
+    X = as.matrix(X),
+    lambda = 0.1,
+    pair_id = pair_id,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    profile_order = profile_order,
+    p_list = create_p_list(W, uniform = TRUE),
+    K = 3,
+    nSGD = 1L,
+    diff = TRUE,
+    outcome_model_type = "glm",
+    force_gaussian = FALSE,
+    use_regularization = TRUE,
+    compute_se = FALSE,
+    compute_hessian = FALSE,
+    conda_env = "strategize_env",
+    conda_env_required = FALSE,
+    crossfit_q = TRUE,
+    crossfit_q_control = list(
+      folds = 2L,
+      n_policy_draws = 4L,
+      chunk_size = 8L,
+      seed = 9292L
+    )
+  )
+
+  expect_equal(res$Q_crossfit_info$mode, "covariate_sensitive_pairwise_glm")
+  expect_equal(res$Q_crossfit_info$K, 3L)
+  expect_equal(nrow(res$Q_crossfit_info$cluster_summary), 3L)
+  expect_true(all(c("min_cluster_ess_fraction", "cluster_entropy_mean") %in%
+                    names(res$Q_crossfit_info$summary)))
 })
 
 test_that("strategize can return first-class adversarial crossfit Q fields", {
