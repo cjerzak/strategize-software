@@ -3677,6 +3677,54 @@ test_that("compact SVI scan mode resolver defaults to required for chunked compa
   )
 })
 
+test_that("compact SVI effective scan steps round only scanned tail chunks", {
+  expect_identical(
+    strategize:::neural_compact_effective_scan_steps(
+      svi_steps = 5L,
+      completed_steps = 0L,
+      chunk_size = 4L,
+      scan_available = TRUE
+    ),
+    8L
+  )
+  expect_identical(
+    strategize:::neural_compact_effective_scan_steps(
+      svi_steps = 5L,
+      completed_steps = 2L,
+      chunk_size = 4L,
+      scan_available = TRUE
+    ),
+    6L
+  )
+  expect_identical(
+    strategize:::neural_compact_effective_scan_steps(
+      svi_steps = 5L,
+      completed_steps = 0L,
+      chunk_size = 4L,
+      scan_available = FALSE
+    ),
+    5L
+  )
+  expect_identical(
+    strategize:::neural_compact_effective_scan_steps(
+      svi_steps = 5L,
+      completed_steps = 0L,
+      chunk_size = 1L,
+      scan_available = TRUE
+    ),
+    5L
+  )
+  expect_identical(
+    strategize:::neural_compact_effective_scan_steps(
+      svi_steps = 5L,
+      completed_steps = 5L,
+      chunk_size = 4L,
+      scan_available = TRUE
+    ),
+    5L
+  )
+})
+
 test_that("compact SVI validation cadence respects chunk boundaries and final step", {
   expect_identical(
     strategize:::neural_resolve_positive_int(
@@ -3787,6 +3835,9 @@ test_that("compact SVI fallback mode records single-step fallback when scan help
   expect_identical(diagnostics$compact_update_scan_status, "fallback_single_step")
   expect_match(diagnostics$compact_update_scan_error, "synthetic scan failure")
   expect_identical(as.integer(diagnostics$compact_update_chunk_size_effective), 1L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_requested), 2L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_effective), 2L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_overrun), 0L)
   expect_identical(diagnostics$compact_update_jit_required, TRUE)
   expect_identical(diagnostics$compact_update_jit_status, "ok")
   expect_identical(diagnostics$compact_update_jit_path, "scan_to_single_fallback")
@@ -3808,6 +3859,31 @@ test_that("compact SVI single-step updates use cached jitted update", {
   expect_identical(diagnostics$compact_update_jit_path, "single")
   expect_gte(as.integer(diagnostics$compact_update_jit_cache_size), 1L)
   expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
+})
+
+test_that("compact SVI fallback mode keeps requested step budget after scan failure", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  local_strenv_bindings("jax_svi_update_scan")
+  set_strenv_bindings(list(
+    jax_svi_update_scan = function(...) stop("synthetic scan failure")
+  ))
+
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 4L,
+    svi_steps = 5L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(as.integer(model_info$svi_steps), 5L)
+  expect_identical(as.integer(model_info$svi_steps_completed), 5L)
+  expect_length(model_info$svi_loss_curve, 5L)
+  expect_identical(diagnostics$compact_update_scan_status, "fallback_single_step")
+  expect_identical(as.integer(diagnostics$compact_update_steps_requested), 5L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_effective), 5L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_overrun), 0L)
 })
 
 test_that("compact SVI errors when jitted single-step update fails", {
@@ -3845,6 +3921,25 @@ test_that("compact SVI required scan mode records ok for live scanned updates", 
   expect_identical(diagnostics$compact_update_jit_path, "scan")
   expect_gte(as.integer(diagnostics$compact_update_jit_cache_size), 1L)
   expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
+})
+
+test_that("compact SVI required scan rounds effective steps to full scan shape", {
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "required",
+    compact_update_chunk_size = 4L,
+    svi_steps = 5L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(as.integer(model_info$svi_steps), 5L)
+  expect_identical(as.integer(model_info$svi_steps_completed), 8L)
+  expect_length(model_info$svi_loss_curve, 8L)
+  expect_identical(diagnostics$compact_update_scan_status, "ok")
+  expect_identical(diagnostics$compact_update_jit_path, "scan")
+  expect_identical(as.integer(diagnostics$compact_update_chunk_size_effective), 4L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_requested), 5L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_effective), 8L)
+  expect_identical(as.integer(diagnostics$compact_update_steps_overrun), 3L)
 })
 
 test_that("compact SVI validation logs scanned chunk throughput from completed steps", {

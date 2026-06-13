@@ -835,6 +835,36 @@ neural_resolve_compact_update_scan <- function(compact_training,
   mode
 }
 
+neural_compact_effective_scan_steps <- function(svi_steps,
+                                                completed_steps = 0L,
+                                                chunk_size,
+                                                scan_available = TRUE) {
+  requested <- suppressWarnings(as.integer(svi_steps))
+  completed <- suppressWarnings(as.integer(completed_steps %||% 0L))
+  chunk_size <- suppressWarnings(as.integer(chunk_size))
+  if (length(requested) != 1L || is.na(requested) || requested < 1L) {
+    return(0L)
+  }
+  if (!isTRUE(scan_available) ||
+      length(chunk_size) != 1L ||
+      is.na(chunk_size) ||
+      chunk_size <= 1L) {
+    return(as.integer(requested))
+  }
+  if (length(completed) != 1L || is.na(completed) || completed < 0L) {
+    completed <- 0L
+  }
+  if (completed >= requested) {
+    return(as.integer(requested))
+  }
+  remaining <- as.integer(requested) - as.integer(completed)
+  tail_steps <- remaining %% as.integer(chunk_size)
+  if (tail_steps == 0L) {
+    return(as.integer(requested))
+  }
+  as.integer(requested + (as.integer(chunk_size) - tail_steps))
+}
+
 neural_resolve_positive_int <- function(value, fallback = 1L) {
   out <- suppressWarnings(as.integer(value))
   if (length(out) != 1L || is.na(out) || !is.finite(out) || out < 1L) {
@@ -19318,8 +19348,25 @@ generate_ModelOutcome_neural <- function(){
           neural_stop_compact_scan_required(compact_scan_error)
         }
       }
+      compact_svi_steps_target <- neural_compact_effective_scan_steps(
+        svi_steps = svi_steps,
+        completed_steps = svi_steps_completed,
+        chunk_size = compact_update_chunk_size,
+        scan_available = isTRUE(compact_scan_available)
+      )
+      if (compact_svi_steps_target > length(svi_loss_curve)) {
+        svi_loss_curve <- c(
+          svi_loss_curve,
+          rep(NA_real_, as.integer(compact_svi_steps_target - length(svi_loss_curve)))
+        )
+      }
       optimizer_diagnostics$compact_update_chunk_size_requested <- as.integer(compact_update_chunk_size)
       optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
+      optimizer_diagnostics$compact_update_steps_requested <- as.integer(svi_steps)
+      optimizer_diagnostics$compact_update_steps_effective <- as.integer(compact_svi_steps_target)
+      optimizer_diagnostics$compact_update_steps_overrun <- as.integer(
+        max(0L, as.integer(compact_svi_steps_target) - as.integer(svi_steps))
+      )
       optimizer_diagnostics$compact_update_scan_mode <- compact_update_scan
       optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
       optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
@@ -19567,12 +19614,12 @@ generate_ModelOutcome_neural <- function(){
       }
 
       step_cursor <- as.integer(svi_steps_completed) + 1L
-      while (step_cursor <= as.integer(svi_steps)) {
+      while (step_cursor <= as.integer(compact_svi_steps_target)) {
         batch_args <- NULL
         chunk_completed <- FALSE
         chunk_n <- min(
           as.integer(compact_update_chunk_size),
-          as.integer(svi_steps) - as.integer(step_cursor) + 1L
+          as.integer(compact_svi_steps_target) - as.integer(step_cursor) + 1L
         )
         chunk_start_step <- as.integer(svi_steps_completed)
         chunk_started_at <- proc.time()[["elapsed"]]
@@ -19641,6 +19688,7 @@ generate_ModelOutcome_neural <- function(){
             compact_scan_status <- "fallback_single_step"
             compact_update_jit_path <- "scan_to_single_fallback"
             compact_update_chunk_size_effective <- 1L
+            compact_svi_steps_target <- as.integer(svi_steps)
             if (!isTRUE(compact_scan_message_emitted)) {
               message(sprintf(
                 "Compact SVI scanned updates unavailable; falling back to single-step updates%s.",
@@ -19705,6 +19753,10 @@ generate_ModelOutcome_neural <- function(){
             as.numeric(chunk_steps) * as.numeric(compact_svi_batch_size)
         }
         optimizer_diagnostics$compact_update_chunk_size_effective <- as.integer(compact_update_chunk_size_effective)
+        optimizer_diagnostics$compact_update_steps_effective <- as.integer(compact_svi_steps_target)
+        optimizer_diagnostics$compact_update_steps_overrun <- as.integer(
+          max(0L, as.integer(compact_svi_steps_target) - as.integer(svi_steps))
+        )
         optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
         optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
         refresh_compact_jit_diagnostics()
