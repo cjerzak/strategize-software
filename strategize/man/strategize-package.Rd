@@ -20,6 +20,7 @@ Useful links:
 
 Authors:
 \itemize{
+  \item Connor T. Jerzak \email{connor.jerzak@austin.utexas.edu} (\href{https://orcid.org/0000-0001-9858-2050}{ORCID})
   \item Priyanshi Chandra \email{i19ma012@amhd.svnit.ac.in} (\href{https://orcid.org/0009-0003-1625-8823}{ORCID})
   \item Rishi Hazra \email{rishihazra@college.harvard.edu} (\href{https://orcid.org/0000-0001-5018-4440}{ORCID})
 }
