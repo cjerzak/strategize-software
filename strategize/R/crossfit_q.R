@@ -489,6 +489,84 @@ cs_crossfit_q_reconstruct_feature_info <- function(p_list) {
   list(main_info = main_info, interaction_info = interaction_info)
 }
 
+cs_crossfit_q_normalize_feature_info <- function(feature_info) {
+  if (is.null(feature_info) || !is.list(feature_info)) {
+    return(NULL)
+  }
+  if (is.null(feature_info$main_info)) {
+    return(NULL)
+  }
+  main_info <- as.data.frame(feature_info$main_info)
+  interaction_info <- if (is.null(feature_info$interaction_info)) {
+    data.frame()
+  } else {
+    as.data.frame(feature_info$interaction_info)
+  }
+  if (!all(c("d", "l") %in% names(main_info))) {
+    return(NULL)
+  }
+  if (nrow(interaction_info) > 0L &&
+      !all(c("d", "l", "dp", "lp") %in% names(interaction_info))) {
+    return(NULL)
+  }
+  list(main_info = main_info, interaction_info = interaction_info)
+}
+
+cs_crossfit_q_feature_info_ncols <- function(feature_info) {
+  feature_info <- cs_crossfit_q_normalize_feature_info(feature_info)
+  if (is.null(feature_info)) {
+    return(NA_integer_)
+  }
+  as.integer(nrow(feature_info$main_info) + nrow(feature_info$interaction_info))
+}
+
+cs_crossfit_q_result_feature_info <- function(result, p_list, suffix = "overall",
+                                              beta = NULL) {
+  suffix <- as.character(suffix)[[1L]]
+  beta_len <- if (is.null(beta)) NA_integer_ else length(beta)
+  candidates <- list()
+  labels <- character(0)
+  add_candidate <- function(label, feature_info) {
+    feature_info <- cs_crossfit_q_normalize_feature_info(feature_info)
+    if (is.null(feature_info)) {
+      return(invisible(NULL))
+    }
+    candidates[[length(candidates) + 1L]] <<- feature_info
+    labels[[length(labels) + 1L]] <<- label
+    invisible(NULL)
+  }
+
+  if (!is.null(result$glm_feature_info) && is.list(result$glm_feature_info)) {
+    if (!is.null(result$glm_feature_info[[suffix]])) {
+      add_candidate(sprintf("glm_feature_info$%s", suffix),
+                    result$glm_feature_info[[suffix]])
+    }
+    if (!identical(suffix, "overall") &&
+        !is.null(result$glm_feature_info$overall)) {
+      add_candidate("glm_feature_info$overall", result$glm_feature_info$overall)
+    }
+  }
+  add_candidate("reconstructed_p_list", cs_crossfit_q_reconstruct_feature_info(p_list))
+
+  if (!length(candidates)) {
+    stop("Could not construct cross-fit GLM feature metadata.", call. = FALSE)
+  }
+  if (is.na(beta_len)) {
+    return(candidates[[1L]])
+  }
+
+  ncols <- vapply(candidates, cs_crossfit_q_feature_info_ncols, integer(1))
+  match_idx <- which(ncols == beta_len)
+  if (length(match_idx)) {
+    return(candidates[[match_idx[[1L]]]])
+  }
+  stop(sprintf(
+    "No cross-fit GLM feature basis matched fold model coefficient length %d (candidates: %s).",
+    beta_len,
+    paste(sprintf("%s=%s", labels, ncols), collapse = ", ")
+  ), call. = FALSE)
+}
+
 cs_crossfit_q_to_numeric <- function(x) {
   out <- tryCatch(as.numeric(x), error = function(e) NULL)
   if (!is.null(out) && length(out)) {
@@ -551,6 +629,7 @@ cs_crossfit_q_sample_policy <- function(policy, n, seed = NULL) {
 cs_crossfit_q_profile_score <- function(W, result, p_list, feature_info = NULL) {
   W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
   W <- W[, names(p_list), drop = FALSE]
+  beta <- cs_crossfit_q_to_numeric(result$est_coefficients_jnp)
   enc <- cs_prepare_W_encoding(
     W = W,
     p_list = p_list,
@@ -558,14 +637,18 @@ cs_crossfit_q_profile_score <- function(W, result, p_list, feature_info = NULL) 
     align = "by_name"
   )
   if (is.null(feature_info)) {
-    feature_info <- cs_crossfit_q_reconstruct_feature_info(p_list)
+    feature_info <- cs_crossfit_q_result_feature_info(
+      result = result,
+      p_list = p_list,
+      suffix = "overall",
+      beta = beta
+    )
   }
   X_design <- cs2step_glm_build_design(
     W_idx = enc$W_idx,
     main_info = feature_info$main_info,
     interaction_info = feature_info$interaction_info
   )
-  beta <- cs_crossfit_q_to_numeric(result$est_coefficients_jnp)
   if (ncol(X_design) != length(beta)) {
     stop(sprintf(
       "Cross-fit design matrix has %d columns but fold model has %d coefficient(s).",
@@ -576,6 +659,7 @@ cs_crossfit_q_profile_score <- function(W, result, p_list, feature_info = NULL) 
 }
 
 cs_crossfit_q_profile_score_beta <- function(W, beta, p_list, feature_info = NULL) {
+  beta <- as.numeric(beta)
   W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
   W <- W[, names(p_list), drop = FALSE]
   enc <- cs_prepare_W_encoding(
@@ -615,11 +699,14 @@ cs_crossfit_q_model_params <- function(result, suffix) {
     stop(sprintf("Could not extract adversarial GLM parameters for '%s'.", suffix),
          call. = FALSE)
   }
-  list(intercept = intercept[[1L]], beta = beta)
+  list(intercept = intercept[[1L]], beta = beta, suffix = suffix)
 }
 
 cs_crossfit_q_pair_predict_params <- function(focal_W, opponent_W, params, p_list,
                                               feature_info = NULL) {
+  if (is.null(feature_info)) {
+    feature_info <- params$feature_info
+  }
   if (is.null(feature_info)) {
     feature_info <- cs_crossfit_q_reconstruct_feature_info(p_list)
   }
@@ -630,15 +717,21 @@ cs_crossfit_q_pair_predict_params <- function(focal_W, opponent_W, params, p_lis
 
 cs_crossfit_q_pair_predict <- function(focal_W, opponent_W, result, p_list,
                                        feature_info = NULL) {
-  if (is.null(feature_info)) {
-    feature_info <- cs_crossfit_q_reconstruct_feature_info(p_list)
-  }
   intercept <- cs_crossfit_q_to_numeric(result$est_intercept_jnp)
   if (!length(intercept)) {
     intercept <- 0
   }
-  score_focal <- cs_crossfit_q_profile_score(focal_W, result, p_list, feature_info)
-  score_opponent <- cs_crossfit_q_profile_score(opponent_W, result, p_list, feature_info)
+  beta <- cs_crossfit_q_to_numeric(result$est_coefficients_jnp)
+  if (is.null(feature_info)) {
+    feature_info <- cs_crossfit_q_result_feature_info(
+      result = result,
+      p_list = p_list,
+      suffix = "overall",
+      beta = beta
+    )
+  }
+  score_focal <- cs_crossfit_q_profile_score_beta(focal_W, beta, p_list, feature_info)
+  score_opponent <- cs_crossfit_q_profile_score_beta(opponent_W, beta, p_list, feature_info)
   eta <- intercept[[1L]] + score_focal - score_opponent
   family <- tryCatch(
     tolower(as.character(result$outcome_model_view$models$overall$glm_family)),
@@ -653,14 +746,20 @@ cs_crossfit_q_pair_predict <- function(focal_W, opponent_W, result, p_list,
 
 cs_crossfit_q_policy_model_mu <- function(policy, opponent_W, result, p_list,
                                           n_draws, seed, chunk_size) {
-  feature_info <- cs_crossfit_q_reconstruct_feature_info(p_list)
   draws <- cs_crossfit_q_sample_policy(policy, n = n_draws, seed = seed)
   intercept <- cs_crossfit_q_to_numeric(result$est_intercept_jnp)
   if (!length(intercept)) {
     intercept <- 0
   }
-  score_draws <- cs_crossfit_q_profile_score(draws, result, p_list, feature_info)
-  score_opp <- cs_crossfit_q_profile_score(opponent_W, result, p_list, feature_info)
+  beta <- cs_crossfit_q_to_numeric(result$est_coefficients_jnp)
+  feature_info <- cs_crossfit_q_result_feature_info(
+    result = result,
+    p_list = p_list,
+    suffix = "overall",
+    beta = beta
+  )
+  score_draws <- cs_crossfit_q_profile_score_beta(draws, beta, p_list, feature_info)
+  score_opp <- cs_crossfit_q_profile_score_beta(opponent_W, beta, p_list, feature_info)
   family <- tryCatch(
     tolower(as.character(result$outcome_model_view$models$overall$glm_family)),
     error = function(e) "binomial"
@@ -1302,12 +1401,18 @@ cs_crossfit_q_validate_policy_support <- function(policy, p_list, label) {
 cs_crossfit_q_adversarial_model_mu <- function(result, p_list, groups, policies,
                                                respondent_group, perspective_group,
                                                n_draws, seed) {
-  feature_info <- cs_crossfit_q_reconstruct_feature_info(p_list)
   base_group <- groups[[1L]]
   other_group <- groups[[2L]]
+  suffix <- if (identical(respondent_group, base_group)) "ast" else "dag"
   params <- cs_crossfit_q_model_params(
     result,
-    if (identical(respondent_group, base_group)) "ast" else "dag"
+    suffix
+  )
+  feature_info <- cs_crossfit_q_result_feature_info(
+    result = result,
+    p_list = p_list,
+    suffix = suffix,
+    beta = params$beta
   )
   base_draws <- cs_crossfit_q_sample_policy(policies[[base_group]], n = n_draws, seed = seed)
   other_draws <- cs_crossfit_q_sample_policy(policies[[other_group]], n = n_draws, seed = seed + 7919L)
@@ -1335,7 +1440,6 @@ cs_crossfit_q_adversarial_fold_records <- function(train_result, Y, W,
   }
 
   W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
-  feature_info <- cs_crossfit_q_reconstruct_feature_info(p_list)
   policies <- cs_crossfit_q_adversarial_extract_policies(train_result, groups)
   for (g in groups) {
     cs_crossfit_q_validate_policy_support(policies[[g]], p_list, g)
@@ -1371,9 +1475,16 @@ cs_crossfit_q_adversarial_fold_records <- function(train_result, Y, W,
     if (!length(idx)) {
       next
     }
+    suffix <- if (identical(g, groups[[1L]])) "ast" else "dag"
     params <- cs_crossfit_q_model_params(
       train_result,
-      if (identical(g, groups[[1L]])) "ast" else "dag"
+      suffix
+    )
+    feature_info <- cs_crossfit_q_result_feature_info(
+      result = train_result,
+      p_list = p_list,
+      suffix = suffix,
+      beta = params$beta
     )
     m_base[idx] <- cs_crossfit_q_pair_predict_params(
       focal_W = W[fold_contests$base_idx[idx], , drop = FALSE],

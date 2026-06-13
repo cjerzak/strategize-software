@@ -68,6 +68,46 @@ test_that("policy support weights match grouped multinomial probabilities", {
   )
 })
 
+test_that("getPrettyPi flattens balanced implicit locators before segment sums", {
+  skip_on_cran()
+  skip_if_no_jax()
+  ensure_test_jax()
+
+  assign("nUniqueFactors", as.integer(5L), envir = strategize:::strenv)
+  assign(
+    "OneTf",
+    strategize:::strenv$jnp$array(matrix(1), dtype = strategize:::strenv$dtj),
+    envir = strategize:::strenv
+  )
+
+  locator <- matrix(rep(seq_len(5L), each = 2L), nrow = 2L)
+  locator <- strategize:::strenv$jnp$array(locator, dtype = strategize:::strenv$jnp$int32)
+  pi_reduced <- strategize:::strenv$jnp$array(
+    matrix(rep(c(0.2, 0.3), times = 5L), ncol = 1L),
+    dtype = strategize:::strenv$dtj
+  )
+
+  main_comp_mat <- matrix(0, nrow = 15L, ncol = 10L)
+  main_comp_mat[c(1L, 2L, 4L, 5L, 7L, 8L, 10L, 11L, 13L, 14L) +
+                  15L * (seq_len(10L) - 1L)] <- 1
+  shadow_comp_mat <- matrix(0, nrow = 15L, ncol = 5L)
+  shadow_comp_mat[c(3L, 6L, 9L, 12L, 15L) + 15L * (seq_len(5L) - 1L)] <- 1
+
+  pretty <- strategize:::getPrettyPi(
+    pi_star_value = pi_reduced,
+    ParameterizationType = "Implicit",
+    d_locator = locator,
+    main_comp_mat = strategize:::strenv$jnp$array(main_comp_mat, dtype = strategize:::strenv$dtj),
+    shadow_comp_mat = strategize:::strenv$jnp$array(shadow_comp_mat, dtype = strategize:::strenv$dtj)
+  )
+
+  expect_equal(
+    as.numeric(strategize:::strenv$np$array(pretty)),
+    rep(c(0.2, 0.3, 0.5), times = 5L),
+    tolerance = 1e-6
+  )
+})
+
 test_that("policy sample log-prob helper handles rank-4 pooled batches", {
   skip_on_cran()
   skip_if_no_jax()

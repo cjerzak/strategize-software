@@ -1183,14 +1183,19 @@ strategize       <-          function(
   strenv$ParameterizationType <- ifelse( holdout_indicator == 0,
                                   yes = "Full", no = "Implicit" ) 
   #strenv$d_locator_full <- strenv$d_locator_use
-  d_locator_full <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d])}))
-  d_locator <- unlist(sapply(1:length(factor_levels),function(l_d){rep(l_d,times=factor_levels[l_d]-1)}))
+  d_locator_full <- as.integer(unlist(lapply(seq_along(factor_levels), function(l_d) {
+    rep(l_d, times = factor_levels[l_d])
+  }), use.names = FALSE))
+  d_locator <- as.integer(unlist(lapply(seq_along(factor_levels), function(l_d) {
+    rep(l_d, times = factor_levels[l_d] - 1L)
+  }), use.names = FALSE))
   strenv$nUniqueFactors <- as.integer(length(unique(as.vector(d_locator))))
   strenv$nUniqueLevelsByFactors <- as.integer( factor_levels )
   strenv$d_locator_use <- strenv$jnp$array(
                                     ifelse(strenv$ParameterizationType == "Implicit", 
                                            yes = list(d_locator), 
-                                           no = list(d_locator_full))[[1]] ) 
+                                           no = list(d_locator_full))[[1]],
+                                    dtype = strenv$jnp$int32 )
   
   # p logic 
   p_vec_sum_prime <- unlist(tapply(1:length(p_vec),d_locator,function(er){
@@ -1335,8 +1340,9 @@ strategize       <-          function(
       strenv$shadow_comp_mat <- shadow_comp_mat
     }
 
-    split_vec_full <- unlist(sapply(1:length(factor_levels),function(xz){
-                           rep(xz,times=factor_levels[xz])} ))
+    split_vec_full <- as.integer(unlist(lapply(seq_along(factor_levels), function(xz) {
+      rep(xz, times = factor_levels[xz])
+    }), use.names = FALSE))
     split_vec_use <- ifelse(strenv$ParameterizationType == "Implicit",
                             yes = list(split_vec), no = list(split_vec_full))[[1]]
   }
@@ -2327,6 +2333,46 @@ strategize       <-          function(
     dag0 = get_neural_info("neural_model_info_dag0_jnp")
   )
 
+  glm_feature_info_out <- NULL
+  if (identical(tolower(as.character(outcome_model_type)), "glm")) {
+    get_glm_feature_info <- function(suffix) {
+      main_name <- paste0("main_info_", suffix, "_jnp")
+      inter_name <- paste0("interaction_info_", suffix, "_jnp")
+      if (!exists(main_name, inherits = TRUE)) {
+        return(NULL)
+      }
+      main_info_use <- get(main_name, inherits = TRUE)
+      if (is.null(main_info_use)) {
+        return(NULL)
+      }
+      interaction_info_use <- if (exists(inter_name, inherits = TRUE)) {
+        get(inter_name, inherits = TRUE)
+      } else {
+        data.frame()
+      }
+      if (is.null(interaction_info_use)) {
+        interaction_info_use <- data.frame()
+      }
+      list(
+        main_info = as.data.frame(main_info_use),
+        interaction_info = as.data.frame(interaction_info_use)
+      )
+    }
+    glm_feature_info_out <- list()
+    for (suffix in c("ast", "dag", "ast0", "dag0")) {
+      info <- get_glm_feature_info(suffix)
+      if (!is.null(info)) {
+        glm_feature_info_out[[suffix]] <- info
+      }
+    }
+    if (!isTRUE(adversarial) && !is.null(glm_feature_info_out$ast)) {
+      glm_feature_info_out$overall <- glm_feature_info_out$ast
+    }
+    if (!length(glm_feature_info_out)) {
+      glm_feature_info_out <- NULL
+    }
+  }
+
   crossfit_q_result <- NULL
   if (isTRUE(crossfit_q)) {
     crossfit_q_result <- cs_crossfit_q_strategize(
@@ -2475,6 +2521,7 @@ strategize       <-          function(
                     ),
                   
                   "outcome_model_view" = outcome_model_view,
+                  "glm_feature_info" = glm_feature_info_out,
                   "neural_model_info" = neural_model_info_out,
 
                   # Hessian functions for equilibrium geometry analysis

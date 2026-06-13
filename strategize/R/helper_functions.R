@@ -1666,6 +1666,8 @@ getPrettyPi <- function( pi_star_value,
     pi_star_full <- pi_star_value
   }
   if( ParameterizationType == "Implicit" ){
+    d_locator <- strenv$jnp$reshape(strenv$jnp$atleast_1d(d_locator), list(-1L))
+    pi_star_value <- strenv$jnp$reshape(pi_star_value, list(-1L, 1L))
     # Ensure d_locator is a JAX array (assumed to be provided as such)
     # Map d_locator values to consecutive integers starting from 0
     unique_groups_inverse_indices <- strenv$jnp$unique( d_locator, 
@@ -1689,7 +1691,10 @@ getPrettyPi <- function( pi_star_value,
     
     
     # Compute pi_star_impliedTerms for each group
-    pi_star_impliedTerms <- strenv$OneTf - group_sums$squeeze()
+    pi_star_impliedTerms <- strenv$jnp$subtract(
+      strenv$jnp$array(1., dtype = strenv$dtj),
+      strenv$jnp$reshape(group_sums, list(-1L, 1L))
+    )
     # pi_star_impliedTerms - pi_star_impliedTermsOLD
     
     # Old way of computing implied terms  

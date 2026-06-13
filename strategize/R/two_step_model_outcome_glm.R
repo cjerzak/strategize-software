@@ -1287,17 +1287,21 @@ generate_ModelOutcome <- function(){
           Inter_na <- which_na[which_na > ncol(main_dat)] - ncol(main_dat)
       
           # drop
-          interaction_info <- interaction_info[-Inter_na,]
+          if (length(Inter_na) > 0L) {
+            interaction_info <- interaction_info[-Inter_na, , drop = FALSE]
+          }
           if (nrow(interaction_info) > 0L) {
             interaction_info$inter_index <- seq_len(nrow(interaction_info))
           } else {
             interaction_info$inter_index <- integer(0)
           }
       
-          main_info <- main_info[-Main_na,]
-          if (nrow(main_info) > 0L) {
+          if (length(Main_na) > 0L) {
+            main_info <- main_info[-Main_na, , drop = FALSE]
+          }
+          if (nrow(main_info) > 0L && !"d_index" %in% names(main_info)) {
             main_info$d_index <- seq_len(nrow(main_info))
-          } else {
+          } else if (nrow(main_info) == 0L) {
             main_info$d_index <- integer(0)
           }
         }

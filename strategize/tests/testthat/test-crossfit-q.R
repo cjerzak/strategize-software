@@ -177,6 +177,57 @@ test_that("crossfit Q probability weights and diagnostics are computed", {
   expect_true(diagnostics$clipped)
 })
 
+test_that("crossfit Q scores heldout rows on fitted reduced GLM feature basis", {
+  p_list <- list(
+    A = c(a = 0.5, b = 0.5),
+    B = c(x = 0.5, y = 0.5)
+  )
+  reduced_feature_info <- list(
+    main_info = data.frame(
+      d = c(1L, 2L),
+      l = c(1L, 1L),
+      d_index = c(1L, 2L)
+    ),
+    interaction_info = data.frame()
+  )
+  result <- list(
+    est_intercept_jnp = 0,
+    est_coefficients_jnp = c(0.4, -0.2),
+    glm_feature_info = list(overall = reduced_feature_info),
+    outcome_model_view = list(
+      models = list(overall = list(glm_family = "binomial"))
+    ),
+    pi_star_point = list(
+      A = c(a = 0.6, b = 0.4),
+      B = c(x = 0.3, y = 0.7)
+    )
+  )
+
+  expect_equal(
+    cs_crossfit_q_feature_info_ncols(cs_crossfit_q_reconstruct_feature_info(p_list)),
+    3L
+  )
+  expect_equal(cs_crossfit_q_feature_info_ncols(reduced_feature_info), 2L)
+
+  focal_W <- data.frame(A = c("a", "b"), B = c("x", "y"), stringsAsFactors = FALSE)
+  opponent_W <- data.frame(A = c("b", "a"), B = c("y", "x"), stringsAsFactors = FALSE)
+  pred <- cs_crossfit_q_pair_predict(focal_W, opponent_W, result, p_list)
+  expect_length(pred, 2L)
+  expect_true(all(is.finite(pred)))
+
+  mu <- cs_crossfit_q_policy_model_mu(
+    policy = result$pi_star_point,
+    opponent_W = opponent_W,
+    result = result,
+    p_list = p_list,
+    n_draws = 4L,
+    seed = 2026L,
+    chunk_size = 2L
+  )
+  expect_length(mu, 2L)
+  expect_true(all(is.finite(mu)))
+})
+
 test_that("covariate-sensitive policy probabilities mix cluster policies row-wise", {
   p_list <- list(
     A = c(a = 0.5, b = 0.5),
