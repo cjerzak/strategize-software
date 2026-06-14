@@ -5,6 +5,31 @@
 # These tests require the conda environment with JAX.
 # =============================================================================
 
+test_that("GLM interaction variation filter preserves zero-column shape", {
+  interacted_dat <- matrix(0, nrow = 6L, ncol = 3L)
+  interaction_info <- data.frame(
+    d = c(1L, 1L, 2L),
+    l = c(1L, 1L, 1L),
+    dl_index = c(1L, 1L, 2L),
+    dp = c(2L, 3L, 3L),
+    lp = c(1L, 1L, 1L),
+    dplp_index = c(2L, 3L, 3L),
+    inter_index = seq_len(3L)
+  )
+
+  filtered <- strategize:::cs2step_filter_varying_interactions(
+    interacted_dat = interacted_dat,
+    interaction_info = interaction_info
+  )
+
+  expect_true(is.matrix(filtered$interacted_dat))
+  expect_equal(nrow(filtered$interacted_dat), nrow(interacted_dat))
+  expect_equal(ncol(filtered$interacted_dat), 0L)
+  expect_s3_class(filtered$interaction_info, "data.frame")
+  expect_equal(nrow(filtered$interaction_info), 0L)
+  expect_length(filtered$interaction_info$inter_index, 0L)
+})
+
 test_that("strategize returns valid result with GLM outcome model", {
   skip_on_cran()
   skip_if_no_jax()
@@ -19,6 +44,128 @@ test_that("strategize returns valid result with GLM outcome model", {
   ))
 
   expect_valid_strategize_output(res, n_factors = ncol(data$W))
+})
+
+test_that("strategize GLM handles pairwise designs with zero-variance interactions", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_seed(20260614)
+  withr::local_envvar(STRATEGIZE_GLM_SKIP_EVAL = "1")
+
+  n_pairs <- 60L
+  n_factors <- 3L
+  W_left <- matrix("A", nrow = n_pairs, ncol = n_factors)
+  W_right <- matrix("A", nrow = n_pairs, ncol = n_factors)
+  for (i in seq_len(n_pairs)) {
+    active <- ((i - 1L) %% n_factors) + 1L
+    alt <- rep("A", n_factors)
+    alt[active] <- "B"
+    if (i %% 2L == 1L) {
+      W_left[i, ] <- alt
+    } else {
+      W_right[i, ] <- alt
+    }
+  }
+  W <- rbind(W_left, W_right)
+  colnames(W) <- paste0("V", seq_len(n_factors))
+
+  p_list <- lapply(seq_len(n_factors), function(j) {
+    prop_b <- mean(W[, j] == "B")
+    c(A = 1 - prop_b, B = prop_b)
+  })
+  names(p_list) <- colnames(W)
+
+  pair_id <- rep(seq_len(n_pairs), times = 2L)
+  profile_order <- rep(c(1L, 2L), each = n_pairs)
+  active <- ((seq_len(n_pairs) - 1L) %% n_factors) + 1L
+  effects <- c(0.8, -0.3, 0.4)
+  left_minus_right <- ifelse(seq_len(n_pairs) %% 2L == 1L,
+                             effects[active],
+                             -effects[active])
+  Y_left <- rbinom(n_pairs, size = 1L, prob = plogis(left_minus_right))
+  Y <- c(Y_left, 1L - Y_left)
+
+  res <- NULL
+  expect_no_error({
+    res <- strategize(
+      Y = Y,
+      W = W,
+      pair_id = pair_id,
+      respondent_id = pair_id,
+      respondent_task_id = pair_id,
+      profile_order = profile_order,
+      p_list = p_list,
+      lambda = 0.1,
+      K = 1,
+      nSGD = 2L,
+      outcome_model_type = "glm",
+      diff = TRUE,
+      use_regularization = TRUE,
+      crossfit_q = FALSE,
+      compute_hessian = FALSE,
+      force_gaussian = FALSE,
+      nMonte_Qglm = 2L,
+      nMonte_adversarial = 2L,
+      conda_env = "strategize_env",
+      conda_env_required = TRUE
+    )
+  })
+  expect_valid_strategize_output(res, n_factors = n_factors)
+})
+
+test_that("strategize GLM refits intercept-only when all pairwise columns are aliased", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_seed(20260615)
+  withr::local_envvar(STRATEGIZE_GLM_SKIP_EVAL = "1")
+
+  n_pairs <- 36L
+  n_factors <- 3L
+  W_pair <- cbind(
+    rep(c("A", "B"), length.out = n_pairs),
+    rep(c("A", "A", "B", "B"), length.out = n_pairs),
+    rep(c("A", "B", "B", "A"), length.out = n_pairs)
+  )
+  W <- rbind(W_pair, W_pair)
+  colnames(W) <- paste0("V", seq_len(n_factors))
+
+  p_list <- lapply(seq_len(n_factors), function(j) {
+    prop_b <- mean(W[, j] == "B")
+    c(A = 1 - prop_b, B = prop_b)
+  })
+  names(p_list) <- colnames(W)
+
+  pair_id <- rep(seq_len(n_pairs), times = 2L)
+  profile_order <- rep(c(1L, 2L), each = n_pairs)
+  Y_left <- rbinom(n_pairs, size = 1L, prob = 0.5)
+  Y <- c(Y_left, 1L - Y_left)
+
+  res <- NULL
+  expect_warning({
+    res <- strategize(
+      Y = Y,
+      W = W,
+      pair_id = pair_id,
+      respondent_id = pair_id,
+      respondent_task_id = pair_id,
+      profile_order = profile_order,
+      p_list = p_list,
+      lambda = 0.1,
+      K = 1,
+      nSGD = 1L,
+      outcome_model_type = "glm",
+      diff = TRUE,
+      use_regularization = TRUE,
+      crossfit_q = FALSE,
+      compute_hessian = FALSE,
+      force_gaussian = FALSE,
+      nMonte_Qglm = 2L,
+      nMonte_adversarial = 2L,
+      conda_env = "strategize_env",
+      conda_env_required = TRUE
+    )
+  }, "GLM coefficients contained NA")
+  expect_valid_strategize_output(res, n_factors = n_factors)
 })
 
 test_that("strategize handles K > 1 (multi-cluster)", {

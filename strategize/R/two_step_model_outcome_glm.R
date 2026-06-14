@@ -1,3 +1,27 @@
+cs2step_filter_varying_interactions <- function(interacted_dat, interaction_info) {
+  if (NCOL(interacted_dat) == 0L) {
+    return(list(
+      interacted_dat = as.matrix(interacted_dat),
+      interaction_info = interaction_info
+    ))
+  }
+
+  interacted_dat <- as.matrix(interacted_dat)
+  indicator_InteractionVariation <- apply(interacted_dat, 2, sd) > 0
+  interacted_dat <- as.matrix(interacted_dat[, indicator_InteractionVariation, drop = FALSE])
+  interaction_info <- interaction_info[indicator_InteractionVariation, , drop = FALSE]
+  if (nrow(interaction_info) > 0L) {
+    interaction_info$inter_index <- seq_len(nrow(interaction_info))
+  } else {
+    interaction_info$inter_index <- integer(0)
+  }
+
+  list(
+    interacted_dat = interacted_dat,
+    interaction_info = interaction_info
+  )
+}
+
 generate_ModelOutcome <- function(){
   # Initialize vcov_OutcomeModel to ensure it's defined in all code paths
   # (particularly needed when K > 1 AND presaved_outcome_model == TRUE)
@@ -159,13 +183,16 @@ generate_ModelOutcome <- function(){
         varcov_cluster_variable_glm <- varcov_cluster_variable_
       }
 
-        if(nrow(interacted_dat)>0){
-          interacted_dat <- try(as.matrix(interacted_dat[,indicator_InteractionVariation <- apply(as.matrix(interacted_dat), 2, sd)>0]), T)
-          if('try-error' %in% class(interacted_dat)){
+        if(NCOL(interacted_dat) > 0L){
+          filtered_interactions <- try(
+            cs2step_filter_varying_interactions(interacted_dat, interaction_info),
+            T
+          )
+          if('try-error' %in% class(filtered_interactions)){
             stop("Error in interacted_dat <- try(interacted_dat[,indicator_InteractionVariation <- apply(interacted_dat, 2, sd)>0], T)")
           }
-          interaction_info <- interaction_info[indicator_InteractionVariation,]
-          interaction_info$inter_index <- 1:nrow(interaction_info)
+          interacted_dat <- filtered_interactions$interacted_dat
+          interaction_info <- filtered_interactions$interaction_info
         }
 
         # Add stage (primary vs general) indicator and stage x factor interactions
@@ -503,14 +530,14 @@ generate_ModelOutcome <- function(){
       }
 	    }
 
-	    # Build GLM design matrix (post-regularization) for both evaluation + final fit.
-	    if(nrow(interacted_dat) == 0){ glm_input <- main_dat }
-	    if(nrow(interacted_dat) > 0){
-	      glm_input <- cbind(main_dat, interacted_dat )
-	      if( ncol(glm_input) > 0.5*nrow(glm_input)){
-	        stop("Too many possible interactions given data size. Set use_regularization = TRUE")
-	      }
-	    }
+		    # Build GLM design matrix (post-regularization) for both evaluation + final fit.
+		    if(NCOL(interacted_dat) == 0L){ glm_input <- main_dat }
+		    if(NCOL(interacted_dat) > 0L){
+		      glm_input <- cbind(main_dat, interacted_dat )
+		      if( ncol(glm_input) > 0.5*nrow(glm_input)){
+		        stop("Too many possible interactions given data size. Set use_regularization = TRUE")
+		      }
+		    }
 
 	    # Add stage interactions to GLM input if available
 	    # These are: stage main effect + stage x factor interactions
@@ -1271,12 +1298,23 @@ generate_ModelOutcome <- function(){
           warning(sprintf("GLM coefficients contained NA; refitting without %d column(s).",
                           length(which_na)),
                   call. = FALSE)
-          glm_refit <- if (force_no_intercept) {
-            Y_glm ~ 0 + cbind( main_dat, interacted_dat)[,-which_na]
-          } else {
-            Y_glm ~ cbind( main_dat, interacted_dat)[,-which_na]
-          }
-          my_model <- try(glm(glm_refit, family = glm_family), silent = TRUE)
+	          glm_input_refit <- cbind(main_dat, interacted_dat)
+	          keep_refit <- rep(TRUE, ncol(glm_input_refit))
+	          keep_refit[which_na] <- FALSE
+	          if (any(keep_refit)) {
+	            glm_input_refit <- glm_input_refit[, keep_refit, drop = FALSE]
+	            glm_refit <- if (force_no_intercept) {
+	              Y_glm ~ 0 + glm_input_refit
+	            } else {
+	              Y_glm ~ glm_input_refit
+	            }
+	          } else {
+	            if (force_no_intercept) {
+	              force_no_intercept <- FALSE
+	            }
+	            glm_refit <- Y_glm ~ 1
+	          }
+	          my_model <- try(glm(glm_refit, family = glm_family), silent = TRUE)
           if (inherits(my_model, "try-error")) {
             stop("GLM refit failed after dropping NA coefficients.", call. = FALSE)
           }
@@ -1326,8 +1364,13 @@ generate_ModelOutcome <- function(){
         }
 
         # main part
-        my_mean_main_part <- matrix(0,nrow = nrow(main_info_PreRegularization), ncol = 1)
-        my_mean_main_part[main_info$d_index] <- model_coef_vec[1:nrow(main_info)]
+	        my_mean_main_part <- matrix(0,nrow = nrow(main_info_PreRegularization), ncol = 1)
+	        main_coef_indices <- if (nrow(main_info) > 0L) {
+	          seq_len(nrow(main_info))
+	        } else {
+	          integer(0)
+	        }
+	        my_mean_main_part[main_info$d_index] <- model_coef_vec[main_coef_indices]
 
         # inter part (factor x factor interactions)
         n_factor_inter <- nrow(interaction_info)
