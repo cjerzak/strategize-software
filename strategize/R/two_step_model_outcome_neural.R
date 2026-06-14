@@ -664,6 +664,14 @@ neural_build_convergence_diagnostics <- function(parameter_diagnostics = NULL,
   param_nonfinite <- suppressWarnings(as.integer(parameter_diagnostics$n_nonfinite %||% NA_integer_))
   params_failed <- !is.na(param_nonfinite) && param_nonfinite > 0L
   es_reason <- as.character(early_stopping$reason %||% NA_character_)
+  skipped_updates <- suppressWarnings(as.integer(
+    early_stopping$compact_update_nonfinite_count %||%
+      early_stopping$nonfinite_update_count %||%
+      0L
+  ))
+  if (length(skipped_updates) != 1L || is.na(skipped_updates) || skipped_updates < 0L) {
+    skipped_updates <- 0L
+  }
   validation_failed <- es_reason %in% c("validation_error", "metric_failed")
   update_failed <- es_reason %in% c("update_failed")
   n_failed_folds <- suppressWarnings(as.integer(fit_metrics$n_failed_folds %||% NA_integer_))
@@ -721,6 +729,12 @@ neural_build_convergence_diagnostics <- function(parameter_diagnostics = NULL,
 
   notes <- character(0)
   if (isTRUE(loss_nonfinite)) notes <- c(notes, "Some SVI losses were nonfinite.")
+  if (skipped_updates > 0L) {
+    notes <- c(
+      notes,
+      sprintf("%d compact SVI update attempt(s) were skipped after non-finite losses.", skipped_updates)
+    )
+  }
   if (isTRUE(any_failed_folds)) notes <- c(notes, "One or more OOS folds failed.")
   if (isTRUE(plateaued)) notes <- c(notes, "SVI loss plateau detected.")
   if (isTRUE(overfit_suspected)) notes <- c(notes, "OOS metrics are worse than in-sample metrics.")
@@ -19294,6 +19308,69 @@ generate_ModelOutcome_neural <- function(){
       compact_update_jit_status <- "pending"
       compact_update_jit_cache_size <- NA_integer_
       compact_update_jit_compile_count <- NA_integer_
+      saved_attempted_steps <- max(0L, min(as.integer(svi_steps_completed), length(svi_loss_curve)))
+      saved_attempted_losses <- if (saved_attempted_steps > 0L) {
+        as.numeric(svi_loss_curve[seq_len(saved_attempted_steps)])
+      } else {
+        numeric(0)
+      }
+      saved_nonfinite <- if (length(saved_attempted_losses) > 0L) {
+        !is.finite(saved_attempted_losses)
+      } else {
+        logical(0)
+      }
+      compact_update_nonfinite_steps <- which(saved_nonfinite)
+      compact_update_nonfinite_losses <- saved_attempted_losses[saved_nonfinite]
+      compact_update_nonfinite_paths <- rep("resume", length(compact_update_nonfinite_steps))
+      compact_update_committed_steps <- as.integer(sum(is.finite(saved_attempted_losses)))
+      compact_update_skipped_steps <- as.integer(length(compact_update_nonfinite_steps))
+      compact_update_stable_available <- FALSE
+      refresh_compact_skip_diagnostics <- function() {
+        n_nonfinite <- as.integer(length(compact_update_nonfinite_steps))
+        optimizer_diagnostics$compact_update_stable_available <<- isTRUE(compact_update_stable_available)
+        optimizer_diagnostics$compact_update_nonfinite_count <<- n_nonfinite
+        optimizer_diagnostics$compact_update_nonfinite_steps <<- as.integer(compact_update_nonfinite_steps)
+        optimizer_diagnostics$compact_update_nonfinite_losses <<- as.numeric(compact_update_nonfinite_losses)
+        optimizer_diagnostics$compact_update_nonfinite_path <<- as.character(compact_update_nonfinite_paths)
+        optimizer_diagnostics$compact_update_committed_steps <<- as.integer(compact_update_committed_steps)
+        optimizer_diagnostics$compact_update_skipped_steps <<- as.integer(compact_update_skipped_steps)
+        optimizer_diagnostics$compact_update_attempted_steps <<- as.integer(svi_steps_completed)
+        early_stopping_info$compact_update_nonfinite_count <<- n_nonfinite
+        early_stopping_info$compact_update_nonfinite_steps <<- as.integer(compact_update_nonfinite_steps)
+        early_stopping_info$compact_update_skipped_steps <<- as.integer(compact_update_skipped_steps)
+        invisible(NULL)
+      }
+      record_compact_update_attempt <- function(step_range,
+                                                losses,
+                                                path,
+                                                committed_steps) {
+        losses <- as.numeric(losses)
+        step_range <- as.integer(step_range)
+        finite_loss <- is.finite(losses)
+        if (length(losses) > 0L && any(!finite_loss)) {
+          bad_idx <- which(!finite_loss)
+          compact_update_nonfinite_steps <<- c(
+            as.integer(compact_update_nonfinite_steps),
+            as.integer(step_range[bad_idx])
+          )
+          compact_update_nonfinite_losses <<- c(
+            as.numeric(compact_update_nonfinite_losses),
+            as.numeric(losses[bad_idx])
+          )
+          compact_update_nonfinite_paths <<- c(
+            as.character(compact_update_nonfinite_paths),
+            rep(as.character(path), length(bad_idx))
+          )
+          compact_update_skipped_steps <<- as.integer(compact_update_skipped_steps + length(bad_idx))
+        }
+        committed_steps <- suppressWarnings(as.integer(committed_steps))
+        if (length(committed_steps) != 1L || is.na(committed_steps) || committed_steps < 0L) {
+          committed_steps <- 0L
+        }
+        compact_update_committed_steps <<- as.integer(compact_update_committed_steps + committed_steps)
+        refresh_compact_skip_diagnostics()
+        invisible(NULL)
+      }
       read_compact_jit_cache_info <- function() {
         info <- tryCatch(strenv$jax_svi_update_jit_cache_info(), error = function(e) NULL)
         if (is.null(info)) {
@@ -19324,6 +19401,10 @@ generate_ModelOutcome_neural <- function(){
         compact_jit_error <<- conditionMessage(e)
         FALSE
       })
+      compact_update_stable_available <- tryCatch(
+        isTRUE(strenv$jax_svi_update_stable_available(svi)),
+        error = function(e) FALSE
+      )
       compact_scan_available <- compact_update_chunk_size > 1L && !is.null(strenv$jax_svi_update_scan)
       if (!isTRUE(compact_jit_available)) {
         compact_update_jit_status <- "unavailable"
@@ -19370,6 +19451,7 @@ generate_ModelOutcome_neural <- function(){
       optimizer_diagnostics$compact_update_scan_mode <- compact_update_scan
       optimizer_diagnostics$compact_update_scan_status <- compact_scan_status
       optimizer_diagnostics$compact_update_scan_error <- compact_scan_error
+      refresh_compact_skip_diagnostics()
       refresh_compact_jit_diagnostics()
 
       best_metric <- if (!is.null(svi_checkpoint_best) &&
@@ -19661,12 +19743,27 @@ generate_ModelOutcome_neural <- function(){
                 }
                 losses <- losses[seq_len(chunk_n)]
                 step_range <- seq.int(step_cursor, length.out = chunk_n)
-                svi_state <- scan_parts$state
+                finite_losses <- is.finite(losses)
+                has_nonfinite_loss <- any(!finite_losses)
+                scan_state_safe <- !isTRUE(has_nonfinite_loss) || isTRUE(compact_update_stable_available)
+                if (isTRUE(scan_state_safe)) {
+                  svi_state <- scan_parts$state
+                }
                 svi_loss_curve[step_range] <- losses
                 svi_steps_completed <- as.integer(tail(step_range, 1L))
+                record_compact_update_attempt(
+                  step_range = step_range,
+                  losses = losses,
+                  path = "scan",
+                  committed_steps = if (isTRUE(scan_state_safe)) sum(finite_losses) else 0L
+                )
                 batch_args <- batch_args_list[[length(batch_args_list)]]
                 compact_scan_status <- "ok"
-                compact_update_jit_status <- "ok"
+                compact_update_jit_status <- if (isTRUE(has_nonfinite_loss)) {
+                  "ok_with_skipped_updates"
+                } else {
+                  "ok"
+                }
                 compact_update_jit_path <- "scan"
                 compact_update_chunk_size_effective <- max(
                   as.integer(compact_update_chunk_size_effective),
@@ -19728,10 +19825,27 @@ generate_ModelOutcome_neural <- function(){
             early_stopping_reason <- "update_failed"
             break
           }
-          svi_state <- update_parts$state
-          svi_loss_curve[[step_cursor]] <- as.numeric(update_parts$loss)
+          update_loss <- as.numeric(update_parts$loss)
+          if (length(update_loss) != 1L) {
+            update_loss <- NA_real_
+          }
+          single_state_safe <- is.finite(update_loss) || isTRUE(compact_update_stable_available)
+          if (isTRUE(single_state_safe)) {
+            svi_state <- update_parts$state
+          }
+          svi_loss_curve[[step_cursor]] <- update_loss
           svi_steps_completed <- as.integer(step_cursor)
-          compact_update_jit_status <- "ok"
+          record_compact_update_attempt(
+            step_range = step_cursor,
+            losses = update_loss,
+            path = "single",
+            committed_steps = if (is.finite(update_loss)) 1L else 0L
+          )
+          compact_update_jit_status <- if (is.finite(update_loss)) {
+            "ok"
+          } else {
+            "ok_with_skipped_updates"
+          }
           compact_update_jit_path <- if (identical(compact_scan_status, "fallback_single_step") &&
                                           compact_update_chunk_size > 1L) {
             "scan_to_single_fallback"
@@ -20293,7 +20407,16 @@ generate_ModelOutcome_neural <- function(){
     optimizer_diagnostics$steps_completed <- as.integer(svi_steps_completed %||% length(svi_loss_curve))
     optimizer_diagnostics$lr_trace <- lr_trace_info$lr_trace
     optimizer_diagnostics$lr_trace_status <- lr_trace_info$lr_trace_status
-    optimizer_diagnostics$optimizer_status <- "ok"
+    skipped_update_steps <- suppressWarnings(as.integer(
+      optimizer_diagnostics$compact_update_skipped_steps %||% 0L
+    ))
+    optimizer_diagnostics$optimizer_status <- if (length(skipped_update_steps) == 1L &&
+                                                    !is.na(skipped_update_steps) &&
+                                                    skipped_update_steps > 0L) {
+      "ok_with_skipped_updates"
+    } else {
+      "ok"
+    }
     optimizer_diagnostics$universal_loss_weighting <- universal_loss_weighting_diagnostics
     params <- if (!is.null(SVIParams)) {
       SVIParams

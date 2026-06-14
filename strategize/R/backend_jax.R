@@ -223,6 +223,7 @@ strategize_register_jax_transformer_helpers <- function() {
 strategize_register_jax_svi_helpers <- function() {
   if (!is.null(strenv$jax_svi_update) &&
       !is.null(strenv$jax_svi_update_scan) &&
+      !is.null(strenv$jax_svi_update_stable_available) &&
       !is.null(strenv$jax_svi_update_jit_cache_info) &&
       !is.null(strenv$jax_svi_update_jit_cache_clear) &&
       !is.null(strenv$jax_svi_gradient_diagnostics) &&
@@ -250,6 +251,17 @@ strategize_register_jax_svi_helpers <- function() {
     "def _strategize_svi_update_cache_key(mode, svi, names, forward_mode_differentiation):",
     "    return (mode, id(svi), tuple(names), bool(forward_mode_differentiation))",
     "",
+    "def strategize_svi_update_stable_available(svi):",
+    "    return hasattr(svi, 'stable_update')",
+    "",
+    "def _strategize_svi_update_call(svi, state, args_in, forward_mode_differentiation=False):",
+    "    update_method = svi.stable_update if hasattr(svi, 'stable_update') else svi.update",
+    "    return update_method(",
+    "        state,",
+    "        forward_mode_differentiation=forward_mode_differentiation,",
+    "        **args_in",
+    "    )",
+    "",
     "def strategize_svi_update_jit(svi, svi_state, batch_args, forward_mode_differentiation=False):",
     "    global _strategize_svi_update_jit_compile_count",
     "    names = _strategize_svi_update_arg_names(batch_args)",
@@ -259,10 +271,8 @@ strategize_register_jax_svi_helpers <- function() {
     "    if fn is None:",
     "        _strategize_svi_update_jit_compile_count += 1",
     "        def _compiled(state, args_in):",
-    "            return svi.update(",
-    "                state,",
-    "                forward_mode_differentiation=forward_mode_differentiation,",
-    "                **args_in",
+    "            return _strategize_svi_update_call(",
+    "                svi, state, args_in, forward_mode_differentiation",
     "            )",
     "        fn = jax.jit(_compiled)",
     "        _strategize_svi_update_jit_cache[key] = fn",
@@ -278,10 +288,8 @@ strategize_register_jax_svi_helpers <- function() {
     "        _strategize_svi_update_jit_compile_count += 1",
     "        def _compiled(state, chunks_in):",
     "            def body(step_state, step_args):",
-    "                next_state, loss = svi.update(",
-    "                    step_state,",
-    "                    forward_mode_differentiation=forward_mode_differentiation,",
-    "                    **step_args",
+    "                next_state, loss = _strategize_svi_update_call(",
+    "                    svi, step_state, step_args, forward_mode_differentiation",
     "                )",
     "                return next_state, loss",
     "            return jax.lax.scan(body, state, chunks_in)",
@@ -385,6 +393,7 @@ strategize_register_jax_svi_helpers <- function() {
   reticulate::py_run_string(helper_code)
   strenv$jax_svi_update <- reticulate::py$strategize_svi_update_jit
   strenv$jax_svi_update_scan <- reticulate::py$strategize_svi_update_scan_jit
+  strenv$jax_svi_update_stable_available <- reticulate::py$strategize_svi_update_stable_available
   strenv$jax_svi_update_jit_cache_info <- reticulate::py$strategize_svi_update_jit_cache_info
   strenv$jax_svi_update_jit_cache_clear <- reticulate::py$strategize_svi_update_jit_cache_clear
   strenv$jax_svi_gradient_diagnostics <- reticulate::py$strategize_svi_gradient_diagnostics_jit

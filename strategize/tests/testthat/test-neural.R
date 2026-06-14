@@ -3780,6 +3780,7 @@ test_that("compact SVI jitted update and gradient helpers register cache diagnos
 
   expect_false(is.null(strategize:::strenv$jax_svi_update))
   expect_false(is.null(strategize:::strenv$jax_svi_update_scan))
+  expect_false(is.null(strategize:::strenv$jax_svi_update_stable_available))
   expect_false(is.null(strategize:::strenv$jax_svi_update_jit_cache_info))
   expect_false(is.null(strategize:::strenv$jax_svi_update_jit_cache_clear))
   expect_false(is.null(strategize:::strenv$jax_svi_gradient_diagnostics))
@@ -3861,6 +3862,44 @@ test_that("compact SVI single-step updates use cached jitted update", {
   expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
 })
 
+test_that("compact SVI skips non-finite single-step updates without stopping", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  strategize:::strategize_register_jax_svi_helpers()
+  local_strenv_bindings("jax_svi_update")
+  original_update <- strategize:::strenv$jax_svi_update
+  update_calls <- 0L
+  set_strenv_bindings(list(
+    jax_svi_update = function(...) {
+      update_calls <<- update_calls + 1L
+      result <- original_update(...)
+      if (identical(update_calls, 1L)) {
+        parts <- as.list(result)
+        return(list(parts[[1L]], NaN))
+      }
+      result
+    }
+  ))
+
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "fallback",
+    compact_update_chunk_size = 1L,
+    svi_steps = 3L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(as.integer(model_info$svi_steps_completed), 3L)
+  expect_false(is.finite(model_info$svi_loss_curve[[1L]]))
+  expect_identical(diagnostics$optimizer_status, "ok_with_skipped_updates")
+  expect_identical(as.integer(diagnostics$compact_update_nonfinite_count), 1L)
+  expect_identical(as.integer(diagnostics$compact_update_skipped_steps), 1L)
+  expect_identical(as.integer(diagnostics$compact_update_nonfinite_steps[[1L]]), 1L)
+  expect_identical(diagnostics$compact_update_nonfinite_path[[1L]], "single")
+  expect_true(isTRUE(model_info$convergence_diagnostics$loss_nonfinite))
+  expect_true(any(grepl("skipped", model_info$convergence_diagnostics$notes, fixed = TRUE)))
+})
+
 test_that("compact SVI fallback mode keeps requested step budget after scan failure", {
   skip_on_cran()
   skip_if_no_jax()
@@ -3921,6 +3960,46 @@ test_that("compact SVI required scan mode records ok for live scanned updates", 
   expect_identical(diagnostics$compact_update_jit_path, "scan")
   expect_gte(as.integer(diagnostics$compact_update_jit_cache_size), 1L)
   expect_gte(as.integer(diagnostics$compact_update_jit_compile_count), 1L)
+})
+
+test_that("compact SVI skips non-finite scanned updates without stopping", {
+  skip_on_cran()
+  skip_if_no_jax()
+  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  strategize:::strategize_register_jax_svi_helpers()
+  local_strenv_bindings("jax_svi_update_scan")
+  original_scan <- strategize:::strenv$jax_svi_update_scan
+  scan_calls <- 0L
+  set_strenv_bindings(list(
+    jax_svi_update_scan = function(...) {
+      scan_calls <<- scan_calls + 1L
+      result <- original_scan(...)
+      if (identical(scan_calls, 1L)) {
+        parts <- as.list(result)
+        losses <- as.numeric(strategize:::strenv$np$array(parts[[2L]]))
+        losses[[min(2L, length(losses))]] <- NaN
+        return(list(parts[[1L]], losses))
+      }
+      result
+    }
+  ))
+
+  model_info <- run_compact_svi_fit(
+    compact_update_scan = "required",
+    compact_update_chunk_size = 2L,
+    svi_steps = 4L
+  )
+  diagnostics <- model_info$optimizer_diagnostics
+
+  expect_identical(as.integer(model_info$svi_steps_completed), 4L)
+  expect_false(is.finite(model_info$svi_loss_curve[[2L]]))
+  expect_identical(diagnostics$optimizer_status, "ok_with_skipped_updates")
+  expect_identical(as.integer(diagnostics$compact_update_nonfinite_count), 1L)
+  expect_identical(as.integer(diagnostics$compact_update_skipped_steps), 1L)
+  expect_identical(as.integer(diagnostics$compact_update_nonfinite_steps[[1L]]), 2L)
+  expect_identical(diagnostics$compact_update_nonfinite_path[[1L]], "scan")
+  expect_true(isTRUE(diagnostics$compact_update_stable_available))
+  expect_true(isTRUE(model_info$convergence_diagnostics$loss_nonfinite))
 })
 
 test_that("compact SVI required scan rounds effective steps to full scan shape", {
