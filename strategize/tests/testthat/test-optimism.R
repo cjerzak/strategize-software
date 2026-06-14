@@ -55,6 +55,42 @@ test_that("cv_strategize enforces optimism compatibility before JAX init", {
   )
 })
 
+test_that("adversarial GLM falls back to main effects after interaction screening failure", {
+  skip_if_no_jax()
+  withr::local_seed(124)
+  withr::local_envvar(STRATEGIZE_GLM_SKIP_EVAL = "1")
+
+  base <- generate_test_data(n = 50, n_factors = 2, n_levels = 2, seed = 321)
+  adv_data <- add_adversarial_structure(base, seed = 222)
+  p_list <- generate_test_p_list(adv_data$W)
+
+  result <- NULL
+  expect_no_error({
+    result <- suppressWarnings(strategize(
+      Y = adv_data$Y,
+      W = adv_data$W,
+      p_list = p_list,
+      lambda = 0.1,
+      nSGD = 1,
+      nMonte_Qglm = 2L,
+      nMonte_adversarial = 2L,
+      diff = TRUE,
+      adversarial = TRUE,
+      compute_se = FALSE,
+      pair_id = adv_data$pair_id,
+      respondent_id = adv_data$respondent_id,
+      respondent_task_id = adv_data$respondent_task_id,
+      profile_order = adv_data$profile_order,
+      competing_group_variable_respondent = adv_data$competing_group_variable_respondent,
+      competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
+      competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
+      optimism = "extragrad"
+    ))
+  })
+
+  expect_equal(result$convergence_history$optimism, "extragrad")
+})
+
 test_that("extragrad uses joint look-ahead for both players", {
   skip_if_no_jax()
   withr::local_seed(123)

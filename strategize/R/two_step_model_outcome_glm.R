@@ -322,7 +322,7 @@ generate_ModelOutcome <- function(){
             if (is.null(glinternet_results)) {
               use_regularization <- FALSE
               interaction_info <- interaction_info[0, , drop = FALSE]
-              interacted_dat <- interacted_dat[0, , drop = FALSE]
+              interacted_dat <- matrix(numeric(0), nrow = NROW(main_dat), ncol = 0L)
               force_no_interactions <- TRUE
               ok_ <- TRUE
               next
@@ -533,6 +533,13 @@ generate_ModelOutcome <- function(){
 		    # Build GLM design matrix (post-regularization) for both evaluation + final fit.
 		    if(NCOL(interacted_dat) == 0L){ glm_input <- main_dat }
 		    if(NCOL(interacted_dat) > 0L){
+		      if (NROW(interacted_dat) != NROW(main_dat)) {
+		        stop(sprintf(
+		          "Internal GLM design error: main_dat has %d row(s) but interacted_dat has %d row(s).",
+		          NROW(main_dat),
+		          NROW(interacted_dat)
+		        ), call. = FALSE)
+		      }
 		      glm_input <- cbind(main_dat, interacted_dat )
 		      if( ncol(glm_input) > 0.5*nrow(glm_input)){
 		        stop("Too many possible interactions given data size. Set use_regularization = TRUE")
