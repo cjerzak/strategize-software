@@ -1,4 +1,5 @@
-embedding_test_neural_control <- function(cross_candidate_encoder = NULL) {
+embedding_test_neural_control <- function(cross_candidate_encoder = NULL,
+                                          low_rank_interaction_rank = NULL) {
   control <- list(
     ModelDims = 12L,
     ModelDepth = 1L,
@@ -12,6 +13,9 @@ embedding_test_neural_control <- function(cross_candidate_encoder = NULL) {
   )
   if (!is.null(cross_candidate_encoder)) {
     control$cross_candidate_encoder <- cross_candidate_encoder
+  }
+  if (!is.null(low_rank_interaction_rank)) {
+    control$low_rank_interaction_rank <- low_rank_interaction_rank
   }
   control
 }
@@ -116,10 +120,12 @@ embedding_test_predictor_fit <- local({
 
   function(mode = c("single", "pairwise"),
            cross_candidate_encoder = NULL,
+           low_rank_interaction_rank = NULL,
            seed = 1L) {
     mode <- match.arg(mode)
     cross_key <- if (is.null(cross_candidate_encoder)) "default" else as.character(cross_candidate_encoder)
-    cache_key <- paste(mode, cross_key, as.integer(seed), sep = "::")
+    rank_key <- if (is.null(low_rank_interaction_rank)) "default" else as.integer(low_rank_interaction_rank)
+    cache_key <- paste(mode, cross_key, rank_key, as.integer(seed), sep = "::")
     if (exists(cache_key, envir = cache, inherits = FALSE)) {
       return(get(cache_key, envir = cache, inherits = FALSE))
     }
@@ -141,7 +147,10 @@ embedding_test_predictor_fit <- local({
       mode = mode,
       pair_id = if (identical(mode, "pairwise")) data$pair_id else NULL,
       profile_order = if (identical(mode, "pairwise")) data$profile_order else NULL,
-      neural_mcmc_control = embedding_test_neural_control(cross_candidate_encoder),
+      neural_mcmc_control = embedding_test_neural_control(
+        cross_candidate_encoder = cross_candidate_encoder,
+        low_rank_interaction_rank = low_rank_interaction_rank
+      ),
       conda_env_required = TRUE
     ))
 
@@ -156,10 +165,12 @@ embedding_test_context_predictor_fit <- local({
 
   function(mode = c("single", "pairwise"),
            cross_candidate_encoder = NULL,
+           low_rank_interaction_rank = NULL,
            seed = 1L) {
     mode <- match.arg(mode)
     cross_key <- if (is.null(cross_candidate_encoder)) "default" else as.character(cross_candidate_encoder)
-    cache_key <- paste(mode, cross_key, as.integer(seed), sep = "::")
+    rank_key <- if (is.null(low_rank_interaction_rank)) "default" else as.integer(low_rank_interaction_rank)
+    cache_key <- paste(mode, cross_key, rank_key, as.integer(seed), sep = "::")
     if (exists(cache_key, envir = cache, inherits = FALSE)) {
       return(get(cache_key, envir = cache, inherits = FALSE))
     }
@@ -197,7 +208,10 @@ embedding_test_context_predictor_fit <- local({
       competing_group_variable_respondent = data$competing_group_variable_respondent,
       X = X,
       conda_env_required = TRUE,
-      neural_mcmc_control = embedding_test_neural_control(cross_candidate_encoder)
+      neural_mcmc_control = embedding_test_neural_control(
+        cross_candidate_encoder = cross_candidate_encoder,
+        low_rank_interaction_rank = low_rank_interaction_rank
+      )
     ))
 
     predictor <- structure(
@@ -390,6 +404,32 @@ test_that("respondent-context embeddings react to covariates and respondent grou
   )))
 })
 
+test_that("extract_embeddings returns narrow single-mode respondent readouts", {
+  fit_obj <- embedding_test_context_predictor_fit(
+    mode = "single",
+    low_rank_interaction_rank = 2L,
+    seed = 9311
+  )
+  newdata <- embedding_test_newdata_subset(fit_obj, 1:12)
+
+  for (level in c("respondent_final", "respondent_cls", "respondent_pool", "respondent_mean")) {
+    emb <- extract_embeddings(
+      fit_obj$fit,
+      newdata = newdata,
+      level = level
+    )
+
+    expect_s3_class(emb, "strategic_embeddings")
+    expect_identical(emb$mode, "single")
+    expect_null(emb$embeddings)
+    expect_null(emb$respondent_context)
+    expect_true(is.matrix(emb$readouts[[level]]))
+    expect_equal(dim(emb$readouts[[level]]), c(12L, 12L))
+    expect_true(all(is.finite(emb$readouts[[level]])))
+    expect_identical(emb$metadata$level, level)
+  }
+})
+
 test_that("extract_embeddings returns left and right matrices for pairwise term mode", {
   fit_obj <- embedding_test_predictor_fit(
     mode = "pairwise",
@@ -442,6 +482,32 @@ test_that("extract_embeddings returns pairwise respondent-context embeddings", {
   expect_true(all(is.finite(emb$respondent_context)))
 })
 
+test_that("extract_embeddings returns narrow pairwise respondent readouts", {
+  fit_obj <- embedding_test_context_predictor_fit(
+    mode = "pairwise",
+    low_rank_interaction_rank = 2L,
+    seed = 9313
+  )
+  pair_keep <- unique(fit_obj$data$pair_id)[1:10]
+  rows <- which(fit_obj$data$pair_id %in% pair_keep)
+  emb <- extract_embeddings(
+    fit_obj$fit,
+    newdata = embedding_test_newdata_subset(fit_obj, rows),
+    level = "respondent_final"
+  )
+
+  expect_s3_class(emb, "strategic_embeddings")
+  expect_identical(emb$mode, "pairwise")
+  expect_null(emb$left)
+  expect_null(emb$right)
+  expect_null(emb$joint)
+  expect_null(emb$respondent_context)
+  expect_true(is.matrix(emb$readouts$respondent_final))
+  expect_equal(dim(emb$readouts$respondent_final), c(length(pair_keep), 12L))
+  expect_true(all(is.finite(emb$readouts$respondent_final)))
+  expect_identical(emb$metadata$level, "respondent_final")
+})
+
 test_that("extract_embeddings can return candidate and respondent-context levels together", {
   fit_obj <- embedding_test_context_predictor_fit(
     mode = "pairwise",
@@ -462,6 +528,18 @@ test_that("extract_embeddings can return candidate and respondent-context levels
   expect_equal(nrow(emb$left), length(pair_keep))
   expect_equal(nrow(emb$respondent_context), length(pair_keep))
   expect_identical(emb$metadata$level, "all")
+})
+
+test_that("respondent readout levels error when readouts are unavailable", {
+  expect_error(
+    strategize:::cs2step_neural_extract_prepared(
+      params = list(),
+      model_info = list(low_rank_interaction_rank = 0L),
+      prep = list(),
+      level = "respondent_final"
+    ),
+    "does not expose respondent readout"
+  )
 })
 
 test_that("pairwise respondent-context extraction passes through group fields", {

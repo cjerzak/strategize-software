@@ -8,8 +8,20 @@ extract_embeddings <- function(object, ...) {
   UseMethod("extract_embeddings")
 }
 
-cs2step_embedding_level <- function(level = c("candidate", "respondent_context", "all")) {
+cs2step_embedding_level <- function(level = c(
+                                      "candidate",
+                                      "respondent_context",
+                                      "respondent_final",
+                                      "respondent_cls",
+                                      "respondent_pool",
+                                      "respondent_mean",
+                                      "all"
+                                    )) {
   match.arg(level)
+}
+
+cs2step_respondent_readout_levels <- function() {
+  c("respondent_final", "respondent_cls", "respondent_pool", "respondent_mean")
 }
 
 cs2step_embeddings_as_matrix <- function(x) {
@@ -547,6 +559,21 @@ cs2step_neural_extract_prepared <- function(params,
       prep = prep
     )
   }
+  respondent_readout_levels <- cs2step_respondent_readout_levels()
+  if (level %in% respondent_readout_levels) {
+    if (!isTRUE(neural_has_readout_cls(model_info))) {
+      stop(
+        sprintf("Neural model does not expose respondent readout embeddings for level '%s'.", level),
+        call. = FALSE
+      )
+    }
+    readouts <- cs2step_neural_extract_respondent_readouts_prepared(
+      params = params,
+      model_info = model_info,
+      prep = prep
+    )
+    out[[level]] <- readouts[[level]]
+  }
   if (identical(level, "all") && isTRUE(neural_has_readout_cls(model_info))) {
     out <- c(out, cs2step_neural_extract_respondent_readouts_prepared(
       params = params,
@@ -574,7 +601,15 @@ cs2step_neural_extract_internal <- function(object,
                                             experiment_year = NULL,
                                             pair_id = NULL,
                                             profile_order = NULL,
-                                            level = c("candidate", "respondent_context", "all"),
+                                            level = c(
+                                              "candidate",
+                                              "respondent_context",
+                                              "respondent_final",
+                                              "respondent_cls",
+                                              "respondent_pool",
+                                              "respondent_mean",
+                                              "all"
+                                            ),
                                             source_class = class(object)[[1]],
                                             extra_metadata = NULL,
                                             factor_schema = NULL,
@@ -773,7 +808,9 @@ cs2step_neural_extract_internal <- function(object,
 #' @param newdata New data in the same format accepted by \code{predict()}.
 #' @param level Embedding level to return: \code{"candidate"} keeps the
 #'   historical candidate/profile output, \code{"respondent_context"} returns
-#'   context-side embeddings, and \code{"all"} returns both.
+#'   context-side embeddings, \code{"respondent_final"}, \code{"respondent_cls"},
+#'   \code{"respondent_pool"}, or \code{"respondent_mean"} return one respondent
+#'   tower readout, and \code{"all"} returns all available embedding outputs.
 #' @param factor_schema Optional explicit prediction-time factor schema for fused
 #'   neural predictors. Supply a list with \code{names_list} or \code{p_list},
 #'   and optionally precomputed factor/level text or structural matrices.
@@ -782,7 +819,15 @@ cs2step_neural_extract_internal <- function(object,
 #' @export
 extract_embeddings.strategic_predictor <- function(object,
                                                    newdata,
-                                                   level = c("candidate", "respondent_context", "all"),
+                                                   level = c(
+                                                     "candidate",
+                                                     "respondent_context",
+                                                     "respondent_final",
+                                                     "respondent_cls",
+                                                     "respondent_pool",
+                                                     "respondent_mean",
+                                                     "all"
+                                                   ),
                                                    factor_schema = NULL,
                                                    text_embedding_fn = NULL,
                                                    ...) {
@@ -1333,7 +1378,15 @@ extract_embeddings.conjoint_foundation_model <- function(object,
                                                          mode = c("auto", "pairwise", "single"),
                                                          likelihood = NULL,
                                                          n_outcomes = NULL,
-                                                         level = c("candidate", "respondent_context", "all"),
+                                                         level = c(
+                                                           "candidate",
+                                                           "respondent_context",
+                                                           "respondent_final",
+                                                           "respondent_cls",
+                                                           "respondent_pool",
+                                                           "respondent_mean",
+                                                           "all"
+                                                         ),
                                                          experiment_id = NULL,
                                                          names_list = NULL,
                                                          p_list = NULL,
