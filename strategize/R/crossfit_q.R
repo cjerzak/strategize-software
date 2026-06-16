@@ -1778,6 +1778,27 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
   )
 }
 
+cs_crossfit_q_fold_error_message <- function(fold, n_folds, split_by,
+                                             train_pair_rows, test_pair_rows,
+                                             train_rows, use_regularization,
+                                             message) {
+  sprintf(
+    paste0(
+      "crossfit_q fold %d/%d training strategize() failed ",
+      "(split_by=%s, train_pairs=%d, test_pairs=%d, train_rows=%d, ",
+      "use_regularization=%s): %s"
+    ),
+    as.integer(fold),
+    as.integer(n_folds),
+    as.character(split_by),
+    length(train_pair_rows),
+    length(test_pair_rows),
+    length(train_rows),
+    ifelse(isTRUE(use_regularization), "TRUE", "FALSE"),
+    message
+  )
+}
+
 cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
                                      varcov_cluster_variable = NULL,
                                      competing_group_variable_respondent = NULL,
@@ -1959,7 +1980,24 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
       compute_hessian = FALSE,
       crossfit_q = FALSE
     )
-    train_result <- do.call(strategize, train_args)
+    train_result <- tryCatch(
+      do.call(strategize, train_args),
+      error = function(e) {
+        stop(
+          cs_crossfit_q_fold_error_message(
+            fold = fold,
+            n_folds = fold_obj$n_folds,
+            split_by = control$split_by,
+            train_pair_rows = train_pair_rows,
+            test_pair_rows = test_pair_rows,
+            train_rows = train_rows,
+            use_regularization = use_regularization,
+            message = conditionMessage(e)
+          ),
+          call. = FALSE
+        )
+      }
+    )
     if (isTRUE(adversarial)) {
       fold_results[[fold]] <- cs_crossfit_q_adversarial_fold_records(
         train_result = train_result,

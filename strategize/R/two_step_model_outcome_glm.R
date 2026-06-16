@@ -22,6 +22,39 @@ cs2step_filter_varying_interactions <- function(interacted_dat, interaction_info
   )
 }
 
+cs_glm_design_size_error_message <- function(glm_input, main_dat, interacted_dat,
+                                             use_regularization_requested,
+                                             screening_applied,
+                                             outcome_model_key = NULL) {
+  n_obs <- NROW(glm_input)
+  n_cols <- NCOL(glm_input)
+  limit <- floor(0.5 * n_obs)
+  main_cols <- NCOL(as.matrix(main_dat))
+  interaction_cols <- NCOL(as.matrix(interacted_dat))
+  context <- if (!is.null(outcome_model_key) && nzchar(as.character(outcome_model_key))) {
+    sprintf(" for outcome_model_key='%s'", as.character(outcome_model_key))
+  } else {
+    ""
+  }
+  sprintf(
+    paste0(
+      "Post-screen GLM design is too large%s: %d column(s) for %d observation(s); ",
+      "limit is %d column(s). Requested use_regularization=%s; screening_applied=%s; ",
+      "final columns: main=%d, interactions=%d. This check runs after ",
+      "regularization/glinternet screening, so setting use_regularization=TRUE may ",
+      "already have happened and may not be sufficient."
+    ),
+    context,
+    n_cols,
+    n_obs,
+    limit,
+    ifelse(isTRUE(use_regularization_requested), "TRUE", "FALSE"),
+    ifelse(isTRUE(screening_applied), "TRUE", "FALSE"),
+    main_cols,
+    interaction_cols
+  )
+}
+
 generate_ModelOutcome <- function(){
   # Initialize vcov_OutcomeModel to ensure it's defined in all code paths
   # (particularly needed when K > 1 AND presaved_outcome_model == TRUE)
@@ -542,7 +575,17 @@ generate_ModelOutcome <- function(){
 		      }
 		      glm_input <- cbind(main_dat, interacted_dat )
 		      if( ncol(glm_input) > 0.5*nrow(glm_input)){
-		        stop("Too many possible interactions given data size. Set use_regularization = TRUE")
+		        stop(
+		          cs_glm_design_size_error_message(
+		            glm_input = glm_input,
+		            main_dat = main_dat,
+		            interacted_dat = interacted_dat,
+		            use_regularization_requested = use_regularization_input,
+		            screening_applied = UsedRegularization,
+		            outcome_model_key = outcome_model_key
+		          ),
+		          call. = FALSE
+		        )
 		      }
 		    }
 
