@@ -148,6 +148,45 @@ test_that("crossfit Q validation enforces pairwise v1 constraints", {
   )
 })
 
+test_that("FactorHet formulas quote non-syntactic profile factor names", {
+  W <- data.frame(
+    Sex = c("Male", "Female", "Male", "Female"),
+    Age = c("45", "60", "30", "45"),
+    check.names = FALSE
+  )
+  W[["Experience in public office"]] <- c("None", "4 years", "8 years", "12 years")
+  W[["Salient personal characteristics"]] <- c("Honest", "Intelligent", "Moral", "Strong")
+  W[["Favorability rating among the public"]] <- c("41%", "51%", "61%", "71%")
+  X <- data.frame(
+    `R Age` = c(34, 35, 36, 37),
+    `if` = c(0, 1, 0, 1),
+    check.names = FALSE
+  )
+  design <- data.frame(
+    Yobs = c(1, 0, 1, 0),
+    W,
+    X,
+    check.names = FALSE
+  )
+
+  formulas <- cs_factorhet_formulas(W, X)
+
+  expect_s3_class(formulas$main_only, "formula")
+  expect_s3_class(formulas$with_interactions, "formula")
+  expect_s3_class(formulas$moderator, "formula")
+  expect_match(deparse1(formulas$main_only),
+               "`Experience in public office`",
+               fixed = TRUE)
+  expect_match(deparse1(formulas$with_interactions),
+               "`Salient personal characteristics`",
+               fixed = TRUE)
+  expect_match(deparse1(formulas$moderator), "`R Age`", fixed = TRUE)
+
+  expect_no_error(stats::model.matrix(formulas$main_only, design))
+  expect_no_error(stats::model.matrix(formulas$with_interactions, design))
+  expect_no_error(stats::model.matrix(formulas$moderator, design))
+})
+
 test_that("crossfit Q probability weights and diagnostics are computed", {
   W <- data.frame(
     A = c("a", "b", "a", "b"),

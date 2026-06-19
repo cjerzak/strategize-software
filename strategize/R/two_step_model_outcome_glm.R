@@ -55,6 +55,53 @@ cs_glm_design_size_error_message <- function(glm_input, main_dat, interacted_dat
   )
 }
 
+cs_glm_formula_terms <- function(x) {
+  vapply(
+    as.character(x),
+    function(term) deparse1(as.name(term), backtick = TRUE),
+    character(1),
+    USE.NAMES = FALSE
+  )
+}
+
+cs_factorhet_formulas <- function(W, X = NULL) {
+  factor_terms <- cs_glm_formula_terms(colnames(W))
+  if (!length(factor_terms)) {
+    stop("FactorHet outcome formula requires at least one profile factor.",
+         call. = FALSE)
+  }
+
+  interaction_terms <- character(0)
+  if (length(factor_terms) >= 2L) {
+    inter_idx <- t(combn(seq_along(factor_terms), m = 2L))
+    interaction_terms <- paste(
+      factor_terms[inter_idx[, 1L]],
+      factor_terms[inter_idx[, 2L]],
+      sep = ":"
+    )
+  }
+  moderator_terms <- if (!is.null(X) && ncol(as.matrix(X)) > 0L) {
+    cs_glm_formula_terms(colnames(X))
+  } else {
+    character(0)
+  }
+
+  list(
+    with_interactions = as.formula(paste(
+      "Yobs ~",
+      paste(c(factor_terms, interaction_terms), collapse = "+")
+    )),
+    main_only = as.formula(paste(
+      "Yobs ~",
+      paste(factor_terms, collapse = "+")
+    )),
+    moderator = as.formula(paste(
+      "~",
+      if (length(moderator_terms)) paste(moderator_terms, collapse = "+") else "1"
+    ))
+  )
+}
+
 generate_ModelOutcome <- function(){
   # Initialize vcov_OutcomeModel to ensure it's defined in all code paths
   # (particularly needed when K > 1 AND presaved_outcome_model == TRUE)
@@ -402,25 +449,11 @@ generate_ModelOutcome <- function(){
                     "respondent_id" = respondent_id,
                     "respondent_task_id" = respondent_task_id,
                     "profile_order" = profile_order, W_fh, X))
-            inter_fh <- t(combn(1:ncol(W_fh),m=2))
-            OutcomeFormula_withInter <- as.formula( paste(
-              # outcome
-              "Yobs", "~",
-              # main terms
-              paste(colnames(W_fh),collapse = "+"), "+",
-              # interactions
-              paste(paste(colnames(W_fh)[inter_fh[,1]],
-                          colnames(W_fh)[inter_fh[,2]],sep = ":"),collapse="+")) )
-            OutcomeFormula_mainOnly <- as.formula( paste(
-              # outcome
-              "Yobs", "~",
-              # main terms
-              paste(colnames(W_fh),collapse = "+") ))
-
-            ModeratorFormula <- as.formula(paste("~", 
-                                                 paste(paste("`",colnames(X),"`",sep = ""), 
-                                                       collapse = "+")))
-            rm(W_fh); rm(inter_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
+            factorhet_formulas <- cs_factorhet_formulas(W_fh, X)
+            OutcomeFormula_withInter <- factorhet_formulas$with_interactions
+            OutcomeFormula_mainOnly <- factorhet_formulas$main_only
+            ModeratorFormula <- factorhet_formulas$moderator
+            rm(W_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
 
             # check to ensure correct data setup (values should read 2)
             # table(table( paste(design_fh$respondent_task_id, design_fh$respondent_id,sep='_') ))
