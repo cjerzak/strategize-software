@@ -260,6 +260,8 @@ sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
 cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
 and are evaluated at the early-stopping checkpoint cadence; set
 \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
+Set \code{neural_mcmc_control$seed} (default \code{123}) to make SVI,
+posterior sampling, and MCMC JAX PRNG streams reproducible.
 Advanced restart checkpoints can be enabled with
 \code{neural_mcmc_control$checkpoint_path}; rerunning with the same data and
 controls resumes from \code{latest.rds} and promotes the best validation

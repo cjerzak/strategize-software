@@ -140,6 +140,8 @@ Universal mixed-likelihood fits use
 default so objective mass follows SVI observation counts; set
 \code{"balanced_cell"} to reproduce clipped inverse-frequency weighting
 across task-mode/likelihood cells.
+Set \code{neural_mcmc_control$seed} (default \code{123}) to make SVI,
+posterior sampling, and MCMC JAX PRNG streams reproducible.
 Advanced restart checkpoints can be enabled with
 \code{neural_mcmc_control$checkpoint_path}; rerunning with the same data and
 controls resumes from \code{latest.rds} and promotes the best validation
