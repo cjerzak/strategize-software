@@ -187,6 +187,50 @@ test_that("FactorHet formulas quote non-syntactic profile factor names", {
   expect_no_error(stats::model.matrix(formulas$moderator, design))
 })
 
+test_that("FactorHet design preserves numeric moderator rank with character respondent ids", {
+  resp_ids <- paste0("resp_", seq_len(6))
+  respondent_id <- rep(resp_ids, each = 2L)
+  respondent_task_id <- rep(seq_len(6), each = 2L)
+  profile_order <- rep(c(1L, 2L), times = 6L)
+  W <- data.frame(
+    treatment = rep(c("status_quo", "new_policy"), times = 6L),
+    frame = rep(c("gain", "loss", "neutral"), length.out = 12L),
+    stringsAsFactors = FALSE
+  )
+  ages <- c(29, 34, 45, 53, 67, 74)
+  X_resp <- data.frame(
+    resp_age = ages,
+    age_young = as.integer(ages < 40),
+    age_middle = as.integer(ages >= 40 & ages < 60),
+    check.names = FALSE
+  )
+  X <- X_resp[match(respondent_id, resp_ids), , drop = FALSE]
+
+  prepared <- cs_factorhet_prepare_design(
+    Y = rep(c(0, 1), times = 6L),
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    profile_order = profile_order,
+    W = W,
+    X = X
+  )
+  design <- prepared$design
+  formulas <- cs_factorhet_formulas(prepared$W, prepared$X)
+  respondent_design <- design[!duplicated(design$respondent_id), , drop = FALSE]
+  moderator_matrix <- stats::model.matrix(formulas$moderator, respondent_design)
+
+  expect_true(is.character(design$respondent_id))
+  expect_true(is.numeric(design$resp_age))
+  expect_true(is.numeric(design$age_young))
+  expect_true(is.numeric(design$age_middle))
+  expect_false(is.factor(design$resp_age))
+  expect_equal(
+    colnames(moderator_matrix),
+    c("(Intercept)", "resp_age", "age_young", "age_middle")
+  )
+  expect_equal(qr(moderator_matrix)$rank, ncol(moderator_matrix))
+})
+
 test_that("crossfit Q probability weights and diagnostics are computed", {
   W <- data.frame(
     A = c("a", "b", "a", "b"),

@@ -102,6 +102,39 @@ cs_factorhet_formulas <- function(W, X = NULL) {
   )
 }
 
+cs_factorhet_prepare_design <- function(Y,
+                                        respondent_id,
+                                        respondent_task_id,
+                                        profile_order,
+                                        W,
+                                        X = NULL,
+                                        factor_names = colnames(W)) {
+  W_fh <- W
+  colnames(W_fh) <- factor_names
+  if (!is.null(X) && NCOL(X) > 0L) {
+    X_fh <- as.data.frame(X, stringsAsFactors = FALSE, check.names = FALSE)
+    X_fh[] <- lapply(X_fh, function(x_col) as.numeric(as.character(x_col)))
+  } else {
+    X_fh <- NULL
+  }
+  design_fh <- as.data.frame(
+    data.frame(
+      "Yobs" = Y,
+      "respondent_id" = respondent_id,
+      "respondent_task_id" = respondent_task_id,
+      "profile_order" = profile_order,
+      as.data.frame(W_fh, stringsAsFactors = FALSE, check.names = FALSE),
+      X_fh,
+      check.names = FALSE
+    )
+  )
+  list(
+    design = design_fh,
+    W = W_fh,
+    X = X_fh
+  )
+}
+
 generate_ModelOutcome <- function(){
   # Initialize vcov_OutcomeModel to ensure it's defined in all code paths
   # (particularly needed when K > 1 AND presaved_outcome_model == TRUE)
@@ -442,31 +475,23 @@ generate_ModelOutcome <- function(){
             interaction_info$dp_adj <- regularization_adjust_hash[as.character(interaction_info$dp)]
         }
         if(K > 1){
-            W_fh <- W
-            colnames(W_fh) <- colnames(w_orig)
-            X_fh <- X
-            if (!is.null(X_fh) && NCOL(X_fh) > 0L) {
-              X_fh <- as.data.frame(X_fh, stringsAsFactors = FALSE, check.names = FALSE)
-              X_fh[] <- lapply(X_fh, function(x_col) as.numeric(as.character(x_col)))
-            } else {
-              X_fh <- NULL
-            }
-            design_fh <- as.data.frame(
-              data.frame(
-                "Yobs" = Y,
-                "respondent_id" = respondent_id,
-                "respondent_task_id" = respondent_task_id,
-                "profile_order" = profile_order,
-                as.data.frame(W_fh, stringsAsFactors = FALSE, check.names = FALSE),
-                X_fh,
-                check.names = FALSE
-              )
+            factorhet_design <- cs_factorhet_prepare_design(
+              Y = Y,
+              respondent_id = respondent_id,
+              respondent_task_id = respondent_task_id,
+              profile_order = profile_order,
+              W = W,
+              X = X,
+              factor_names = colnames(w_orig)
             )
+            W_fh <- factorhet_design$W
+            X_fh <- factorhet_design$X
+            design_fh <- factorhet_design$design
             factorhet_formulas <- cs_factorhet_formulas(W_fh, X_fh)
             OutcomeFormula_withInter <- factorhet_formulas$with_interactions
             OutcomeFormula_mainOnly <- factorhet_formulas$main_only
             ModeratorFormula <- factorhet_formulas$moderator
-            rm(W_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
+            rm(factorhet_design, W_fh); #rm( interacted_dat ); rm(W_); rm(main_dat);rm(w_orig);rm(X)
 
             # check to ensure correct data setup (values should read 2)
             # table(table( paste(design_fh$respondent_task_id, design_fh$respondent_id,sep='_') ))
