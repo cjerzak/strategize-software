@@ -135,6 +135,25 @@ cs_factorhet_prepare_design <- function(Y,
   )
 }
 
+cs_factorhet_with_scratch_dir <- function(expr) {
+  old_wd <- getwd()
+  scratch_dir <- tempfile("strategize-factorhet-")
+  if (!dir.create(scratch_dir, recursive = TRUE, showWarnings = FALSE)) {
+    stop(sprintf(
+      "Could not create isolated FactorHet scratch directory: %s",
+      scratch_dir
+    ), call. = FALSE)
+  }
+  on.exit({
+    if (dir.exists(old_wd)) {
+      setwd(old_wd)
+    }
+    unlink(scratch_dir, recursive = TRUE, force = TRUE)
+  }, add = TRUE)
+  setwd(scratch_dir)
+  force(expr)
+}
+
 generate_ModelOutcome <- function(){
   # Initialize vcov_OutcomeModel to ensure it's defined in all code paths
   # (particularly needed when K > 1 AND presaved_outcome_model == TRUE)
@@ -498,20 +517,37 @@ generate_ModelOutcome <- function(){
             # table(paste0(respondent_id,respondent_task_id))
 
             # devtools::install_github('mgoplerud/FactorHet'); install.packages("tgp"); install.packages("mclust")
+            factorhet_warnings <- character(0)
             my_model <- tryCatch(
-              FactorHet::FactorHet_mbo(
-                formula = OutcomeFormula_mainOnly,
-                group = as.formula("~ respondent_id"),
-                task =  as.formula("~ respondent_task_id"),
-                choice_order = as.formula("~ profile_order"),
-                moderator = ModeratorFormula,
-                design = design_fh,
-                mbo_control = FactorHet::FactorHet_mbo_control(iters = 3),
-                control = FactorHet::FactorHet_control(beta_method = "cpp"),
-                K = K
+              cs_factorhet_with_scratch_dir(
+                withCallingHandlers(
+                  FactorHet::FactorHet_mbo(
+                    formula = OutcomeFormula_mainOnly,
+                    group = as.formula("~ respondent_id"),
+                    task =  as.formula("~ respondent_task_id"),
+                    choice_order = as.formula("~ profile_order"),
+                    moderator = ModeratorFormula,
+                    design = design_fh,
+                    mbo_control = FactorHet::FactorHet_mbo_control(iters = 3),
+                    control = FactorHet::FactorHet_control(beta_method = "cpp"),
+                    K = K
+                  ),
+                  warning = function(w) {
+                    factorhet_warnings <<- c(
+                      factorhet_warnings,
+                      conditionMessage(w)
+                    )
+                  }
+                )
               ),
               error = function(e) {
                 msg <- conditionMessage(e)
+                if (length(factorhet_warnings)) {
+                  warning_msg <- paste(unique(factorhet_warnings), collapse = "; ")
+                  if (nzchar(warning_msg)) {
+                    msg <- paste0(msg, "; prior warning(s): ", warning_msg)
+                  }
+                }
                 backend_failure <- grepl(
                   "lhs|lazy-load database|generateDesign|ParamHelpers|mlrMBO",
                   msg,
