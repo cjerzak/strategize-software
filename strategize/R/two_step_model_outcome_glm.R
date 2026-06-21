@@ -444,12 +444,25 @@ generate_ModelOutcome <- function(){
         if(K > 1){
             W_fh <- W
             colnames(W_fh) <- colnames(w_orig)
+            X_fh <- X
+            if (!is.null(X_fh) && NCOL(X_fh) > 0L) {
+              X_fh <- as.data.frame(X_fh, stringsAsFactors = FALSE, check.names = FALSE)
+              X_fh[] <- lapply(X_fh, function(x_col) as.numeric(as.character(x_col)))
+            } else {
+              X_fh <- NULL
+            }
             design_fh <- as.data.frame(
-              cbind("Yobs" = Y, 
-                    "respondent_id" = respondent_id,
-                    "respondent_task_id" = respondent_task_id,
-                    "profile_order" = profile_order, W_fh, X))
-            factorhet_formulas <- cs_factorhet_formulas(W_fh, X)
+              data.frame(
+                "Yobs" = Y,
+                "respondent_id" = respondent_id,
+                "respondent_task_id" = respondent_task_id,
+                "profile_order" = profile_order,
+                as.data.frame(W_fh, stringsAsFactors = FALSE, check.names = FALSE),
+                X_fh,
+                check.names = FALSE
+              )
+            )
+            factorhet_formulas <- cs_factorhet_formulas(W_fh, X_fh)
             OutcomeFormula_withInter <- factorhet_formulas$with_interactions
             OutcomeFormula_mainOnly <- factorhet_formulas$main_only
             ModeratorFormula <- factorhet_formulas$moderator
