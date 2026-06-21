@@ -171,16 +171,29 @@ test_that("validate_strategize_inputs catches unnamed p_list elements", {
   )
 })
 
-test_that("validate_strategize_inputs warns about p_list not summing to 1", {
+test_that("validate_strategize_inputs catches p_list not summing to 1", {
   skip_on_cran()
 
   Y <- c(1, 0, 1, 0)
   W <- data.frame(Gender = c("M", "F", "M", "F"))
   p_list <- list(Gender = c(M = 0.4, F = 0.4))  # Sum to 0.8
 
-  expect_warning(
+  expect_error(
     validate_strategize_inputs(Y = Y, W = W, lambda = 0.1, p_list = p_list),
     "sum to"
+  )
+})
+
+test_that("validate_strategize_inputs catches non-finite p_list probabilities", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+  p_list <- list(Gender = c(M = NA_real_, F = 1))
+
+  expect_error(
+    validate_strategize_inputs(Y = Y, W = W, lambda = 0.1, p_list = p_list),
+    "finite, non-missing"
   )
 })
 
@@ -241,6 +254,23 @@ test_that("validate_strategize_inputs catches non-binary groups in adversarial m
       competing_group_variable_candidate = c("A", "B", "C", "D")
     ),
     "exactly 2 groups"
+  )
+})
+
+test_that("validate_strategize_inputs catches adversarial group mismatches", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      adversarial = TRUE,
+      competing_group_variable_respondent = c("D", "R", "D", "R"),
+      competing_group_variable_candidate = c("A", "B", "A", "B")
+    ),
+    "matching group labels"
   )
 })
 
@@ -362,6 +392,51 @@ test_that("validate_strategize_inputs warns about diff without profile_order", {
       diff = TRUE, pair_id = pair_id
     ),
     "profile_order"
+  )
+})
+
+test_that("validate_strategize_inputs errors on malformed neural diff metadata", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      diff = TRUE,
+      outcome_model_type = "neural"
+    ),
+    "pair_id"
+  )
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      diff = TRUE,
+      pair_id = c(1, 1, 2, 2),
+      profile_order = c(1, 1, 1, 2),
+      outcome_model_type = "neural"
+    ),
+    "profile_order"
+  )
+})
+
+test_that("validate_strategize_inputs validates neural seed", {
+  skip_on_cran()
+
+  Y <- c(1, 0, 1, 0)
+  W <- data.frame(Gender = c("M", "F", "M", "F"))
+
+  expect_true(validate_strategize_inputs(
+    Y = Y, W = W, lambda = 0.1,
+    neural_mcmc_control = list(seed = 42L)
+  ))
+  expect_error(
+    validate_strategize_inputs(
+      Y = Y, W = W, lambda = 0.1,
+      neural_mcmc_control = list(seed = NA_integer_)
+    ),
+    "seed"
   )
 })
 

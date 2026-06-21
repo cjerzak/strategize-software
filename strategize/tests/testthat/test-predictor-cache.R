@@ -51,6 +51,58 @@ test_that("strategic_prediction() can reuse cached predictors", {
   expect_equal(preds_cached, preds_reused, tolerance = 1e-8)
 })
 
+test_that("strategic_prediction() rejects stale or legacy caches", {
+  dat <- generate_test_data(n = 200, n_factors = 2, n_levels = 2, seed = 20260203)
+  tmp <- tempfile(fileext = ".rds")
+
+  fit_cached <- strategic_prediction(
+    Y = dat$Y,
+    W = dat$W,
+    model = "glm",
+    mode = "single",
+    use_regularization = FALSE,
+    cache_path = tmp,
+    cache_overwrite = TRUE
+  )
+  bundle <- readRDS(tmp)
+  bundle$metadata$fingerprint <- NULL
+  saveRDS(bundle, tmp)
+
+  expect_error(
+    strategic_prediction(
+      Y = dat$Y,
+      W = dat$W,
+      model = "glm",
+      mode = "single",
+      use_regularization = FALSE,
+      cache_path = tmp,
+      cache_overwrite = FALSE
+    ),
+    "missing an artifact fingerprint"
+  )
+
+  fit_cached$metadata$fingerprint <- strategize:::cs2step_predictor_request_fingerprint(
+    Y = dat$Y,
+    W = dat$W,
+    model = "glm",
+    mode = "single",
+    use_regularization = FALSE
+  )
+  save_strategic_predictor(fit_cached, tmp, overwrite = TRUE)
+  expect_error(
+    strategic_prediction(
+      Y = rev(dat$Y),
+      W = dat$W,
+      model = "glm",
+      mode = "single",
+      use_regularization = FALSE,
+      cache_path = tmp,
+      cache_overwrite = FALSE
+    ),
+    "fingerprint mismatch"
+  )
+})
+
 test_that("strategic_prediction() derives neural checkpoint paths from cache_path", {
   captured_control <- NULL
   saved_path <- NULL
@@ -102,7 +154,7 @@ test_that("strategic_prediction() derives neural checkpoint paths from cache_pat
   expect_equal(saved_path, cache_path)
 })
 
-test_that("strategic_prediction() cache_overwrite removes explicit neural checkpoints", {
+test_that("strategic_prediction() cache_overwrite preserves explicit neural checkpoints", {
   captured_control <- NULL
 
   testthat::local_mocked_bindings(
@@ -152,5 +204,5 @@ test_that("strategic_prediction() cache_overwrite removes explicit neural checkp
   )
 
   expect_equal(captured_control$checkpoint_path, explicit_checkpoint)
-  expect_false(dir.exists(explicit_checkpoint))
+  expect_true(dir.exists(explicit_checkpoint))
 })

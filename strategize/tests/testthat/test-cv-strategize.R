@@ -107,6 +107,39 @@ test_that("cs_prepare_cv_folds rejects invalid assignments", {
   )
 })
 
+test_that("cs_prepare_cv_folds keeps pair_id rows together", {
+  Y <- rep(c(0, 1), 4)
+  W <- data.frame(A = rep(c("x", "y"), 4), stringsAsFactors = FALSE)
+  pair_id <- rep(seq_len(4), each = 2L)
+  respondent_id <- seq_along(Y)
+  respondent_task_id <- rep(1L, length(Y))
+
+  expect_error(
+    strategize:::cs_prepare_cv_folds(
+      folds = c("fold_a", "fold_b", "fold_a", "fold_a",
+                "fold_b", "fold_b", "fold_a", "fold_a"),
+      Y = Y,
+      W = W,
+      respondent_id = respondent_id,
+      respondent_task_id = respondent_task_id,
+      pair_id = pair_id
+    ),
+    "pair_id"
+  )
+
+  folds <- strategize:::cs_prepare_cv_folds(
+    folds = c("fold_a", "fold_b", "fold_a", "fold_b"),
+    Y = Y,
+    W = W,
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    pair_id = pair_id
+  )
+  expect_identical(as.character(folds$fold_id),
+                   c("fold_a", "fold_a", "fold_b", "fold_b",
+                     "fold_a", "fold_a", "fold_b", "fold_b"))
+})
+
 test_that("cv_strategize selects lambda with single value", {
   skip_on_cran()
   skip_if_no_jax()

@@ -1,4 +1,9 @@
-cs_prepare_cv_folds <- function(folds, Y, W, respondent_id = NULL, respondent_task_id = NULL) {
+cs_prepare_cv_folds <- function(folds,
+                                Y,
+                                W,
+                                respondent_id = NULL,
+                                respondent_task_id = NULL,
+                                pair_id = NULL) {
   n <- length(Y)
   if (n < 2L) {
     stop("'Y' must contain at least two observations for cross-validation.", call. = FALSE)
@@ -12,8 +17,18 @@ cs_prepare_cv_folds <- function(folds, Y, W, respondent_id = NULL, respondent_ta
   if (length(respondent_id) != n || length(respondent_task_id) != n) {
     stop("'respondent_id' and 'respondent_task_id' must match length(Y).", call. = FALSE)
   }
+  if (!is.null(pair_id) && length(pair_id) != n) {
+    stop("'pair_id' must match length(Y).", call. = FALSE)
+  }
 
-  task_id <- paste0(respondent_id, "_", respondent_task_id)
+  task_id <- if (!is.null(pair_id)) {
+    if (anyNA(pair_id)) {
+      stop("'pair_id' cannot contain missing values when used for cross-validation folds.", call. = FALSE)
+    }
+    paste0("pair_", as.character(pair_id))
+  } else {
+    paste0(respondent_id, "_", respondent_task_id)
+  }
   task_order <- unique(task_id)
 
   build_split_matrix <- function(fold_id_obs) {
@@ -85,7 +100,8 @@ cs_prepare_cv_folds <- function(folds, Y, W, respondent_id = NULL, respondent_ta
       length(unique(x))
     }, integer(1))
     if (any(per_task_n != 1L)) {
-      stop("'folds' must assign every respondent-task to exactly one fold.", call. = FALSE)
+      unit_label <- if (!is.null(pair_id)) "pair_id" else "respondent-task"
+      stop(sprintf("'folds' must assign every %s to exactly one fold.", unit_label), call. = FALSE)
     }
     return(build_split_matrix(fold_id_obs))
   }
@@ -541,6 +557,20 @@ cv_strategize       <-          function(
 
   if(is.null(respondent_id)){ respondent_id <- 1:length(Y) }
   if(is.null(respondent_task_id)){ respondent_task_id <- rep(1L, length(Y)) }
+  pair_id_for_folds <- if (isTRUE(diff) && !is.null(pair_id)) pair_id else NULL
+
+  subset_X_for_cv <- function(rows = NULL) {
+    if (is.null(X)) {
+      return(NULL)
+    }
+    if (is.null(rows)) {
+      return(X)
+    }
+    if (is.null(dim(X))) {
+      return(X[rows])
+    }
+    X[rows, , drop = FALSE]
+  }
 
   # Ensure p_list is computed from full data for consistent dimensions across folds
   # This prevents dimension mismatches when different CV folds see different factor levels
@@ -559,7 +589,8 @@ cv_strategize       <-          function(
       Y = Y,
       W = W,
       respondent_id = respondent_id,
-      respondent_task_id = respondent_task_id
+      respondent_task_id = respondent_task_id,
+      pair_id = pair_id_for_folds
     )
     indi_list <- cv_fold_obj$indi_list
     folds_use <- cv_fold_obj$n_folds
@@ -586,7 +617,7 @@ cv_strategize       <-          function(
             # input data
             Y = Y[use_indices],
             W = W[use_indices,],
-            X = ifelse(K>1, yes = list(X[use_indices,]), no = list(NULL))[[1]],
+            X = subset_X_for_cv(use_indices),
             varcov_cluster_variable = varcov_cluster_variable[use_indices],
             pair_id = pair_id[use_indices],
             respondent_id = respondent_id[ use_indices ],
@@ -688,7 +719,7 @@ cv_strategize       <-          function(
     # input data
     Y = Y,
     W = W,
-    X = ifelse(K > 1, yes = list(X), no = list(NULL))[[1]],
+    X = subset_X_for_cv(),
     nSGD = nSGD,
     penalty_type = penalty_type,
     varcov_cluster_variable = varcov_cluster_variable,

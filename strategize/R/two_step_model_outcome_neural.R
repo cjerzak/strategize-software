@@ -10509,7 +10509,8 @@ generate_ModelOutcome_neural <- function(){
       prior_sd = 0.5
     ),
     universal_loss_weighting = "empirical",
-    balanced_sampling = NULL
+    balanced_sampling = NULL,
+    seed = 123L
   )
   RMS_scale = 0.5
   UsedRegularization <- FALSE
@@ -10568,70 +10569,6 @@ generate_ModelOutcome_neural <- function(){
     file_suffix <- sprintf("%s_two", file_suffix)
   }
   bundle_path <- sprintf("./StrategizeInternals/neural_bundle_%s.rds", file_suffix)
-
-  if (!isTRUE(neural_oos_eval_internal_flag) &&
-      isTRUE(presaved_outcome_model) && file.exists(bundle_path)) {
-    bundle <- tryCatch(readRDS(bundle_path), error = function(e) NULL)
-    if (is.list(bundle) && !is.null(bundle$fit) &&
-        !is.null(bundle$fit$theta_mean) &&
-        !is.null(bundle$fit$neural_model_info)) {
-      message(sprintf("Loading cached neural outcome bundle: %s", bundle_path))
-
-      # Main-info structure for downstream compatibility
-      for(nrp in 1:2){
-        main_info <- do.call(rbind, sapply(1:length(factor_levels), function(d_){
-          list(data.frame(
-            "d" = d_,
-            "l" = 1:max(1, factor_levels[d_] - ifelse(nrp == 1, yes = 1, no = holdout_indicator))
-          ))
-        }))
-        main_info <- cbind(main_info, "d_index" = 1:nrow(main_info))
-        if(nrp == 1){ a_structure <- main_info }
-      }
-      if(holdout_indicator == 0){
-        a_structure_leftoutLdminus1 <- main_info[which(c(base::diff(main_info$d),1)==0),]
-        a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
-      }
-      interaction_info <- data.frame()
-      interaction_info_PreRegularization <- interaction_info
-      regularization_adjust_hash <- main_info$d
-      names(regularization_adjust_hash) <- main_info$d
-      main_dat <- matrix(0, nrow = 0L, ncol = 0L)
-
-      theta_mean_num <- as.numeric(bundle$fit$theta_mean)
-      theta_var_num <- bundle$fit$theta_var
-      my_mean <- numeric(0)
-      my_mean_full <- NULL
-      vcov_OutcomeModel_by_k <- NULL
-      vcov_OutcomeModel <- if (!is.null(theta_var_num)) {
-        c(0, as.numeric(theta_var_num))
-      } else {
-        c(0, rep(0, length(theta_mean_num)))
-      }
-
-      EST_INTERCEPT_tf <- strenv$jnp$array(matrix(0, nrow = 1L, ncol = 1L), dtype = strenv$dtj)
-      EST_COEFFICIENTS_tf <- strenv$jnp$reshape(
-        strenv$jnp$array(theta_mean_num, dtype = strenv$dtj),
-        list(-1L, 1L)
-      )
-
-      if (exists("K", inherits = TRUE) && is.numeric(K) && K > 1) {
-        base_vec <- c(0, theta_mean_num)
-        my_mean_full <- matrix(rep(base_vec, K), ncol = K)
-        vcov_OutcomeModel_by_k <- replicate(K, vcov_OutcomeModel, simplify = FALSE)
-      }
-
-      neural_model_info <- bundle$fit$neural_model_info
-      neural_validate_full_attn_compatibility(
-        model_info = neural_model_info,
-        context = "Cached neural outcome bundle"
-      )
-      fit_metrics <- bundle$fit$fit_metrics %||% neural_model_info$fit_metrics
-      my_model <- NULL
-
-      return(invisible(NULL))
-    }
-  }
 
   normalize_cross_candidate_encoder <- function(value) {
     if (is.null(value)) {
@@ -10852,6 +10789,117 @@ generate_ModelOutcome_neural <- function(){
       !isTRUE(neural_oos_eval_internal_flag) &&
       is.null(mcmc_control$checkpoint_path)) {
     mcmc_control$checkpoint_path <- paste0(bundle_path, ".inprogress")
+  }
+  training_seed_supplied <- !is.null(mcmc_overrides) &&
+    "seed" %in% names(mcmc_overrides) &&
+    !is.null(mcmc_overrides$seed)
+  training_seed_info <- neural_resolve_training_seed(
+    mcmc_control,
+    supplied = training_seed_supplied
+  )
+  mcmc_control$seed <- training_seed_info$seed
+  neural_training_seed <- training_seed_info$seed
+  neural_training_seed_supplied <- isTRUE(training_seed_info$supplied)
+  neural_runtime_info <- neural_runtime_provenance(
+    mcmc_control = mcmc_control,
+    conda_env = conda_env
+  )
+  neural_outcome_fingerprint <- cs2step_neural_outcome_request_fingerprint(
+    Y = Y_,
+    W = W_,
+    X = if (exists("X_", inherits = TRUE)) X_ else NULL,
+    X_present = if (exists("X_present_", inherits = TRUE)) X_present_ else NULL,
+    names_list = if (exists("names_list", inherits = TRUE)) names_list else NULL,
+    factor_levels = factor_levels,
+    diff = diff,
+    pair_id = pair_id_ %||% NULL,
+    profile_order = profile_order_ %||% NULL,
+    p_list = if (exists("p_list", inherits = TRUE)) p_list else NULL,
+    competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
+    competing_group_variable_respondent = competing_group_variable_respondent_ %||% NULL,
+    respondent_id = if (exists("respondent_id", inherits = TRUE)) respondent_id else NULL,
+    respondent_task_id = if (exists("respondent_task_id", inherits = TRUE)) respondent_task_id else NULL,
+    outcome_model_key = outcome_model_key,
+    group = GroupsPool[GroupCounter],
+    round = Round_,
+    adversarial = adversarial,
+    adversarial_model_strategy = adversarial_model_strategy,
+    mcmc_control = mcmc_control,
+    neural_token_info = NULL
+  )
+
+  if (!isTRUE(neural_oos_eval_internal_flag) &&
+      isTRUE(presaved_outcome_model) && file.exists(bundle_path)) {
+    bundle_raw <- tryCatch(readRDS(bundle_path), error = function(e) NULL)
+    if (is.list(bundle_raw) && !is.null(bundle_raw$fit) &&
+        !is.null(bundle_raw$fit$theta_mean) &&
+        !is.null(bundle_raw$fit$neural_model_info)) {
+      cs2step_artifact_assert_fingerprint(
+        stored = bundle_raw$metadata$fingerprint %||% NULL,
+        expected = neural_outcome_fingerprint,
+        context = "Cached neural outcome bundle"
+      )
+      cached_predictor <- load_neural_outcome_bundle(
+        bundle_path,
+        conda_env = conda_env,
+        conda_env_required = conda_env_required,
+        preload_params = FALSE
+      )
+      message(sprintf("Loading cached neural outcome bundle: %s", bundle_path))
+
+      for(nrp in 1:2){
+        main_info <- do.call(rbind, sapply(1:length(factor_levels), function(d_){
+          list(data.frame(
+            "d" = d_,
+            "l" = 1:max(1, factor_levels[d_] - ifelse(nrp == 1, yes = 1, no = holdout_indicator))
+          ))
+        }))
+        main_info <- cbind(main_info, "d_index" = 1:nrow(main_info))
+        if(nrp == 1){ a_structure <- main_info }
+      }
+      if(holdout_indicator == 0){
+        a_structure_leftoutLdminus1 <- main_info[which(c(base::diff(main_info$d),1)==0),]
+        a_structure_leftoutLdminus1$d_index <- 1:nrow(a_structure_leftoutLdminus1)
+      }
+      interaction_info <- data.frame()
+      interaction_info_PreRegularization <- interaction_info
+      regularization_adjust_hash <- main_info$d
+      names(regularization_adjust_hash) <- main_info$d
+      main_dat <- matrix(0, nrow = 0L, ncol = 0L)
+
+      theta_mean_num <- as.numeric(cached_predictor$fit$theta_mean)
+      theta_var_num <- cached_predictor$fit$theta_var
+      my_mean <- numeric(0)
+      my_mean_full <- NULL
+      vcov_OutcomeModel_by_k <- NULL
+      vcov_OutcomeModel <- if (!is.null(theta_var_num)) {
+        c(0, as.numeric(theta_var_num))
+      } else {
+        c(0, rep(0, length(theta_mean_num)))
+      }
+
+      EST_INTERCEPT_tf <- strenv$jnp$array(matrix(0, nrow = 1L, ncol = 1L), dtype = strenv$dtj)
+      EST_COEFFICIENTS_tf <- strenv$jnp$reshape(
+        strenv$jnp$array(theta_mean_num, dtype = strenv$dtj),
+        list(-1L, 1L)
+      )
+
+      if (exists("K", inherits = TRUE) && is.numeric(K) && K > 1) {
+        base_vec <- c(0, theta_mean_num)
+        my_mean_full <- matrix(rep(base_vec, K), ncol = K)
+        vcov_OutcomeModel_by_k <- replicate(K, vcov_OutcomeModel, simplify = FALSE)
+      }
+
+      neural_model_info <- cached_predictor$fit$neural_model_info
+      neural_validate_full_attn_compatibility(
+        model_info = neural_model_info,
+        context = "Cached neural outcome bundle"
+      )
+      fit_metrics <- cached_predictor$fit$fit_metrics %||% neural_model_info$fit_metrics
+      my_model <- NULL
+
+      return(invisible(NULL))
+    }
   }
   user_supplied_svi_steps <- !is.null(mcmc_overrides) && !is.null(mcmc_overrides$svi_steps)
   user_supplied_svi_num_draws <- !is.null(mcmc_overrides) &&
@@ -11602,6 +11650,30 @@ generate_ModelOutcome_neural <- function(){
   universal_n_outcomes_pair_use <- NULL
   universal_n_outcomes_single_use <- NULL
 
+  neural_pairwise_assert_pair_constant <- function(values, pair_mat, label) {
+    if (is.null(values) || is.null(pair_mat) || nrow(pair_mat) < 1L) {
+      return(invisible(TRUE))
+    }
+    if (!is.null(dim(values))) {
+      values_df <- as.data.frame(values)
+      row_sig <- vapply(seq_len(nrow(values_df)), function(i_) {
+        digest::digest(as.list(values_df[i_, , drop = FALSE]), algo = "xxhash64", serialize = TRUE)
+      }, character(1))
+    } else {
+      row_sig <- vapply(seq_along(values), function(i_) {
+        digest::digest(values[[i_]], algo = "xxhash64", serialize = TRUE)
+      }, character(1))
+    }
+    bad <- row_sig[pair_mat[, 1L]] != row_sig[pair_mat[, 2L]]
+    if (any(bad, na.rm = TRUE)) {
+      stop(
+        sprintf("Pairwise neural mode requires %s to be constant within each pair_id.", label),
+        call. = FALSE
+      )
+    }
+    invisible(TRUE)
+  }
+
   if (isTRUE(universal_mixed_mode)) {
     universal_pair_rows <- which(universal_task_mode_all == "pairwise")
     universal_single_rows <- which(universal_task_mode_all == "single")
@@ -11627,6 +11699,12 @@ generate_ModelOutcome_neural <- function(){
     n_universal_pair_obs <- nrow(pair_mat)
     n_universal_single_obs <- length(universal_single_rows)
     universal_pair_obs_rows <- pair_mat[, 1L]
+    neural_pairwise_assert_pair_constant(resp_party_index, pair_mat, "respondent group metadata")
+    neural_pairwise_assert_pair_constant(X_, pair_mat, "respondent covariates")
+    neural_pairwise_assert_pair_constant(X_present_, pair_mat, "respondent covariate presence metadata")
+    neural_pairwise_assert_pair_constant(experiment_index_all, pair_mat, "experiment metadata")
+    neural_pairwise_assert_pair_constant(respondent_id_all, pair_mat, "respondent_id")
+    neural_pairwise_assert_pair_constant(respondent_task_id_all, pair_mat, "respondent_task_id")
 
     if (isTRUE(compact_training)) {
       X_left <- NULL
@@ -11675,12 +11753,17 @@ generate_ModelOutcome_neural <- function(){
     )
     if (is.null(pair_info) || is.null(pair_info$pair_sizes) ||
         !all(pair_info$pair_sizes == 2L)) {
-      warning("pair_id does not define exactly 2 rows per pair; falling back to single-candidate model.")
-      pairwise_mode <- FALSE
+      stop("Pairwise neural mode requires pair_id to define exactly 2 rows per pair.", call. = FALSE)
     } else {
       pair_mat <- pair_info$pair_mat
     }
     if (pairwise_mode) {
+      neural_pairwise_assert_pair_constant(resp_party_index, pair_mat, "respondent group metadata")
+      neural_pairwise_assert_pair_constant(X_, pair_mat, "respondent covariates")
+      neural_pairwise_assert_pair_constant(X_present_, pair_mat, "respondent covariate presence metadata")
+      neural_pairwise_assert_pair_constant(experiment_index_all, pair_mat, "experiment metadata")
+      neural_pairwise_assert_pair_constant(respondent_id_all, pair_mat, "respondent_id")
+      neural_pairwise_assert_pair_constant(respondent_task_id_all, pair_mat, "respondent_task_id")
       if (isTRUE(compact_training)) {
         X_left <- NULL
         X_right <- NULL
@@ -18411,7 +18494,7 @@ generate_ModelOutcome_neural <- function(){
         obs_scale = obs_scale_jnp
       )
     }
-    rng_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
+    rng_key <- neural_training_prng_key(neural_training_seed, stream = 1L)
     svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
     svi_checkpoint_fingerprint <- NULL
     svi_checkpoint_latest <- NULL
@@ -19063,6 +19146,7 @@ generate_ModelOutcome_neural <- function(){
         likelihood = likelihood,
         pairwise_mode = isTRUE(pairwise_mode),
         subsample_method = subsample_method,
+        training_seed = as.integer(neural_training_seed),
         early_stopping_running = isTRUE(early_stopping_running),
         compact_training = isTRUE(compact_training),
         compact_rng_state = if (isTRUE(compact_training) &&
@@ -20428,7 +20512,7 @@ generate_ModelOutcome_neural <- function(){
     if (length(n_draws) != 1L || is.na(n_draws) || !is.finite(n_draws) || n_draws < 1L) {
       n_draws <- 1L
     }
-    sample_key <- strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000)))
+    sample_key <- neural_training_prng_key(neural_training_seed, stream = 2L)
     if (isTRUE(run_mcmc_after_svi)) {
       SVIInitValues <- extract_svi_param_sites(params)
     } else if (!is.null(SVIPosteriorDraws)) {
@@ -20511,7 +20595,7 @@ generate_ModelOutcome_neural <- function(){
     )
 
     if (pairwise_mode) {
-      sampler$run(strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000))),
+      sampler$run(neural_training_prng_key(neural_training_seed, stream = 3L),
                   X_left = X_left_jnp,
                   X_right = X_right_jnp,
                   party_left = party_left_jnp,
@@ -20522,7 +20606,7 @@ generate_ModelOutcome_neural <- function(){
                   experiment_index = experiment_index_jnp,
                   Y_obs = Y_jnp)
     } else {
-      sampler$run(strenv$jax$random$PRNGKey(ai(runif(1, 0, 10000))),
+      sampler$run(neural_training_prng_key(neural_training_seed, stream = 4L),
                   X = X_single_jnp,
                   party = party_single_jnp,
                   resp_party = resp_party_jnp,
@@ -22019,6 +22103,9 @@ generate_ModelOutcome_neural <- function(){
     gradient_diagnostics = gradient_diagnostics,
     parameter_diagnostics = parameter_diagnostics,
     stage_diagnostics = stage_diagnostics,
+    training_seed = as.integer(neural_training_seed),
+    training_seed_supplied = isTRUE(neural_training_seed_supplied),
+    runtime_provenance = neural_runtime_info,
     model_dims = ModelDims,
     model_depth = ModelDepth,
     residual_mode = residual_mode,
@@ -22038,7 +22125,10 @@ generate_ModelOutcome_neural <- function(){
       group = GroupsPool[GroupCounter],
       round = Round_,
       adversarial = isTRUE(adversarial),
-      adversarial_model_strategy = adversarial_model_strategy
+      adversarial_model_strategy = adversarial_model_strategy,
+      training_seed = as.integer(neural_training_seed),
+      runtime_provenance = neural_runtime_info,
+      fingerprint = neural_outcome_fingerprint
     )
     tryCatch({
       save_neural_outcome_bundle(

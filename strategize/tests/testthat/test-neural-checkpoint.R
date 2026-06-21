@@ -41,8 +41,10 @@ test_that("neural SVI checkpoints write and read latest/best snapshots", {
 
   manifest <- jsonlite::read_json(file.path(tmp, "manifest.json"))
   expect_identical(manifest$artifact_type, "strategize_neural_svi_checkpoint")
+  expect_identical(manifest$checkpoint_semantics, "parameter_warm_start")
   expect_identical(manifest$snapshots$latest$file, "latest.rds")
   expect_identical(manifest$snapshots$best$file, "best.rds")
+  expect_identical(latest$checkpoint_semantics, "parameter_warm_start")
 })
 
 test_that("neural SVI checkpoint atomic writes leave readable snapshots", {
@@ -94,5 +96,36 @@ test_that("neural SVI checkpoint fingerprint mismatch errors clearly", {
       tempfile("model.rds.inprogress")
     ),
     "fingerprint mismatch.*cache_overwrite = TRUE.*delete the stale \\.inprogress"
+  )
+})
+
+test_that("neural SVI checkpoint cleanup is manifest guarded", {
+  fingerprint <- strategize:::neural_svi_checkpoint_fingerprint(list(data = 1))
+  payload <- strategize:::neural_svi_checkpoint_make_payload(
+    snapshot_type = "latest",
+    fingerprint = fingerprint,
+    completed_step = 1L,
+    resolved_svi_steps = 1L,
+    svi_params = list(w = 1)
+  )
+
+  safe <- tempfile(fileext = ".inprogress")
+  strategize:::neural_svi_checkpoint_save_snapshot(safe, "latest", payload)
+  expect_true(dir.exists(safe))
+  strategize:::neural_svi_checkpoint_remove_dir(safe)
+  expect_false(dir.exists(safe))
+
+  broad <- tempfile("checkpoint-")
+  dir.create(broad)
+  expect_error(
+    strategize:::neural_svi_checkpoint_remove_dir(broad),
+    "not an '\\.inprogress'"
+  )
+
+  missing_manifest <- tempfile(fileext = ".inprogress")
+  dir.create(missing_manifest)
+  expect_error(
+    strategize:::neural_svi_checkpoint_remove_dir(missing_manifest),
+    "valid strategize manifest"
   )
 })

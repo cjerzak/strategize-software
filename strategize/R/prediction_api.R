@@ -726,16 +726,6 @@ strategic_prediction <- function(Y,
     if (length(cache_path) != 1L || !nzchar(cache_path)) {
       stop("'cache_path' must be a non-empty character path.", call. = FALSE)
     }
-    if (!isTRUE(cache_overwrite) && file.exists(cache_path)) {
-      return(load_strategic_predictor(
-        cache_path,
-        conda_env = conda_env,
-        conda_env_required = conda_env_required
-      ))
-    }
-    if (isTRUE(cache_overwrite)) {
-      neural_svi_checkpoint_remove_dir(paste0(cache_path, ".inprogress"))
-    }
   }
   cs2step_validate_binary_outcome(Y)
   if (missing(W) || is.null(W)) {
@@ -780,9 +770,39 @@ strategic_prediction <- function(Y,
     if (is.null(fit_control$checkpoint_path)) {
       fit_control$checkpoint_path <- checkpoint_path
     }
-    if (isTRUE(cache_overwrite)) {
+    if (isTRUE(cache_overwrite) && identical(checkpoint_path, paste0(cache_path, ".inprogress"))) {
       neural_svi_checkpoint_remove_dir(checkpoint_path)
     }
+  }
+
+  request_fingerprint <- cs2step_predictor_request_fingerprint(
+    Y = Y,
+    W = W_df,
+    X = X,
+    model = model,
+    mode = mode_use,
+    pair_id = pair_id,
+    profile_order = profile_order,
+    varcov_cluster_variable = varcov_cluster_variable,
+    names_list = names_list,
+    factor_levels = factor_levels,
+    neural_mcmc_control = fit_control,
+    use_regularization = use_regularization,
+    nFolds_glm = nFolds_glm
+  )
+
+  if (!is.null(cache_path) && !isTRUE(cache_overwrite) && file.exists(cache_path)) {
+    bundle <- readRDS(cache_path)
+    cs2step_artifact_assert_fingerprint(
+      stored = bundle$metadata$fingerprint %||% NULL,
+      expected = request_fingerprint,
+      context = "strategic_prediction cache"
+    )
+    return(cs2step_unpack_predictor(
+      bundle,
+      conda_env = conda_env,
+      conda_env_required = conda_env_required
+    ))
   }
 
   fit <- if (identical(model, "glm")) {
@@ -834,7 +854,8 @@ strategic_prediction <- function(Y,
         call = match.call(),
         timestamp = Sys.time(),
         conda_env = if (identical(model, "neural")) conda_env else NULL,
-        conda_env_required = if (identical(model, "neural")) conda_env_required else NULL
+        conda_env_required = if (identical(model, "neural")) conda_env_required else NULL,
+        fingerprint = request_fingerprint
       )
     ),
     class = "strategic_predictor"
@@ -4740,7 +4761,12 @@ load_neural_outcome_bundle <- function(file,
     preload_params = preload_params
   )
   if (inherits(out, "strategic_predictor")) {
-    out$metadata$cache_id <- sprintf("neural_cache_%d", as.integer(stats::runif(1, 1, 1e9)))
+    cache_hash <- out$metadata$fingerprint$hash %||% digest::digest(
+      list(file = normalizePath(file, winslash = "/", mustWork = FALSE)),
+      algo = "xxhash64",
+      serialize = TRUE
+    )
+    out$metadata$cache_id <- paste0("neural_cache_", cache_hash)
   }
   out
 }

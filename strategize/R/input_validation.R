@@ -97,6 +97,8 @@ NULL
 #'   default so objective mass follows SVI observation counts; set
 #'   \code{"balanced_cell"} to reproduce clipped inverse-frequency weighting
 #'   across task-mode/likelihood cells.
+#'   Set \code{neural_mcmc_control$seed} (default \code{123}) to make SVI,
+#'   posterior sampling, and MCMC JAX PRNG streams reproducible.
 #'   Advanced restart checkpoints can be enabled with
 #'   \code{neural_mcmc_control$checkpoint_path}; rerunning with the same data and
 #'   controls resumes from \code{latest.rds} and promotes the best validation
@@ -285,21 +287,30 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         stop(msg, call. = FALSE)
       }
 
-      # Check probabilities sum to 1
-      prob_sum <- sum(p_list[[i]])
-      if (abs(prob_sum - 1) > 1e-4) {
-        warning(
-          sprintf("p_list[[%d]] ('%s') probabilities sum to %.4f, not 1.0.\n", i, factor_name, prob_sum),
-          "  Probabilities should sum to 1 for valid distribution.",
+      probs <- suppressWarnings(as.numeric(p_list[[i]]))
+      if (length(probs) != length(p_list[[i]]) || any(!is.finite(probs))) {
+        stop(
+          sprintf("p_list[[%d]] ('%s') must contain finite, non-missing probabilities.\n", i, factor_name),
+          "  Use numeric probabilities with no NA, NaN, Inf, or -Inf values.",
           call. = FALSE
         )
       }
 
       # Check for negative probabilities
-      if (any(p_list[[i]] < 0)) {
+      if (any(probs < 0)) {
         stop(
           sprintf("p_list[[%d]] ('%s') contains negative probabilities.\n", i, factor_name),
           "  All probabilities must be >= 0.",
+          call. = FALSE
+        )
+      }
+
+      # Check probabilities sum to 1
+      prob_sum <- sum(probs)
+      if (abs(prob_sum - 1) > 1e-4) {
+        stop(
+          sprintf("p_list[[%d]] ('%s') probabilities sum to %.4f, not 1.0.\n", i, factor_name, prob_sum),
+          "  Probabilities should sum to 1 for valid distribution.",
           call. = FALSE
         )
       }
@@ -427,6 +438,32 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         call. = FALSE
       )
     }
+    if (anyNA(competing_group_variable_respondent) ||
+        anyNA(competing_group_variable_candidate)) {
+      stop(
+        "Adversarial group variables cannot contain missing values.",
+        call. = FALSE
+      )
+    }
+    cand_groups <- unique(competing_group_variable_candidate)
+    if (length(cand_groups) != 2) {
+      stop(
+        sprintf(
+          "Adversarial mode requires exactly 2 groups in competing_group_variable_candidate.\n"
+        ),
+        sprintf("  Found %d groups: %s\n", length(cand_groups),
+                paste(head(cand_groups, 5), collapse = ", ")),
+        "  Adversarial mode models a two-player zero-sum game.",
+        call. = FALSE
+      )
+    }
+    if (!setequal(as.character(unique(competing_group_variable_respondent)),
+                  as.character(cand_groups))) {
+      stop(
+        "Adversarial respondent and candidate group variables must contain matching group labels.",
+        call. = FALSE
+      )
+    }
     if (!is.null(competing_group_competition_variable_candidate)) {
       if (length(competing_group_competition_variable_candidate) != nrow(W)) {
         stop(
@@ -492,21 +529,45 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
   }
 
   # ---- diff mode validation ----
+  neural_diff_strict <- isTRUE(diff) && identical(tolower(as.character(outcome_model_type)), "neural")
   if (isTRUE(diff) && is.null(pair_id)) {
-    warning(
+    msg <- paste0(
       "diff=TRUE typically requires 'pair_id' to identify forced-choice pairs.\n",
-      "  Without pair_id, the function may not correctly identify paired profiles.",
-      call. = FALSE
+      "  Without pair_id, the function may not correctly identify paired profiles."
     )
+    if (isTRUE(neural_diff_strict)) {
+      stop(msg, call. = FALSE)
+    }
+    warning(msg, call. = FALSE)
   }
   if (isTRUE(diff) && !is.null(pair_id)) {
-    if (is.null(profile_order)) {
-      warning(
-        "diff=TRUE without 'profile_order'.\n",
-        "  Provide profile_order to ensure consistent within-pair ordering.\n",
-        "  If omitted, ordering will be inferred deterministically (e.g., by candidate group and hashed profiles).",
+    if (length(pair_id) != nrow(W)) {
+      stop(
+        sprintf("pair_id has %d elements but W has %d rows.\n",
+                length(pair_id), nrow(W)),
+        "  Lengths must match.",
         call. = FALSE
       )
+    }
+    if (any(is.na(pair_id))) {
+      msg <- paste0(
+        "pair_id contains NA values.\n",
+        "  Missing pair identifiers can lead to ambiguous pair differences."
+      )
+      if (isTRUE(neural_diff_strict)) {
+        stop(msg, call. = FALSE)
+      }
+      warning(msg, call. = FALSE)
+    }
+    if (is.null(profile_order)) {
+      msg <- paste0(
+        "diff=TRUE without 'profile_order'.\n",
+        "  Provide profile_order to ensure consistent within-pair ordering."
+      )
+      if (isTRUE(neural_diff_strict)) {
+        stop(msg, call. = FALSE)
+      }
+      warning(msg, call. = FALSE)
     } else {
       if (length(profile_order) != nrow(W)) {
         stop(
@@ -517,27 +578,48 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         )
       }
       if (any(is.na(profile_order))) {
-        warning(
+        msg <- paste0(
           "profile_order contains NA values.\n",
-          "  Missing ordering can lead to ambiguous pair differences.",
-          call. = FALSE
+          "  Missing ordering can lead to ambiguous pair differences."
         )
+        if (isTRUE(neural_diff_strict)) {
+          stop(msg, call. = FALSE)
+        }
+        warning(msg, call. = FALSE)
       }
       pair_sizes <- table(pair_id)
       if (any(pair_sizes != 2L)) {
-        warning(
+        msg <- paste0(
           "diff=TRUE expects exactly two rows per pair_id.\n",
-          "  Found pairs with sizes other than 2; ordering may be unreliable.",
-          call. = FALSE
+          "  Found pairs with sizes other than 2; ordering may be unreliable."
         )
+        if (isTRUE(neural_diff_strict)) {
+          stop(msg, call. = FALSE)
+        }
+        warning(msg, call. = FALSE)
       }
       order_ok <- tapply(profile_order, pair_id, function(x) length(unique(x)) == 2L)
       if (any(!order_ok)) {
-        warning(
+        msg <- paste0(
           "profile_order is inconsistent within one or more pairs.\n",
-          "  Each pair_id should have two distinct order values (e.g., 1 and 2).",
-          call. = FALSE
+          "  Each pair_id should have two distinct order values (e.g., 1 and 2)."
         )
+        if (isTRUE(neural_diff_strict)) {
+          stop(msg, call. = FALSE)
+        }
+        warning(msg, call. = FALSE)
+      }
+      if (isTRUE(neural_diff_strict)) {
+        profile_by_pair <- split(profile_order, pair_id)
+        order_12 <- vapply(profile_by_pair, function(x) {
+          identical(sort(unique(as.integer(x))), c(1L, 2L))
+        }, logical(1))
+        if (!all(order_12)) {
+          stop(
+            "Neural diff=TRUE requires profile_order values 1 and 2 within each pair_id.",
+            call. = FALSE
+          )
+        }
       }
     }
   }
@@ -579,6 +661,21 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
       "'neural_mcmc_control' must be a list when provided.",
       call. = FALSE
     )
+  }
+  if (!is.null(neural_mcmc_control) &&
+      !is.null(neural_mcmc_control$seed)) {
+    seed_val <- suppressWarnings(as.numeric(neural_mcmc_control$seed))
+    if (length(seed_val) != 1L ||
+        is.na(seed_val) ||
+        !is.finite(seed_val) ||
+        seed_val < 0 ||
+        seed_val != floor(seed_val) ||
+        seed_val > .Machine$integer.max) {
+      stop(
+        "'neural_mcmc_control$seed' must be one non-negative integer.",
+        call. = FALSE
+      )
+    }
   }
   if (!is.null(neural_mcmc_control) &&
       !is.null(neural_mcmc_control$uncertainty_scope)) {

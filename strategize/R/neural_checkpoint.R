@@ -158,6 +158,7 @@ neural_svi_checkpoint_write_manifest <- function(path,
   manifest <- list(
     schema_version = 1L,
     artifact_type = "strategize_neural_svi_checkpoint",
+    checkpoint_semantics = "parameter_warm_start",
     created_at = created_at,
     updated_at = now,
     fingerprint = fingerprint,
@@ -265,6 +266,7 @@ neural_svi_checkpoint_make_payload <- function(snapshot_type,
   list(
     schema_version = 1L,
     artifact_type = "strategize_neural_svi_checkpoint_snapshot",
+    checkpoint_semantics = "parameter_warm_start",
     snapshot_type = snapshot_type,
     created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     fingerprint = fingerprint,
@@ -363,8 +365,32 @@ neural_svi_checkpoint_restore_best <- function(path, fingerprint) {
 }
 
 neural_svi_checkpoint_remove_dir <- function(path) {
-  if (!is.null(path) && nzchar(path) && dir.exists(path)) {
-    unlink(path, recursive = TRUE, force = TRUE)
+  if (is.null(path)) {
+    return(invisible(NULL))
   }
+  path <- as.character(path)
+  if (length(path) != 1L || is.na(path) || !nzchar(path) || !dir.exists(path)) {
+    return(invisible(NULL))
+  }
+  base <- basename(normalizePath(path, winslash = "/", mustWork = FALSE))
+  if (!endsWith(base, ".inprogress")) {
+    stop(
+      "Refusing to remove checkpoint directory because it is not an '.inprogress' path: ",
+      path,
+      call. = FALSE
+    )
+  }
+  manifest <- neural_svi_checkpoint_read_manifest(path)
+  if (!is.list(manifest) ||
+      !identical(manifest$artifact_type, "strategize_neural_svi_checkpoint") ||
+      !identical(manifest$checkpoint_semantics %||% "parameter_warm_start",
+                 "parameter_warm_start")) {
+    stop(
+      "Refusing to remove checkpoint directory without a valid strategize manifest: ",
+      path,
+      call. = FALSE
+    )
+  }
+  unlink(path, recursive = TRUE, force = TRUE)
   invisible(NULL)
 }
