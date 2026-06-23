@@ -35,6 +35,66 @@ test_that("schema dropout resolver handles defaults and overrides", {
   )
 })
 
+test_that("neural init policy resolves RMS and residual depth defaults", {
+  expect_equal(strategize:::neural_resolve_rms_scale(NULL), 0.25)
+  expect_equal(strategize:::neural_resolve_rms_scale(0.5), 0.5)
+  expect_identical(
+    strategize:::neural_resolve_residual_weight_depth_scale("floor-one"),
+    "floor_one"
+  )
+
+  shallow <- strategize:::neural_resolve_init_policy(
+    model_depth = 1L,
+    model_dims = 16L
+  )
+  expect_equal(shallow$RMS_scale, 0.25)
+  expect_identical(shallow$residual_weight_depth_scale, "floor_one")
+  expect_equal(shallow$depth_prior_scale, sqrt(2))
+  expect_equal(shallow$residual_weight_multiplier, sqrt(2))
+  expect_equal(shallow$gate_sd_scale, 0.1 * sqrt(2))
+
+  depth_two <- strategize:::neural_resolve_init_policy(
+    model_depth = 2L,
+    model_dims = 16L
+  )
+  expect_equal(depth_two$residual_weight_multiplier, 1)
+
+  deep_default <- strategize:::neural_resolve_init_policy(
+    model_depth = 4L,
+    model_dims = 16L
+  )
+  expect_equal(deep_default$residual_weight_multiplier, 1)
+  expect_equal(deep_default$weight_sd_scale, sqrt(2) / 4)
+  expect_equal(deep_default$residual_weight_sd_scale, sqrt(2) / 4)
+  expect_equal(deep_default$gate_depth_multiplier, sqrt(2) / 2)
+
+  legacy <- strategize:::neural_resolve_init_policy(
+    model_depth = 4L,
+    model_dims = 16L,
+    RMS_scale = 0.5,
+    residual_weight_depth_scale = "legacy"
+  )
+  expect_equal(legacy$RMS_scale, 0.5)
+  expect_equal(legacy$residual_weight_multiplier, sqrt(2) / 2)
+  expect_equal(legacy$residual_weight_sd_scale, (sqrt(2) / 4) * (sqrt(2) / 2))
+
+  no_depth <- strategize:::neural_resolve_init_policy(
+    model_depth = 4L,
+    model_dims = 16L,
+    residual_weight_depth_scale = "none"
+  )
+  expect_equal(no_depth$residual_weight_multiplier, 1)
+
+  expect_error(
+    strategize:::neural_resolve_rms_scale(0),
+    "RMS_scale"
+  )
+  expect_error(
+    strategize:::neural_resolve_residual_weight_depth_scale("wide"),
+    "residual_weight_depth_scale"
+  )
+})
+
 test_that("schema dropout helper scales unit masks and keeps token masks binary", {
   skip_if_no_jax()
   strategize:::initialize_jax()

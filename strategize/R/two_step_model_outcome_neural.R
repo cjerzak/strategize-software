@@ -3501,6 +3501,62 @@ neural_low_rank_logit_normalization_enabled <- function(model_info = NULL,
     length(rc_target) == 1L && is.finite(rc_target) && rc_target > 0
 }
 
+neural_resolve_rms_scale <- function(value = NULL) {
+  scale <- suppressWarnings(as.numeric(value %||% 0.25))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    stop("'neural_mcmc_control$RMS_scale' must be a positive finite scalar.", call. = FALSE)
+  }
+  as.numeric(scale)
+}
+
+neural_resolve_residual_weight_depth_scale <- function(value = NULL) {
+  mode <- tolower(as.character(value %||% "floor_one"))
+  mode <- gsub("-", "_", mode, fixed = TRUE)
+  if (length(mode) != 1L || is.na(mode) || !nzchar(mode) ||
+      !mode %in% c("floor_one", "legacy", "none")) {
+    stop(
+      "'neural_mcmc_control$residual_weight_depth_scale' must be one of ",
+      "'floor_one', 'legacy', or 'none'.",
+      call. = FALSE
+    )
+  }
+  mode
+}
+
+neural_resolve_init_policy <- function(model_depth,
+                                       model_dims,
+                                       RMS_scale = NULL,
+                                       residual_weight_depth_scale = NULL) {
+  depth <- suppressWarnings(as.numeric(model_depth))
+  dims <- suppressWarnings(as.numeric(model_dims))
+  if (length(depth) != 1L || is.na(depth) || !is.finite(depth) || depth < 1) {
+    stop("'neural_mcmc_control$ModelDepth' must be an integer >= 1.", call. = FALSE)
+  }
+  if (length(dims) != 1L || is.na(dims) || !is.finite(dims) || dims < 1) {
+    stop("'neural_mcmc_control$ModelDims' must be an integer >= 1.", call. = FALSE)
+  }
+  rms_scale <- neural_resolve_rms_scale(RMS_scale)
+  residual_policy <- neural_resolve_residual_weight_depth_scale(residual_weight_depth_scale)
+  depth_prior_scale <- sqrt(2) / sqrt(depth)
+  residual_weight_multiplier <- switch(
+    residual_policy,
+    floor_one = max(1, depth_prior_scale),
+    legacy = depth_prior_scale,
+    none = 1
+  )
+  weight_sd_scale <- sqrt(2) / sqrt(dims)
+  list(
+    RMS_scale = rms_scale,
+    residual_weight_depth_scale = residual_policy,
+    depth_prior_scale = as.numeric(depth_prior_scale),
+    residual_weight_multiplier = as.numeric(residual_weight_multiplier),
+    gate_depth_multiplier = as.numeric(depth_prior_scale),
+    weight_sd_scale = as.numeric(weight_sd_scale),
+    residual_weight_sd_scale = as.numeric(weight_sd_scale * residual_weight_multiplier),
+    gate_sd_scale = as.numeric(0.1 * depth_prior_scale)
+  )
+}
+
 neural_pairwise_bernoulli_logit_scale_enabled <- function(model_info = NULL) {
   if (is.null(model_info)) {
     return(FALSE)
@@ -10553,9 +10609,10 @@ generate_ModelOutcome_neural <- function(){
     ),
     universal_loss_weighting = "empirical",
     balanced_sampling = NULL,
+    RMS_scale = 0.25,
+    residual_weight_depth_scale = "floor_one",
     seed = 123L
   )
-  RMS_scale = 0.5
   UsedRegularization <- FALSE
   uncertainty_scope <- "all"
   mcmc_overrides <- NULL
@@ -10833,6 +10890,10 @@ generate_ModelOutcome_neural <- function(){
       is.null(mcmc_control$checkpoint_path)) {
     mcmc_control$checkpoint_path <- paste0(bundle_path, ".inprogress")
   }
+  mcmc_control$RMS_scale <- neural_resolve_rms_scale(mcmc_control$RMS_scale)
+  mcmc_control$residual_weight_depth_scale <- neural_resolve_residual_weight_depth_scale(
+    mcmc_control$residual_weight_depth_scale
+  )
   training_seed_supplied <- !is.null(mcmc_overrides) &&
     "seed" %in% names(mcmc_overrides) &&
     !is.null(mcmc_overrides$seed)
@@ -11097,12 +11158,20 @@ generate_ModelOutcome_neural <- function(){
     }
   ))
   FFDim <- ai(ai(round(MD_int * WideMultiplicationFactor)))
-  weight_sd_scale <- sqrt(2) / sqrt(as.numeric(ModelDims))
+  init_policy <- neural_resolve_init_policy(
+    model_depth = ModelDepth,
+    model_dims = ModelDims,
+    RMS_scale = mcmc_control$RMS_scale,
+    residual_weight_depth_scale = mcmc_control$residual_weight_depth_scale
+  )
+  RMS_scale <- init_policy$RMS_scale
+  weight_sd_scale <- init_policy$weight_sd_scale
   #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
-  
-  # Depth-aware scaling for priors and ReZero-style residual gates.
-  depth_prior_scale <- sqrt(2) / sqrt(as.numeric(ModelDepth))
-  gate_sd_scale <- 0.1 * depth_prior_scale
+
+  # Depth-aware scaling for residual priors and ReZero-style residual gates.
+  depth_prior_scale <- init_policy$depth_prior_scale
+  residual_weight_sd_scale <- init_policy$residual_weight_sd_scale
+  gate_sd_scale <- init_policy$gate_sd_scale
   embed_sd_scale <- 4 * weight_sd_scale
   context_embed_sd_scale <- embed_sd_scale
   choice_embed_sd_scale <- 0.25 * context_embed_sd_scale
@@ -13641,9 +13710,9 @@ generate_ModelOutcome_neural <- function(){
     }
 
     layer_params <- list()
-    attnres_query_sd_scale <- as.numeric(weight_sd_scale * depth_prior_scale)
+    attnres_query_sd_scale <- as.numeric(residual_weight_sd_scale)
     for (l_ in 1L:ModelDepth) {
-      tau_w_prior <- as.numeric(weight_sd_scale * depth_prior_scale)
+      tau_w_prior <- as.numeric(residual_weight_sd_scale)
       tau_w_l <- if (isTRUE(output_only_mode)) {
         tau_w_prior
       } else {
@@ -13911,11 +13980,11 @@ generate_ModelOutcome_neural <- function(){
     W_o_cross <- NULL
     if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
       tau_cross_attn <- if (isTRUE(output_only_mode)) {
-        as.numeric(weight_sd_scale * depth_prior_scale)
+        as.numeric(residual_weight_sd_scale)
       } else {
         strenv$numpyro$sample(
           "tau_cross_attn",
-          strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale * depth_prior_scale))
+          strenv$numpyro$distributions$HalfNormal(as.numeric(residual_weight_sd_scale))
         )
       }
 
@@ -17520,6 +17589,7 @@ generate_ModelOutcome_neural <- function(){
     resp_party_missing_index = resp_party_missing_index,
     context_present_masking = context_present_masking
   )
+  validation_model_info$init_policy <- init_policy
   validation_model_info$factor_name_text <- factor_name_text
   validation_model_info$level_name_text <- level_name_text
   validation_model_info$factor_struct_matrix <- factor_struct_matrix
@@ -21100,6 +21170,7 @@ generate_ModelOutcome_neural <- function(){
     resp_party_missing_index = resp_party_missing_index,
     context_present_masking = context_present_masking
   )
+  predict_model_info$init_policy <- init_policy
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
   predict_model_info$factor_struct_matrix <- factor_struct_matrix
@@ -22219,6 +22290,7 @@ generate_ModelOutcome_neural <- function(){
     runtime_provenance = neural_runtime_info,
     model_dims = ModelDims,
     model_depth = ModelDepth,
+    init_policy = init_policy,
     residual_mode = residual_mode,
     n_heads = TransformerHeads,
     head_dim = head_dim,
