@@ -1723,35 +1723,6 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
   n_covariates <- length(covariate_names)
   encoding <- neural_covariate_value_encoding(model_info)
 
-  resp_cov_mean <- neural_resolve_default_resp_cov_values(
-    model_info = model_info,
-    n_rows = n_rows,
-    experiment_idx = experiment_idx
-  )
-  resp_cov_mean <- as.matrix(resp_cov_mean)
-  if (n_covariates > 0L &&
-      (nrow(resp_cov_mean) != n_rows || ncol(resp_cov_mean) != n_covariates)) {
-    resp_cov_mean <- if (n_covariates > 0L) {
-      matrix(0, nrow = n_rows, ncol = n_covariates)
-    } else {
-      matrix(0, nrow = n_rows, ncol = 0L)
-    }
-  }
-
-  resp_cov_default_present <- cs2step_neural_to_r_array(model_info$resp_cov_default_present)
-  resp_cov_default_present <- if (is.null(resp_cov_default_present)) {
-    if (n_covariates > 0L) rep(1, n_covariates) else numeric(0)
-  } else {
-    as.numeric(resp_cov_default_present)
-  }
-  if (n_covariates > 0L && length(resp_cov_default_present) != n_covariates) {
-    if (length(resp_cov_default_present) == 0L) {
-      resp_cov_default_present <- rep(1, n_covariates)
-    } else {
-      resp_cov_default_present <- rep_len(resp_cov_default_present, n_covariates)
-    }
-  }
-
   if (n_covariates < 1L) {
     return(list(
       values = matrix(0, nrow = n_rows, ncol = 0L),
@@ -1760,8 +1731,8 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
     ))
   }
 
-  values <- matrix(resp_cov_mean, nrow = n_rows, ncol = n_covariates)
-  present <- matrix(rep(resp_cov_default_present, each = n_rows), nrow = n_rows, ncol = n_covariates)
+  values <- matrix(0, nrow = n_rows, ncol = n_covariates)
+  present <- matrix(0, nrow = n_rows, ncol = n_covariates)
   colnames(values) <- covariate_names
   colnames(present) <- covariate_names
   order_idx <- if (identical(encoding, "shared_projection")) {
@@ -1772,20 +1743,22 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
   } else {
     NULL
   }
+  order_matrix <- function(order_idx_use = order_idx) {
+    if (is.null(order_idx_use)) {
+      return(NULL)
+    }
+    neural_build_default_covariate_order_matrix(
+      order_idx = order_idx_use,
+      n_rows = n_rows,
+      max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
+    )
+  }
 
   if (is.null(resp_cov_new)) {
     return(list(
       values = values,
       present = present,
-      order = if (is.null(order_idx)) {
-        NULL
-      } else {
-        neural_build_default_covariate_order_matrix(
-          order_idx = order_idx,
-          n_rows = n_rows,
-          max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
-        )
-      }
+      order = order_matrix()
     ))
   }
 
@@ -1816,7 +1789,7 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
   }
 
   if (ncol(resp_cov_new) < 1L) {
-    return(list(values = values, present = present))
+    return(list(values = values, present = present, order = order_matrix()))
   }
 
   if (is.null(colnames(resp_cov_new))) {
@@ -1840,31 +1813,31 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
     return(list(
       values = values,
       present = present,
-      order = if (is.null(order_idx)) {
-        NULL
-      } else {
-        neural_build_default_covariate_order_matrix(
-          order_idx = integer(0),
-          n_rows = n_rows,
-          max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
-        )
-      }
+      order = order_matrix()
     ))
   }
 
   for (k in seq_along(idx)) {
-    col_vals <- suppressWarnings(as.numeric(resp_cov_new[[k]]))
-    if (identical(encoding, "shared_projection")) {
-      if (any(!is.finite(col_vals))) {
-        stop(
-          "Prediction-time X contains NA/Inf values, which are unsupported under shared_projection.",
-          call. = FALSE
-        )
-      }
-      observed <- rep(TRUE, length(col_vals))
-    } else {
-      observed <- !is.na(col_vals)
+    raw_vals <- resp_cov_new[[k]]
+    raw_missing <- is.na(raw_vals)
+    if (is.factor(raw_vals)) {
+      raw_vals <- as.character(raw_vals)
     }
+    col_vals <- suppressWarnings(as.numeric(raw_vals))
+    coerced_missing <- is.na(col_vals)
+    if (any(coerced_missing & !raw_missing, na.rm = TRUE)) {
+      stop(
+        "Prediction-time X must contain numeric values or NA for fitted covariates.",
+        call. = FALSE
+      )
+    }
+    if (any(is.infinite(col_vals), na.rm = TRUE)) {
+      stop(
+        "Prediction-time X contains Inf values for fitted covariates.",
+        call. = FALSE
+      )
+    }
+    observed <- !is.na(col_vals)
     tgt <- idx[[k]]
     values[observed, tgt] <- col_vals[observed]
     values[!observed, tgt] <- 0
@@ -1872,22 +1845,10 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
     present[!observed, tgt] <- 0
   }
 
-  if (identical(encoding, "shared_projection")) {
-    order_idx <- as.integer(idx - 1L)
-  }
-
   list(
     values = values,
     present = present,
-    order = if (is.null(order_idx)) {
-      NULL
-    } else {
-      neural_build_default_covariate_order_matrix(
-        order_idx = order_idx,
-        n_rows = n_rows,
-        max_covariate_tokens = model_info$max_covariate_tokens %||% NULL
-      )
-    }
+    order = order_matrix()
   )
 }
 

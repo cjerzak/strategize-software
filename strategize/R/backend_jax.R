@@ -132,7 +132,7 @@ strategize_register_jax_transformer_helpers <- function() {
     "        if token_mask is not None:",
     "            mask_use = jnp.reshape((token_mask > 0).astype(scores.dtype),",
     "                                   (token_mask.shape[0], 1, 1, token_mask.shape[1]))",
-    "            scores = jnp.where(mask_use > 0, scores, jnp.asarray(-1e9, dtype=scores.dtype))",
+    "            scores = jnp.where(mask_use > 0, scores, jnp.asarray(jnp.finfo(scores.dtype).min, dtype=scores.dtype))",
     "        attn = jax.nn.softmax(scores, axis=-1)",
     "        return jnp.einsum('nhqk,nkhd->nqhd', attn, Vh)",
     "    original_dtype = Qh.dtype",

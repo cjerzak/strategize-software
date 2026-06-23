@@ -35,6 +35,53 @@ test_that("schema dropout resolver handles defaults and overrides", {
   )
 })
 
+test_that("schema dropout helper scales unit masks and keeps token masks binary", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  key <- strategize:::strenv$jax$random$PRNGKey(23L)
+  keys <- strategize:::strenv$jax$random$split(key, 2L)
+  binary <- strategize:::neural_schema_dropout_random_keep(
+    strategize:::strenv$jnp$take(keys, 0L, axis = 0L),
+    0.5,
+    8L,
+    4L
+  )
+  inverted <- strategize:::neural_schema_dropout_random_keep(
+    strategize:::strenv$jnp$take(keys, 1L, axis = 0L),
+    0.5,
+    8L,
+    4L,
+    inverted = TRUE
+  )
+  binary_vals <- unique(as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(binary))))
+  inverted_vals <- unique(as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(inverted))))
+
+  expect_true(all(binary_vals %in% c(0, 1)))
+  expect_true(all(inverted_vals %in% c(0, 2)))
+})
+
+test_that("attention and sigma numeric guards use dtype-aware floors", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+
+  scores <- strategize:::strenv$jnp$ones(
+    reticulate::tuple(1L, 1L, 1L, 1L),
+    dtype = strategize:::strenv$jnp$float16
+  )
+  mask_value <- as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(
+    strategize:::neural_attention_mask_value(scores)
+  )))
+  expect_true(is.finite(mask_value))
+  expect_lte(mask_value, -60000)
+
+  sigma <- strategize:::strenv$jnp$array(1e-9, dtype = strategize:::strenv$dtj)
+  sigma_floor <- as.numeric(reticulate::py_to_r(strategize:::strenv$np$array(
+    strategize:::neural_floor_sigma(sigma, dtype = strategize:::strenv$dtj)
+  )))
+  expect_lt(abs(sigma_floor - 1e-3), 1e-7)
+})
+
 test_that("pairwise Bernoulli logit scale controls final R logits", {
   expect_false(strategize:::neural_resolve_learned_pairwise_bernoulli_logit_scale(NULL))
   expect_true(strategize:::neural_resolve_learned_pairwise_bernoulli_logit_scale("learned"))
@@ -141,6 +188,32 @@ test_that("neural architecture control resolvers preserve legacy upgrade default
   )
   expect_false(no_calibration$enabled)
   expect_identical(no_calibration$method, "none")
+
+  expect_error(
+    strategize:::neural_validate_calibration_temperature_compatibility(
+      TRUE,
+      list(enabled = TRUE, method = "logit_scale", prior_sd = 0.5)
+    ),
+    "cannot learn both"
+  )
+  expect_no_error(
+    strategize:::neural_validate_calibration_temperature_compatibility(
+      TRUE,
+      list(enabled = FALSE, method = "none", prior_sd = NULL)
+    )
+  )
+})
+
+test_that("context_present_masking false disables runtime context masks", {
+  info <- strategize:::neural_set_pairwise_context_model_info(
+    list(),
+    context_present_masking = FALSE
+  )
+  expect_false(info$context_present_masking)
+  expect_null(strategize:::neural_context_present_mask(
+    context_present = c(1L, 0L),
+    model_info = info
+  ))
 })
 
 test_that("balanced compact sampler draws studies and respondents hierarchically", {

@@ -1046,6 +1046,9 @@ neural_context_present_mask <- function(party_idx = NULL,
                                         resp_party_idx = NULL,
                                         context_present = NULL,
                                         model_info = NULL) {
+  if (!is.null(model_info) && identical(model_info$context_present_masking, FALSE)) {
+    return(NULL)
+  }
   if (!is.null(context_present)) {
     return(strenv$jnp$array(context_present) > 0L)
   }
@@ -2090,6 +2093,19 @@ neural_next_multiple <- function(x, multiple) {
   as.integer(ceiling(x / multiple) * multiple)
 }
 
+neural_attention_mask_value <- function(scores) {
+  dtype <- scores$dtype
+  strenv$jnp$array(strenv$jnp$finfo(dtype)$min, dtype = dtype)
+}
+
+neural_floor_sigma <- function(sigma, dtype = NULL) {
+  if (is.null(sigma)) {
+    return(NULL)
+  }
+  dtype_use <- dtype %||% tryCatch(sigma$dtype, error = function(e) strenv$dtj)
+  strenv$jnp$maximum(sigma, strenv$jnp$array(1e-3, dtype = dtype_use))
+}
+
 neural_self_attention_context <- function(Qh, Kh, Vh, token_mask, model_info) {
   resolve <- neural_attention_resolve_backend(model_info, role = "self", fail_on_forced = TRUE)
   if (identical(resolve$backend, "dense")) {
@@ -2100,7 +2116,8 @@ neural_self_attention_context <- function(Qh, Kh, Vh, token_mask, model_info) {
         strenv$jnp$astype(token_mask > 0, scores$dtype),
         list(token_mask$shape[[1]], 1L, 1L, token_mask$shape[[2]])
       )
-      large_neg <- strenv$jnp$array(-1e9, dtype = scores$dtype)
+      # Choice/CLS tokens are always emitted by the packer, so every row has at least one valid key.
+      large_neg <- neural_attention_mask_value(scores)
       scores <- strenv$jnp$where(mask_use > 0, scores, large_neg)
     }
     attn <- strenv$jax$nn$softmax(scores, axis = -1L)
@@ -3221,6 +3238,19 @@ neural_resolve_calibration_control <- function(value = NULL,
   list(enabled = TRUE, method = method, prior_sd = as.numeric(prior_sd))
 }
 
+neural_validate_calibration_temperature_compatibility <- function(learned_pairwise_bernoulli_logit_scale,
+                                                                  calibration_control) {
+  if (isTRUE(learned_pairwise_bernoulli_logit_scale) &&
+      isTRUE(calibration_control$enabled) &&
+      identical(calibration_control$method %||% NULL, "logit_scale")) {
+    stop(
+      "neural_mcmc_control cannot learn both pairwise_bernoulli_logit_scale and calibration logit_scale; disable one.",
+      call. = FALSE
+    )
+  }
+  invisible(calibration_control)
+}
+
 neural_resolve_learned_pairwise_bernoulli_logit_scale <- function(value = NULL) {
   if (is.null(value)) {
     return(FALSE)
@@ -4314,13 +4344,9 @@ neural_model_jit_cache_key <- function(model_info) {
     digest_field(model_info$default_experiment_text),
     tryCatch(as.character(isTRUE(model_info$default_experiment_text_present %||% FALSE)), error = function(e) "na"),
     digest_field(model_info$place_embedding),
-    digest_field(model_info$place_present),
     digest_field(model_info$default_place_embedding),
-    tryCatch(as.character(isTRUE(model_info$default_place_present %||% FALSE)), error = function(e) "na"),
     digest_field(model_info$time_embedding),
-    digest_field(model_info$time_present),
     digest_field(model_info$default_time_embedding),
-    tryCatch(as.character(isTRUE(model_info$default_time_present %||% FALSE)), error = function(e) "na"),
     map_token
   )
   paste0("stable:v1:fallback::", paste(fields, collapse = "::"))
@@ -5764,19 +5790,27 @@ neural_numpyro_prng_key <- function() {
 neural_schema_dropout_random_keep <- function(key,
                                               rate,
                                               n_batch,
-                                              n_units) {
+                                              n_units,
+                                              inverted = FALSE) {
   rate <- as.numeric(rate %||% 0)
   n_batch <- ai(n_batch)
   n_units <- ai(n_units)
   if (!is.finite(rate) || rate <= 0 || n_batch < 1L || n_units < 1L) {
     return(NULL)
   }
+  if (rate >= 1) {
+    return(strenv$jnp$zeros(reticulate::tuple(n_batch, n_units), dtype = strenv$dtj))
+  }
   u <- strenv$jax$random$uniform(
     key,
     shape = reticulate::tuple(n_batch, n_units),
     dtype = strenv$dtj
   )
-  (u >= strenv$jnp$array(rate, dtype = strenv$dtj))$astype(strenv$dtj)
+  keep <- (u >= strenv$jnp$array(rate, dtype = strenv$dtj))$astype(strenv$dtj)
+  if (!isTRUE(inverted)) {
+    return(keep)
+  }
+  keep / strenv$jnp$array(1 - rate, dtype = strenv$dtj)
 }
 
 neural_sample_schema_dropout_masks <- function(model_info,
@@ -5805,25 +5839,25 @@ neural_sample_schema_dropout_masks <- function(model_info,
       key_at(4L), rates$covariate_token, n_batch, n_covariate_tokens
     ),
     schema_text_factor = neural_schema_dropout_random_keep(
-      key_at(5L), rates$schema_text, n_batch, n_factor_tokens
+      key_at(5L), rates$schema_text, n_batch, n_factor_tokens, inverted = TRUE
     ),
     schema_text_level = neural_schema_dropout_random_keep(
-      key_at(6L), rates$schema_text, n_batch, n_factor_tokens
+      key_at(6L), rates$schema_text, n_batch, n_factor_tokens, inverted = TRUE
     ),
     schema_text_covariate = neural_schema_dropout_random_keep(
-      key_at(7L), rates$schema_text, n_batch, n_covariate_tokens
+      key_at(7L), rates$schema_text, n_batch, n_covariate_tokens, inverted = TRUE
     ),
     schema_text_covariate_value = neural_schema_dropout_random_keep(
-      key_at(8L), rates$schema_text, n_batch, n_covariate_tokens
+      key_at(8L), rates$schema_text, n_batch, n_covariate_tokens, inverted = TRUE
     ),
     structural_factor = neural_schema_dropout_random_keep(
-      key_at(9L), rates$structural_metadata, n_batch, n_factor_tokens
+      key_at(9L), rates$structural_metadata, n_batch, n_factor_tokens, inverted = TRUE
     ),
     structural_level = neural_schema_dropout_random_keep(
-      key_at(10L), rates$structural_metadata, n_batch, n_factor_tokens
+      key_at(10L), rates$structural_metadata, n_batch, n_factor_tokens, inverted = TRUE
     ),
     structural_covariate_metadata = neural_schema_dropout_random_keep(
-      key_at(11L), rates$structural_metadata, n_batch, n_covariate_tokens
+      key_at(11L), rates$structural_metadata, n_batch, n_covariate_tokens, inverted = TRUE
     )
   )
   out <- Filter(Negate(is.null), out)
@@ -8234,7 +8268,7 @@ neural_cross_attend_cls_to_tokens <- function(q_vec, kv_tokens, model_info,
       strenv$jnp$astype(kv_token_mask > 0, scores$dtype),
       list(kv_token_mask$shape[[1]], 1L, 1L, kv_token_mask$shape[[2]])
     )
-    neg_inf <- strenv$jnp$array(-1e30, dtype = scores$dtype)
+    neg_inf <- neural_attention_mask_value(scores)
     scores <- strenv$jnp$where(kv_mask > 0, scores, neg_inf)
   }
   attn <- strenv$jax$nn$softmax(scores, axis = -1L)
@@ -8878,7 +8912,11 @@ neural_predict_pair_core_prepared <- function(params,
   }
   list(
     mu = strenv$jnp$squeeze(logits, axis = 1L),
-    sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.)
+    sigma = if (!is.null(params$sigma)) {
+      neural_floor_sigma(params$sigma, dtype = logits$dtype)
+    } else {
+      strenv$jnp$array(1., dtype = logits$dtype)
+    }
   )
 }
 
@@ -8984,7 +9022,11 @@ neural_predict_single_core_prepared <- function(params,
   }
   list(
     mu = strenv$jnp$squeeze(logits, axis = 1L),
-    sigma = if (!is.null(params$sigma)) params$sigma else strenv$jnp$array(1.)
+    sigma = if (!is.null(params$sigma)) {
+      neural_floor_sigma(params$sigma, dtype = logits$dtype)
+    } else {
+      strenv$jnp$array(1., dtype = logits$dtype)
+    }
   )
 }
 
@@ -10478,6 +10520,7 @@ generate_ModelOutcome_neural <- function(){
     svi_num_draws = 50L,
     vi_guide = "auto_normal",
     optimizer = "muon",
+    svi_clip_global_norm = 10,
     early_stopping = TRUE,
     early_stopping_n_checks = 10L,
     early_stopping_patience = 3L,
@@ -11415,6 +11458,7 @@ generate_ModelOutcome_neural <- function(){
       default_time_embedding <- neural_default_time_context_matrix()
     }
   }
+  context_present_masking <- isTRUE(neural_token_info_use$context_present_masking %||% TRUE)
   experiment_token_mode <- tolower(as.character(
     neural_token_info_use$experiment_token_mode %||% "legacy_id"
   ))
@@ -12255,6 +12299,10 @@ generate_ModelOutcome_neural <- function(){
     likelihood = likelihood,
     legacy_pairwise_scale = FALSE,
     prior_sd_fallback = 0.5
+  )
+  neural_validate_calibration_temperature_compatibility(
+    learned_pairwise_bernoulli_logit_scale = learned_pairwise_bernoulli_logit_scale,
+    calibration_control = calibration_control
   )
   mcmc_control$calibration <- calibration_control
   pairwise_bernoulli_logit_scale_prior_sd <-
@@ -13805,13 +13853,15 @@ generate_ModelOutcome_neural <- function(){
 
       W_ff2_name <- paste0("W_ff2_l", l_)
       W_ff2_shape <- reticulate::tuple(FFDim, ModelDims)
+      ff2_fan_scale <- as.numeric(sqrt(as.numeric(ModelDims) / max(1, as.numeric(FFDim))))
+      tau_w_ff2_l <- tau_w_l * ff2_fan_scale
       W_ff2_l <- p2d(
         name = W_ff2_name,
         sample_fxn = function() {
-          sample_loc_scale(W_ff2_name, tau_w_l, W_ff2_shape)
+          sample_loc_scale(W_ff2_name, tau_w_ff2_l, W_ff2_shape)
         },
         init_fxn = function() {
-          p2d_init_normal(W_ff2_name, tau_w_l, W_ff2_shape)
+          p2d_init_normal(W_ff2_name, tau_w_ff2_l, W_ff2_shape)
         }
       )
 
@@ -14172,6 +14222,7 @@ generate_ModelOutcome_neural <- function(){
         "sigma",
         strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale))
       )
+      sigma <- neural_floor_sigma(sigma, dtype = ddtype_)
     }
     log_pairwise_bernoulli_logit_scale <- NULL
     if (isTRUE(learned_pairwise_bernoulli_logit_scale) &&
@@ -14388,7 +14439,7 @@ generate_ModelOutcome_neural <- function(){
     sigma_use <- if (is.null(sigma)) {
       strenv$jnp$array(1., dtype = ddtype_)
     } else {
-      sigma
+      neural_floor_sigma(sigma, dtype = ddtype_)
     }
     norm_logp <- strenv$numpyro$distributions$Normal(mu, sigma_use)$log_prob(y_norm)
     ord_logp <- strenv$jnp$zeros_like(y_numeric)
@@ -14510,8 +14561,9 @@ generate_ModelOutcome_neural <- function(){
         return(invisible(NULL))
       }
       mu <- strenv$jnp$take(logits, ai(0L), axis = 1L)
+      sigma_use <- neural_floor_sigma(sigma, dtype = ddtype_)
       scaled_observation_factor(
-        strenv$numpyro$distributions$Normal(mu, sigma),
+        strenv$numpyro$distributions$Normal(mu, sigma_use),
         Yb
       )
       return(invisible(NULL))
@@ -14719,7 +14771,7 @@ generate_ModelOutcome_neural <- function(){
       n_resp_party_levels = n_resp_party_levels,
       party_missing_index = party_missing_index,
       resp_party_missing_index = resp_party_missing_index,
-      context_present_masking = TRUE
+      context_present_masking = context_present_masking
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
@@ -15477,7 +15529,7 @@ generate_ModelOutcome_neural <- function(){
       n_resp_party_levels = n_resp_party_levels,
       party_missing_index = party_missing_index,
       resp_party_missing_index = resp_party_missing_index,
-      context_present_masking = TRUE
+      context_present_masking = context_present_masking
     )
 
     embed_candidate <- function(X_idx, party_idx, resp_p, experiment_idx = NULL,
@@ -17466,7 +17518,7 @@ generate_ModelOutcome_neural <- function(){
     n_resp_party_levels = n_resp_party_levels,
     party_missing_index = party_missing_index,
     resp_party_missing_index = resp_party_missing_index,
-    context_present_masking = TRUE
+    context_present_masking = context_present_masking
   )
   validation_model_info$factor_name_text <- factor_name_text
   validation_model_info$level_name_text <- level_name_text
@@ -18342,6 +18394,33 @@ generate_ModelOutcome_neural <- function(){
     } else {
       svi_lr
     }
+    clip_global_norm <- as.numeric(mcmc_control$svi_clip_global_norm %||% 10)
+    if (length(clip_global_norm) != 1L ||
+        is.na(clip_global_norm) ||
+        !is.finite(clip_global_norm) ||
+        clip_global_norm <= 0) {
+      clip_global_norm <- NA_real_
+    }
+    optax_clip_available <- reticulate::py_has_attr(strenv$optax, "clip_by_global_norm") &&
+      reticulate::py_has_attr(strenv$optax, "chain")
+    optax_to_numpyro_available <- reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")
+    clip_enabled <- isTRUE(optax_clip_available) && is.finite(clip_global_norm)
+    wrap_optax_optimizer <- function(optax_optim) {
+      if (!isTRUE(clip_enabled)) {
+        return(optax_optim)
+      }
+      strenv$optax$chain(
+        strenv$optax$clip_by_global_norm(as.numeric(clip_global_norm)),
+        optax_optim
+      )
+    }
+    optax_to_numpyro_optimizer <- function(optax_optim) {
+      optax_optim <- wrap_optax_optimizer(optax_optim)
+      if (isTRUE(optax_to_numpyro_available)) {
+        return(strenv$numpyro$optim$optax_to_numpyro(optax_optim))
+      }
+      optax_optim
+    }
     muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
       reticulate::py_has_attr(strenv$optax$contrib, "muon")
     optimizer_tag <- neural_resolve_svi_optimizer_tag(
@@ -18360,22 +18439,28 @@ generate_ModelOutcome_neural <- function(){
       warmup_steps = as.integer(warmup_steps),
       decay_steps = as.integer(decay_steps),
       end_factor = end_factor,
+      clip_global_norm = if (is.finite(clip_global_norm)) clip_global_norm else NA_real_,
+      clip_status = if (isTRUE(clip_enabled)) "enabled" else if (!is.finite(clip_global_norm)) "disabled" else "unavailable",
       steps_completed = NA_integer_,
       lr_trace = numeric(0),
       lr_trace_status = "pending"
     )
     svi_optim <- if (optimizer_tag == "adam") {
-      strenv$numpyro$optim$Adam(lr_schedule)
+      if (isTRUE(clip_enabled) &&
+          reticulate::py_has_attr(strenv$optax, "adam")) {
+        optax_to_numpyro_optimizer(strenv$optax$adam(learning_rate = lr_schedule))
+      } else {
+        strenv$numpyro$optim$Adam(lr_schedule)
+      }
     } else if (optimizer_tag == "adamw") {
-      if (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW")) {
+      if (isTRUE(clip_enabled) &&
+          reticulate::py_has_attr(strenv$optax, "adamw")) {
+        optax_to_numpyro_optimizer(strenv$optax$adamw(learning_rate = lr_schedule))
+      } else if (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW")) {
         strenv$numpyro$optim$AdamW(lr_schedule)
       } else if (reticulate::py_has_attr(strenv$optax, "adamw")) {
         optax_optim <- strenv$optax$adamw(learning_rate = lr_schedule)
-        if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
-          strenv$numpyro$optim$optax_to_numpyro(optax_optim)
-        } else {
-          optax_optim
-        }
+        optax_to_numpyro_optimizer(optax_optim)
       } else {
         stop(
           "optimizer='adamw' requested, but neither numpyro.optim.AdamW nor optax.adamw is available.",
@@ -18391,7 +18476,7 @@ generate_ModelOutcome_neural <- function(){
 
         muon_kwargs <- list(
           learning_rate = lr_schedule,
-          adam_weight_decay = 1e-4,
+          adam_weight_decay = 0,
           consistent_rms = 0.2
         )
         if (!is.null(muon_dimnums)) {
@@ -18411,11 +18496,7 @@ generate_ModelOutcome_neural <- function(){
             )
           }
         )
-        if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
-          strenv$numpyro$optim$optax_to_numpyro(optax_optim)
-        } else {
-          optax_optim
-        }
+        optax_to_numpyro_optimizer(optax_optim)
       } else {
         stop(
           "optimizer='muon' requested, but optax.contrib.muon is unavailable.",
@@ -18424,11 +18505,7 @@ generate_ModelOutcome_neural <- function(){
       }
     } else {
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
-      if (reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")) {
-        strenv$numpyro$optim$optax_to_numpyro(optax_optim)
-      } else {
-        optax_optim
-      }
+      optax_to_numpyro_optimizer(optax_optim)
     }
     svi <- strenv$numpyro$infer$SVI(
       model = model_fn,
@@ -21021,7 +21098,7 @@ generate_ModelOutcome_neural <- function(){
     n_resp_party_levels = n_resp_party_levels,
     party_missing_index = party_missing_index,
     resp_party_missing_index = resp_party_missing_index,
-    context_present_masking = TRUE
+    context_present_masking = context_present_masking
   )
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
@@ -21106,6 +21183,58 @@ generate_ModelOutcome_neural <- function(){
     NULL
   }
 
+  normalize_direct_resp_cov_prediction <- function(resp_cov_new = NULL,
+                                                   resp_cov_present_new = NULL,
+                                                   n_rows = 1L) {
+    n_rows <- ai(n_rows)
+    if (is.null(resp_cov_new)) {
+      n_cov <- length(covariate_names_override)
+      if (n_cov < 1L) {
+        n_cov <- ai(n_resp_covariates)
+      }
+      values <- matrix(0, nrow = n_rows, ncol = n_cov)
+      if (n_cov > 0L && length(covariate_names_override) == n_cov) {
+        colnames(values) <- covariate_names_override
+      }
+      return(list(values = values, present = matrix(0, nrow = n_rows, ncol = n_cov)))
+    }
+
+    raw_mat <- as.matrix(resp_cov_new)
+    if (nrow(raw_mat) != n_rows) {
+      stop("resp_cov_new must have one row per prediction row.", call. = FALSE)
+    }
+    missing_raw <- is.na(raw_mat)
+    values <- suppressWarnings(matrix(
+      as.numeric(raw_mat),
+      nrow = nrow(raw_mat),
+      ncol = ncol(raw_mat),
+      dimnames = dimnames(raw_mat)
+    ))
+    bad_non_numeric <- is.na(values) & !missing_raw
+    if (any(bad_non_numeric)) {
+      stop("resp_cov_new must contain numeric values or NA.", call. = FALSE)
+    }
+    bad_inf <- !is.na(values) & !is.finite(values)
+    if (any(bad_inf)) {
+      stop("resp_cov_new must not contain Inf or -Inf values.", call. = FALSE)
+    }
+    values[is.na(values)] <- 0
+
+    if (is.null(resp_cov_present_new)) {
+      present <- matrix(as.numeric(!missing_raw), nrow = nrow(values), ncol = ncol(values))
+      dimnames(present) <- dimnames(values)
+    } else {
+      present <- as.matrix(resp_cov_present_new)
+      if (!identical(dim(present), dim(values))) {
+        stop("resp_cov_present_new must have the same dimensions as resp_cov_new.", call. = FALSE)
+      }
+      present <- matrix(as.numeric(present), nrow = nrow(values), ncol = ncol(values))
+      dimnames(present) <- dimnames(values)
+      present[is.na(present)] <- 0
+    }
+    list(values = values, present = present)
+  }
+
   TransformerPredict_pair <- function(params, Xl_new, Xr_new, pl_new, pr_new,
                                       resp_party_new = NULL, resp_cov_new = NULL,
                                       resp_cov_present_new = NULL,
@@ -21121,23 +21250,14 @@ generate_ModelOutcome_neural <- function(){
       resp_party_new <- rep(0L, nrow(Xl_new))
     }
     resp_p <- strenv$jnp$array(as.integer(resp_party_new))$astype(strenv$jnp$int32)
-    if (is.null(resp_cov_new)) {
-      resp_cov_new <- neural_resolve_default_resp_cov_values(
-        model_info = predict_model_info,
-        n_rows = nrow(Xl_new),
-        experiment_idx = experiment_idx_new
-      )
-    }
+    resp_cov_prepped <- normalize_direct_resp_cov_prediction(
+      resp_cov_new = resp_cov_new,
+      resp_cov_present_new = resp_cov_present_new,
+      n_rows = nrow(Xl_new)
+    )
+    resp_cov_new <- resp_cov_prepped$values
+    resp_cov_present_new <- resp_cov_prepped$present
     resp_c <- strenv$jnp$array(as.matrix(resp_cov_new))$astype(ddtype_)
-    if (is.null(resp_cov_present_new)) {
-      resp_cov_present_new <- if (!is.null(resp_cov_default_present)) {
-        matrix(rep(resp_cov_default_present, each = nrow(Xl_new)), nrow = nrow(Xl_new))
-      } else if (!is.null(resp_cov_new) && ncol(as.matrix(resp_cov_new)) > 0L) {
-        matrix(1, nrow = nrow(Xl_new), ncol = ncol(as.matrix(resp_cov_new)))
-      } else {
-        matrix(0, nrow = nrow(Xl_new), ncol = 0L)
-      }
-    }
     resp_c_present <- strenv$jnp$array(as.matrix(resp_cov_present_new))$astype(ddtype_)
     if (is.null(resp_cov_order_new)) {
       resp_cov_order_new <- build_resp_cov_order_new(
@@ -21196,23 +21316,14 @@ generate_ModelOutcome_neural <- function(){
       resp_party_new <- rep(0L, nrow(X_new))
     }
     resp_p <- strenv$jnp$array(as.integer(resp_party_new))$astype(strenv$jnp$int32)
-    if (is.null(resp_cov_new)) {
-      resp_cov_new <- neural_resolve_default_resp_cov_values(
-        model_info = predict_model_info,
-        n_rows = nrow(X_new),
-        experiment_idx = experiment_idx_new
-      )
-    }
+    resp_cov_prepped <- normalize_direct_resp_cov_prediction(
+      resp_cov_new = resp_cov_new,
+      resp_cov_present_new = resp_cov_present_new,
+      n_rows = nrow(X_new)
+    )
+    resp_cov_new <- resp_cov_prepped$values
+    resp_cov_present_new <- resp_cov_prepped$present
     resp_c <- strenv$jnp$array(as.matrix(resp_cov_new))$astype(ddtype_)
-    if (is.null(resp_cov_present_new)) {
-      resp_cov_present_new <- if (!is.null(resp_cov_default_present)) {
-        matrix(rep(resp_cov_default_present, each = nrow(X_new)), nrow = nrow(X_new))
-      } else if (!is.null(resp_cov_new) && ncol(as.matrix(resp_cov_new)) > 0L) {
-        matrix(1, nrow = nrow(X_new), ncol = ncol(as.matrix(resp_cov_new)))
-      } else {
-        matrix(0, nrow = nrow(X_new), ncol = 0L)
-      }
-    }
     resp_c_present <- strenv$jnp$array(as.matrix(resp_cov_present_new))$astype(ddtype_)
     if (is.null(resp_cov_order_new)) {
       resp_cov_order_new <- build_resp_cov_order_new(
@@ -22007,7 +22118,7 @@ generate_ModelOutcome_neural <- function(){
     has_candidate_group_context = isTRUE(has_candidate_group_context),
     has_respondent_group_context = isTRUE(has_respondent_group_context),
     has_relation_token_context = isTRUE(has_relation_context),
-    context_present_masking = TRUE,
+    context_present_masking = context_present_masking,
     has_stage_context = isTRUE(stage_context_enabled),
     has_matchup_context = isTRUE(use_matchup_token),
     has_stage_token = !is.null(ParamsMean$E_stage),

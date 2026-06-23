@@ -180,6 +180,56 @@ test_that("prediction-time X raw aliases activate foundation covariate tokens", 
   testthat::expect_equal(prepped$order[, 1:2, drop = FALSE], cbind(c(0L, 0L), c(1L, 1L)))
 })
 
+test_that("prediction-time omitted respondent covariates stay missing under shared projection", {
+  model_info <- prediction_test_resp_cov_model_info(strict = TRUE)
+  model_info$resp_cov_mean <- c(10, 20)
+  model_info$resp_cov_default_present <- c(1, 1)
+
+  prepped_none <- strategize:::cs2step_neural_prepare_resp_cov(
+    resp_cov_new = NULL,
+    model_info = model_info,
+    n_rows = 2L
+  )
+  expected_zero <- matrix(
+    0,
+    nrow = 2L,
+    ncol = 2L,
+    dimnames = list(NULL, model_info$covariate_names)
+  )
+  testthat::expect_equal(prepped_none$values, expected_zero)
+  testthat::expect_equal(prepped_none$present, expected_zero)
+  testthat::expect_equal(prepped_none$order[, 1:2, drop = FALSE], cbind(c(0L, 0L), c(1L, 1L)))
+  testthat::expect_true(all(prepped_none$order[, 3:4, drop = FALSE] == -1L))
+
+  prepped_partial <- strategize:::cs2step_neural_prepare_resp_cov(
+    resp_cov_new = data.frame(income = c(1, NA), check.names = FALSE),
+    model_info = model_info,
+    n_rows = 2L
+  )
+  testthat::expect_equal(prepped_partial$values[, "local::target::income"], c(1, 0))
+  testthat::expect_equal(prepped_partial$present[, "local::target::income"], c(1, 0))
+  testthat::expect_equal(prepped_partial$values[, "local::target::local_bonus"], c(0, 0))
+  testthat::expect_equal(prepped_partial$present[, "local::target::local_bonus"], c(0, 0))
+  testthat::expect_equal(prepped_partial$order[, 1:2, drop = FALSE], cbind(c(0L, 0L), c(1L, 1L)))
+
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_resp_cov(
+      resp_cov_new = data.frame(income = c(Inf, 1), check.names = FALSE),
+      model_info = model_info,
+      n_rows = 2L
+    ),
+    "Inf"
+  )
+  testthat::expect_error(
+    strategize:::cs2step_neural_prepare_resp_cov(
+      resp_cov_new = data.frame(income = c("bad", "2"), check.names = FALSE),
+      model_info = model_info,
+      n_rows = 2L
+    ),
+    "numeric values or NA"
+  )
+})
+
 test_that("prediction-time X rejects conflicting raw and internal covariate aliases", {
   model_info <- prediction_test_resp_cov_model_info(strict = TRUE)
   x_new <- data.frame(
@@ -229,9 +279,14 @@ test_that("legacy predictors keep permissive no-match prediction-time X behavior
     n_rows = 2L
   )
 
-  testthat::expect_true(all(prepped$order == -1L))
+  testthat::expect_equal(prepped$order[, 1:2, drop = FALSE], cbind(c(0L, 0L), c(1L, 1L)))
+  testthat::expect_true(all(prepped$order[, 3:4, drop = FALSE] == -1L))
   testthat::expect_equal(
     prepped$values,
+    matrix(0, nrow = 2L, ncol = 2L, dimnames = list(NULL, model_info$covariate_names))
+  )
+  testthat::expect_equal(
+    prepped$present,
     matrix(0, nrow = 2L, ncol = 2L, dimnames = list(NULL, model_info$covariate_names))
   )
 })

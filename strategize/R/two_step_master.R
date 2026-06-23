@@ -2706,7 +2706,9 @@ strategize       <-          function(
           NULL
         },
         coefficient_matrix = coefficient_matrix,
-        cluster_params = cluster_params
+        cluster_params = cluster_params,
+        moderator_columns = factorhet_cache_out$moderator_columns,
+        dropped_moderator_columns = factorhet_cache_out$dropped_moderator_columns
       )
       result_out$outcome_model_view$metadata$K <- as.integer(K)
       result_out$outcome_model_view$metadata$heterogeneity_model <- "FactorHet_mbo"

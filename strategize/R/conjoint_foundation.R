@@ -908,10 +908,12 @@ cs_foundation_semantic_feature_names <- function(text_registry) {
   out
 }
 
-cs_foundation_get_embedding_rows <- function(emb_matrix, keys) {
+cs_foundation_get_embedding_rows <- function(emb_matrix, keys, return_present = FALSE) {
   keys <- as.character(keys)
+  present <- rep(FALSE, length(keys))
   if (is.null(emb_matrix) || !length(keys)) {
-    return(matrix(numeric(0), nrow = length(keys), ncol = 0L))
+    rows <- matrix(numeric(0), nrow = length(keys), ncol = 0L)
+    return(if (isTRUE(return_present)) list(rows = rows, present = present) else rows)
   }
   out <- matrix(0, nrow = length(keys), ncol = ncol(emb_matrix))
   rownames(out) <- keys
@@ -920,8 +922,9 @@ cs_foundation_get_embedding_rows <- function(emb_matrix, keys) {
   ok <- which(!is.na(matched))
   if (length(ok) > 0L) {
     out[ok, ] <- emb_matrix[matched[ok], , drop = FALSE]
+    present[ok] <- TRUE
   }
-  out
+  if (isTRUE(return_present)) list(rows = out, present = present) else out
 }
 
 cs_foundation_align_covariate_block <- function(schema_names,
@@ -1193,24 +1196,35 @@ cs_foundation_row_semantics <- function(W_df, exp_map, text_registry, X_mat = NU
     for (factor_name in names(exp_map$factor_map)) {
       factor_meta <- exp_map$factor_map[[factor_name]]
       level_map <- exp_map$level_map[[factor_name]]
-      factor_vec <- cs_foundation_get_embedding_rows(
+      factor_info <- cs_foundation_get_embedding_rows(
         emb_matrix = text_registry$factor_embedding,
-        keys = factor_meta$slot_key
+        keys = factor_meta$slot_key,
+        return_present = TRUE
       )
+      if (!isTRUE(factor_info$present[[1L]])) {
+        next
+      }
       vals <- as.character(W_df[[factor_name]])
       lvl_keys <- unname(level_map[vals])
       good <- !is.na(lvl_keys)
       if (!any(good)) {
         next
       }
-      factor_sum[good, ] <- factor_sum[good, , drop = FALSE] +
-        matrix(rep(factor_vec[1, ], each = sum(good)), nrow = sum(good))
-      level_sum[good, ] <- level_sum[good, , drop = FALSE] +
-        cs_foundation_get_embedding_rows(
-          emb_matrix = text_registry$level_embedding,
-          keys = lvl_keys[good]
-        )
-      counts[good] <- counts[good] + 1L
+      good_idx <- which(good)
+      level_info <- cs_foundation_get_embedding_rows(
+        emb_matrix = text_registry$level_embedding,
+        keys = lvl_keys[good_idx],
+        return_present = TRUE
+      )
+      matched_idx <- good_idx[level_info$present]
+      if (!length(matched_idx)) {
+        next
+      }
+      factor_sum[matched_idx, ] <- factor_sum[matched_idx, , drop = FALSE] +
+        matrix(rep(factor_info$rows[1, ], each = length(matched_idx)), nrow = length(matched_idx))
+      level_sum[matched_idx, ] <- level_sum[matched_idx, , drop = FALSE] +
+        level_info$rows[level_info$present, , drop = FALSE]
+      counts[matched_idx] <- counts[matched_idx] + 1L
     }
 
     counts[counts < 1L] <- 1L
@@ -1228,12 +1242,17 @@ cs_foundation_row_semantics <- function(W_df, exp_map, text_registry, X_mat = NU
   if (!is.null(X_mat) && !is.null(x_feature_emb) && ncol(X_mat) > 0L && nrow(x_feature_emb) > 0L) {
     X_use <- as.matrix(X_mat)
     storage.mode(X_use) <- "double"
-    x_emb <- cs_foundation_get_embedding_rows(
+    x_info <- cs_foundation_get_embedding_rows(
       emb_matrix = x_feature_emb,
-      keys = colnames(X_use)
+      keys = colnames(X_use),
+      return_present = TRUE
     )
-    semantic_x <- X_use %*% x_emb
-    denom <- rowSums(abs(X_use))
+    X_weight <- X_use
+    if (length(x_info$present) > 0L && any(!x_info$present)) {
+      X_weight[, !x_info$present] <- 0
+    }
+    semantic_x <- X_weight %*% x_info$rows
+    denom <- rowSums(abs(X_weight))
     ok <- denom > 0
     if (any(ok)) {
       semantic_x[ok, ] <- semantic_x[ok, , drop = FALSE] / denom[ok]

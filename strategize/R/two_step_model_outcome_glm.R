@@ -64,6 +64,59 @@ cs_glm_formula_terms <- function(x) {
   )
 }
 
+cs_factorhet_rank_reduce_moderators <- function(X, tol = 1e-7) {
+  if (is.null(X) || NCOL(X) == 0L) {
+    return(list(
+      X = NULL,
+      kept = character(0),
+      dropped = character(0)
+    ))
+  }
+
+  X_fh <- as.data.frame(X, stringsAsFactors = FALSE, check.names = FALSE)
+  if (is.null(colnames(X_fh))) {
+    colnames(X_fh) <- paste0("X", seq_len(ncol(X_fh)))
+  }
+  X_fh[] <- lapply(X_fh, function(x_col) as.numeric(as.character(x_col)))
+  col_names <- colnames(X_fh)
+  if (!length(col_names)) {
+    return(list(
+      X = NULL,
+      kept = character(0),
+      dropped = character(0)
+    ))
+  }
+
+  X_mat <- as.matrix(X_fh)
+  keep <- rep(FALSE, ncol(X_mat))
+  basis <- matrix(1, nrow = nrow(X_mat), ncol = 1L)
+  basis_rank <- qr(basis, tol = tol)$rank
+  for (j in seq_len(ncol(X_mat))) {
+    x_col <- X_mat[, j]
+    if (any(!is.finite(x_col))) {
+      next
+    }
+    candidate <- cbind(basis, x_col)
+    candidate_rank <- qr(candidate, tol = tol)$rank
+    if (candidate_rank > basis_rank) {
+      keep[[j]] <- TRUE
+      basis <- candidate
+      basis_rank <- candidate_rank
+    }
+  }
+
+  dropped <- col_names[!keep]
+  X_keep <- X_fh[, keep, drop = FALSE]
+  if (!ncol(X_keep)) {
+    X_keep <- NULL
+  }
+  list(
+    X = X_keep,
+    kept = col_names[keep],
+    dropped = dropped
+  )
+}
+
 cs_factorhet_formulas <- function(W, X = NULL) {
   factor_terms <- cs_glm_formula_terms(colnames(W))
   if (!length(factor_terms)) {
@@ -111,12 +164,8 @@ cs_factorhet_prepare_design <- function(Y,
                                         factor_names = colnames(W)) {
   W_fh <- W
   colnames(W_fh) <- factor_names
-  if (!is.null(X) && NCOL(X) > 0L) {
-    X_fh <- as.data.frame(X, stringsAsFactors = FALSE, check.names = FALSE)
-    X_fh[] <- lapply(X_fh, function(x_col) as.numeric(as.character(x_col)))
-  } else {
-    X_fh <- NULL
-  }
+  moderator_rank <- cs_factorhet_rank_reduce_moderators(X)
+  X_fh <- moderator_rank$X
   design_fh <- as.data.frame(
     data.frame(
       "Yobs" = Y,
@@ -131,7 +180,9 @@ cs_factorhet_prepare_design <- function(Y,
   list(
     design = design_fh,
     W = W_fh,
-    X = X_fh
+    X = X_fh,
+    moderator_columns = moderator_rank$kept,
+    dropped_moderator_columns = moderator_rank$dropped
   )
 }
 
@@ -505,6 +556,8 @@ generate_ModelOutcome <- function(){
             )
             W_fh <- factorhet_design$W
             X_fh <- factorhet_design$X
+            factorhet_moderator_columns <- factorhet_design$moderator_columns
+            factorhet_dropped_moderator_columns <- factorhet_design$dropped_moderator_columns
             design_fh <- factorhet_design$design
             factorhet_formulas <- cs_factorhet_formulas(W_fh, X_fh)
             OutcomeFormula_withInter <- factorhet_formulas$with_interactions
@@ -604,7 +657,9 @@ generate_ModelOutcome <- function(){
               vcov_OutcomeModel_by_k = vcov_OutcomeModel_by_k,
               vcov_OutcomeModel = vcov_OutcomeModel,
               my_model = my_model,
-              K = K
+              K = K,
+              moderator_columns = factorhet_moderator_columns,
+              dropped_moderator_columns = factorhet_dropped_moderator_columns
             )
 
             # adjustements for competibility with k=1 case

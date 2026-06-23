@@ -231,6 +231,47 @@ test_that("FactorHet design preserves numeric moderator rank with character resp
   expect_equal(qr(moderator_matrix)$rank, ncol(moderator_matrix))
 })
 
+test_that("FactorHet design drops rank-deficient moderator columns", {
+  resp_ids <- paste0("resp_", seq_len(5))
+  respondent_id <- rep(resp_ids, each = 2L)
+  respondent_task_id <- rep(seq_len(5), each = 2L)
+  profile_order <- rep(c(1L, 2L), times = 5L)
+  W <- data.frame(
+    treatment = rep(c("status_quo", "new_policy"), times = 5L),
+    frame = rep(c("gain", "loss"), length.out = 10L),
+    stringsAsFactors = FALSE
+  )
+  party_a <- c(1, 0, 1, 0, 1)
+  X_resp <- data.frame(
+    party_a = party_a,
+    party_b = 1 - party_a,
+    constant = 1,
+    check.names = FALSE
+  )
+  X <- X_resp[match(respondent_id, resp_ids), , drop = FALSE]
+
+  prepared <- cs_factorhet_prepare_design(
+    Y = rep(c(0, 1), times = 5L),
+    respondent_id = respondent_id,
+    respondent_task_id = respondent_task_id,
+    profile_order = profile_order,
+    W = W,
+    X = X
+  )
+  formulas <- cs_factorhet_formulas(prepared$W, prepared$X)
+  respondent_design <- prepared$design[
+    !duplicated(prepared$design$respondent_id),
+    ,
+    drop = FALSE
+  ]
+  moderator_matrix <- stats::model.matrix(formulas$moderator, respondent_design)
+
+  expect_equal(prepared$moderator_columns, "party_a")
+  expect_equal(prepared$dropped_moderator_columns, c("party_b", "constant"))
+  expect_false("party_b" %in% names(prepared$design))
+  expect_equal(qr(moderator_matrix)$rank, ncol(moderator_matrix))
+})
+
 test_that("crossfit Q probability weights and diagnostics are computed", {
   W <- data.frame(
     A = c("a", "b", "a", "b"),
