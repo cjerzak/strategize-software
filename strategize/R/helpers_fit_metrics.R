@@ -243,7 +243,7 @@ cs_compute_outcome_metrics <- function(y_eval, pred_eval, likelihood, threshold 
     prob_mat <- prob_mat[keep, , drop = FALSE]
     if (length(y_eval)) {
       log_loss <- cs_compute_multiclass_log_loss(y_eval, prob_mat)
-      pred_class <- max.col(prob_mat) - 1L
+      pred_class <- max.col(prob_mat, ties.method = "first") - 1L
       accuracy <- mean(pred_class == y_eval, na.rm = TRUE)
     } else {
       log_loss <- NA_real_
