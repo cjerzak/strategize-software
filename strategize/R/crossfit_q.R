@@ -616,13 +616,20 @@ cs_crossfit_q_policy_prob <- function(W, policy, p_list) {
   probs
 }
 
-cs_crossfit_q_sample_policy <- function(policy, n, seed = NULL) {
-  if (!is.null(seed)) {
-    set.seed(as.integer(seed))
+cs_crossfit_q_sample_policy <- function(policy, n, seed = NULL, uniforms = NULL) {
+  if (is.null(uniforms)) {
+    if (!is.null(seed)) {
+      set.seed(as.integer(seed))
+    }
+    uniforms <- matrix(stats::runif(as.integer(n) * length(policy)), nrow = as.integer(n))
   }
-  out <- lapply(policy, function(p) {
-    sample(names(p), size = n, replace = TRUE, prob = as.numeric(p))
-  })
+  out <- Map(function(p, u) {
+    probs <- as.numeric(p)
+    cdf <- cumsum(probs / sum(probs))
+    idx <- findInterval(u, c(0, cdf), rightmost.closed = TRUE)
+    idx <- pmin(pmax(idx, 1L), length(probs))
+    names(p)[idx]
+  }, policy, as.data.frame(uniforms, stringsAsFactors = FALSE))
   as.data.frame(out, stringsAsFactors = FALSE, check.names = FALSE)
 }
 
@@ -745,8 +752,9 @@ cs_crossfit_q_pair_predict <- function(focal_W, opponent_W, result, p_list,
 }
 
 cs_crossfit_q_policy_model_mu <- function(policy, opponent_W, result, p_list,
-                                          n_draws, seed, chunk_size) {
-  draws <- cs_crossfit_q_sample_policy(policy, n = n_draws, seed = seed)
+                                          n_draws, seed, chunk_size,
+                                          uniforms = NULL) {
+  draws <- cs_crossfit_q_sample_policy(policy, n = n_draws, seed = seed, uniforms = uniforms)
   intercept <- cs_crossfit_q_to_numeric(result$est_intercept_jnp)
   if (!length(intercept)) {
     intercept <- 0
@@ -1697,6 +1705,11 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
 
   policy <- cs_crossfit_q_extract_policy(train_result)
   m_obs <- cs_crossfit_q_pair_predict(focal_W, opponent_W, train_result, p_list)
+  set.seed(as.integer(control$seed + 1009L * fold))
+  common_uniforms <- matrix(
+    stats::runif(as.integer(control$n_policy_draws) * length(p_list)),
+    nrow = as.integer(control$n_policy_draws)
+  )
   mu_policy <- cs_crossfit_q_policy_model_mu(
     policy = policy,
     opponent_W = opponent_W,
@@ -1704,7 +1717,8 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
     p_list = p_list,
     n_draws = control$n_policy_draws,
     seed = control$seed + 1009L * fold,
-    chunk_size = control$chunk_size
+    chunk_size = control$chunk_size,
+    uniforms = common_uniforms
   )
   mu_reference <- cs_crossfit_q_policy_model_mu(
     policy = p_list,
@@ -1712,8 +1726,9 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
     result = train_result,
     p_list = p_list,
     n_draws = control$n_policy_draws,
-    seed = control$seed + 2003L * fold,
-    chunk_size = control$chunk_size
+    seed = control$seed + 1009L * fold,
+    chunk_size = control$chunk_size,
+    uniforms = common_uniforms
   )
 
   p_focal <- cs_crossfit_q_policy_prob(focal_W, p_list, p_list)
