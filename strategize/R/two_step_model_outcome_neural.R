@@ -13068,8 +13068,11 @@ generate_ModelOutcome_neural <- function(){
   # removes the posterior-collapse failure mode. Gates are nuisance scalars, so the
   # loss of posterior uncertainty on them is acceptable.
   p2d_gate_init_value <- 0.1
+  p2d_fixed_gate_value <- function(init_value = p2d_gate_init_value) {
+    strenv$jnp$array(as.numeric(init_value), dtype = ddtype_)
+  }
   p2d_deterministic_gate <- function(name, init_value = p2d_gate_init_value) {
-    init_val <- strenv$jnp$array(as.numeric(init_value), dtype = ddtype_)
+    init_val <- p2d_fixed_gate_value(init_value)
     if (!is.null(p2d_constraint_positive)) {
       return(strenv$numpyro$param(name, init_val, constraint = p2d_constraint_positive))
     }
@@ -21019,6 +21022,25 @@ generate_ModelOutcome_neural <- function(){
     invisible(value)
   }
 
+  get_gate_mean_or_fixed <- function(name) {
+    value <- get_site_mean_or_param(name)
+    if (!is.null(value)) {
+      return(value)
+    }
+    if (!isTRUE(use_svi)) {
+      return(p2d_fixed_gate_value())
+    }
+    NULL
+  }
+
+  maybe_gate <- function(name, assign_as = name) {
+    value <- get_gate_mean_or_fixed(name)
+    if (!is.null(value)) {
+      ParamsMean[[assign_as]] <<- value
+    }
+    invisible(value)
+  }
+
   maybe_site("E_party")
   maybe_site("E_resp_party")
   maybe_site("E_respondent_cls")
@@ -21043,7 +21065,9 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_experiment_text")
   maybe_site("W_place_context")
   maybe_site("W_time_context")
-  maybe_site("alpha_cross")
+  if (isTRUE(pairwise_mode) && isTRUE(use_cross_attn)) {
+    maybe_gate("alpha_cross")
+  }
   maybe_site("RMS_cross")
   maybe_site("RMS_merge_cross")
   maybe_site("RMS_q_cross")
@@ -21084,7 +21108,9 @@ generate_ModelOutcome_neural <- function(){
   if (!is.null(PosteriorDraws$W_cross_out)) {
     ParamsMean$W_cross_out <- mean_param(PosteriorDraws$W_cross_out)
   }
-  maybe_site("alpha_rc")
+  if (low_rank_interaction_rank > 0L) {
+    maybe_gate("alpha_rc")
+  }
   maybe_site("W_rc_r")
   maybe_site("W_rc_c")
   maybe_site("W_rc_out")
@@ -21118,8 +21144,10 @@ generate_ModelOutcome_neural <- function(){
     maybe_site(paste0("pseudo_query_ff_l", l_))
     alpha_attn_name <- paste0("alpha_attn_l", l_)
     alpha_ff_name <- paste0("alpha_ff_l", l_)
-    maybe_site(alpha_attn_name)
-    maybe_site(alpha_ff_name)
+    if (!isTRUE(use_full_attn_residual)) {
+      maybe_gate(alpha_attn_name)
+      maybe_gate(alpha_ff_name)
+    }
 
     maybe_site(paste0("RMS_attn_l", l_))
     maybe_site(paste0("RMS_q_l", l_))

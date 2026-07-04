@@ -3142,6 +3142,69 @@ test_that("full attention residual mode exposes depth-attention metadata", {
   expect_false("alpha_ff_l1" %in% model_info$param_names)
 })
 
+test_that("pure MCMC standard residual fits preserve fixed ReZero gates", {
+  skip_on_cran()
+  skip_if_no_jax()
+
+  if (!"jnp" %in% ls(envir = strategize:::strenv)) {
+    strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
+  }
+
+  data <- generate_test_data(n = 12, seed = 20260704)
+  names_list <- strategize:::cs2step_build_names_list(data$W)
+  W_idx <- strategize:::cs2step_encode_W_indices(
+    data$W,
+    names_list = names_list,
+    unknown = "error",
+    pad_unknown = 0L
+  )
+  factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
+
+  fit <- suppressMessages(suppressWarnings(strategize:::cs2step_eval_outcome_model_neural(
+    Y = data$Y,
+    W_idx = W_idx,
+    names_list = names_list,
+    factor_levels = factor_levels,
+    diff = TRUE,
+    pair_id = data$pair_id,
+    profile_order = data$profile_order,
+    conda_env_required = TRUE,
+    neural_mcmc_control = list(
+      ModelDims = 4L,
+      ModelDepth = 1L,
+      residual_mode = "standard",
+      subsample_method = "full",
+      uncertainty_scope = "all",
+      n_samples_warmup = 1L,
+      n_samples_mcmc = 1L,
+      n_chains = 1L,
+      chain_method = "sequential",
+      cross_candidate_encoder = "none",
+      eval_enabled = FALSE,
+      warn_stage_imbalance_pct = 0,
+      warn_min_cell_n = 0L
+    )
+  )))
+
+  model_info <- fit$neural_model_info
+  expect_false(is.null(model_info))
+  expect_identical(model_info$residual_mode, "standard")
+  expect_true("alpha_attn_layers" %in% model_info$param_names)
+  expect_true("alpha_ff_layers" %in% model_info$param_names)
+  expect_false("alpha_attn_l1" %in% model_info$param_names)
+  expect_false("alpha_ff_l1" %in% model_info$param_names)
+  expect_equal(
+    as.numeric(strategize:::cs2step_neural_to_r_array(model_info$params$alpha_attn_layers)),
+    0.1,
+    tolerance = 1e-7
+  )
+  expect_equal(
+    as.numeric(strategize:::cs2step_neural_to_r_array(model_info$params$alpha_ff_layers)),
+    0.1,
+    tolerance = 1e-7
+  )
+})
+
 test_that("full attention residual readout aggregates layer history", {
   skip_if_no_jax()
   strategize:::initialize_jax()
