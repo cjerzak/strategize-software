@@ -3509,6 +3509,22 @@ neural_resolve_rms_scale <- function(value = NULL) {
   as.numeric(scale)
 }
 
+neural_resolve_qk_rms_scale <- function(value = NULL) {
+  scale <- suppressWarnings(as.numeric(value %||% 0.1))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    stop("'neural_mcmc_control$qk_rms_scale' must be a positive finite scalar.", call. = FALSE)
+  }
+  as.numeric(scale)
+}
+
+neural_resolve_moe_load_balance_lambda <- function(value = NULL) {
+  lambda <- suppressWarnings(as.numeric(value %||% 0.01))
+  if (length(lambda) != 1L || is.na(lambda) || !is.finite(lambda) || lambda < 0) {
+    return(0.01)
+  }
+  as.numeric(lambda)
+}
+
 neural_resolve_residual_weight_depth_scale <- function(value = NULL) {
   mode <- tolower(as.character(value %||% "floor_one"))
   mode <- gsub("-", "_", mode, fixed = TRUE)
@@ -3526,7 +3542,8 @@ neural_resolve_residual_weight_depth_scale <- function(value = NULL) {
 neural_resolve_init_policy <- function(model_depth,
                                        model_dims,
                                        RMS_scale = NULL,
-                                       residual_weight_depth_scale = NULL) {
+                                       residual_weight_depth_scale = NULL,
+                                       qk_rms_scale = NULL) {
   depth <- suppressWarnings(as.numeric(model_depth))
   dims <- suppressWarnings(as.numeric(model_dims))
   if (length(depth) != 1L || is.na(depth) || !is.finite(depth) || depth < 1) {
@@ -3536,6 +3553,7 @@ neural_resolve_init_policy <- function(model_depth,
     stop("'neural_mcmc_control$ModelDims' must be an integer >= 1.", call. = FALSE)
   }
   rms_scale <- neural_resolve_rms_scale(RMS_scale)
+  qk_rms_scale_resolved <- neural_resolve_qk_rms_scale(qk_rms_scale)
   residual_policy <- neural_resolve_residual_weight_depth_scale(residual_weight_depth_scale)
   depth_prior_scale <- sqrt(2) / sqrt(depth)
   residual_weight_multiplier <- switch(
@@ -3547,6 +3565,7 @@ neural_resolve_init_policy <- function(model_depth,
   weight_sd_scale <- sqrt(2) / sqrt(dims)
   list(
     RMS_scale = rms_scale,
+    qk_rms_scale = qk_rms_scale_resolved,
     residual_weight_depth_scale = residual_policy,
     depth_prior_scale = as.numeric(depth_prior_scale),
     residual_weight_multiplier = as.numeric(residual_weight_multiplier),
@@ -6546,6 +6565,31 @@ neural_build_covariate_fused_tokens <- function(model_info,
         params$W_covariate_value_basis
       )
       value_tok <- strenv$jnp$einsum("nsm,nsmd->nsd", mix_weights, basis_proj)
+      # Issue 5: Switch-style load-balancing penalty. Push the (token-mask-weighted)
+      # mean routing mass toward uniform so no single expert absorbs all weight while
+      # the others stop receiving gradients. Emitted as a numpyro.factor only during
+      # SVI training (moe_aux_active); harmless/skipped otherwise.
+      moe_lambda <- suppressWarnings(as.numeric(strenv$moe_load_balance_lambda %||% 0))
+      if (isTRUE(strenv$moe_aux_active) && length(moe_lambda) == 1L &&
+          is.finite(moe_lambda) && moe_lambda > 0) {
+        n_experts_moe <- ai(mix_weights$shape[[3]])
+        route_mask <- strenv$jnp$astype(token_mask, strenv$dtj)
+        route_denom <- strenv$jnp$maximum(
+          strenv$jnp$sum(route_mask),
+          strenv$jnp$array(1., dtype = strenv$dtj)
+        )
+        route_weighted <- mix_weights * strenv$jnp$expand_dims(route_mask, axis = 2L)
+        mean_route <- strenv$jnp$sum(
+          strenv$jnp$sum(route_weighted, axis = 1L),
+          axis = 0L
+        ) / route_denom
+        uniform_target <- strenv$jnp$array(1. / as.numeric(n_experts_moe), dtype = strenv$dtj)
+        moe_aux <- strenv$jnp$array(moe_lambda, dtype = strenv$dtj) *
+          strenv$jnp$sum(strenv$jnp$square(mean_route - uniform_target))
+        moe_aux_name <- paste0("moe_load_balance_", strenv$moe_aux_counter)
+        strenv$moe_aux_counter <- strenv$moe_aux_counter + 1L
+        strenv$numpyro$factor(moe_aux_name, strenv$jnp$negative(moe_aux))
+      }
     }
   }
   if (is.null(value_tok)) {
@@ -10608,9 +10652,13 @@ generate_ModelOutcome_neural <- function(){
       prior_sd = 0.5
     ),
     universal_loss_weighting = "empirical",
+    universal_family_logprob_normalize = FALSE,
     balanced_sampling = NULL,
     RMS_scale = 0.25,
+    qk_rms_scale = 0.1,
+    moe_load_balance_lambda = 0.01,
     residual_weight_depth_scale = "floor_one",
+    svi_lr_plate_rescale = TRUE,
     seed = 123L
   )
   UsedRegularization <- FALSE
@@ -10891,6 +10939,14 @@ generate_ModelOutcome_neural <- function(){
     mcmc_control$checkpoint_path <- paste0(bundle_path, ".inprogress")
   }
   mcmc_control$RMS_scale <- neural_resolve_rms_scale(mcmc_control$RMS_scale)
+  mcmc_control$qk_rms_scale <- neural_resolve_qk_rms_scale(mcmc_control$qk_rms_scale)
+  mcmc_control$moe_load_balance_lambda <- neural_resolve_moe_load_balance_lambda(
+    mcmc_control$moe_load_balance_lambda
+  )
+  mcmc_control$universal_family_logprob_normalize <- isTRUE(
+    mcmc_control$universal_family_logprob_normalize
+  )
+  mcmc_control$svi_lr_plate_rescale <- isTRUE(mcmc_control$svi_lr_plate_rescale %||% TRUE)
   mcmc_control$residual_weight_depth_scale <- neural_resolve_residual_weight_depth_scale(
     mcmc_control$residual_weight_depth_scale
   )
@@ -11162,9 +11218,28 @@ generate_ModelOutcome_neural <- function(){
     model_depth = ModelDepth,
     model_dims = ModelDims,
     RMS_scale = mcmc_control$RMS_scale,
-    residual_weight_depth_scale = mcmc_control$residual_weight_depth_scale
+    residual_weight_depth_scale = mcmc_control$residual_weight_depth_scale,
+    qk_rms_scale = mcmc_control$qk_rms_scale
   )
   RMS_scale <- init_policy$RMS_scale
+  # QK-norm gets its own (tighter) prior scale, distinct from the general RMS_scale
+  # (Issue 6): a loose QK-norm scale lets attention logits amplify at init, causing
+  # early attention-sink behavior and sparse gradients through the softmax.
+  qk_rms_scale <- init_policy$qk_rms_scale
+  # Per-family log-prob normalization (Issue 3): when enabled, each likelihood
+  # family's contribution to the mixed-task log-prob is divided by an in-batch scale
+  # so a small-sigma Normal head cannot dominate the shared trunk's gradient. Off by
+  # default to preserve existing (empirical) behavior.
+  universal_family_logprob_normalize <- isTRUE(mcmc_control$universal_family_logprob_normalize)
+  # MoE covariate-value encoder load balancing (Issue 5): a Switch-style auxiliary
+  # penalty keeps routing mass off a single expert. The penalty is emitted as a
+  # numpyro.factor from the encoder only while `moe_aux_active` is TRUE (set around
+  # SVI training below); the counter yields a unique factor-site name per encoder
+  # invocation within a single model trace, avoiding duplicate-site collisions.
+  moe_load_balance_lambda <- neural_resolve_moe_load_balance_lambda(mcmc_control$moe_load_balance_lambda)
+  strenv$moe_load_balance_lambda <- moe_load_balance_lambda
+  strenv$moe_aux_active <- FALSE
+  strenv$moe_aux_counter <- 0L
   weight_sd_scale <- init_policy$weight_sd_scale
   #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
 
@@ -12984,6 +13059,22 @@ generate_ModelOutcome_neural <- function(){
     }
     sample_fxn()
   }
+  # ReZero residual gates (Issue 1): treat as deterministic learned scalars rather
+  # than HalfNormal latents. Sampling the gate from HalfNormal(gate_sd_scale) left
+  # the gates at random positive init and, for small gate_sd_scale, let the
+  # variational posterior collapse toward zero -- starving gradients through the
+  # residual stream. A plain numpyro.param initialized to a small positive constant
+  # restores standard-ReZero semantics (gate starts small, grows toward ~1) and
+  # removes the posterior-collapse failure mode. Gates are nuisance scalars, so the
+  # loss of posterior uncertainty on them is acceptable.
+  p2d_gate_init_value <- 0.1
+  p2d_deterministic_gate <- function(name, init_value = p2d_gate_init_value) {
+    init_val <- strenv$jnp$array(as.numeric(init_value), dtype = ddtype_)
+    if (!is.null(p2d_constraint_positive)) {
+      return(strenv$numpyro$param(name, init_val, constraint = p2d_constraint_positive))
+    }
+    strenv$numpyro$param(name, init_val)
+  }
   sample_loc_scale <- function(name, scale, shape_tuple) {
     if (isTRUE(manual_noncentered_loc_scale)) {
       z <- strenv$numpyro$sample(
@@ -13759,34 +13850,10 @@ generate_ModelOutcome_neural <- function(){
         )
       } else {
         alpha_attn_name <- paste0("alpha_attn_l", l_)
-        alpha_attn_l <- p2d(
-          name = alpha_attn_name,
-          sample_fxn = function() {
-            strenv$numpyro$sample(
-              alpha_attn_name,
-              strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
-            )
-          },
-          init_fxn = function() {
-            p2d_init_halfnormal(alpha_attn_name, gate_sd_scale, reticulate::tuple())
-          },
-          constraint = p2d_constraint_positive
-        )
+        alpha_attn_l <- p2d_deterministic_gate(alpha_attn_name)
 
         alpha_ff_name <- paste0("alpha_ff_l", l_)
-        alpha_ff_l <- p2d(
-          name = alpha_ff_name,
-          sample_fxn = function() {
-            strenv$numpyro$sample(
-              alpha_ff_name,
-              strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
-            )
-          },
-          init_fxn = function() {
-            p2d_init_halfnormal(alpha_ff_name, gate_sd_scale, reticulate::tuple())
-          },
-          constraint = p2d_constraint_positive
-        )
+        alpha_ff_l <- p2d_deterministic_gate(alpha_ff_name)
       }
 
       RMS_attn_name <- paste0("RMS_attn_l", l_)
@@ -13833,12 +13900,12 @@ generate_ModelOutcome_neural <- function(){
           sample_fxn = function() {
             strenv$numpyro$sample(
               RMS_q_name,
-              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              strenv$numpyro$distributions$LogNormal(0., qk_rms_scale),
               sample_shape = RMS_head_shape
             )
           },
           init_fxn = function() {
-            p2d_init_lognormal(RMS_q_name, RMS_scale, RMS_head_shape)
+            p2d_init_lognormal(RMS_q_name, qk_rms_scale, RMS_head_shape)
           },
           constraint = p2d_constraint_positive
         )
@@ -13849,12 +13916,12 @@ generate_ModelOutcome_neural <- function(){
           sample_fxn = function() {
             strenv$numpyro$sample(
               RMS_k_name,
-              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              strenv$numpyro$distributions$LogNormal(0., qk_rms_scale),
               sample_shape = RMS_head_shape
             )
           },
           init_fxn = function() {
-            p2d_init_lognormal(RMS_k_name, RMS_scale, RMS_head_shape)
+            p2d_init_lognormal(RMS_k_name, qk_rms_scale, RMS_head_shape)
           },
           constraint = p2d_constraint_positive
         )
@@ -13988,19 +14055,7 @@ generate_ModelOutcome_neural <- function(){
         )
       }
 
-      alpha_cross <- p2d(
-        name = "alpha_cross",
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            "alpha_cross",
-            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
-          )
-        },
-        init_fxn = function() {
-          p2d_init_halfnormal("alpha_cross", gate_sd_scale, reticulate::tuple())
-        },
-        constraint = p2d_constraint_positive
-      )
+      alpha_cross <- p2d_deterministic_gate("alpha_cross")
 
       RMS_cross <- p2d(
         name = "RMS_cross",
@@ -14038,12 +14093,12 @@ generate_ModelOutcome_neural <- function(){
           sample_fxn = function() {
             strenv$numpyro$sample(
               "RMS_q_cross",
-              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              strenv$numpyro$distributions$LogNormal(0., qk_rms_scale),
               sample_shape = reticulate::tuple(head_dim)
             )
           },
           init_fxn = function() {
-            p2d_init_lognormal("RMS_q_cross", RMS_scale, reticulate::tuple(head_dim))
+            p2d_init_lognormal("RMS_q_cross", qk_rms_scale, reticulate::tuple(head_dim))
           },
           constraint = p2d_constraint_positive
         )
@@ -14052,12 +14107,12 @@ generate_ModelOutcome_neural <- function(){
           sample_fxn = function() {
             strenv$numpyro$sample(
               "RMS_k_cross",
-              strenv$numpyro$distributions$LogNormal(0., RMS_scale),
+              strenv$numpyro$distributions$LogNormal(0., qk_rms_scale),
               sample_shape = reticulate::tuple(head_dim)
             )
           },
           init_fxn = function() {
-            p2d_init_lognormal("RMS_k_cross", RMS_scale, reticulate::tuple(head_dim))
+            p2d_init_lognormal("RMS_k_cross", qk_rms_scale, reticulate::tuple(head_dim))
           },
           constraint = p2d_constraint_positive
         )
@@ -14269,20 +14324,7 @@ generate_ModelOutcome_neural <- function(){
         },
         is_output_layer = TRUE
       )
-      alpha_rc <- p2d(
-        name = "alpha_rc",
-        sample_fxn = function() {
-          strenv$numpyro$sample(
-            "alpha_rc",
-            strenv$numpyro$distributions$HalfNormal(gate_sd_scale)
-          )
-        },
-        init_fxn = function() {
-          p2d_init_halfnormal("alpha_rc", gate_sd_scale, reticulate::tuple())
-        },
-        constraint = p2d_constraint_positive,
-        is_output_layer = TRUE
-      )
+      alpha_rc <- p2d_deterministic_gate("alpha_rc")
     }
 
     sigma <- NULL
@@ -14554,7 +14596,27 @@ generate_ModelOutcome_neural <- function(){
     cat_term <- like_cat * cat_logp
     norm_term <- like_norm * norm_logp
     ord_term <- like_ord * ord_logp
-    bern_term + cat_term + norm_term + ord_term
+    if (isTRUE(universal_family_logprob_normalize)) {
+      # Normalize each family's per-row contribution by an in-batch scale
+      # s = max(1, mean|log-prob| over that family's rows), held constant w.r.t.
+      # gradients. Families whose log-probs are already O(1) (Bernoulli/Categorical)
+      # are left unchanged; only families with large-magnitude log-probs (e.g. a
+      # Normal head with small sigma) get downscaled, equalizing gradient magnitude
+      # across families on the shared transformer trunk.
+      one_ddt <- strenv$jnp$array(1., dtype = ddtype_)
+      family_logp_scale <- function(mask, term) {
+        count <- strenv$jnp$maximum(strenv$jnp$sum(mask), one_ddt)
+        mean_abs <- strenv$jnp$sum(strenv$jnp$abs(term)) / count
+        strenv$jax$lax$stop_gradient(strenv$jnp$maximum(mean_abs, one_ddt))
+      }
+      s_bern <- family_logp_scale(like_bern, bern_term)
+      s_cat <- family_logp_scale(like_cat, cat_term)
+      s_norm <- family_logp_scale(like_norm, norm_term)
+      s_ord <- family_logp_scale(like_ord, ord_term)
+      bern_term / s_bern + cat_term / s_cat + norm_term / s_norm + ord_term / s_ord
+    } else {
+      bern_term + cat_term + norm_term + ord_term
+    }
   }
 
   apply_observation_likelihood <- function(logits,
@@ -14717,6 +14779,7 @@ generate_ModelOutcome_neural <- function(){
                                            n_outcomes_single = NULL,
                                            Y_single_obs = NULL,
                                            obs_scale_single = NULL) {
+    strenv$moe_aux_counter <- 0L
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X_left <- subset_model_rows(X_left, obs_idx)
@@ -15479,6 +15542,7 @@ generate_ModelOutcome_neural <- function(){
                                              Y_obs,
                                              obs_idx = NULL,
                                              obs_scale = NULL) {
+    strenv$moe_aux_counter <- 0L
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X <- subset_model_rows(X, obs_idx)
@@ -18384,6 +18448,27 @@ generate_ModelOutcome_neural <- function(){
     } else {
       subsample_method
     }
+    # Issue 4: NumPyro's plate multiplies the minibatch likelihood by N/subsample_size,
+    # so with a fixed base LR the ELBO gradient magnitude grows with N -- the global-norm
+    # clip then fires on nearly every step, silently throttling the effective LR and
+    # distorting gradient direction. Rescale the peak LR by sqrt(subsample_size / N) so
+    # gradient magnitude (and thus training dynamics) stay roughly invariant to dataset
+    # size. Gated by svi_lr_plate_rescale and only applied when the plate subsamples.
+    if (isTRUE(mcmc_control$svi_lr_plate_rescale) &&
+        isTRUE(subsample_method_model %in% c("batch", "batch_vi"))) {
+      plate_batch_size <- min(as.numeric(mcmc_control$batch_size), as.numeric(n_obs_svi))
+      if (is.finite(plate_batch_size) && plate_batch_size > 0 &&
+          n_obs_svi > 0L && plate_batch_size < as.numeric(n_obs_svi)) {
+        svi_lr_plate_factor <- sqrt(plate_batch_size / as.numeric(n_obs_svi))
+        svi_lr_pre_rescale <- svi_lr
+        svi_lr <- svi_lr * svi_lr_plate_factor
+        message(sprintf(
+          "SVI plate LR rescale (Issue 4): batch=%d, N=%d -> lr %.5g x %.4f = %.5g",
+          as.integer(plate_batch_size), as.integer(n_obs_svi),
+          svi_lr_pre_rescale, svi_lr_plate_factor, svi_lr
+        ))
+      }
+    }
     svi_budget_info <- neural_resolve_svi_budget(
       svi_steps_input = mcmc_control$svi_steps,
       svi_num_draws_input = mcmc_control$svi_num_draws,
@@ -18585,6 +18670,11 @@ generate_ModelOutcome_neural <- function(){
         num_particles = n_particles
       )
     )
+    # Activate the MoE load-balancing auxiliary factor (Issue 5) for the duration of
+    # SVI training so it enters the ELBO; deactivated before posterior sampling /
+    # prediction so it never perturbs predictive outputs.
+    strenv$moe_aux_active <- TRUE
+    on.exit(strenv$moe_aux_active <- FALSE, add = TRUE)
     svi_model_args <- if (isTRUE(compact_training)) {
       compact_batch_args(compact_sample_obs_idx())
     } else if (isTRUE(universal_mixed_mode)) {
@@ -20682,6 +20772,7 @@ generate_ModelOutcome_neural <- function(){
     message(sprintf("\n SVI Runtime: %.3f min",
                     as.numeric(difftime(Sys.time(), t0_, units = "secs"))/60))
     emit_svi_fit_summary()
+    strenv$moe_aux_active <- FALSE
   }
 
   if (!isTRUE(use_svi) || isTRUE(run_mcmc_after_svi)) {
