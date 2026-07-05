@@ -484,6 +484,18 @@ generate_ModelOutcome <- function(){
               InteractionPairs <- NULL
             }
 
+            # A fully degenerate (single-value) response makes glinternet's C
+            # group_lasso segfault; skip screening entirely and fall back to the
+            # unregularized path (mirrors the NULL-result fallback below).
+            if (!glm_response_has_variation(Y_glm)) {
+              use_regularization <- FALSE
+              interaction_info <- interaction_info[0, , drop = FALSE]
+              interacted_dat <- matrix(numeric(0), nrow = NROW(main_dat), ncol = 0L)
+              force_no_interactions <- TRUE
+              ok_ <- TRUE
+              next
+            }
+
             message("Starting a glinternet fit...")
             n_obs_glm <- length(Y_glm)
             nFolds_glm_use <- min(nFolds_glm, floor(n_obs_glm / 2))
@@ -1194,8 +1206,12 @@ generate_ModelOutcome <- function(){
 		              main_train_full <- main_obs_eval[train_pos, , drop = FALSE]
 
 		              # If the training fold has no usable signal, skip screening.
+		              # glinternet's C group_lasso segfaults on a degenerate (single-value)
+		              # response, which is common in tiny nested folds, so also require the
+		              # training response to carry variation before invoking it.
 		              col_sd_main <- tryCatch(apply(main_train_full, 2, sd), error = function(e) NULL)
-		              if (!is.null(col_sd_main) &&
+		              if (glm_response_has_variation(y_train) &&
+		                  !is.null(col_sd_main) &&
 		                  any(is.finite(col_sd_main) & col_sd_main > 0)) {
 		                n_obs_glm <- length(y_train)
 		                nFolds_glm_use <- if (exists("nFolds_glm", inherits = TRUE) &&

@@ -57,6 +57,32 @@ test_that("ess_fxn handles extreme unbalanced weights", {
   expect_equal(strategize:::ess_fxn(w_extreme), 1)
 })
 
+# ---------------------------------------------------------------------------
+# glm_response_has_variation: gates glinternet screening to avoid the C-level
+# segfault that glinternet's group_lasso triggers on a single-value response.
+# ---------------------------------------------------------------------------
+
+test_that("glm_response_has_variation flags a degenerate response", {
+  # The exact segfault trigger: a fold whose response is all identical.
+  expect_false(strategize:::glm_response_has_variation(c(1, 1, 1)))
+  expect_false(strategize:::glm_response_has_variation(c(0, 0, 0, 0)))
+  expect_false(strategize:::glm_response_has_variation(5))
+})
+
+test_that("glm_response_has_variation accepts a varied response", {
+  expect_true(strategize:::glm_response_has_variation(c(1, 0, 1)))
+  expect_true(strategize:::glm_response_has_variation(c(0, 1)))
+  expect_true(strategize:::glm_response_has_variation(c(-1, 0, 1)))
+})
+
+test_that("glm_response_has_variation ignores non-finite values", {
+  # NA / Inf must not count as a distinct level that fakes variation.
+  expect_false(strategize:::glm_response_has_variation(c(1, 1, NA)))
+  expect_false(strategize:::glm_response_has_variation(c(1, NA, Inf)))
+  expect_true(strategize:::glm_response_has_variation(c(1, 0, NA)))
+  expect_false(strategize:::glm_response_has_variation(c(NA, NA)))
+})
+
 test_that("RescaleFxn rescales and recenters correctly", {
   x <- c(-1, 0, 1)
   res <- strategize:::RescaleFxn(x, estMean = 2, estSD = 3)

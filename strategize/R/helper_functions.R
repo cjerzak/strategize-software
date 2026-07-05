@@ -6,6 +6,16 @@ f2n <- function(x){as.numeric(as.character(x))}
 
 ess_fxn <- function(wz){ sum(wz)^2 / sum(wz^2)}
 
+# glinternet's C group_lasso routine segfaults ("invalid permissions") when a
+# binomial fit is handed a degenerate response (all values identical). This
+# predicate gates glinternet screening: TRUE only when the response carries
+# usable signal (>= 2 distinct finite values). Family-agnostic -- for binomial
+# this means both classes are present; for gaussian it means genuine variation.
+glm_response_has_variation <- function(y) {
+  y <- y[is.finite(y)]
+  length(unique(y)) >= 2L
+}
+
 cs_build_names_list <- function(W, p_list = NULL) {
   if (is.null(W)) {
     stop("'W' is required.", call. = FALSE)
