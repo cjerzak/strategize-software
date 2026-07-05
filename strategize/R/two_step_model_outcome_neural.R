@@ -3651,18 +3651,27 @@ neural_apply_classification_logit_calibration <- function(logits,
   )
 }
 
-neural_softclip_jnp <- function(x, low, high, softness) {
+neural_softclip_jnp <- function(x, low, high, softness, straight_through = TRUE) {
   s <- strenv$jnp$array(as.numeric(softness), dtype = x$dtype %||% strenv$dtj)
   low_j <- strenv$jnp$array(as.numeric(low), dtype = x$dtype %||% strenv$dtj)
   high_j <- strenv$jnp$array(as.numeric(high), dtype = x$dtype %||% strenv$dtj)
   clipped <- low_j + s * strenv$jax$nn$softplus((x - low_j) / s) -
     s * strenv$jax$nn$softplus((x - high_j) / s)
-  # Keep the bounded forward value while avoiding near-zero tail gradients for
-  # already-saturated low-rank logits.
+  if (!isTRUE(straight_through)) {
+    # True-gradient path (serve / pi*-differentiated): forward value is identical
+    # to the STE below, but the softclip's own vanishing tail gradient IS the
+    # correct signal. Returning it keeps the optimizer's gradient consistent with
+    # the bounded Q surface, instead of the STE's phantom identity push that
+    # drives pi* toward degenerate extremes once the logit saturates.
+    return(clipped)
+  }
+  # Straight-through estimator: bounded forward value with identity gradient,
+  # used during training to avoid near-zero tail gradients starving the trunk.
   x + strenv$jax$lax$stop_gradient(clipped - x)
 }
 
-neural_apply_low_rank_logit_transform <- function(logits, model_info = NULL) {
+neural_apply_low_rank_logit_transform <- function(logits, model_info = NULL,
+                                                  straight_through = TRUE) {
   if (!isTRUE(neural_low_rank_logit_transform_enabled(model_info))) {
     return(logits)
   }
@@ -3672,21 +3681,24 @@ neural_apply_low_rank_logit_transform <- function(logits, model_info = NULL) {
     logits,
     low = -bound,
     high = bound,
-    softness = softness
+    softness = softness,
+    straight_through = straight_through
   )
 }
 
 neural_apply_pairwise_classification_logit_transform <- function(logits,
                                                                  model_info = NULL,
                                                                  likelihood_code_obs = NULL,
-                                                                 pairwise_obs = FALSE) {
+                                                                 pairwise_obs = FALSE,
+                                                                 straight_through = TRUE) {
   if (!isTRUE(pairwise_obs) ||
       !isTRUE(neural_low_rank_logit_transform_enabled(model_info))) {
     return(logits)
   }
   likelihood <- tolower(as.character(model_info$likelihood %||% "bernoulli"))
   if (identical(likelihood, "bernoulli")) {
-    return(neural_apply_low_rank_logit_transform(logits, model_info))
+    return(neural_apply_low_rank_logit_transform(logits, model_info,
+                                                 straight_through = straight_through))
   }
   if (!identical(likelihood, "mixed") || is.null(likelihood_code_obs)) {
     return(logits)
@@ -3697,7 +3709,8 @@ neural_apply_pairwise_classification_logit_transform <- function(logits,
     return(logits)
   }
   first <- strenv$jnp$take(logits, ai(0L), axis = 1L)
-  first_soft <- neural_apply_low_rank_logit_transform(first, model_info)
+  first_soft <- neural_apply_low_rank_logit_transform(first, model_info,
+                                                      straight_through = straight_through)
   bern_mask <- strenv$jnp$equal(likelihood_code_obs, ai(0L))
   first_use <- strenv$jnp$where(bern_mask, first_soft, first)
   first_col <- strenv$jnp$reshape(first_use, list(-1L, 1L))
@@ -5085,7 +5098,26 @@ neural_resolve_svi_optimizer_tag <- function(optimizer_tag,
 }
 
 neural_muon_target_name_regex <- function() {
-  "^(W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross|W_factor_struct|W_level_struct|W_out|M_cross_raw|W_rc_(r|c|out))$"
+  # Single source of truth for Muon-target parameter names, consumed by both the R
+  # selector (neural_muon_targets_matrix_weight) and the Python MuonDimensionNumbers
+  # callable (which injects this string), so the mask and the dimension-numbers tree
+  # stay in sync. Combined with the ndim==2 gate, this is effectively "every hidden
+  # weight matrix EXCEPT embeddings, the readout/interaction output heads, and gains".
+  # Added: the always-on fused-tokenization SwiGLU MLP (W_factor_fuse_1/2) and the
+  # covariate fusion / value-encoder MLPs, which are on the pi* hot path and were
+  # previously routed to Muon's Adam sub-branch while the identical transformer FF
+  # (W_ff1/2) was orthogonalized. Dropped: the readout head W_out and interaction
+  # output head W_rc_out, which benefit from Adam's per-coordinate scaling to
+  # calibrate output magnitude (standard Muon recipes exclude the output head).
+  paste0(
+    "^(",
+    "W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross",
+    "|W_factor_struct|W_level_struct",
+    "|W_factor_fuse_(1|2)|W_covariate_fuse_(1|2)",
+    "|W_covariate_value_(conditioner_1|conditioner_2|basis|shared)",
+    "|M_cross_raw|W_rc_(r|c)",
+    ")$"
+  )
 }
 
 neural_swiglu <- function(x) {
@@ -9591,6 +9623,28 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
       params
     )
   }
+  # Additive main-effects head + calibration temperature (train/serve parity with
+  # neural_predict_single_core_prepared at 9094/9105). neural_predict_single_soft
+  # and the utility-based primary nomination both consume this utility, so both
+  # inherit the fix. Each step self-gates and is a no-op when disabled.
+  if (isTRUE(neural_additive_utility_enabled(model_info, params))) {
+    add_info <- neural_build_candidate_tokens_soft(
+      pi_vec, party_idx, 0L, model_info, params,
+      resp_party_idx = resp_party_idx, return_mask = TRUE,
+      context_present = context_present
+    )
+    utility <- utility +
+      neural_additive_logits_from_candidate_tokens(
+        tokens = add_info$tokens, token_mask = add_info$mask,
+        params = params, model_info = model_info,
+        out_dim = ai(utility$shape[[2]]), dtype = utility$dtype
+      )
+  }
+  utility <- neural_apply_classification_logit_calibration(
+    utility,
+    model_info = model_info,
+    params = params
+  )
   utility
 }
 
@@ -9621,68 +9675,79 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
   if (isTRUE(use_cross_encoder)) {
     choice_tok <- neural_build_choice_token(model_info, params)
     choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
-    ctx_info <- neural_build_context_tokens(model_info,
-                                            resp_party_idx = resp_party_idx,
-                                            stage_idx = stage_idx,
-                                            matchup_idx = matchup_idx,
-                                            resp_cov_vec = resp_cov_vec,
-                                            params = params,
-                                            return_mask = TRUE,
-                                            context_present = context_present)
-    ctx_tokens <- ctx_info$tokens %||% NULL
-    ctx_mask <- ctx_info$mask %||% NULL
-    left_info <- neural_build_candidate_tokens_soft(pi_left, party_left_idx, 0L, model_info, params,
-                                                    resp_party_idx = resp_party_idx,
-                                                    return_mask = TRUE,
-                                                    context_present = context_present)
-    right_info <- neural_build_candidate_tokens_soft(pi_right, party_right_idx, 1L, model_info, params,
-                                                     resp_party_idx = resp_party_idx,
-                                                     return_mask = TRUE,
-                                                     context_present = context_present)
-    left_tokens <- neural_add_segment_embedding(
-      left_info$tokens,
-      0L,
-      model_info = model_info,
-      params = params
-    )
-    right_tokens <- neural_add_segment_embedding(
-      right_info$tokens,
-      1L,
-      model_info = model_info,
-      params = params
-    )
-    sep_tok <- neural_build_sep_token(model_info, params = params)
-    sep_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
-    seq_info <- neural_pack_full_cross_sequence(
-      choice_tok = choice_tok,
-      choice_mask = choice_mask,
-      sep_tok = sep_tok,
-      sep_mask = sep_mask,
-      left_tokens = left_tokens,
-      left_mask = left_info$mask,
-      right_tokens = right_tokens,
-      right_mask = right_info$mask,
-      model_info = model_info,
-      ctx_tokens = ctx_tokens,
-      ctx_mask = ctx_mask
-    )
-    tokens <- seq_info$tokens
-    token_mask <- seq_info$mask
-    transformer_out <- neural_run_transformer(
-      tokens,
-      model_info,
-      params,
-      token_mask = token_mask,
-      return_details = TRUE
-    )
-    cls_out <- neural_extract_choice_representation(transformer_out)
-    logits <- neural_linear_head(
-      cls_out,
-      params$W_out,
-      params$b_out,
-      model_info = model_info,
-      pairwise_obs = TRUE
-    )
+    # Cross-encoder CLS logits for a given candidate ordering (a = left/segment0,
+    # b = right/segment1). Factored into a closure so strict antisymmetry can
+    # average the forward and reversed orderings, matching the hard core at
+    # 8746-8772: the raw cross-encoder logit is not antisymmetric in (left, right),
+    # so serving it un-averaged yields a self-inconsistent Q(l,r)+Q(r,l) != 1
+    # surface that distorts both the general-election Q and the kappa push-forward.
+    cross_cls_logits <- function(pi_a, party_a, pi_b, party_b,
+                                 stage_idx_use, matchup_idx_use, context_present_use) {
+      ctx_info <- neural_build_context_tokens(model_info,
+                                              resp_party_idx = resp_party_idx,
+                                              stage_idx = stage_idx_use,
+                                              matchup_idx = matchup_idx_use,
+                                              resp_cov_vec = resp_cov_vec,
+                                              params = params,
+                                              return_mask = TRUE,
+                                              context_present = context_present_use)
+      a_info <- neural_build_candidate_tokens_soft(pi_a, party_a, 0L, model_info, params,
+                                                   resp_party_idx = resp_party_idx,
+                                                   return_mask = TRUE,
+                                                   context_present = context_present_use)
+      b_info <- neural_build_candidate_tokens_soft(pi_b, party_b, 1L, model_info, params,
+                                                   resp_party_idx = resp_party_idx,
+                                                   return_mask = TRUE,
+                                                   context_present = context_present_use)
+      a_tokens <- neural_add_segment_embedding(a_info$tokens, 0L, model_info = model_info, params = params)
+      b_tokens <- neural_add_segment_embedding(b_info$tokens, 1L, model_info = model_info, params = params)
+      sep_tok <- neural_build_sep_token(model_info, params = params)
+      sep_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
+      seq_info <- neural_pack_full_cross_sequence(
+        choice_tok = choice_tok,
+        choice_mask = choice_mask,
+        sep_tok = sep_tok,
+        sep_mask = sep_mask,
+        left_tokens = a_tokens,
+        left_mask = a_info$mask,
+        right_tokens = b_tokens,
+        right_mask = b_info$mask,
+        model_info = model_info,
+        ctx_tokens = ctx_info$tokens %||% NULL,
+        ctx_mask = ctx_info$mask %||% NULL
+      )
+      transformer_out <- neural_run_transformer(
+        seq_info$tokens,
+        model_info,
+        params,
+        token_mask = seq_info$mask,
+        return_details = TRUE
+      )
+      cls_out <- neural_extract_choice_representation(transformer_out)
+      neural_linear_head(
+        cls_out,
+        params$W_out,
+        params$b_out,
+        model_info = model_info,
+        pairwise_obs = TRUE
+      )
+    }
+    logits <- cross_cls_logits(pi_left, party_left_idx, pi_right, party_right_idx,
+                               stage_idx, matchup_idx, context_present)
+    if (isTRUE(neural_pairwise_antisymmetry_strict(model_info))) {
+      stage_idx_rev <- neural_stage_index(party_right_idx, party_left_idx, model_info)
+      matchup_idx_rev <- if (!is.null(params$E_matchup)) {
+        neural_matchup_index(party_right_idx, party_left_idx, model_info)
+      } else {
+        NULL
+      }
+      context_present_rev <- neural_pair_context_present(
+        party_right_idx, party_left_idx, resp_party_idx, model_info
+      )
+      logits_rev <- cross_cls_logits(pi_right, party_right_idx, pi_left, party_left_idx,
+                                     stage_idx_rev, matchup_idx_rev, context_present_rev)
+      logits <- 0.5 * (logits - logits_rev)
+    }
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
       resp_readout <- neural_encode_respondent_tower_prepared(
         params = params,
@@ -9727,6 +9792,32 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
           dtype = logits$dtype,
           model_info = model_info,
           pairwise_obs = TRUE
+        )
+    }
+    # Additive main-effects head (parity with the hard cross-encoder core at 8797),
+    # added after the antisymmetry averaging and the low-rank delta.
+    if (isTRUE(neural_additive_utility_enabled(model_info, params))) {
+      add_out_dim <- ai(logits$shape[[2]])
+      left_add_info <- neural_build_candidate_tokens_soft(
+        pi_left, party_left_idx, 0L, model_info, params,
+        resp_party_idx = resp_party_idx, return_mask = TRUE,
+        context_present = context_present
+      )
+      right_add_info <- neural_build_candidate_tokens_soft(
+        pi_right, party_right_idx, 1L, model_info, params,
+        resp_party_idx = resp_party_idx, return_mask = TRUE,
+        context_present = context_present
+      )
+      logits <- logits +
+        neural_additive_logits_from_candidate_tokens(
+          tokens = left_add_info$tokens, token_mask = left_add_info$mask,
+          params = params, model_info = model_info,
+          out_dim = add_out_dim, dtype = logits$dtype
+        ) -
+        neural_additive_logits_from_candidate_tokens(
+          tokens = right_add_info$tokens, token_mask = right_add_info$mask,
+          params = params, model_info = model_info,
+          out_dim = add_out_dim, dtype = logits$dtype
         )
     }
   } else {
@@ -9824,15 +9915,41 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                         params$M_cross, params$W_cross_out,
                                         out_dim = ai(params$W_out$shape[[2]]))
     }
+    # Additive main-effects head (train/serve parity with the hard core at 8966):
+    # applied only in the two-tower branch, as the last logit contribution before
+    # the shared transform/scale/calibration. Self-gates via
+    # neural_additive_utility_enabled, so it is a no-op when the additive head is off.
+    if (isTRUE(neural_additive_utility_enabled(model_info, params))) {
+      add_out_dim <- ai(logits$shape[[2]])
+      left_add_info <- neural_build_candidate_tokens_soft(
+        pi_left, party_left_idx, 0L, model_info, params,
+        resp_party_idx = resp_party_idx, return_mask = TRUE,
+        context_present = context_present
+      )
+      right_add_info <- neural_build_candidate_tokens_soft(
+        pi_right, party_right_idx, 1L, model_info, params,
+        resp_party_idx = resp_party_idx, return_mask = TRUE,
+        context_present = context_present
+      )
+      logits <- logits +
+        neural_additive_logits_from_candidate_tokens(
+          tokens = left_add_info$tokens, token_mask = left_add_info$mask,
+          params = params, model_info = model_info,
+          out_dim = add_out_dim, dtype = logits$dtype
+        ) -
+        neural_additive_logits_from_candidate_tokens(
+          tokens = right_add_info$tokens, token_mask = right_add_info$mask,
+          params = params, model_info = model_info,
+          out_dim = add_out_dim, dtype = logits$dtype
+        )
+    }
   }
   logits <- neural_apply_pairwise_classification_logit_transform(
     logits,
     model_info = model_info,
-    pairwise_obs = TRUE
+    pairwise_obs = TRUE,
+    straight_through = FALSE
   )
-  if (return_logits) {
-    return(logits)
-  }
   logits <- neural_apply_pairwise_bernoulli_logit_scale(
     logits,
     model_info = model_info,
@@ -9842,6 +9959,17 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
     ),
     pairwise_obs = TRUE
   )
+  # Learned calibration temperature (train/serve parity with the hard core at 8996):
+  # apply before the return_logits exit so the kappa push-forward sees the same
+  # calibrated logits training did, prior to the separate push-forward temperature.
+  logits <- neural_apply_classification_logit_calibration(
+    logits,
+    model_info = model_info,
+    params = params
+  )
+  if (return_logits) {
+    return(logits)
+  }
   neural_logits_to_q(logits, model_info$likelihood)
 }
 
@@ -10054,11 +10182,16 @@ neural_average_case_report_adjust_q <- function(q_vec,
   w <- strenv$jnp$exp(log_target - log_baseline)
   denom <- strenv$jnp$sum(w)
   eps <- strenv$jnp$array(1e-8, dtype = w$dtype)
+  # jnp$where evaluates BOTH branches, so dividing by the raw denom (which the
+  # condition guards against being ~0) poisons the reverse pass with NaN when a
+  # degenerate pi* underflows the importance weights. Divide by a floored
+  # denominator so both branches stay finite; the where still selects 0.
+  safe_denom <- strenv$jnp$maximum(denom, eps)
   residual <- strenv$jnp$reshape(dr$Y_single, list(-1L)) -
     strenv$jnp$reshape(pred_obs$mu, list(-1L))
   correction <- strenv$jnp$where(
     denom > eps,
-    strenv$jnp$sum(w * residual) / denom,
+    strenv$jnp$sum(w * residual) / safe_denom,
     strenv$jnp$array(0., dtype = w$dtype)
   )
   q_vec + correction
@@ -13067,7 +13200,18 @@ generate_ModelOutcome_neural <- function(){
   # restores standard-ReZero semantics (gate starts small, grows toward ~1) and
   # removes the posterior-collapse failure mode. Gates are nuisance scalars, so the
   # loss of posterior uncertainty on them is acceptable.
-  p2d_gate_init_value <- 0.1
+  #
+  # Init from the depth-aware policy scale (gate_sd_scale = 0.1 * sqrt(2/depth));
+  # this equals the historical hardcoded 0.1 at the default depth 2 but restores
+  # the intended attenuation of residual-branch injections for deeper models,
+  # keeping residual-stream variance bounded with depth.
+  p2d_gate_init_value <- as.numeric(gate_sd_scale)
+  if (length(p2d_gate_init_value) != 1L ||
+      is.na(p2d_gate_init_value) ||
+      !is.finite(p2d_gate_init_value) ||
+      p2d_gate_init_value <= 0) {
+    p2d_gate_init_value <- 0.1
+  }
   p2d_fixed_gate_value <- function(init_value = p2d_gate_init_value) {
     strenv$jnp$array(as.numeric(init_value), dtype = ddtype_)
   }
@@ -18053,6 +18197,16 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     reparam_config[["W_out"]] <- locscale_reparam(centered = 0)
+    # Non-centered (Neal's-funnel-avoiding) parameterization for the secondary
+    # hierarchical heads, matching the main trunk. Each is a Normal(0, tau)
+    # sample_loc_scale site with a HalfNormal tau; under mean-field AutoNormal the
+    # centered form induces a funnel that biases the scale posterior and inflates
+    # gradient variance. numpyro's reparam handler keys on encountered site names,
+    # so listing sites absent from a given model config is a safe no-op.
+    for (site in c("W_add_out", "W_rc_r", "W_rc_c",
+                   "W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
+      reparam_config[[site]] <- locscale_reparam(centered = 0)
+    }
     if (isTRUE(use_cross_term)) {
       reparam_config[["M_cross_raw"]] <- locscale_reparam(centered = 0)
     }
@@ -18451,14 +18605,21 @@ generate_ModelOutcome_neural <- function(){
     } else {
       subsample_method
     }
-    # Issue 4: NumPyro's plate multiplies the minibatch likelihood by N/subsample_size,
-    # so with a fixed base LR the ELBO gradient magnitude grows with N -- the global-norm
-    # clip then fires on nearly every step, silently throttling the effective LR and
-    # distorting gradient direction. Rescale the peak LR by sqrt(subsample_size / N) so
-    # gradient magnitude (and thus training dynamics) stay roughly invariant to dataset
-    # size. Gated by svi_lr_plate_rescale and only applied when the plate subsamples.
+    # Issue 4 (revised): the plate multiplies the minibatch likelihood by
+    # N/subsample_size, inflating the ELBO gradient. The earlier LR rescale by
+    # sqrt(subsample/N) cannot achieve its stated goal -- clip_by_global_norm sits
+    # UPSTREAM of the learning rate in the optax chain, so scaling the LR never
+    # changes how often the clip fires. And the supported optimizers (muon
+    # orthogonalization; adam/adamw/adabelief m/sqrt(v)) are invariant to a global
+    # gradient scale, so the plate inflation is already normalized away -- the
+    # rescale then only shrinks the effective LR (up to ~10x), wasting the step
+    # budget. So skip it for scale-invariant optimizers. If clip saturation is ever
+    # a real concern, the correct lever is to scale clip_global_norm by N/subsample,
+    # not the LR. The gate is retained for any future non-scale-invariant optimizer.
+    optimizer_scale_invariant <- optimizer_tag %in% c("adam", "adamw", "adabelief", "muon")
     if (isTRUE(mcmc_control$svi_lr_plate_rescale) &&
-        isTRUE(subsample_method_model %in% c("batch", "batch_vi"))) {
+        isTRUE(subsample_method_model %in% c("batch", "batch_vi")) &&
+        !isTRUE(optimizer_scale_invariant)) {
       plate_batch_size <- min(as.numeric(mcmc_control$batch_size), as.numeric(n_obs_svi))
       if (is.finite(plate_batch_size) && plate_batch_size > 0 &&
           n_obs_svi > 0L && plate_batch_size < as.numeric(n_obs_svi)) {
@@ -18466,7 +18627,7 @@ generate_ModelOutcome_neural <- function(){
         svi_lr_pre_rescale <- svi_lr
         svi_lr <- svi_lr * svi_lr_plate_factor
         message(sprintf(
-          "SVI plate LR rescale (Issue 4): batch=%d, N=%d -> lr %.5g x %.4f = %.5g",
+          "SVI plate LR rescale: batch=%d, N=%d -> lr %.5g x %.4f = %.5g",
           as.integer(plate_batch_size), as.integer(n_obs_svi),
           svi_lr_pre_rescale, svi_lr_plate_factor, svi_lr
         ))
@@ -18611,13 +18772,21 @@ generate_ModelOutcome_neural <- function(){
         strenv$numpyro$optim$Adam(lr_schedule)
       }
     } else if (optimizer_tag == "adamw") {
+      # optax.adamw defaults to weight_decay=1e-4 with mask=None, which applies
+      # decoupled decay to EVERY optimized leaf -- including the AutoNormal
+      # posterior stddevs (*_auto_scale), RMSNorm/QK gains, and the deterministic
+      # ReZero gates (init small) -- decaying gates toward 0 silently undoes the
+      # ReZero fix and mis-calibrates the variational posterior. Set weight_decay=0
+      # to match the muon default (adam_weight_decay=0). A name-masked nonzero decay
+      # restricted to true weight matrices would be the richer alternative.
       if (isTRUE(clip_enabled) &&
           reticulate::py_has_attr(strenv$optax, "adamw")) {
-        optax_to_numpyro_optimizer(strenv$optax$adamw(learning_rate = lr_schedule))
+        optax_to_numpyro_optimizer(strenv$optax$adamw(learning_rate = lr_schedule,
+                                                      weight_decay = 0))
       } else if (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW")) {
-        strenv$numpyro$optim$AdamW(lr_schedule)
+        strenv$numpyro$optim$AdamW(lr_schedule, weight_decay = 0)
       } else if (reticulate::py_has_attr(strenv$optax, "adamw")) {
-        optax_optim <- strenv$optax$adamw(learning_rate = lr_schedule)
+        optax_optim <- strenv$optax$adamw(learning_rate = lr_schedule, weight_decay = 0)
         optax_to_numpyro_optimizer(optax_optim)
       } else {
         stop(
@@ -18665,13 +18834,29 @@ generate_ModelOutcome_neural <- function(){
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
       optax_to_numpyro_optimizer(optax_optim)
     }
+    # With a mean-field AutoNormal/AutoDiagonalNormal guide, every weight latent is
+    # Normal-prior / Normal-posterior, so the per-site KL is available in closed
+    # form. TraceMeanField_ELBO substitutes that analytic KL for Trace_ELBO's
+    # single-sample MC estimate of the entropy/cross-entropy term (num_particles=1
+    # by default), removing avoidable gradient variance at no extra cost. Fall back
+    # to Trace_ELBO for non-mean-field guides or if the class is unavailable.
+    elbo_loss <- local({
+      mean_field_guide <- guide_name %in% c("auto_normal", "auto_diagonal")
+      if (isTRUE(mean_field_guide) &&
+          reticulate::py_has_attr(strenv$numpyro$infer, "TraceMeanField_ELBO")) {
+        tryCatch(
+          strenv$numpyro$infer$TraceMeanField_ELBO(num_particles = n_particles),
+          error = function(e) strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
+        )
+      } else {
+        strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
+      }
+    })
     svi <- strenv$numpyro$infer$SVI(
       model = model_fn,
       guide = guide,
       optim = svi_optim,
-      loss = strenv$numpyro$infer$Trace_ELBO(
-        num_particles = n_particles
-      )
+      loss = elbo_loss
     )
     # Activate the MoE load-balancing auxiliary factor (Issue 5) for the duration of
     # SVI training so it enters the ELBO; deactivated before posterior sampling /
@@ -18963,7 +19148,18 @@ generate_ModelOutcome_neural <- function(){
       }
       if (length(validation_idx) > validation_target_n) {
         set.seed(as.integer(split_seed) + 1L)
+        validation_fold_rows <- validation_idx
         validation_idx <- sort(sample(validation_idx, size = validation_target_n, replace = FALSE))
+        # Return the fold rows NOT chosen for validation to the training set.
+        # Previously they were dropped from both sets, silently shrinking training
+        # to ~1 - 1/n_folds of N (~80%) regardless of validation_frac (and worse for
+        # large N, where validation is additionally capped at validation_max_n).
+        # train_idx stays disjoint from the downsampled validation_idx, so there is
+        # no train/validation leakage.
+        returned_to_train <- setdiff(validation_fold_rows, validation_idx)
+        if (length(returned_to_train) > 0L) {
+          train_idx <- sort(c(train_idx, returned_to_train))
+        }
       }
       validation_batch_size <- if (isTRUE(early_stopping_validation_batch_size_supplied)) {
         neural_resolve_early_stopping_validation_batch_size(
@@ -19511,6 +19707,23 @@ generate_ModelOutcome_neural <- function(){
       }
       checkpoint_training_complete <- checkpoint_resume_completed >= as.integer(svi_steps) ||
         isTRUE(svi_checkpoint_latest$early_stopping$stopped_early)
+      # A partial-checkpoint resume re-initializes the optimizer from saved params
+      # only (svi$init below): optax/Muon momentum buffers are discarded and the LR
+      # schedule restarts at step 0 -- re-entering warmup and traversing only a
+      # partial cosine tail -- so a resumed fit is not identical to an uninterrupted
+      # one. Full continuity would require persisting and restoring the optax
+      # optim_state (step count + momentum) in the checkpoint; until then, surface
+      # the warm restart rather than letting the discontinuity be silent.
+      if (checkpoint_resume_completed > 0L && !isTRUE(checkpoint_training_complete)) {
+        warning(sprintf(
+          paste0(
+            "Neural SVI resume from step %d/%d performs an optimizer WARM RESTART: ",
+            "the LR schedule restarts (re-warmup) and Muon/optax momentum is ",
+            "discarded, so the resumed run is not identical to an uninterrupted fit."
+          ),
+          as.integer(checkpoint_resume_completed), as.integer(svi_steps)
+        ), call. = FALSE)
+      }
       if (isTRUE(checkpoint_training_complete)) {
         checkpoint_final_snapshot <- if (!is.null(svi_checkpoint_best) &&
                                          is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {

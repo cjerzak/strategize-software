@@ -51,8 +51,18 @@ test_that("muon dimension-number tree hits intended matrix weights and excludes 
     list(name = "W_q_l1", ndim = 2L, want = "muon"),
     list(name = "W_ff2_l3", ndim = 2L, want = "muon"),
     list(name = "W_q_cross", ndim = 2L, want = "muon"),
-    list(name = "W_out", ndim = 2L, want = "muon"),
     list(name = "M_cross_raw", ndim = 2L, want = "muon"),
+    # On-critical-path hidden MLPs now orthogonalized alongside the transformer FF
+    # (previously fell to Muon's Adam sub-branch despite identical structure).
+    list(name = "W_factor_fuse_1", ndim = 2L, want = "muon"),
+    list(name = "W_factor_fuse_2", ndim = 2L, want = "muon"),
+    list(name = "W_covariate_fuse_1", ndim = 2L, want = "muon"),
+    list(name = "W_covariate_value_conditioner_1", ndim = 2L, want = "muon"),
+    list(name = "W_rc_r", ndim = 2L, want = "muon"),
+    # Output/unembedding heads are excluded from Muon (standard recipe): they need
+    # Adam's per-coordinate scaling to calibrate output magnitude.
+    list(name = "W_out", ndim = 2L, want = "adam"),
+    list(name = "W_rc_out", ndim = 2L, want = "adam"),
     list(name = "b_out", ndim = 1L, want = "adam"),
     list(name = "RMS_attn_l1", ndim = 1L, want = "adam")
   )
@@ -88,8 +98,9 @@ test_that("muon dimension-number tree handles guide-location aliases but not gui
     list(name = "W_q_l1_auto_loc", want = "muon"),
     list(name = "W_ff1_l2_base_auto_loc", want = "muon"),
     list(name = "W_ff2_l2_decentered_auto_loc", want = "muon"),
-    list(name = "W_out_auto_loc", want = "muon"),
+    list(name = "W_factor_fuse_1_auto_loc", want = "muon"),
     list(name = "M_cross_raw_auto_loc", want = "muon"),
+    list(name = "W_out_auto_loc", want = "adam"),
     list(name = "W_q_l1_auto_scale", want = "adam"),
     list(name = "W_ff1_l2_base_auto_scale", want = "adam"),
     list(name = "W_out_auto_scale", want = "adam")
