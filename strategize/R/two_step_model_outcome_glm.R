@@ -749,17 +749,31 @@ generate_ModelOutcome <- function(){
 		      }
 		      glm_input <- cbind(main_dat, interacted_dat )
 		      if( ncol(glm_input) > 0.5*nrow(glm_input)){
-		        stop(
-		          cs_glm_design_size_error_message(
-		            glm_input = glm_input,
-		            main_dat = main_dat,
-		            interacted_dat = interacted_dat,
-		            use_regularization_requested = use_regularization_input,
-		            screening_applied = UsedRegularization,
-		            outcome_model_key = outcome_model_key
-		          ),
-		          call. = FALSE
-		        )
+		        # Graceful degradation: the post-screen design is too wide for the
+		        # available observations (common for tiny adversarial per-group
+		        # subsets). Drop the lower-priority interaction columns and keep the
+		        # main effects; only error if the main effects alone still overflow.
+		        if( ncol(main_dat) > 0.5*nrow(main_dat)){
+		          stop(
+		            cs_glm_design_size_error_message(
+		              glm_input = glm_input,
+		              main_dat = main_dat,
+		              interacted_dat = interacted_dat,
+		              use_regularization_requested = use_regularization_input,
+		              screening_applied = UsedRegularization,
+		              outcome_model_key = outcome_model_key
+		            ),
+		            call. = FALSE
+		          )
+		        }
+		        message(sprintf(
+		          paste0("Post-screen GLM design too wide (%d col for %d obs); ",
+		            "dropping %d interaction column(s), keeping %d main effect(s)."),
+		          ncol(glm_input), nrow(glm_input), ncol(interacted_dat), ncol(main_dat)
+		        ))
+		        interacted_dat <- matrix(numeric(0), nrow = NROW(main_dat), ncol = 0L)
+		        interaction_info <- interaction_info[0, , drop = FALSE]
+		        glm_input <- main_dat
 		      }
 		    }
 
