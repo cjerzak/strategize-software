@@ -438,6 +438,18 @@ Structure depends on parameters:
 
 \item{\code{Q_point_mEst}, \code{Q_se_mEst}}{Backward-compatible aliases for \code{Q_point} and \code{Q_se}.}
 
+\item{\code{Q_point_in_sample}}{In-sample point estimate of the Q objective at the
+optimized policy. Identical to \code{Q_point}; provided under an unambiguous name.}
+
+\item{\code{Q_reference_in_sample}}{The same in-sample Q objective evaluated at the
+reference (randomization) distribution \code{p_list} (both players at \code{p_list}
+in adversarial/difference modes), using the same report-phase estimator as
+\code{Q_point_in_sample}. \code{NA_real_} if the evaluation fails.}
+
+\item{\code{Q_gain_in_sample}}{\code{Q_point_in_sample - Q_reference_in_sample}.
+Comparing with \code{Q_gain_crossfit} (in-sample minus cross-fitted gain) estimates
+the optimism of the in-sample gain.}
+
 \item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
 
 \item{\code{outcome_model_view}}{Interpretable summaries of the fitted outcome models (by player and stage).

@@ -521,6 +521,17 @@ expect_valid_strategize_output <- function(res, n_factors = NULL) {
   testthat::expect_type(res$pi_star_point, "list")
   testthat::expect_type(res$p_list, "list")
 
+  testthat::expect_true("Q_point_in_sample" %in% names(res))
+  testthat::expect_true("Q_reference_in_sample" %in% names(res))
+  testthat::expect_true("Q_gain_in_sample" %in% names(res))
+  if (all(is.finite(res$Q_reference_in_sample))) {
+    testthat::expect_equal(
+      as.numeric(res$Q_gain_in_sample),
+      as.numeric(res$Q_point_in_sample) - as.numeric(res$Q_reference_in_sample),
+      tolerance = 1e-8
+    )
+  }
+
   if (!is.null(n_factors)) {
     testthat::expect_equal(length(res$p_list), n_factors)
   }

@@ -44,6 +44,8 @@ test_that("strategize returns valid result with GLM outcome model", {
   ))
 
   expect_valid_strategize_output(res, n_factors = ncol(data$W))
+  expect_true(is.finite(res$Q_reference_in_sample))
+  expect_true(is.finite(res$Q_gain_in_sample))
 })
 
 test_that("strategize GLM handles pairwise designs with zero-variance interactions", {

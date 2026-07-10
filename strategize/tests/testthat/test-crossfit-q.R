@@ -675,6 +675,9 @@ test_that("strategize can return first-class crossfit Q fields", {
   expect_true(is.finite(res$Q_crossfit))
   expect_true(is.finite(res$Q_reference_crossfit))
   expect_true(is.finite(res$Q_gain_crossfit))
+  # gain_optimism = in-sample gain minus cross-fitted gain must be computable
+  expect_true(is.finite(res$Q_gain_in_sample))
+  expect_true(is.finite(as.numeric(res$Q_gain_in_sample) - as.numeric(res$Q_gain_crossfit)))
   expect_s3_class(res$Q_crossfit_info$summary, "data.frame")
   expect_true(all(c("dr_hajek", "dr", "ips", "snips", "model") %in%
                     res$Q_crossfit_info$summary$estimator))

@@ -368,6 +368,18 @@
 #'
 #' \item{\code{Q_point_mEst}, \code{Q_se_mEst}}{Backward-compatible aliases for \code{Q_point} and \code{Q_se}.}
 #'
+#' \item{\code{Q_point_in_sample}}{In-sample point estimate of the Q objective at the
+#' optimized policy. Identical to \code{Q_point}; provided under an unambiguous name.}
+#'
+#' \item{\code{Q_reference_in_sample}}{The same in-sample Q objective evaluated at the
+#' reference (randomization) distribution \code{p_list} (both players at \code{p_list}
+#' in adversarial/difference modes), using the same report-phase estimator as
+#' \code{Q_point_in_sample}. \code{NA_real_} if the evaluation fails.}
+#'
+#' \item{\code{Q_gain_in_sample}}{\code{Q_point_in_sample - Q_reference_in_sample}.
+#' Comparing with \code{Q_gain_crossfit} (in-sample minus cross-fitted gain) estimates
+#' the optimism of the in-sample gain.}
+#'
 #' \item{\code{pi_star_lb}, \code{pi_star_ub}}{Confidence bounds for \code{pi_star_point} (if \code{compute_se = TRUE} and a confidence level is provided).}
 #'
 #' \item{\code{outcome_model_view}}{Interpretable summaries of the fitted outcome models (by player and stage).
@@ -1465,7 +1477,7 @@ strategize       <-          function(
 
   # Obtain solution via exact calculation
   message("Starting optimization...")
-  q_star_OUTER <- q_star_se_OUTER <- pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
+  q_star_OUTER <- q_star_se_OUTER <- q_reference_OUTER <- pi_star_se_list_OUTER <- pi_star_list_OUTER <- replicate(n = K, list())
   for(k_clust in 1:K){
   if(K > 1){
     message(sprintf("Optimizing cluster %s of %s...",k_clust, K))
@@ -2057,6 +2069,79 @@ strategize       <-          function(
   }
   q_star <- as.matrix(   q_star  )
   q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
+
+  # In-sample Q at the reference (randomization) policy p_list, evaluated via
+  # the same report-phase estimator as q_star so the two are on identical
+  # semantics (raw QFXN for exact-eval specs, MC draws otherwise).
+  q_reference_in_sample_k <- tryCatch({
+    qref_parts_ast <- gather_fxn(REGRESSION_PARAMS_jax_ast_jnp)
+    qref_parts_dag <- gather_fxn(REGRESSION_PARAMS_jax_dag_jnp)
+    if (!adversarial) {
+      qref_eval <- evaluate_average_case_q(
+        pi_star_ast = p_vec_tf,
+        pi_star_dag = p_vec_tf,
+        INTERCEPT_ast_ = qref_parts_ast[[1]],
+        COEFFICIENTS_ast_ = qref_parts_ast[[2]],
+        INTERCEPT_dag_ = qref_parts_dag[[1]],
+        COEFFICIENTS_dag_ = qref_parts_dag[[2]],
+        seed_in = jax_seed,
+        phase = "report",
+        outcome_model_type = outcome_model_type,
+        glm_family = glm_family,
+        nMonte_Qglm = nMonte_Qglm,
+        temperature = MNtemp,
+        ParameterizationType = strenv$ParameterizationType,
+        d_locator_use = strenv$d_locator_use,
+        q_fxn = QFXN,
+        single_party = !isTRUE(diff),
+        force_reinforce = force_reinforce
+      )
+      as.numeric(strenv$np$array(qref_eval$q_vec))[1]
+    } else {
+      qref_parts_ast0 <- gather_fxn(REGRESSION_PARAMS_jax_ast0_jnp)
+      qref_parts_dag0 <- gather_fxn(REGRESSION_PARAMS_jax_dag0_jnp)
+      # Reference = both players at p_list; alr(p_list) without init noise.
+      qref_a_ref <- strenv$jnp$array(a_vec_init_mat, strenv$dtj)
+      qref_eval <- evaluate_adversarial_q(
+        pi_star_ast = p_vec_tf,
+        pi_star_dag = p_vec_tf,
+        a_i_ast = qref_a_ref,
+        a_i_dag = qref_a_ref,
+        INTERCEPT_ast_ = qref_parts_ast[[1]],
+        COEFFICIENTS_ast_ = qref_parts_ast[[2]],
+        INTERCEPT_dag_ = qref_parts_dag[[1]],
+        COEFFICIENTS_dag_ = qref_parts_dag[[2]],
+        INTERCEPT_ast0_ = qref_parts_ast0[[1]],
+        COEFFICIENTS_ast0_ = qref_parts_ast0[[2]],
+        INTERCEPT_dag0_ = qref_parts_dag0[[1]],
+        COEFFICIENTS_dag0_ = qref_parts_dag0[[2]],
+        P_VEC_FULL_ast_ = p_vec_full_ast_jnp,
+        P_VEC_FULL_dag_ = p_vec_full_dag_jnp,
+        SLATE_VEC_ast_ = SLATE_VEC_ast_jnp,
+        SLATE_VEC_dag_ = SLATE_VEC_dag_jnp,
+        LAMBDA_ = strenv$jnp$array(lambda),
+        Q_SIGN = strenv$jnp$array(1.),
+        seed_in = jax_seed,
+        phase = "report",
+        outcome_model_type = outcome_model_type,
+        glm_family = glm_family,
+        nMonte_Qglm = nMonte_Qglm,
+        nMonte_adversarial = nMonte_adversarial,
+        primary_pushforward = primary_pushforward,
+        primary_n_entrants = primary_n_entrants,
+        primary_n_field = primary_n_field,
+        temperature = MNtemp,
+        ParameterizationType = strenv$ParameterizationType,
+        d_locator_use = strenv$d_locator_use
+      )
+      # $q_ast, not $q_max, to match the report-phase extraction for q_star.
+      as.numeric(strenv$np$array(qref_eval$q_ast))[1]
+    }
+  }, error = function(e) NA_real_)
+  if (!length(q_reference_in_sample_k) || !is.numeric(q_reference_in_sample_k) ||
+      !is.finite(q_reference_in_sample_k[[1]])) {
+    q_reference_in_sample_k <- NA_real_
+  }
   pi_star_numeric <- strenv$np$array( pi_star_full ) # - c(1:3) already extracted 
 
   # drop the q part
@@ -2096,7 +2181,10 @@ strategize       <-          function(
   pi_star_se_list_OUTER[[k_clust]] <- (pi_star_se_list <- RenamePiList(  pi_star_se_list  ))
   q_star_OUTER[[k_clust]] <- q_star
   q_star_se_OUTER[[k_clust]] <- q_star_se
+  q_reference_OUTER[[k_clust]] <- q_reference_in_sample_k
   } # end loop k in 1, ..., K
+
+  q_reference_in_sample <- unlist( q_reference_OUTER )
 
   # reset names for K > 1 case
   if(K > 1){
@@ -2109,7 +2197,10 @@ strategize       <-          function(
     q_star <- unlist( q_star_OUTER )
     q_star_se <- unlist( q_star_se_OUTER )
     names(q_star_se) <- names(q_star) <- paste("k",  1:K, sep = "")
+    names(q_reference_in_sample) <- paste("k",  1:K, sep = "")
   }
+  q_gain_in_sample <- as.numeric(q_star) - as.numeric(q_reference_in_sample)
+  names(q_gain_in_sample) <- names(q_reference_in_sample)
 
   for(sign_ in c(-1,1)){
     bound_ <- lapply(1:max(c(length(GroupsPool),K)),function(k_){
@@ -2483,7 +2574,11 @@ strategize       <-          function(
                   "Q_se"= q_star_se,
                   "Q_point_mEst" = q_star,
                   "Q_se_mEst"= q_star_se,
-                  
+
+                  "Q_point_in_sample" = q_star,
+                  "Q_reference_in_sample" = q_reference_in_sample,
+                  "Q_gain_in_sample" = q_gain_in_sample,
+
                   "pi_star_vec" = pi_star_numeric,
                   "pi_star_red_ast" = pi_star_red_ast,
                   "pi_star_red_dag" = pi_star_red_dag,
