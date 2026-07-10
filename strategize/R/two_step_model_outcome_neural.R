@@ -233,9 +233,53 @@ neural_coerce_group_index_base <- function(values,
     return(rep(missing_idx, as.integer(n_rows)))
   }
   if (is.numeric(values)) {
+    vals_num <- as.numeric(values)
+    finite_vals <- vals_num[is.finite(vals_num)]
+    if (length(finite_vals) > 0L && any(abs(finite_vals - round(finite_vals)) > 1e-8)) {
+      stop(
+        "Numeric group values must be whole-number codes or match the group labels; ",
+        "received fractional values. Supply character labels instead.",
+        call. = FALSE
+      )
+    }
+    # Numeric labels first: if every observed value literally matches a level
+    # label (e.g., levels "1"/"2"), treat values as labels, not positions.
+    vals_chr <- as.character(values)
+    observed <- vals_chr[!is.na(vals_chr) & nzchar(vals_chr)]
+    if (length(observed) > 0L && all(observed %in% levels)) {
+      idx <- match(vals_chr, levels) - 1L
+      idx[is.na(idx)] <- missing_idx
+      return(as.integer(idx))
+    }
+    # Positional codes: infer the base only from definitive evidence. A value
+    # of 0 can only be 0-based; a value of length(levels) can only be 1-based.
+    # The old heuristic ("shift iff some value >= length(levels)") silently
+    # misread 1-based codes whenever the batch happened to omit the top level,
+    # shifting every group by one -- never guess silently.
     idx <- as.integer(values)
-    if (any(idx >= length(levels), na.rm = TRUE)) {
+    has_zero <- any(idx == 0L, na.rm = TRUE)
+    has_top <- any(idx == length(levels), na.rm = TRUE)
+    if (has_zero && has_top) {
+      stop(
+        sprintf(paste0(
+          "Numeric group codes contain both 0 and %d, which no single ",
+          "0-based or 1-based indexing of the %d group levels can produce. ",
+          "Supply character labels instead."
+        ), length(levels), length(levels)),
+        call. = FALSE
+      )
+    }
+    if (has_top) {
       idx <- idx - 1L
+    } else if (!has_zero && any(!is.na(idx))) {
+      warning(
+        paste0(
+          "Numeric group codes are ambiguous (no 0 and no top-level code ",
+          "observed); interpreting them as 0-based indices into the group ",
+          "levels. Pass character labels to remove the ambiguity."
+        ),
+        call. = FALSE
+      )
     }
     idx[is.na(idx) | idx < 0L | idx >= length(levels)] <- missing_idx
     return(idx)
@@ -578,13 +622,23 @@ neural_extract_lr_trace <- function(lr_schedule, steps_completed, fallback_lr = 
     return(list(lr_trace = rep(lr_value, steps_completed), lr_trace_status = "ok"))
   }
 
-  trace <- tryCatch(
-    vapply(seq_len(steps_completed) - 1L, function(step) {
-      value <- lr_schedule(ai(step))
-      as.numeric(strenv$np$array(value))
-    }, numeric(1)),
-    error = function(e) NULL
-  )
+  # Evaluate the whole schedule in ONE vmapped device call: the per-step loop
+  # cost one reticulate round-trip per completed step (40k+ at teardown of a
+  # long run). Fall back to the loop for schedules vmap cannot trace.
+  trace <- tryCatch({
+    steps_arr <- strenv$jnp$arange(ai(steps_completed))
+    values <- strenv$jax$vmap(lr_schedule)(steps_arr)
+    as.numeric(strenv$np$array(values))
+  }, error = function(e) NULL)
+  if (is.null(trace) || length(trace) != steps_completed) {
+    trace <- tryCatch(
+      vapply(seq_len(steps_completed) - 1L, function(step) {
+        value <- lr_schedule(ai(step))
+        as.numeric(strenv$np$array(value))
+      }, numeric(1)),
+      error = function(e) NULL
+    )
+  }
   if (is.null(trace) || length(trace) != steps_completed) {
     return(list(
       lr_trace = rep(NA_real_, steps_completed),
@@ -1439,8 +1493,60 @@ neural_logits_to_q <- function(logits, likelihood){
     prob <- strenv$jnp$take(probs, 1L, axis = 1L)
     return(strenv$jnp$reshape(prob, list(-1L, 1L)))
   }
+  if (likelihood == "mixed") {
+    # Universal/mixed models emit (n, global_out_dim) logits; column 0 carries
+    # the bernoulli/pairwise logit. The normal-mu fallback below would crash on
+    # squeeze(axis = 1) for out_dim > 1 and, worse, return a raw logit as "q".
+    # jnp$take keeps the pi-gradient path intact.
+    prob <- strenv$jax$nn$sigmoid(strenv$jnp$take(logits, 0L, axis = 1L))
+    return(strenv$jnp$reshape(prob, list(-1L, 1L)))
+  }
   mu <- strenv$jnp$squeeze(logits, axis = 1L)
   strenv$jnp$reshape(mu, list(-1L, 1L))
+}
+
+# Row-level outcome validity under the universal mixed likelihood. Codes:
+# 0 = bernoulli (y in {0,1}), 1 = categorical (integer y in [0, n_outcomes)),
+# 2 = normal (finite y), 3 = ordinal (integer y in [0, n_outcomes)). A single
+# invalid row that reaches the likelihood either NaNs the whole ELBO (NaN y)
+# or is index-clamped into a finite-but-wrong log-prob, so training inputs
+# must be screened with this predicate before they reach JAX.
+neural_mixed_row_is_valid <- function(y,
+                                      likelihood_code_obs,
+                                      n_outcomes_obs) {
+  y_num <- as.numeric(y)
+  code <- as.integer(likelihood_code_obs)
+  n_outcomes_obs <- as.integer(n_outcomes_obs)
+  ok <- is.finite(y_num) & is.finite(code)
+  bern_idx <- ok & code == 0L
+  if (any(bern_idx)) {
+    ok[bern_idx] <- y_num[bern_idx] %in% c(0, 1)
+  }
+  cat_idx <- ok & code == 1L
+  if (any(cat_idx)) {
+    y_cat <- suppressWarnings(as.integer(round(y_num[cat_idx])))
+    ok[cat_idx] <- is.finite(y_cat) &
+      abs(y_num[cat_idx] - y_cat) < 1e-8 &
+      is.finite(n_outcomes_obs[cat_idx]) &
+      n_outcomes_obs[cat_idx] >= 2L &
+      y_cat >= 0L &
+      y_cat < n_outcomes_obs[cat_idx]
+  }
+  norm_idx <- ok & code == 2L
+  if (any(norm_idx)) {
+    ok[norm_idx] <- is.finite(y_num[norm_idx])
+  }
+  ord_idx <- ok & code == 3L
+  if (any(ord_idx)) {
+    y_ord <- suppressWarnings(as.integer(round(y_num[ord_idx])))
+    ok[ord_idx] <- is.finite(y_ord) &
+      abs(y_num[ord_idx] - y_ord) < 1e-8 &
+      is.finite(n_outcomes_obs[ord_idx]) &
+      n_outcomes_obs[ord_idx] >= 2L &
+      y_ord >= 0L &
+      y_ord < n_outcomes_obs[ord_idx]
+  }
+  ok
 }
 
 apply_implicit_parameterization_jnp <- function(p_sub,
@@ -3525,6 +3631,40 @@ neural_resolve_moe_load_balance_lambda <- function(value = NULL) {
   as.numeric(lambda)
 }
 
+# Emit the MoE load-balancing penalty collected during this model trace as ONE
+# numpyro.factor at model-body level (outside any data plate), scaled by
+# n_obs_total * lambda so the penalty tracks the likelihood magnitude
+# identically under plate subsampling and compact (obs_scale) training. The
+# mean over collected terms keeps the weight independent of how many times the
+# covariate encoder ran within the trace (forward/reversed pass, low-rank
+# tower). Clears the collector; a no-op when training is inactive.
+neural_emit_moe_load_balance_factor <- function(n_obs_total) {
+  pending <- strenv$moe_aux_pending
+  strenv$moe_aux_pending <- list()
+  if (!isTRUE(strenv$moe_aux_active) ||
+      is.null(pending) || length(pending) < 1L) {
+    return(invisible(NULL))
+  }
+  moe_lambda <- suppressWarnings(as.numeric(strenv$moe_load_balance_lambda %||% 0))
+  if (length(moe_lambda) != 1L || !is.finite(moe_lambda) || moe_lambda <= 0) {
+    return(invisible(NULL))
+  }
+  n_scale <- suppressWarnings(as.numeric(n_obs_total))
+  if (length(n_scale) != 1L || !is.finite(n_scale) || n_scale < 1) {
+    n_scale <- 1
+  }
+  aux_total <- Reduce(`+`, pending)
+  if (length(pending) > 1L) {
+    aux_total <- aux_total / as.numeric(length(pending))
+  }
+  scale_val <- strenv$jnp$array(moe_lambda * n_scale, dtype = strenv$dtj)
+  strenv$numpyro$factor(
+    "moe_load_balance",
+    strenv$jnp$negative(scale_val * aux_total)
+  )
+  invisible(NULL)
+}
+
 neural_resolve_residual_weight_depth_scale <- function(value = NULL) {
   mode <- tolower(as.character(value %||% "floor_one"))
   mode <- gsub("-", "_", mode, fixed = TRUE)
@@ -3815,6 +3955,49 @@ neural_apply_pairwise_bernoulli_logit_adjustment_r <- function(logits,
   neural_apply_pairwise_bernoulli_logit_scale_r(logits, model_info)
 }
 
+# R-side calibration temperature (mirrors
+# neural_apply_classification_logit_calibration). The jitted mixed-model cores
+# call the jnp version without likelihood_code_obs, which makes it a no-op for
+# likelihood == "mixed" -- so mixed models trained with
+# calibration_method = "logit_scale" must have the temperature re-applied here
+# on the class-family rows before logits are converted to probabilities.
+neural_calibration_scale_numeric_r <- function(model_info = NULL) {
+  if (is.null(model_info) ||
+      !isTRUE(model_info$calibration_enabled) ||
+      !identical(model_info$calibration_method %||% NULL, "logit_scale")) {
+    return(NULL)
+  }
+  scale <- model_info$calibration_scale %||% NULL
+  if (is.null(scale) && !is.null(model_info$params$calibration_scale)) {
+    scale <- tryCatch(
+      as.numeric(reticulate::py_to_r(strenv$np$array(model_info$params$calibration_scale))),
+      error = function(e) NULL
+    )
+  }
+  if (is.null(scale) && !is.null(model_info$params$log_calibration_scale)) {
+    scale <- tryCatch(
+      exp(as.numeric(reticulate::py_to_r(
+        strenv$np$array(model_info$params$log_calibration_scale)
+      ))[[1L]]),
+      error = function(e) NULL
+    )
+  }
+  scale <- suppressWarnings(as.numeric(scale[[1L]]))
+  if (length(scale) != 1L || is.na(scale) || !is.finite(scale) || scale <= 0) {
+    return(NULL)
+  }
+  as.numeric(scale)
+}
+
+neural_apply_classification_logit_calibration_r <- function(logits,
+                                                            model_info = NULL) {
+  scale <- neural_calibration_scale_numeric_r(model_info)
+  if (is.null(scale)) {
+    return(logits)
+  }
+  logits * scale
+}
+
 neural_low_rank_interaction_rank <- function(model_info = NULL) {
   neural_resolve_low_rank_interaction_rank(
     model_info$low_rank_interaction_rank %||% 0L
@@ -4070,7 +4253,9 @@ neural_build_covariate_distribution_profiles <- function(X_mat,
 
   default_stats <- global_summary$stats
   default_metadata <- global_summary$metadata
-  if (!is.na(default_experiment_index) &&
+  if (!is.null(default_experiment_index) &&
+      length(default_experiment_index) == 1L &&
+      !is.na(default_experiment_index) &&
       length(by_experiment) >= (default_experiment_index + 1L)) {
     stats_idx <- by_experiment[[default_experiment_index + 1L]]
     meta_idx <- metadata_by_experiment[[default_experiment_index + 1L]]
@@ -5109,12 +5294,16 @@ neural_muon_target_name_regex <- function() {
   # (W_ff1/2) was orthogonalized. Dropped: the readout head W_out and interaction
   # output head W_rc_out, which benefit from Adam's per-coordinate scaling to
   # calibrate output magnitude (standard Muon recipes exclude the output head).
+  # W_covariate_value_shared is excluded: it is shaped (1, ModelDims), so it
+  # passes the ndim==2 gate but is effectively a vector -- Newton-Schulz
+  # orthogonalization of a rank-1 matrix degenerates to direction
+  # normalization (Muon-on-vectors is discouraged); Adam handles it.
   paste0(
     "^(",
     "W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross",
     "|W_factor_struct|W_level_struct",
     "|W_factor_fuse_(1|2)|W_covariate_fuse_(1|2)",
-    "|W_covariate_value_(conditioner_1|conditioner_2|basis|shared)",
+    "|W_covariate_value_(conditioner_1|conditioner_2|basis)",
     "|M_cross_raw|W_rc_(r|c)",
     ")$"
   )
@@ -5440,23 +5629,17 @@ neural_apply_cross_term <- function(logits, phi_left, phi_right,
   cross_term <- strenv$jnp$einsum("nm,mp,np->n", phi_left, M_cross, phi_right)
   cross_term <- strenv$jnp$reshape(cross_term, list(-1L, 1L))
   if (is.null(W_cross_out)) {
-    if (is.null(out_dim)) {
-      out_dim <- tryCatch(ai(logits$shape[[2]]), error = function(e) NULL)
-    }
-    if (is.null(out_dim)) {
-      out_dim <- ai(1L)
-    }
-    dtype_use <- dtype
-    if (is.null(dtype_use)) {
-      dtype_use <- tryCatch(logits$dtype, error = function(e) NULL)
-    }
-    if (is.null(dtype_use)) {
-      dtype_use <- strenv$dtj
-    }
-    cross_out <- strenv$jnp$zeros(list(1L, ai(out_dim)), dtype = dtype_use)
-  } else {
-    cross_out <- strenv$jnp$reshape(W_cross_out, list(1L, -1L))
+    # M_cross without its output projection can only come from a corrupted or
+    # legacy artifact. Zero-filling here silently removed the bilinear term
+    # from predictions; fail loudly like the sibling artifact checks.
+    stop(
+      "Model params contain M_cross but no W_cross_out; the cross-term output ",
+      "projection is missing. The artifact is corrupted or from an ",
+      "incompatible strategize version -- refit or re-export it.",
+      call. = FALSE
+    )
   }
+  cross_out <- strenv$jnp$reshape(W_cross_out, list(1L, -1L))
   logits + cross_term * cross_out
 }
 
@@ -5742,6 +5925,18 @@ neural_covariate_order_from_names <- function(order_names, covariate_names) {
     return(integer(0))
   }
   idx <- match(order_names, covariate_names) - 1L
+  unmatched <- order_names[is.na(idx)]
+  if (length(unmatched) > 0L) {
+    # A typo'd covariate name at adaptation/prediction time previously removed
+    # the token silently; mirror the factor-order helper's strictness.
+    warning(sprintf(paste0(
+      "Covariate order name(s) not found in the model's covariate schema and ",
+      "dropped: %s. Available covariates: %s."
+    ),
+    paste(unmatched, collapse = ", "),
+    paste(utils::head(covariate_names, 20L), collapse = ", ")
+    ), call. = FALSE)
+  }
   idx <- idx[!is.na(idx) & idx >= 0L]
   as.integer(idx)
 }
@@ -6599,8 +6794,12 @@ neural_build_covariate_fused_tokens <- function(model_info,
       value_tok <- strenv$jnp$einsum("nsm,nsmd->nsd", mix_weights, basis_proj)
       # Issue 5: Switch-style load-balancing penalty. Push the (token-mask-weighted)
       # mean routing mass toward uniform so no single expert absorbs all weight while
-      # the others stop receiving gradients. Emitted as a numpyro.factor only during
-      # SVI training (moe_aux_active); harmless/skipped otherwise.
+      # the others stop receiving gradients. The deviation term is COLLECTED here
+      # and emitted once per model trace by neural_emit_moe_load_balance_factor(),
+      # outside the data plate with an explicit N * lambda scale -- emitting the
+      # factor from inside this encoder made its effective weight depend on the
+      # plate scaling mode (N*lambda under plate subsampling vs only B*lambda
+      # under compact training) and on how many times the encoder ran per trace.
       moe_lambda <- suppressWarnings(as.numeric(strenv$moe_load_balance_lambda %||% 0))
       if (isTRUE(strenv$moe_aux_active) && length(moe_lambda) == 1L &&
           is.finite(moe_lambda) && moe_lambda > 0) {
@@ -6616,11 +6815,11 @@ neural_build_covariate_fused_tokens <- function(model_info,
           axis = 0L
         ) / route_denom
         uniform_target <- strenv$jnp$array(1. / as.numeric(n_experts_moe), dtype = strenv$dtj)
-        moe_aux <- strenv$jnp$array(moe_lambda, dtype = strenv$dtj) *
-          strenv$jnp$sum(strenv$jnp$square(mean_route - uniform_target))
-        moe_aux_name <- paste0("moe_load_balance_", strenv$moe_aux_counter)
-        strenv$moe_aux_counter <- strenv$moe_aux_counter + 1L
-        strenv$numpyro$factor(moe_aux_name, strenv$jnp$negative(moe_aux))
+        moe_aux <- strenv$jnp$sum(strenv$jnp$square(mean_route - uniform_target))
+        pending <- strenv$moe_aux_pending
+        if (is.null(pending)) pending <- list()
+        pending[[length(pending) + 1L]] <- moe_aux
+        strenv$moe_aux_pending <- pending
       }
     }
   }
@@ -7277,6 +7476,13 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
       )
       if (!is.null(level_text_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+        # Clamp: bare-fit default schemas carry no explicit __holdout__ row, so
+        # an unseen-level code (== n_levels) would otherwise gather out of
+        # bounds -- jnp.take's OOB fill yields NaN tokens that silently poison
+        # every downstream logit. FM/prediction schemas carry the +1 row and
+        # are unaffected by the clamp.
+        n_rows_text <- ai(level_text_proj$shape[[1]])
+        idx_d <- strenv$jnp$clip(idx_d, 0L, ai(n_rows_text - 1L))
         level_text_d <- strenv$jnp$take(level_text_proj, idx_d, axis = 0L)
       }
     }
@@ -7290,6 +7496,8 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
       )
       if (!is.null(level_struct_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
+        n_rows_struct <- ai(level_struct_proj$shape[[1]])
+        idx_d <- strenv$jnp$clip(idx_d, 0L, ai(n_rows_struct - 1L))
         level_struct_d <- strenv$jnp$take(level_struct_proj, idx_d, axis = 0L)
       }
     }
@@ -7424,6 +7632,17 @@ neural_build_context_tokens_batch <- function(model_info,
                      schema_dropout_masks = schema_dropout_masks)
 }
 
+# SOFT (mean-embedding) relaxation -- the differentiable policy path.
+# Each factor's level embeddings are mixed by pi BEFORE the SwiGLU fusion MLP
+# and the transformer, so downstream code computes NN(tokens(E_pi[embedding])),
+# i.e. f(E[x]) rather than E[f(x)]. This is deliberate: mixing before the
+# network is what keeps Q(pi) differentiable in pi for gradient-based policy
+# optimization, and it is exact at one-hot pi. At interior points of the
+# simplex (stochastic interventions) it is a Jensen-type surrogate of the true
+# expected outcome E_{w~pi}[NN(tokens(w))] -- mixing after the fusion MLP
+# would remove only the within-token gap, not the sequence-level one, at a
+# levels^factors cost. Quantify the surrogate gap at a returned optimum with
+# validate_soft_relaxation() (hard-profile Monte Carlo, report-time only).
 neural_build_factor_fused_tokens_soft <- function(pi_vec,
                                                   model_info,
                                                   params,
@@ -7469,11 +7688,21 @@ neural_build_factor_fused_tokens_soft <- function(pi_vec,
     n_e <- ai(n_target)
     if (!is.na(n_p) && !is.na(n_e) && n_p != n_e) {
       if (n_e > n_p) {
+        # Expected case: the level-embedding table carries one extra
+        # __holdout__ row beyond the pi simplex; zero-pad so the holdout row
+        # gets no probability mass.
         pad_n <- ai(n_e - n_p)
         pad <- strenv$jnp$zeros(list(pad_n), dtype = strenv$dtj)
         return(strenv$jnp$concatenate(list(p_full, pad), axis = 0L))
       }
-      return(strenv$jnp$take(p_full, strenv$jnp$arange(ai(n_e)), axis = 0L))
+      # pi longer than the embedding table can only arise from a schema/pi
+      # misalignment; truncation would silently drop probability mass and
+      # shrink the mixed token toward zero -- fail loudly instead.
+      stop(sprintf(paste0(
+        "Soft policy vector has %d entries for a factor whose level-embedding ",
+        "table has only %d rows; the policy simplex and the model schema are ",
+        "misaligned (was the model trained under a different factor/level set?)."
+      ), as.integer(n_p), as.integer(n_e)), call. = FALSE)
     }
     p_full
   }
@@ -8278,6 +8507,21 @@ neural_run_transformer <- function(tokens,
         return(list(tokens = tokens_final, readout_tokens = tokens_final))
       }
       return(tokens_final)
+    }
+    # Stacked params usually drop the per-layer W_q_l1... entries
+    # (drop_legacy = TRUE), in which case the R loop below cannot run -- it
+    # would dereference NULL weights and die in reticulate with an
+    # inscrutable error. Fail with the real cause; fall through only when the
+    # legacy per-layer entries were kept alongside the stack.
+    if (is.null(params[["W_q_l1"]])) {
+      stop(
+        "The scanned transformer path is unavailable (Python scan helper not ",
+        "registered or scan failed), and this model's parameters are stacked ",
+        "for scanning, so the per-layer fallback loop cannot run. Re-run ",
+        "strategize::initialize_jax() (which registers the scan helpers) or ",
+        "reinstall the Python backend.",
+        call. = FALSE
+      )
     }
   }
   residual_history <- if (isTRUE(use_full_attn_residual)) {
@@ -9597,7 +9841,21 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
                                       resp_cov_vec = resp_cov_vec,
                                       params = params,
                                       context_present = context_present)
-  utility <- neural_linear_head(phi, params$W_out, params$b_out)
+  # For a pairwise-trained model, apply the same head/low-rank RMS
+  # normalization the pair logit path uses (pairwise_obs = TRUE at 9988-10001):
+  # under low_rank_logit_normalization = "rms" the raw W_out column scales are
+  # unidentified (only the normalized head enters the training loss), so
+  # un-normalized utilities here would feed the Bradley-Terry nomination
+  # softmax at an arbitrary temperature. All ops are jnp -- the utility stays
+  # differentiable in pi_vec.
+  utility_pairwise_obs <- isTRUE(model_info$pairwise_mode)
+  utility <- neural_linear_head(
+    phi,
+    params$W_out,
+    params$b_out,
+    model_info = model_info,
+    pairwise_obs = utility_pairwise_obs
+  )
   if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
     resp_readout <- neural_encode_respondent_tower_prepared(
       params = params,
@@ -9616,11 +9874,14 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
       resp_party_idx = resp_party_idx,
       context_present = context_present
     )
-    utility <- neural_apply_low_rank_interaction(
-      utility,
-      resp_readout$final,
-      cand_readout$final,
-      params
+    utility <- utility + neural_low_rank_interaction_logits(
+      respondent_final = resp_readout$final,
+      candidate_final = cand_readout$final,
+      params = params,
+      out_dim = ai(utility$shape[[2]]),
+      dtype = utility$dtype,
+      model_info = model_info,
+      pairwise_obs = utility_pairwise_obs
     )
   }
   # Additive main-effects head + calibration temperature (train/serve parity with
@@ -10211,12 +10472,48 @@ neural_resolve_model_info <- function(name) {
   NULL
 }
 
+# The soft policy builders never receive a per-row experiment index or
+# per-experiment factor order: policy optimization always evaluates under
+# model_info's default_experiment_index / default_factor_order. That is
+# correct for single-study fits and for adapted FM predictors whose defaults
+# were pinned to the target study -- but for a multi-experiment pooled model
+# with no pinned default, pi* would be optimized against the wrong (global
+# fallback) study context with nothing visible to the user. Warn once.
+neural_warn_soft_default_context <- function(model_info, label = "policy optimization") {
+  if (is.null(model_info)) {
+    return(invisible(NULL))
+  }
+  n_exp <- suppressWarnings(as.integer(model_info$n_experiment_levels %||%
+                                         length(model_info$experiment_levels %||% character(0))))
+  n_exp <- n_exp[1L]
+  if (is.na(n_exp) || n_exp <= 1L) {
+    return(invisible(NULL))
+  }
+  default_idx <- model_info$default_experiment_index %||% NULL
+  pinned <- !is.null(default_idx) && length(default_idx) == 1L && !is.na(default_idx)
+  if (isTRUE(pinned)) {
+    return(invisible(NULL))
+  }
+  if (isTRUE(strenv$soft_default_context_warned)) {
+    return(invisible(NULL))
+  }
+  strenv$soft_default_context_warned <- TRUE
+  warning(sprintf(paste0(
+    "The neural model pools %d experiments but no default_experiment_index ",
+    "is pinned; %s will evaluate the soft policy under the global fallback ",
+    "context rather than a specific study. Adapt the foundation model to the ",
+    "target study (which pins the default) before optimizing."
+  ), n_exp, label), call. = FALSE)
+  invisible(NULL)
+}
+
 neural_getQStar_single <- function(pi_star_ast,
                                    EST_COEFFICIENTS_tf_ast) {
   model_ast <- neural_resolve_model_info("neural_model_info_ast_jnp")
   if (is.null(model_ast)) {
     stop("neural_getQStar_single requires neural_model_info_ast_jnp.", call. = FALSE)
   }
+  neural_warn_soft_default_context(model_ast)
   party_label <- if (exists("GroupsPool", inherits = TRUE) && length(GroupsPool) > 0) {
     GroupsPool[1]
   } else {
@@ -10242,6 +10539,7 @@ neural_getQStar_diff_BASE <- function(pi_star_ast, pi_star_dag,
   if (is.null(model_ast)) {
     stop("neural_getQStar_diff_BASE requires neural_model_info_ast_jnp.", call. = FALSE)
   }
+  neural_warn_soft_default_context(model_ast)
   model_dag <- neural_resolve_model_info("neural_model_info_dag_jnp")
   if (is.null(model_dag)) {
     model_dag <- model_ast
@@ -10792,6 +11090,11 @@ generate_ModelOutcome_neural <- function(){
     moe_load_balance_lambda = 0.01,
     residual_weight_depth_scale = "floor_one",
     svi_lr_plate_rescale = TRUE,
+    # For single-candidate normal outcomes, optimize/report the average-case
+    # linear (main + 2-way OLS) Q surrogate instead of the neural soft
+    # prediction. Announced via message when active; set FALSE to optimize the
+    # neural prediction directly.
+    average_case_linear_q = TRUE,
     seed = 123L
   )
   UsedRegularization <- FALSE
@@ -11373,6 +11676,7 @@ generate_ModelOutcome_neural <- function(){
   strenv$moe_load_balance_lambda <- moe_load_balance_lambda
   strenv$moe_aux_active <- FALSE
   strenv$moe_aux_counter <- 0L
+  strenv$moe_aux_pending <- list()
   weight_sd_scale <- init_policy$weight_sd_scale
   #weight_sd_scale <- sqrt(2 * log(1 + ModelDims/2))/sqrt(ModelDims)
 
@@ -11777,6 +12081,30 @@ generate_ModelOutcome_neural <- function(){
       experiment_index_all <- NULL
     }
   }
+  if (!is.null(experiment_index_all)) {
+    # The contract is 0-based codes into experiment_levels. Downstream gathers
+    # clamp out-of-range values, so a 1-based caller would silently shift every
+    # experiment's embedding and per-experiment ordinal thresholds -- assert
+    # the range here instead.
+    exp_idx_finite <- experiment_index_all[!is.na(experiment_index_all)]
+    if (length(exp_idx_finite) > 0L && any(exp_idx_finite < 0L)) {
+      stop(
+        "neural_token_info$experiment_index must contain 0-based experiment codes; ",
+        "found negative values.",
+        call. = FALSE
+      )
+    }
+    if (length(experiment_levels_override) > 0L &&
+        length(exp_idx_finite) > 0L &&
+        any(exp_idx_finite >= length(experiment_levels_override))) {
+      stop(sprintf(paste0(
+        "neural_token_info$experiment_index contains code(s) >= %d, the number ",
+        "of experiment levels; expected 0-based codes in [0, %d]. A 1-based ",
+        "index would silently shift every experiment embedding."
+      ), length(experiment_levels_override),
+      length(experiment_levels_override) - 1L), call. = FALSE)
+    }
+  }
   respondent_id_all <- if (exists("respondent_id", inherits = TRUE) &&
                            !is.null(respondent_id)) {
     as.character(respondent_id)
@@ -11886,6 +12214,31 @@ generate_ModelOutcome_neural <- function(){
     }
     if (is.na(universal_global_out_dim) || universal_global_out_dim < 1L) {
       universal_global_out_dim <- max(1L, max(universal_n_outcomes_all, na.rm = TRUE))
+    }
+    # Screen every pooled training row against its declared outcome family
+    # BEFORE anything reaches JAX: one NaN outcome NaNs the entire ELBO and
+    # its gradients, while an out-of-range categorical/ordinal index would be
+    # clamped into a finite-but-wrong likelihood term -- both silent at FM
+    # scale. Fail loudly with the offending rows instead.
+    universal_family_codes_all <- match(
+      universal_likelihood_all,
+      c("bernoulli", "categorical", "normal", "ordinal")
+    ) - 1L
+    universal_rows_valid <- neural_mixed_row_is_valid(
+      y = Y_,
+      likelihood_code_obs = universal_family_codes_all,
+      n_outcomes_obs = universal_n_outcomes_all
+    )
+    if (!all(universal_rows_valid)) {
+      bad_rows <- which(!universal_rows_valid)
+      stop(sprintf(paste0(
+        "Universal foundation training received %d invalid outcome row(s) ",
+        "(non-finite Y, or categorical/ordinal Y outside [0, n_outcomes)). ",
+        "First offending rows: %s. Clean or drop these rows before training."
+      ),
+      length(bad_rows),
+      paste(utils::head(bad_rows, 10L), collapse = ", ")
+      ), call. = FALSE)
     }
   }
   universal_task_mode_levels <- unique(universal_task_mode_all)
@@ -12672,43 +13025,7 @@ generate_ModelOutcome_neural <- function(){
   }
   low_rank_logit_model_info$universal_loss_weighting <- universal_loss_weighting_diagnostics
 
-  mixed_row_is_valid_r <- function(y,
-                                   likelihood_code_obs,
-                                   n_outcomes_obs) {
-    y_num <- as.numeric(y)
-    code <- as.integer(likelihood_code_obs)
-    n_outcomes_obs <- as.integer(n_outcomes_obs)
-    ok <- is.finite(y_num) & is.finite(code)
-    bern_idx <- ok & code == 0L
-    if (any(bern_idx)) {
-      ok[bern_idx] <- y_num[bern_idx] %in% c(0, 1)
-    }
-    cat_idx <- ok & code == 1L
-    if (any(cat_idx)) {
-      y_cat <- suppressWarnings(as.integer(round(y_num[cat_idx])))
-      ok[cat_idx] <- is.finite(y_cat) &
-        abs(y_num[cat_idx] - y_cat) < 1e-8 &
-        is.finite(n_outcomes_obs[cat_idx]) &
-        n_outcomes_obs[cat_idx] >= 2L &
-        y_cat >= 0L &
-        y_cat < n_outcomes_obs[cat_idx]
-    }
-    norm_idx <- ok & code == 2L
-    if (any(norm_idx)) {
-      ok[norm_idx] <- is.finite(y_num[norm_idx])
-    }
-    ord_idx <- ok & code == 3L
-    if (any(ord_idx)) {
-      y_ord <- suppressWarnings(as.integer(round(y_num[ord_idx])))
-      ok[ord_idx] <- is.finite(y_ord) &
-        abs(y_num[ord_idx] - y_ord) < 1e-8 &
-        is.finite(n_outcomes_obs[ord_idx]) &
-        n_outcomes_obs[ord_idx] >= 2L &
-        y_ord >= 0L &
-        y_ord < n_outcomes_obs[ord_idx]
-    }
-    ok
-  }
+  mixed_row_is_valid_r <- neural_mixed_row_is_valid
 
   mixed_eval_strata_r <- function(y,
                                   likelihood_code_obs,
@@ -13176,6 +13493,20 @@ generate_ModelOutcome_neural <- function(){
       p2d_constraint_positive <- constraints_mod$positive
     }
   }
+  # Warm-start values for point-estimated (numpyro.param) trunk sites under
+  # uncertainty_scope = "output". init_to_value only seeds *sample* sites, so
+  # without this lookup a foundation-model warm start supplied through
+  # mcmc_control$init_site_values was silently discarded for every trunk
+  # parameter and the trunk retrained from random init. Populated after
+  # mcmc_control$init_site_values is validated (same frame, before tracing).
+  p2d_warm_start_values <- list()
+  p2d_warm_start_warned <- new.env(parent = emptyenv())
+  p2d_shape_of <- function(x) {
+    tryCatch(
+      as.integer(unlist(reticulate::py_to_r(x$shape))),
+      error = function(e) NULL
+    )
+  }
   p2d <- function(name,
                   sample_fxn,
                   init_fxn,
@@ -13185,6 +13516,29 @@ generate_ModelOutcome_neural <- function(){
     scope <- tolower(as.character(uncertainty_scope_arg))
     if (identical(scope, "output") && !isTRUE(is_output_layer)) {
       init_val <- init_fxn()
+      warm <- p2d_warm_start_values[[name]]
+      if (!is.null(warm)) {
+        warm_val <- tryCatch(
+          strenv$jnp$asarray(warm)$astype(ddtype_),
+          error = function(e) NULL
+        )
+        warm_shape <- if (is.null(warm_val)) NULL else p2d_shape_of(warm_val)
+        init_shape <- p2d_shape_of(init_val)
+        if (!is.null(warm_val) && !is.null(warm_shape) &&
+            !is.null(init_shape) && identical(warm_shape, init_shape)) {
+          init_val <- warm_val
+        } else if (!isTRUE(get0(name, envir = p2d_warm_start_warned,
+                                ifnotfound = FALSE))) {
+          assign(name, TRUE, envir = p2d_warm_start_warned)
+          warning(sprintf(paste0(
+            "init_site_values['%s'] does not match the expected parameter ",
+            "shape (%s vs %s); ignoring this warm-start value."
+          ), name,
+          paste(warm_shape %||% "?", collapse = "x"),
+          paste(init_shape %||% "?", collapse = "x")
+          ), call. = FALSE)
+        }
+      }
       if (!is.null(constraint)) {
         return(strenv$numpyro$param(name, init_val, constraint = constraint))
       }
@@ -14927,6 +15281,7 @@ generate_ModelOutcome_neural <- function(){
                                            Y_single_obs = NULL,
                                            obs_scale_single = NULL) {
     strenv$moe_aux_counter <- 0L
+    strenv$moe_aux_pending <- list()
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X_left <- subset_model_rows(X_left, obs_idx)
@@ -15309,10 +15664,12 @@ generate_ModelOutcome_neural <- function(){
         model_info_local,
         n_batch = ai(Xl$shape[[1]])
       )
-      schema_dropout_right <- neural_sample_schema_dropout_masks(
-        model_info_local,
-        n_batch = ai(Xr$shape[[1]])
-      )
+      # Share the schema-availability masks across the two candidates: real
+      # test-time schema missingness is task-level (a factor absent for one
+      # candidate is absent for both), so independent left/right sampling
+      # trained on asymmetric-information pairs that cannot occur at
+      # inference.
+      schema_dropout_right <- schema_dropout_left
       if (isTRUE(use_cross_encoder)) {
         logits <- encode_pair_cross(Xl, Xr, pl, pr, resp_p, resp_c,
                                     resp_c_present, experiment_idx,
@@ -15679,6 +16036,20 @@ generate_ModelOutcome_neural <- function(){
         })
       }
     }
+    # Under compact training the model receives one BATCH, so the local plate
+    # sizes are B, not the dataset size; use the training-observation total the
+    # compact path resolves (compact_model_n_obs) so the penalty tracks the
+    # likelihood scale identically in both modes.
+    moe_n_total <- if (isTRUE(compact_training)) {
+      as.numeric(compact_model_n_obs)
+    } else {
+      n_tot <- as.numeric(N_local)
+      if (!is.null(X_single)) {
+        n_tot <- n_tot + as.numeric(ai(X_single$shape[[1]]))
+      }
+      n_tot
+    }
+    neural_emit_moe_load_balance_factor(moe_n_total)
   }
 
   BayesianSingleTransformerModel <- function(X, party, resp_party, resp_cov,
@@ -15690,6 +16061,7 @@ generate_ModelOutcome_neural <- function(){
                                              obs_idx = NULL,
                                              obs_scale = NULL) {
     strenv$moe_aux_counter <- 0L
+    strenv$moe_aux_pending <- list()
     obs_idx <- normalize_model_obs_idx(obs_idx)
     if (!is.null(obs_idx)) {
       X <- subset_model_rows(X, obs_idx)
@@ -15978,6 +16350,13 @@ generate_ModelOutcome_neural <- function(){
     }
 
     local_lik()
+    neural_emit_moe_load_balance_factor(
+      if (isTRUE(compact_training)) {
+        as.numeric(compact_model_n_obs)
+      } else {
+        as.numeric(N_local)
+      }
+    )
   }
 
   # Cross-fitted out-of-sample fit metrics (computed before final full-data fit).
@@ -16069,7 +16448,18 @@ generate_ModelOutcome_neural <- function(){
 	        if (exists("varcov_cluster_variable_", inherits = TRUE)) {
 	          cluster_raw <- get("varcov_cluster_variable_", inherits = TRUE)
 	          if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
-	            if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
+	            if (isTRUE(universal_mixed_mode) &&
+	                !is.null(pair_mat) && nrow(pair_mat) > 0) {
+	              need <- suppressWarnings(
+	                max(c(pair_mat[, 1], universal_single_rows), na.rm = TRUE)
+	              )
+	              if (is.finite(need) && length(cluster_raw) >= need) {
+	                cluster_obs <- c(
+	                  cluster_raw[pair_mat[, 1]],
+	                  cluster_raw[universal_single_rows]
+	                )
+	              }
+	            } else if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
 	              need <- suppressWarnings(max(pair_mat[, 1], na.rm = TRUE))
 	              if (is.finite(need) && length(cluster_raw) >= need) {
 	                cluster_obs <- cluster_raw[pair_mat[, 1]]
@@ -16122,7 +16512,18 @@ generate_ModelOutcome_neural <- function(){
 	          }
 
 	          if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
-	            if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
+	            if (isTRUE(universal_mixed_mode) &&
+	                !is.null(pair_mat) && nrow(pair_mat) > 0) {
+	              need <- suppressWarnings(
+	                max(c(pair_mat[, 1], universal_single_rows), na.rm = TRUE)
+	              )
+	              if (is.finite(need) && length(cluster_raw) >= need) {
+	                cluster_obs <- c(
+	                  cluster_raw[pair_mat[, 1]],
+	                  cluster_raw[universal_single_rows]
+	                )
+	              }
+	            } else if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0) {
 	              cluster_obs <- cluster_raw[pair_mat[, 1]]
 	            } else if (!pairwise_mode && length(cluster_raw) == n_total) {
 	              cluster_obs <- cluster_raw
@@ -17055,6 +17456,19 @@ generate_ModelOutcome_neural <- function(){
   if (isTRUE(compact_balanced_sampling$enabled) && !isTRUE(compact_training)) {
     stop("Balanced study/respondent sampling currently requires compact batch_vi training.",
          call. = FALSE)
+  }
+  if (isTRUE(compact_balanced_sampling$enabled) &&
+      identical(tolower(as.character(mcmc_control$universal_loss_weighting %||% "empirical")),
+                "balanced_cell")) {
+    warning(
+      "balanced_sampling and universal_loss_weighting = 'balanced_cell' are ",
+      "both enabled: the cell weights are inverse GLOBAL frequencies while ",
+      "balanced sampling already reshapes the realized batch distribution, so ",
+      "the two corrections stack on overlapping axes (studies aligned with ",
+      "task/likelihood cells are effectively double-reweighted). Prefer one ",
+      "mechanism unless this compounding is intended.",
+      call. = FALSE
+    )
   }
   compact_balanced_state <- NULL
   compact_balanced_pool_key <- NULL
@@ -18207,6 +18621,13 @@ generate_ModelOutcome_neural <- function(){
                    "W_q_cross", "W_k_cross", "W_v_cross", "W_o_cross")) {
       reparam_config[[site]] <- locscale_reparam(centered = 0)
     }
+    # b_out is deliberately NOT reparameterized: LocScaleReparam renames the
+    # latent to b_out_decentered, which would silently disconnect the
+    # data-informed init_to_value warm start built under "b_out" by
+    # neural_build_output_site_init_values (base-rate logit bias). The residual
+    # funnel on this low-dimensional site is a smaller cost than losing the
+    # output-bias warm start; the manual fallback path handles the equivalent
+    # trade-off explicitly via b_out_site_name = "b_out_z".
     if (isTRUE(use_cross_term)) {
       reparam_config[["M_cross_raw"]] <- locscale_reparam(centered = 0)
     }
@@ -18244,6 +18665,10 @@ generate_ModelOutcome_neural <- function(){
   }
   if (!is.null(user_site_init_values) && length(user_site_init_values) > 0L) {
     output_site_init_values <- modifyList(output_site_init_values, user_site_init_values)
+    # Under uncertainty_scope = "output" trunk sites are numpyro.param, which
+    # init_to_value cannot seed; route the warm start through p2d's lookup so
+    # foundation-model adaptation warm-starts the trunk in both scopes.
+    p2d_warm_start_values <- user_site_init_values
   }
   init_to_value <- neural_get_init_to_value()
   use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
@@ -18415,6 +18840,10 @@ generate_ModelOutcome_neural <- function(){
   SVIParams <- NULL
   SVIInitValues <- NULL
   SVIPosteriorDraws <- NULL
+  # TRUE only when posterior draws degenerate to a single restored point
+  # (checkpoint rebuild where guide resampling failed); downstream variance
+  # must then be NA, never a silent 0.
+  posterior_draws_point_only <- FALSE
   svi_loss_curve <- NULL
   resolved_svi_steps <- NULL
   resolved_svi_num_draws <- NULL
@@ -18696,6 +19125,91 @@ generate_ModelOutcome_neural <- function(){
       end_factor <- 0.01
     }
     end_factor <- max(0, min(end_factor, 1))
+    # Resolve the optimizer tag before the checkpoint fingerprint is computed
+    # (the fingerprint includes it, and resolution may change it, e.g. the
+    # muon -> adamw fallback).
+    optimizer_tag <- neural_resolve_svi_optimizer_tag(
+      optimizer_tag = optimizer_tag,
+      guide_name = guide_name,
+      user_supplied_optimizer = user_supplied_optimizer
+    )
+    # The checkpoint is restored BEFORE the LR schedule is built so that a
+    # partial-run resume can continue the schedule from the completed step
+    # (offset below) instead of re-entering warmup at peak LR mid-run.
+    svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
+    svi_checkpoint_fingerprint <- NULL
+    svi_checkpoint_latest <- NULL
+    svi_checkpoint_best <- NULL
+    if (isTRUE(svi_checkpoint$enabled)) {
+      svi_checkpoint_fingerprint <- neural_svi_checkpoint_fingerprint(list(
+        data = list(
+          Y = Y_use,
+          W = W_,
+          W_idx_compact = if (isTRUE(compact_training)) W_idx_compact_use else NULL,
+          X = X_use,
+          X_compact = if (isTRUE(compact_training)) X_compact_use else NULL,
+          X_present = X_present_use,
+          X_present_compact = if (isTRUE(compact_training)) X_present_compact_use else NULL,
+          pair_id = pair_id_ %||% NULL,
+          profile_order = profile_order_ %||% NULL,
+          competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
+          competing_group_variable_respondent = competing_group_variable_respondent_ %||% NULL,
+          respondent_id = respondent_id %||% NULL,
+          respondent_task_id = respondent_task_id %||% NULL
+        ),
+        model = list(
+          likelihood = likelihood,
+          n_outcomes = as.integer(nOutcomes),
+          factor_levels = factor_levels_int,
+          pairwise_mode = isTRUE(pairwise_mode),
+          pairwise_context_mode = pairwise_context_mode,
+          model_dims = as.integer(ModelDims),
+          model_depth = as.integer(ModelDepth),
+          residual_mode = residual_mode,
+          cross_candidate_encoder_mode = cross_candidate_encoder_mode,
+          qk_norm = isTRUE(qk_norm_enabled),
+          subsample_method = subsample_method,
+          output_only_mode = isTRUE(output_only_mode),
+          guide = guide_name,
+          optimizer = optimizer_tag,
+          svi_lr = svi_lr,
+          schedule = schedule_tag,
+          warmup_frac = warmup_frac,
+          end_factor = end_factor,
+          n_particles = as.integer(n_particles),
+          svi_budget_info = svi_budget_info
+        ),
+        control = neural_svi_checkpoint_strip_control(mcmc_control),
+        token = neural_token_info_use
+      ))
+      if (isTRUE(svi_checkpoint$resume)) {
+        svi_checkpoint_latest <- neural_svi_checkpoint_restore_latest(
+          svi_checkpoint$path,
+          svi_checkpoint_fingerprint
+        )
+        svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
+          svi_checkpoint$path,
+          svi_checkpoint_fingerprint
+        )
+        if (!is.null(svi_checkpoint_latest)) {
+          message(sprintf(
+            "Resuming neural SVI checkpoint from %s at step %d/%d.",
+            svi_checkpoint$path,
+            as.integer(svi_checkpoint_latest$completed_step %||% 0L),
+            as.integer(svi_checkpoint_latest$resolved_svi_steps %||% svi_steps)
+          ))
+        }
+      }
+    }
+    lr_schedule_step_offset <- 0L
+    if (!is.null(svi_checkpoint_latest)) {
+      resume_completed_for_lr <- as.integer(svi_checkpoint_latest$completed_step %||% 0L)
+      if (!is.na(resume_completed_for_lr) &&
+          resume_completed_for_lr > 0L &&
+          resume_completed_for_lr < as.integer(svi_steps)) {
+        lr_schedule_step_offset <- resume_completed_for_lr
+      }
+    }
     lr_schedule <- if (schedule_tag == "warmup_cosine") {
       strenv$optax$warmup_cosine_decay_schedule(
         init_value = svi_lr * end_factor,
@@ -18712,6 +19226,14 @@ generate_ModelOutcome_neural <- function(){
       )
     } else {
       svi_lr
+    }
+    if (lr_schedule_step_offset > 0L && !is.numeric(lr_schedule) &&
+        !is.null(strenv$jax_offset_schedule)) {
+      lr_schedule <- strenv$jax_offset_schedule(lr_schedule, ai(lr_schedule_step_offset))
+      message(sprintf(
+        "Resumed LR schedule continues from step %d (no re-warmup).",
+        as.integer(lr_schedule_step_offset)
+      ))
     }
     clip_global_norm <- as.numeric(mcmc_control$svi_clip_global_norm %||% 10)
     if (length(clip_global_norm) != 1L ||
@@ -18742,11 +19264,7 @@ generate_ModelOutcome_neural <- function(){
     }
     muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
       reticulate::py_has_attr(strenv$optax$contrib, "muon")
-    optimizer_tag <- neural_resolve_svi_optimizer_tag(
-      optimizer_tag = optimizer_tag,
-      guide_name = guide_name,
-      user_supplied_optimizer = user_supplied_optimizer
-    )
+    # optimizer_tag was resolved above, before the checkpoint fingerprint.
     optimizer_diagnostics <- list(
       optimizer_status = "configured",
       optimizer = optimizer_tag,
@@ -18800,29 +19318,53 @@ generate_ModelOutcome_neural <- function(){
           neural_get_muon_dimension_numbers_callable(),
           error = function(e) NULL
         )
-
-        muon_kwargs <- list(
-          learning_rate = lr_schedule,
-          adam_weight_decay = 0,
-          consistent_rms = 0.2
-        )
-        if (!is.null(muon_dimnums)) {
-          muon_kwargs$muon_weight_dimension_numbers <- muon_dimnums
-        }
-
-        optax_optim <- tryCatch(
-          do.call(strenv$optax$contrib$muon, muon_kwargs),
-          error = function(e) {
-            muon_kwargs_fallback <- list(learning_rate = lr_schedule)
-            if (!is.null(muon_dimnums)) {
-              muon_kwargs_fallback$muon_weight_dimension_numbers <- muon_dimnums
-            }
-            tryCatch(
-              do.call(strenv$optax$contrib$muon, muon_kwargs_fallback),
-              error = function(e2) strenv$optax$contrib$muon(learning_rate = lr_schedule)
-            )
+        # Never run Muon without the explicit weight partition: optax's default
+        # ('muon' iff ndim == 2) would orthogonalize embedding tables and output
+        # heads -- the known-bad Muon usage the partition regex exists to
+        # prevent. Fall back to adamw/adam loudly instead of degrading silently.
+        muon_adam_fallback <- function(reason) {
+          fallback_tag <- neural_default_svi_fallback_optimizer()
+          warning(sprintf(paste0(
+            "optimizer='muon' cannot be configured safely (%s); ",
+            "falling back to '%s'. A partition-less Muon would orthogonalize ",
+            "embedding tables and output heads."
+          ), reason, fallback_tag), call. = FALSE)
+          optimizer_tag <<- fallback_tag
+          if (identical(fallback_tag, "adamw") &&
+              reticulate::py_has_attr(strenv$optax, "adamw")) {
+            strenv$optax$adamw(learning_rate = lr_schedule, weight_decay = 0)
+          } else {
+            strenv$optax$adam(learning_rate = lr_schedule)
           }
-        )
+        }
+        optax_optim <- if (is.null(muon_dimnums)) {
+          muon_adam_fallback("Muon weight dimension numbers are unavailable")
+        } else {
+          muon_kwargs <- list(
+            learning_rate = lr_schedule,
+            adam_weight_decay = 0,
+            consistent_rms = 0.2,
+            muon_weight_dimension_numbers = muon_dimnums
+          )
+          tryCatch(
+            do.call(strenv$optax$contrib$muon, muon_kwargs),
+            error = function(e) {
+              muon_kwargs_fallback <- list(
+                learning_rate = lr_schedule,
+                muon_weight_dimension_numbers = muon_dimnums
+              )
+              tryCatch(
+                do.call(strenv$optax$contrib$muon, muon_kwargs_fallback),
+                error = function(e2) {
+                  muon_adam_fallback(sprintf(
+                    "installed optax rejected the Muon weight partition: %s",
+                    conditionMessage(e2)
+                  ))
+                }
+              )
+            }
+          )
+        }
         optax_to_numpyro_optimizer(optax_optim)
       } else {
         stop(
@@ -18834,6 +19376,8 @@ generate_ModelOutcome_neural <- function(){
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
       optax_to_numpyro_optimizer(optax_optim)
     }
+    # The muon safety fallback may have downgraded the tag mid-construction.
+    optimizer_diagnostics$optimizer <- optimizer_tag
     # With a mean-field AutoNormal/AutoDiagonalNormal guide, every weight latent is
     # Normal-prior / Normal-posterior, so the per-site KL is available in closed
     # form. TraceMeanField_ELBO substitutes that analytic KL for Trace_ELBO's
@@ -18920,71 +19464,6 @@ generate_ModelOutcome_neural <- function(){
       )
     }
     rng_key <- neural_training_prng_key(neural_training_seed, stream = 1L)
-    svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
-    svi_checkpoint_fingerprint <- NULL
-    svi_checkpoint_latest <- NULL
-    svi_checkpoint_best <- NULL
-    if (isTRUE(svi_checkpoint$enabled)) {
-      svi_checkpoint_fingerprint <- neural_svi_checkpoint_fingerprint(list(
-        data = list(
-          Y = Y_use,
-          W = W_,
-          W_idx_compact = if (isTRUE(compact_training)) W_idx_compact_use else NULL,
-          X = X_use,
-          X_compact = if (isTRUE(compact_training)) X_compact_use else NULL,
-          X_present = X_present_use,
-          X_present_compact = if (isTRUE(compact_training)) X_present_compact_use else NULL,
-          pair_id = pair_id_ %||% NULL,
-          profile_order = profile_order_ %||% NULL,
-          competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
-          competing_group_variable_respondent = competing_group_variable_respondent_ %||% NULL,
-          respondent_id = respondent_id %||% NULL,
-          respondent_task_id = respondent_task_id %||% NULL
-        ),
-        model = list(
-          likelihood = likelihood,
-          n_outcomes = as.integer(nOutcomes),
-          factor_levels = factor_levels_int,
-          pairwise_mode = isTRUE(pairwise_mode),
-          pairwise_context_mode = pairwise_context_mode,
-          model_dims = as.integer(ModelDims),
-          model_depth = as.integer(ModelDepth),
-          residual_mode = residual_mode,
-          cross_candidate_encoder_mode = cross_candidate_encoder_mode,
-          qk_norm = isTRUE(qk_norm_enabled),
-          subsample_method = subsample_method,
-          output_only_mode = isTRUE(output_only_mode),
-          guide = guide_name,
-          optimizer = optimizer_tag,
-          svi_lr = svi_lr,
-          schedule = schedule_tag,
-          warmup_frac = warmup_frac,
-          end_factor = end_factor,
-          n_particles = as.integer(n_particles),
-          svi_budget_info = svi_budget_info
-        ),
-        control = neural_svi_checkpoint_strip_control(mcmc_control),
-        token = neural_token_info_use
-      ))
-      if (isTRUE(svi_checkpoint$resume)) {
-        svi_checkpoint_latest <- neural_svi_checkpoint_restore_latest(
-          svi_checkpoint$path,
-          svi_checkpoint_fingerprint
-        )
-        svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
-          svi_checkpoint$path,
-          svi_checkpoint_fingerprint
-        )
-        if (!is.null(svi_checkpoint_latest)) {
-          message(sprintf(
-            "Resuming neural SVI checkpoint from %s at step %d/%d.",
-            svi_checkpoint$path,
-            as.integer(svi_checkpoint_latest$completed_step %||% 0L),
-            as.integer(svi_checkpoint_latest$resolved_svi_steps %||% svi_steps)
-          ))
-        }
-      }
-    }
     validation_split_reason <- "validation_split_unavailable"
     build_svi_validation_split <- function() {
       validation_split_reason <<- "validation_split_unavailable"
@@ -19030,7 +19509,22 @@ generate_ModelOutcome_neural <- function(){
       if (exists("varcov_cluster_variable_", inherits = TRUE)) {
         cluster_raw <- get("varcov_cluster_variable_", inherits = TRUE)
         if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
-          if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+          if (isTRUE(universal_mixed_mode) &&
+              !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+            # Mixed pooled rows are laid out c(pair_obs, single_obs); build the
+            # cluster vector in the same order so respondent clustering is not
+            # silently discarded by the length check below (which previously
+            # let rows from one respondent straddle train/validation).
+            need <- suppressWarnings(
+              max(c(pair_mat[, 1], universal_single_rows), na.rm = TRUE)
+            )
+            if (is.finite(need) && length(cluster_raw) >= need) {
+              cluster_obs <- c(
+                cluster_raw[pair_mat[, 1]],
+                cluster_raw[universal_single_rows]
+              )
+            }
+          } else if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
             need <- suppressWarnings(max(pair_mat[, 1], na.rm = TRUE))
             if (is.finite(need) && length(cluster_raw) >= need) {
               cluster_obs <- cluster_raw[pair_mat[, 1]]
@@ -19083,7 +19577,18 @@ generate_ModelOutcome_neural <- function(){
         }
 
         if (!is.null(cluster_raw) && length(cluster_raw) > 0L) {
-          if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+          if (isTRUE(universal_mixed_mode) &&
+              !is.null(pair_mat) && nrow(pair_mat) > 0L) {
+            need <- suppressWarnings(
+              max(c(pair_mat[, 1], universal_single_rows), na.rm = TRUE)
+            )
+            if (is.finite(need) && length(cluster_raw) >= need) {
+              cluster_obs <- c(
+                cluster_raw[pair_mat[, 1]],
+                cluster_raw[universal_single_rows]
+              )
+            }
+          } else if (pairwise_mode && !is.null(pair_mat) && nrow(pair_mat) > 0L) {
             cluster_obs <- cluster_raw[pair_mat[, 1]]
           } else if (!pairwise_mode && length(cluster_raw) == n_total) {
             cluster_obs <- cluster_raw
@@ -19147,6 +19652,21 @@ generate_ModelOutcome_neural <- function(){
         return(NULL)
       }
       if (length(validation_idx) > validation_target_n) {
+        # Downsample under a local seed without clobbering the caller's RNG.
+        old_seed_split <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+          get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+        } else {
+          NULL
+        }
+        on.exit({
+          if (is.null(old_seed_split)) {
+            if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+              rm(".Random.seed", envir = .GlobalEnv)
+            }
+          } else {
+            assign(".Random.seed", old_seed_split, envir = .GlobalEnv)
+          }
+        }, add = TRUE)
         set.seed(as.integer(split_seed) + 1L)
         validation_fold_rows <- validation_idx
         validation_idx <- sort(sample(validation_idx, size = validation_target_n, replace = FALSE))
@@ -19708,18 +20228,20 @@ generate_ModelOutcome_neural <- function(){
       checkpoint_training_complete <- checkpoint_resume_completed >= as.integer(svi_steps) ||
         isTRUE(svi_checkpoint_latest$early_stopping$stopped_early)
       # A partial-checkpoint resume re-initializes the optimizer from saved params
-      # only (svi$init below): optax/Muon momentum buffers are discarded and the LR
-      # schedule restarts at step 0 -- re-entering warmup and traversing only a
-      # partial cosine tail -- so a resumed fit is not identical to an uninterrupted
-      # one. Full continuity would require persisting and restoring the optax
-      # optim_state (step count + momentum) in the checkpoint; until then, surface
-      # the warm restart rather than letting the discontinuity be silent.
+      # only (svi$init below). The LR schedule now CONTINUES from the completed
+      # step (offset applied where lr_schedule is built), so there is no
+      # re-warmup LR shock; optax/Muon momentum buffers are still discarded and
+      # rebuild over the first few steps. Full continuity would require
+      # persisting and restoring the optax optim_state in the checkpoint;
+      # until then, surface the remaining discontinuity rather than letting it
+      # be silent.
       if (checkpoint_resume_completed > 0L && !isTRUE(checkpoint_training_complete)) {
         warning(sprintf(
           paste0(
-            "Neural SVI resume from step %d/%d performs an optimizer WARM RESTART: ",
-            "the LR schedule restarts (re-warmup) and Muon/optax momentum is ",
-            "discarded, so the resumed run is not identical to an uninterrupted fit."
+            "Neural SVI resume from step %d/%d: the LR schedule continues from ",
+            "the completed step, but Muon/optax momentum is discarded and ",
+            "rebuilds, so the resumed run is not bitwise identical to an ",
+            "uninterrupted fit."
           ),
           as.integer(checkpoint_resume_completed), as.integer(svi_steps)
         ), call. = FALSE)
@@ -20422,6 +20944,36 @@ generate_ModelOutcome_neural <- function(){
             svi_steps_completed,
             compact_validation_eval_every
           )
+          # Enforce early-stopping patience (previously only the non-compact
+          # path stopped; compact runs always consumed the full step budget).
+          # Matches the non-compact semantics: mark stopped_early, persist a
+          # final latest checkpoint so resume treats the run as complete, and
+          # break; best-so-far params are restored by the post-loop block.
+          if (no_improve_checks >= early_stopping_info$patience &&
+              svi_steps_completed < as.integer(svi_steps) &&
+              is.finite(best_metric)) {
+            early_stopping_info$stopped_early <- TRUE
+            early_stopping_reason <- "patience_exhausted"
+            early_stopping_info$reason <- early_stopping_reason
+            early_stopping_info$stop_step <- as.integer(svi_steps_completed)
+            checkpoint_save(
+              type = "latest",
+              svi_state_current = svi_state,
+              step_current = svi_steps_completed,
+              loss_history_current = current_compact_loss_history(),
+              best_metric_current = best_metric,
+              best_step_current = early_stopping_info$best_step,
+              no_improve_checks_current = no_improve_checks
+            )
+            message(sprintf(
+              "Compact SVI early stopping at step %d/%d: no validation improvement in %d consecutive checks (patience=%d).",
+              as.integer(svi_steps_completed),
+              as.integer(svi_steps),
+              as.integer(no_improve_checks),
+              as.integer(early_stopping_info$patience)
+            ))
+            break
+          }
         }
         checkpoint_due <- !isTRUE(compact_validation_active) &&
           isTRUE(svi_checkpoint$enabled) &&
@@ -20502,7 +21054,9 @@ generate_ModelOutcome_neural <- function(){
           is.finite(early_stopping_info$validation_loss_history)
         ]
         if (length(finite_validation_history) > 0L && is.finite(best_metric)) {
-          early_stopping_reason <- "completed_budget"
+          if (!identical(early_stopping_reason, "patience_exhausted")) {
+            early_stopping_reason <- "completed_budget"
+          }
           early_stopping_info$reason <- early_stopping_reason
           early_stopping_info$best_metric <- best_metric
           early_stopping_info$final_metric <- best_metric
@@ -20969,7 +21523,51 @@ generate_ModelOutcome_neural <- function(){
     if (isTRUE(run_mcmc_after_svi)) {
       SVIInitValues <- extract_svi_param_sites(params)
     } else if (!is.null(SVIPosteriorDraws)) {
-      PosteriorDraws <- SVIPosteriorDraws
+      # Checkpoint-restored fits arrive here with single-point pseudo-draws
+      # (guide medians), whose variance is exactly zero. Resample the guide
+      # posterior from the restored variational params (which include the
+      # *_auto_scale sites) so a rebuilt fit carries the same uncertainty as
+      # an uninterrupted one. sample_posterior needs a prototype trace; on a
+      # pure rebuild the guide was never initialized, so retry after one
+      # throwaway svi$init.
+      sample_restored_posterior <- function() {
+        posterior_sample_args <- c(
+          list(
+            sample_key,
+            params,
+            sample_shape = reticulate::tuple(ai(n_draws))
+          ),
+          svi_model_args
+        )
+        posterior_samples <- do.call(guide$sample_posterior, posterior_sample_args)
+        out <- lapply(posterior_samples, function(x) {
+          strenv$jnp$expand_dims(x, 0L)
+        })
+        names(out) <- names(posterior_samples)
+        out
+      }
+      rebuilt_draws <- tryCatch(
+        sample_restored_posterior(),
+        error = function(e) {
+          tryCatch({
+            invisible(do.call(svi$init, c(list(rng_key), svi_model_args)))
+            sample_restored_posterior()
+          }, error = function(e2) {
+            warning(sprintf(paste0(
+              "Could not resample the guide posterior from restored ",
+              "checkpoint parameters (%s). Posterior variance is unavailable ",
+              "for this fit: dependent standard errors will be NA."
+            ), conditionMessage(e2)), call. = FALSE)
+            NULL
+          })
+        }
+      )
+      if (!is.null(rebuilt_draws)) {
+        PosteriorDraws <- rebuilt_draws
+      } else {
+        PosteriorDraws <- SVIPosteriorDraws
+        posterior_draws_point_only <- TRUE
+      }
     } else {
       posterior_sample_args <- c(
         list(
@@ -20989,6 +21587,18 @@ generate_ModelOutcome_neural <- function(){
                     as.numeric(difftime(Sys.time(), t0_, units = "secs"))/60))
     emit_svi_fit_summary()
     strenv$moe_aux_active <- FALSE
+    # Release this fit's jitted SVI update/gradient closures: they capture the
+    # svi object (and through it the full-dataset arrays), so without clearing,
+    # every CV fold / OOS refit / adversarial fit grew session memory for the
+    # session's lifetime (the clear helpers previously had no callers).
+    tryCatch({
+      if (!is.null(strenv$jax_svi_update_jit_cache_clear)) {
+        strenv$jax_svi_update_jit_cache_clear()
+      }
+      if (!is.null(strenv$jax_svi_gradient_jit_cache_clear)) {
+        strenv$jax_svi_gradient_jit_cache_clear()
+      }
+    }, error = function(e) NULL)
   }
 
   if (!isTRUE(use_svi) || isTRUE(run_mcmc_after_svi)) {
@@ -21650,7 +22260,12 @@ generate_ModelOutcome_neural <- function(){
     pl <- strenv$jnp$array(as.integer(pl_new))$astype(strenv$jnp$int32)
     pr <- strenv$jnp$array(as.integer(pr_new))$astype(strenv$jnp$int32)
     if (is.null(resp_party_new)) {
-      resp_party_new <- rep(0L, nrow(Xl_new))
+      # NULL means "unknown respondent group": use the explicit missing-group
+      # embedding (as my_model's coercion does), not the first group level.
+      resp_party_new <- rep(
+        as.integer(resp_party_missing_index %||% 0L),
+        nrow(Xl_new)
+      )
     }
     resp_p <- strenv$jnp$array(as.integer(resp_party_new))$astype(strenv$jnp$int32)
     resp_cov_prepped <- normalize_direct_resp_cov_prediction(
@@ -21716,7 +22331,12 @@ generate_ModelOutcome_neural <- function(){
     Xb <- strenv$jnp$array(to_index_matrix(X_new))$astype(strenv$jnp$int32)
     pb <- strenv$jnp$array(as.integer(party_new))$astype(strenv$jnp$int32)
     if (is.null(resp_party_new)) {
-      resp_party_new <- rep(0L, nrow(X_new))
+      # NULL means "unknown respondent group": use the explicit missing-group
+      # embedding (as my_model's coercion does), not the first group level.
+      resp_party_new <- rep(
+        as.integer(resp_party_missing_index %||% 0L),
+        nrow(X_new)
+      )
     }
     resp_p <- strenv$jnp$array(as.integer(resp_party_new))$astype(strenv$jnp$int32)
     resp_cov_prepped <- normalize_direct_resp_cov_prediction(
@@ -21820,6 +22440,11 @@ generate_ModelOutcome_neural <- function(){
     if (length(target_n_outcomes) != 1L || is.na(target_n_outcomes) || target_n_outcomes < 1L) {
       target_n_outcomes <- 1L
     }
+    # Train/serve parity: the jitted mixed cores skip the calibration
+    # temperature (their jnp call lacks likelihood_code_obs, a no-op for
+    # likelihood == "mixed"), and training applies it to class-family rows
+    # (bernoulli/categorical/ordinal) only -- re-apply it here, never to
+    # normal rows.
     if (identical(target_likelihood, "bernoulli")) {
       if (isTRUE(pairwise_prediction)) {
         logits[, 1L] <- neural_apply_pairwise_bernoulli_logit_adjustment_r(
@@ -21827,11 +22452,19 @@ generate_ModelOutcome_neural <- function(){
           low_rank_logit_model_info
         )
       }
+      logits[, 1L] <- neural_apply_classification_logit_calibration_r(
+        logits[, 1L],
+        low_rank_logit_model_info
+      )
       return(stats::plogis(logits[, 1L]))
     }
     if (identical(target_likelihood, "categorical")) {
       k <- max(2L, min(as.integer(target_n_outcomes), ncol(logits)))
       z <- logits[, seq_len(k), drop = FALSE]
+      z <- neural_apply_classification_logit_calibration_r(
+        z,
+        low_rank_logit_model_info
+      )
       z <- sweep(z, 1L, apply(z, 1L, max), "-")
       p <- exp(z)
       return(sweep(p, 1L, rowSums(p), "/"))
@@ -21849,7 +22482,10 @@ generate_ModelOutcome_neural <- function(){
     }
     if (target_likelihood %in% c("ordinal", "ordered", "ordered_logit", "ordinal_single")) {
       return(ordinal_prob_matrix_r(
-        eta = logits[, 1L],
+        eta = neural_apply_classification_logit_calibration_r(
+          logits[, 1L],
+          low_rank_logit_model_info
+        ),
         n_outcomes_obs = rep.int(as.integer(target_n_outcomes), nrow(logits)),
         experiment_index = target_experiment_index,
         ordinal_thresholds = to_r_array(ParamsMean$ordinal_thresholds %||% NULL),
@@ -22257,6 +22893,11 @@ generate_ModelOutcome_neural <- function(){
   if (length(param_var) > param_total) {
     param_var <- param_var[seq_len(param_total)]
   }
+  if (isTRUE(posterior_draws_point_only)) {
+    # Draws collapsed to a restored point estimate: zero variance would be
+    # silently wrong, so propagate NA into every downstream SE instead.
+    param_var <- rep(NA_real_, length(param_var))
+  }
   if (uncertainty_scope == "output") {
     keep <- param_names %in% c(
       "W_out", "W_add_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out",
@@ -22362,7 +23003,22 @@ generate_ModelOutcome_neural <- function(){
     !isTRUE(compact_training) &&
     identical(likelihood, "normal") &&
     !is.null(X_single_jnp) &&
-    !is.null(Y_jnp)
+    !is.null(Y_jnp) &&
+    !isFALSE(mcmc_control$average_case_linear_q)
+  if (isTRUE(average_case_single_normal)) {
+    # This surrogate REPLACES the neural soft prediction inside both the
+    # optimization objective (neural_getQStar_single) and the reported Q --
+    # a deliberate population-average estimand under independent
+    # randomization, but it must never be silent: dQ/dtheta through the
+    # surrogate is zero, so the outcome-model uncertainty channel does not
+    # propagate through it.
+    message(
+      "Single-candidate normal outcome: optimization and reported Q use the ",
+      "average-case linear (main + 2-way OLS) Q surrogate rather than the ",
+      "neural prediction. Set neural_mcmc_control$average_case_linear_q = FALSE ",
+      "to optimize the neural prediction directly."
+    )
+  }
   if (isTRUE(average_case_single_normal)) {
     average_case_linear_q_r <- neural_build_average_case_linear_q_calibration(
       W_idx = X_single,

@@ -2649,6 +2649,11 @@ cs2step_neural_coerce_prediction_output <- function(pred,
     if (length(target_n_outcomes) != 1L || is.na(target_n_outcomes) || target_n_outcomes < 1L) {
       target_n_outcomes <- 1L
     }
+    # Train/serve parity: the jitted mixed cores skip the calibration
+    # temperature for likelihood == "mixed"; training applies it to
+    # class-family rows only. Re-apply here (mirrors
+    # coerce_mixed_prediction_output in the training file); normal rows
+    # are never scaled.
     if (identical(target_likelihood, "bernoulli")) {
       if (isTRUE(pairwise_prediction)) {
         logits[, 1L] <- neural_apply_pairwise_bernoulli_logit_adjustment_r(
@@ -2656,18 +2661,26 @@ cs2step_neural_coerce_prediction_output <- function(pred,
           model_info
         )
       }
+      logits[, 1L] <- neural_apply_classification_logit_calibration_r(
+        logits[, 1L],
+        model_info
+      )
       return(stats::plogis(logits[, 1L]))
     }
     if (identical(target_likelihood, "categorical")) {
       k <- max(2L, min(as.integer(target_n_outcomes), ncol(logits)))
       z <- logits[, seq_len(k), drop = FALSE]
+      z <- neural_apply_classification_logit_calibration_r(z, model_info)
       z <- sweep(z, 1L, apply(z, 1L, max), "-")
       p <- exp(z)
       return(sweep(p, 1L, rowSums(p), "/"))
     }
     if (target_likelihood %in% c("ordinal", "ordered", "ordered_logit", "ordered-logit", "ordinal_single")) {
       return(cs2step_ordinal_prob_matrix(
-        eta = logits[, 1L],
+        eta = neural_apply_classification_logit_calibration_r(
+          logits[, 1L],
+          model_info
+        ),
         n_outcomes_obs = rep.int(as.integer(target_n_outcomes), nrow(logits)),
         experiment_index = target_experiment_index,
         ordinal_thresholds = cs2step_neural_to_r_array(ordinal_thresholds),
@@ -3130,8 +3143,19 @@ cs2step_neural_predict_internal <- function(object,
       pred <- if (is.numeric(p) && is.null(dim(p))) as.numeric(p) else p
     }
   } else if (identical(type, "link")) {
-    pred <- as.numeric(cs2step_neural_to_r_array(p))
-  } else if (identical(model_info$likelihood, "mixed")) {
+    link_mat <- cs2step_neural_to_r_array(p)
+    link_mat <- if (is.null(dim(link_mat))) {
+      matrix(as.numeric(link_mat), ncol = 1L)
+    } else {
+      as.matrix(link_mat)
+    }
+    # For multi-logit (mixed/categorical-pooled) models, preserve the n x k
+    # logit matrix -- as.numeric() silently returned a column-major flattened
+    # vector of length n*k. Single-logit models keep the numeric-vector
+    # contract. Raw logits intentionally exclude the serve-time pairwise/
+    # calibration scale adjustments (documented in ?predict): plogis(link)
+    # equals type = "response" only when those adjustments are disabled.
+    pred <- if (ncol(link_mat) == 1L) as.numeric(link_mat[, 1L]) else link_mat
     pred <- p
   } else {
     pred <- cs2step_neural_coerce_prediction_output(

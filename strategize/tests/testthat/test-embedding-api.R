@@ -29,14 +29,29 @@ embedding_test_text_embedding_fn <- function(x) {
   )
 }
 
-embedding_test_covariates <- function(W_df) {
+embedding_test_covariates <- function(W_df, pair_id = NULL) {
   n <- nrow(W_df)
-  idx <- seq_len(n)
+  if (is.null(pair_id)) {
+    idx <- seq_len(n)
+    scale_n <- max(n, 1L)
+  } else {
+    # Respondent covariates must be constant within each forced-choice pair
+    # (one respondent evaluates both candidates); per-row or candidate-
+    # attribute-dependent values trip the backend's pair-constancy
+    # validation, so index everything by pair when pair_id is supplied.
+    idx <- as.integer(factor(pair_id))
+    scale_n <- max(idx, 1L)
+  }
   data.frame(
-    income = idx / max(n, 1L),
-    `household size` = 1 + (idx %% 4L) + 0.5 * (W_df[[1]] == "B"),
-    GOPScore = as.numeric(W_df[[ncol(W_df)]] == "B") - 0.5,
-    local_bonus = seq(-1, 1, length.out = n),
+    income = idx / scale_n,
+    `household size` = 1 + (idx %% 4L) +
+      if (is.null(pair_id)) 0.5 * (W_df[[1]] == "B") else 0,
+    GOPScore = if (is.null(pair_id)) {
+      as.numeric(W_df[[ncol(W_df)]] == "B") - 0.5
+    } else {
+      ((idx %% 3L) - 1) / 2
+    },
+    local_bonus = seq(-1, 1, length.out = scale_n)[idx],
     check.names = FALSE
   )
 }
@@ -69,7 +84,7 @@ embedding_test_pairwise_experiment <- function(seed,
   if (is.null(canonical_factor_id)) {
     canonical_factor_id <- stats::setNames(factor_names, factor_names)
   }
-  x_full <- embedding_test_covariates(W_df)
+  x_full <- embedding_test_covariates(W_df, pair_id = data$pair_id)
   X <- if (is.null(x_names) || length(x_names) < 1L) {
     NULL
   } else {
@@ -187,7 +202,10 @@ embedding_test_context_predictor_fit <- local({
     )
     data <- add_adversarial_structure(data, seed = seed + 101L)
     W_df <- as.data.frame(data$W, stringsAsFactors = FALSE)
-    X <- embedding_test_covariates(W_df)[, c("income", "household size"), drop = FALSE]
+    X <- embedding_test_covariates(
+      W_df,
+      pair_id = if (identical(mode, "pairwise")) data$pair_id else NULL
+    )[, c("income", "household size"), drop = FALSE]
     names_list <- strategize:::cs2step_build_names_list(W_df)
     factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
     W_idx <- strategize:::cs2step_encode_W_indices(

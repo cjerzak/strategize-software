@@ -1278,10 +1278,24 @@ cs_foundation_map_request_to_group <- function(group,
     factor_order_names <- c(factor_order_names, slot_name)
 
     level_key_map <- local_map$level_map[[factor_name]]
+    level_candidates <- local_map$factor_map[[factor_name]]$level_candidates %||% NULL
     raw_vals <- as.character(request$W[[factor_name]])
     allowed_keys <- registry$slot_level_keys[[slot_name]] %||% character(0)
     mapped_vals <- if (factor_name %in% slot_table$slot_name) {
       raw_vals
+    } else if (!is.null(level_candidates)) {
+      # Resolve each level against every key format the artifact may have
+      # been registered under (preference.fm factor-scoped / global keys and
+      # legacy strategize keys) -- single-format matching silently degraded
+      # canonical levels of preference.fm-trained artifacts to holdout.
+      vapply(raw_vals, function(v) {
+        if (is.na(v)) {
+          return(NA_character_)
+        }
+        cands <- level_candidates[[v]] %||% unname(level_key_map[v])
+        hit <- cands[cands %in% allowed_keys]
+        if (length(hit) > 0L) hit[[1L]] else NA_character_
+      }, character(1), USE.NAMES = FALSE)
     } else {
       unname(level_key_map[raw_vals])
     }
@@ -1317,6 +1331,23 @@ cs_foundation_map_request_to_group <- function(group,
       ),
       call. = FALSE
     )
+  }
+  if (!isTRUE(strict_schema_match) &&
+      (length(unmatched_factors) > 0L || length(unmatched_levels) > 0L)) {
+    # Unmatched requests fall back to holdout tokens -- numerically plausible
+    # but semantically wrong embeddings. Never leave that to a metadata field
+    # only.
+    warning(sprintf(paste0(
+      "Foundation embedding extraction could not match %s; these fall back ",
+      "to holdout tokens. Check canonical ids / level labels, or set ",
+      "strict_schema_match = TRUE to make this an error. Unmatched: %s"
+    ),
+    paste(c(
+      if (length(unmatched_factors) > 0L) sprintf("%d factor(s)", length(unique(unmatched_factors))),
+      if (length(unmatched_levels) > 0L) sprintf("%d level(s)", length(unique(unmatched_levels)))
+    ), collapse = " and "),
+    paste(utils::head(unique(c(unmatched_factors, unmatched_levels)), 10L), collapse = ", ")
+    ), call. = FALSE)
   }
 
   list(

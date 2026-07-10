@@ -425,6 +425,30 @@ cs_foundation_make_level_key <- function(experiment_id,
   }
 }
 
+# All level-key formats a canonical level id may be registered under, in
+# priority order. preference.fm writes factor-scoped keys
+# ("<factor_key>::level::<id>", its default) or globally scoped keys
+# ("canon::level::<id>"); older strategize-trained artifacts hold
+# "canon::<id>". Resolving a request against a single format silently mapped
+# canonical levels from preference.fm-trained artifacts to holdout tokens --
+# match against every known format instead, then fall back to the local key.
+cs_foundation_candidate_level_keys <- function(experiment_id,
+                                               factor_key,
+                                               factor_name,
+                                               level_name,
+                                               canonical_level_id = NULL) {
+  canon <- canonical_level_id %||% NA_character_
+  keys <- character(0)
+  if (!is.na(canon) && nzchar(canon)) {
+    keys <- c(
+      paste0(factor_key, "::level::", canon),
+      paste0("canon::level::", canon),
+      paste0("canon::", canon)
+    )
+  }
+  c(keys, paste0("local::", experiment_id, "::", factor_name, "::", level_name))
+}
+
 cs_foundation_group_key <- function(mode,
                                     likelihood,
                                     n_outcomes,
@@ -1640,6 +1664,7 @@ cs_foundation_build_local_factor_map <- function(experiment) {
     levels_here <- experiment$names_list[[factor_name]][[1]]
     level_key_map <- character(length(levels_here))
     names(level_key_map) <- levels_here
+    level_candidates <- setNames(vector("list", length(levels_here)), levels_here)
     for (lvl in levels_here) {
       level_key_map[[lvl]] <- cs_foundation_make_level_key(
         experiment_id = experiment$experiment_id,
@@ -1648,8 +1673,18 @@ cs_foundation_build_local_factor_map <- function(experiment) {
         level_name = lvl,
         canonical_level_id = experiment$canonical_level_id[[factor_name]][[lvl]]
       )
+      level_candidates[[lvl]] <- cs_foundation_candidate_level_keys(
+        experiment_id = experiment$experiment_id,
+        factor_key = factor_key,
+        factor_name = factor_name,
+        level_name = lvl,
+        canonical_level_id = experiment$canonical_level_id[[factor_name]][[lvl]]
+      )
     }
     level_map[[factor_name]] <- level_key_map
+    if (is.null(factor_map[[factor_name]]$level_candidates)) {
+      factor_map[[factor_name]]$level_candidates <- level_candidates
+    }
   }
   list(factor_map = factor_map, level_map = level_map)
 }

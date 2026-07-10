@@ -1829,8 +1829,19 @@ cs2step_restore_text_embedding_metadata <- function(metadata,
     return(metadata)
   }
   backend <- cs2step_normalize_text_embedding_spec(backend)
-  if (!is.null(conda_env) && nzchar(conda_env)) {
+  # Keep the RECORDED text-model conda env: every restore call site passes the
+  # JAX env (e.g. "strategize_env"), and overriding the stored torch/mlx env
+  # with it made cross-host restores import sentence_transformers from the
+  # wrong environment. Only fill the env when the stored spec has none.
+  if ((is.null(backend$conda_env) || !nzchar(backend$conda_env %||% "")) &&
+      !is.null(conda_env) && nzchar(conda_env)) {
     backend$conda_env <- conda_env
+  }
+  # Build-time "ready" status is a property of the ORIGINAL host; carrying it
+  # across a save/load lets the runtime skip dependency probing on a machine
+  # that never installed the text stack. Force re-probing after restore.
+  if (!is.null(backend$status)) {
+    backend$status <- NULL
   }
   metadata$text_embedding_backend <- backend
   if (!is.function(metadata$text_embedding_fn)) {

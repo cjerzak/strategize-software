@@ -144,8 +144,16 @@ cs_foundation_restore_text_matrix <- function(py_group, name, meta) {
     return(NULL)
   }
   out <- as.matrix(cs2step_neural_to_r_array(value))
-  rownames(out) <- as.character(meta$rownames %||% NULL)
-  colnames(out) <- as.character(meta$colnames %||% NULL)
+  # Assigning character(0) dimnames to a non-empty matrix errors; only
+  # restore names that were actually recorded.
+  meta_rownames <- as.character(meta$rownames %||% character(0))
+  if (length(meta_rownames) == nrow(out)) {
+    rownames(out) <- meta_rownames
+  }
+  meta_colnames <- as.character(meta$colnames %||% character(0))
+  if (length(meta_colnames) == ncol(out)) {
+    colnames(out) <- meta_colnames
+  }
   out
 }
 
@@ -206,6 +214,15 @@ cs_foundation_load_checkpoint_dir <- function(path,
   manifest <- jsonlite::read_json(manifest_path, simplifyVector = FALSE)
   if (!identical(manifest$writer$package %||% NULL, "preference.fm")) {
     stop("Unrecognized foundation checkpoint writer.", call. = FALSE)
+  }
+  manifest_schema_version <- suppressWarnings(
+    as.integer(manifest$schema_version %||% 1L)
+  )
+  if (is.na(manifest_schema_version) || manifest_schema_version > 2L) {
+    stop(sprintf(paste0(
+      "Foundation bundle manifest declares schema_version %s, newer than this ",
+      "strategize supports (<= 2). Update strategize/preference.fm to load it."
+    ), as.character(manifest$schema_version %||% NA)), call. = FALSE)
   }
   if (!dir.exists(arrays_path)) {
     stop("Foundation checkpoint is missing arrays/.", call. = FALSE)

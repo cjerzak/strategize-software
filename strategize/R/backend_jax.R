@@ -116,7 +116,11 @@ strategize_register_jax_transformer_helpers <- function() {
     "        return jnp.float32",
     "    if backend == 'cudnn':",
     "        return jnp.bfloat16",
-    "    return original_dtype",
+    "    # 'auto' on non-cudnn resolves to float32, matching the R-side",
+    "    # resolver (neural_attention_dtype_object) so the scan and non-scan",
+    "    # paths run attention in the same dtype even if the global compute",
+    "    # dtype changes (e.g. an x64 pin).",
+    "    return jnp.float32",
     "",
     "def _strategize_next_multiple(x, multiple):",
     "    multiple = int(multiple)",
@@ -374,9 +378,10 @@ strategize_register_jax_svi_helpers <- function() {
     "    }",
     "",
     "def strategize_svi_gradient_jit_cache_clear():",
-    "    global _strategize_svi_gradient_jit_compile_count",
+    "    # Frees the cached jitted closures (which retain the svi object and",
+    "    # its dataset arrays); compile_count is lifetime telemetry and is",
+    "    # deliberately NOT reset.",
     "    _strategize_svi_gradient_jit_cache.clear()",
-    "    _strategize_svi_gradient_jit_compile_count = 0",
     "",
     "def strategize_svi_update_jit_cache_info():",
     "    return {",
@@ -385,9 +390,17 @@ strategize_register_jax_svi_helpers <- function() {
     "    }",
     "",
     "def strategize_svi_update_jit_cache_clear():",
-    "    global _strategize_svi_update_jit_compile_count",
+    "    # Frees the cached jitted closures; compile_count is lifetime",
+    "    # telemetry and is deliberately NOT reset.",
     "    _strategize_svi_update_jit_cache.clear()",
-    "    _strategize_svi_update_jit_compile_count = 0",
+    "",
+    "def strategize_offset_schedule(schedule, offset):",
+    "    # Continue an optax schedule from `offset` steps in: used on SVI",
+    "    # checkpoint resume so the LR does not re-enter warmup at peak value.",
+    "    offset = int(offset)",
+    "    def _shifted(step):",
+    "        return schedule(step + offset)",
+    "    return _shifted",
     sep = "\n"
   )
   reticulate::py_run_string(helper_code)
@@ -399,6 +412,7 @@ strategize_register_jax_svi_helpers <- function() {
   strenv$jax_svi_gradient_diagnostics <- reticulate::py$strategize_svi_gradient_diagnostics_jit
   strenv$jax_svi_gradient_jit_cache_info <- reticulate::py$strategize_svi_gradient_jit_cache_info
   strenv$jax_svi_gradient_jit_cache_clear <- reticulate::py$strategize_svi_gradient_jit_cache_clear
+  strenv$jax_offset_schedule <- reticulate::py$strategize_offset_schedule
   invisible(TRUE)
 }
 

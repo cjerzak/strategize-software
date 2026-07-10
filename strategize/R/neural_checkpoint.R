@@ -74,6 +74,23 @@ neural_svi_checkpoint_fingerprint <- function(fields) {
   )
 }
 
+# Same-directory tempfile + rename is an atomic overwrite on POSIX, but
+# file.rename onto an existing destination fails on Windows -- which would
+# abort a long run at the second snapshot save. Fall back to remove-then-
+# rename there (a small non-atomic window, recovered by the tmp copy).
+neural_svi_checkpoint_commit_tmp <- function(tmp, file, what) {
+  if (file.rename(tmp, file)) {
+    return(invisible(file))
+  }
+  if (file.exists(file)) {
+    unlink(file, recursive = FALSE, force = TRUE)
+    if (file.rename(tmp, file)) {
+      return(invisible(file))
+    }
+  }
+  stop(sprintf("Could not atomically write checkpoint %s '%s'.", what, file), call. = FALSE)
+}
+
 neural_svi_checkpoint_atomic_save_rds <- function(object, file, compress = FALSE) {
   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
   tmp <- tempfile(pattern = paste0(".", basename(file), "-"), tmpdir = dirname(file))
@@ -83,10 +100,7 @@ neural_svi_checkpoint_atomic_save_rds <- function(object, file, compress = FALSE
     }
   }, add = TRUE)
   saveRDS(object, file = tmp, compress = compress)
-  if (!file.rename(tmp, file)) {
-    stop(sprintf("Could not atomically write checkpoint snapshot '%s'.", file), call. = FALSE)
-  }
-  invisible(file)
+  neural_svi_checkpoint_commit_tmp(tmp, file, "snapshot")
 }
 
 neural_svi_checkpoint_atomic_write_json <- function(object, file) {
@@ -98,10 +112,7 @@ neural_svi_checkpoint_atomic_write_json <- function(object, file) {
     }
   }, add = TRUE)
   jsonlite::write_json(object, path = tmp, auto_unbox = TRUE, null = "null", pretty = TRUE)
-  if (!file.rename(tmp, file)) {
-    stop(sprintf("Could not atomically write checkpoint manifest '%s'.", file), call. = FALSE)
-  }
-  invisible(file)
+  neural_svi_checkpoint_commit_tmp(tmp, file, "manifest")
 }
 
 neural_svi_checkpoint_manifest_path <- function(path) {

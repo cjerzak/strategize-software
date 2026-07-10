@@ -845,9 +845,45 @@ strategize       <-          function(
         strenv$DagProp <- prop.table(table(competing_group_variable_respondent[
                           competing_group_variable_respondent %in% GroupsPool]))[2]
       }
-      if(!is.null(competing_group_variable_respondent_proportions)){ 
-        strenv$AstProp <- c(competing_group_variable_respondent_proportions[GroupsPool[1]])
-        strenv$DagProp <- c(competing_group_variable_respondent_proportions[GroupsPool[2]])
+      if(!is.null(competing_group_variable_respondent_proportions)){
+        # Validate user-supplied proportions: a missing group name yields NA
+        # (silent NaN Q* once it reaches JAX) and non-normalized values yield a
+        # non-convex population mixture.
+        missing_groups <- setdiff(
+          GroupsPool[1:2],
+          names(competing_group_variable_respondent_proportions)
+        )
+        if (length(missing_groups) > 0L) {
+          stop(sprintf(paste0(
+            "competing_group_variable_respondent_proportions must be a named ",
+            "vector containing both group levels; missing: %s."
+          ), paste(missing_groups, collapse = ", ")), call. = FALSE)
+        }
+        prop_vals <- as.numeric(
+          competing_group_variable_respondent_proportions[GroupsPool[1:2]]
+        )
+        if (any(!is.finite(prop_vals)) || any(prop_vals < 0)) {
+          stop(
+            "competing_group_variable_respondent_proportions must be finite and non-negative.",
+            call. = FALSE
+          )
+        }
+        prop_total <- sum(prop_vals)
+        if (!isTRUE(all.equal(prop_total, 1, tolerance = 1e-6))) {
+          if (prop_total <= 0) {
+            stop(
+              "competing_group_variable_respondent_proportions must sum to a positive value.",
+              call. = FALSE
+            )
+          }
+          warning(sprintf(
+            "competing_group_variable_respondent_proportions sum to %.4f; renormalizing to 1.",
+            prop_total
+          ), call. = FALSE)
+          prop_vals <- prop_vals / prop_total
+        }
+        strenv$AstProp <- prop_vals[1L]
+        strenv$DagProp <- prop_vals[2L]
       }
     }
 
