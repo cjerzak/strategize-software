@@ -777,14 +777,16 @@ cs_crossfit_q_policy_model_mu <- function(policy, opponent_W, result, p_list,
   for (start in starts) {
     end <- min(length(score_opp), start + as.integer(chunk_size) - 1L)
     idx <- start:end
-    eta_mat <- intercept[[1L]] +
-      matrix(score_draws, nrow = length(idx), ncol = length(score_draws), byrow = TRUE) -
+    diff_mat <- matrix(score_draws, nrow = length(idx), ncol = length(score_draws), byrow = TRUE) -
       matrix(score_opp[idx], nrow = length(idx), ncol = length(score_draws))
-    if (identical(family, "binomial")) {
-      out[idx] <- rowMeans(stats::plogis(eta_mat))
-    } else {
-      out[idx] <- rowMeans(eta_mat)
-    }
+    # The model is fit on one display orientation, so any intercept is a
+    # position effect; the estimand marginalizes over which position the
+    # policy profile occupies. Average the "policy shown first" prediction
+    # with the forced-choice complement of the "policy shown second"
+    # prediction. With a zero intercept this reduces to the single-eta form.
+    g <- function(eta) if (identical(family, "binomial")) stats::plogis(eta) else eta
+    mu_mat <- 0.5 * (g(intercept[[1L]] + diff_mat) + (1 - g(intercept[[1L]] - diff_mat)))
+    out[idx] <- rowMeans(mu_mat)
   }
   out
 }
@@ -1704,7 +1706,19 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
   opponent_W <- W[opponent_idx, , drop = FALSE]
 
   policy <- cs_crossfit_q_extract_policy(train_result)
-  m_obs <- cs_crossfit_q_pair_predict(focal_W, opponent_W, train_result, p_list)
+  # Predict once on the fit-canonical orientation (pair_mat column 1 focal) and
+  # take the forced-choice complement for the swapped duplicates. The model's
+  # intercept is a display-position effect estimated in the canonical
+  # orientation, so re-applying it to the swapped rows (as a naive
+  # both-orientations predict would) systematically mispredicts them; the
+  # complement is exact for any outcome family under forced choice.
+  m_pair <- cs_crossfit_q_pair_predict(
+    W[pair_mat_test[, 1], , drop = FALSE],
+    W[pair_mat_test[, 2], , drop = FALSE],
+    train_result,
+    p_list
+  )
+  m_obs <- c(m_pair, 1 - m_pair)
   set.seed(as.integer(control$seed + 1009L * fold))
   common_uniforms <- matrix(
     stats::runif(as.integer(control$n_policy_draws) * length(p_list)),

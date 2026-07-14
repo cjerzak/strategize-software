@@ -312,3 +312,65 @@ test_that("strategize returns all expected output fields", {
   expect_type(res$p_list, "list")
   expect_equal(length(res$p_list), ncol(data$W))
 })
+
+test_that("binomial pairwise GLM is position-intercept-free by default", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_seed(20260713)
+
+  # Forced-choice pairs with a deliberately injected display-position effect:
+  # P(profile shown first wins) = plogis(0.8 + utility difference).
+  n_pairs <- 400L
+  levels <- c("A", "B")
+  W_first <- cbind(
+    V1 = sample(levels, n_pairs, replace = TRUE),
+    V2 = sample(levels, n_pairs, replace = TRUE)
+  )
+  W_second <- cbind(
+    V1 = sample(levels, n_pairs, replace = TRUE),
+    V2 = sample(levels, n_pairs, replace = TRUE)
+  )
+  utility <- function(W_mat) drop((W_mat == "B") %*% c(0.5, -0.3))
+  p_first <- plogis(0.8 + utility(W_first) - utility(W_second))
+  y_first <- rbinom(n_pairs, 1L, p_first)
+
+  W <- rbind(W_first, W_second)
+  Y <- c(y_first, 1L - y_first)
+  pair_id <- c(seq_len(n_pairs), seq_len(n_pairs))
+  profile_order <- c(rep(1L, n_pairs), rep(2L, n_pairs))
+
+  run_strategize <- function() {
+    strategize(
+      Y = Y,
+      W = W,
+      pair_id = pair_id,
+      respondent_id = pair_id,
+      respondent_task_id = pair_id,
+      profile_order = profile_order,
+      lambda = 0.1,
+      K = 1,
+      nSGD = 5L,
+      outcome_model_type = "glm",
+      force_gaussian = FALSE,
+      nMonte_Qglm = 200L,
+      diff = TRUE,
+      compute_se = FALSE,
+      conda_env = "strategize_env",
+      conda_env_required = TRUE
+    )
+  }
+
+  res <- run_strategize()
+  fitted_intercept <- res$outcome_model_view$models$overall$intercept
+  expect_equal(fitted_intercept, 0, tolerance = 1e-10)
+  expect_equal(res$outcome_model_view$models$overall$baseline, 0.5, tolerance = 1e-10)
+  expect_true(is.finite(res$Q_reference_in_sample))
+  expect_equal(as.numeric(res$Q_reference_in_sample), 0.5, tolerance = 0.02)
+
+  # Escape hatch restores the legacy with-intercept fit; the injected 0.8
+  # position effect must then be visible in the fitted intercept.
+  withr::local_options(strategize.glm_position_intercept = TRUE)
+  res_legacy <- run_strategize()
+  legacy_intercept <- res_legacy$outcome_model_view$models$overall$intercept
+  expect_gt(abs(legacy_intercept), 0.3)
+})

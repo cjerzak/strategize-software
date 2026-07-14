@@ -839,3 +839,137 @@ test_that("strategize can return first-class adversarial crossfit Q fields", {
     length(unique(x)) == 1L
   }, logical(1))))
 })
+
+test_that("fold eval handles a fitted position intercept via forced-choice complement", {
+  # The pair GLM is fit on the pair_mat[,1]-first orientation, so a nonzero
+  # intercept is a display-position effect. The fold evaluator duplicates each
+  # heldout pair into both orientations; the swapped half must be predicted as
+  # the complement, not by re-applying +intercept. With importance weights
+  # identically 1 (policy == p_list), the DR correction term must vanish
+  # exactly, i.e. Q_dr == Q_model.
+  p_list <- list(
+    A = c(a = 0.5, b = 0.5),
+    B = c(x = 0.5, y = 0.5)
+  )
+  feature_info <- list(
+    main_info = data.frame(
+      d = c(1L, 2L),
+      l = c(1L, 1L),
+      d_index = c(1L, 2L)
+    ),
+    interaction_info = data.frame()
+  )
+  result <- list(
+    est_intercept_jnp = 0.8,
+    est_coefficients_jnp = c(0.4, -0.2),
+    glm_feature_info = list(overall = feature_info),
+    outcome_model_view = list(
+      models = list(overall = list(glm_family = "binomial"))
+    ),
+    pi_star_point = list(k1 = p_list)
+  )
+
+  n_pairs <- 4L
+  W <- data.frame(
+    A = c("a", "b", "b", "a", "a", "a", "b", "b"),
+    B = c("x", "y", "x", "y", "y", "x", "y", "x"),
+    stringsAsFactors = FALSE
+  )
+  pair_mat <- cbind(seq(1L, 8L, by = 2L), seq(2L, 8L, by = 2L))
+  Y <- numeric(8L)
+  first_wins <- c(1, 0, 1, 1)
+  Y[pair_mat[, 1]] <- first_wins
+  Y[pair_mat[, 2]] <- 1 - first_wins
+  control <- list(
+    seed = 2026L,
+    n_policy_draws = 8L,
+    chunk_size = 4L,
+    weight_clip = Inf,
+    estimators = c("model", "dr", "dr_hajek")
+  )
+
+  res <- cs_crossfit_q_fold_eval(
+    train_result = result,
+    Y = Y,
+    W = W,
+    pair_mat = pair_mat,
+    test_pair_rows = seq_len(n_pairs),
+    p_list = p_list,
+    control = control,
+    fold = 1L
+  )
+  q_model <- res$Q_crossfit[res$estimator == "model"]
+  q_dr <- res$Q_crossfit[res$estimator == "dr"]
+  q_dr_hajek <- res$Q_crossfit[res$estimator == "dr_hajek"]
+  expect_equal(q_dr, q_model, tolerance = 1e-12)
+  expect_equal(q_dr_hajek, q_model, tolerance = 1e-12)
+
+  # Regression guard: the buggy evaluator applied +intercept to both
+  # orientations, leaving a correction of roughly 0.5 - plogis(0.8).
+  old_m_obs <- cs_crossfit_q_pair_predict(
+    W[c(pair_mat[, 1], pair_mat[, 2]), , drop = FALSE],
+    W[c(pair_mat[, 2], pair_mat[, 1]), , drop = FALSE],
+    result,
+    p_list
+  )
+  y_oriented <- as.numeric(Y[c(pair_mat[, 1], pair_mat[, 2])])
+  expect_gt(abs(mean(y_oriented - old_m_obs)), 0.1)
+})
+
+test_that("policy model mu marginalizes over display position", {
+  p_list <- list(
+    A = c(a = 0.5, b = 0.5),
+    B = c(x = 0.5, y = 0.5)
+  )
+  feature_info <- list(
+    main_info = data.frame(
+      d = c(1L, 2L),
+      l = c(1L, 1L),
+      d_index = c(1L, 2L)
+    ),
+    interaction_info = data.frame()
+  )
+  opponent_W <- data.frame(
+    A = c("a", "b", "a"),
+    B = c("y", "x", "x"),
+    stringsAsFactors = FALSE
+  )
+  make_result <- function(intercept, beta, family) {
+    list(
+      est_intercept_jnp = intercept,
+      est_coefficients_jnp = beta,
+      glm_feature_info = list(overall = feature_info),
+      outcome_model_view = list(
+        models = list(overall = list(glm_family = family))
+      ),
+      pi_star_point = p_list
+    )
+  }
+  mu_args <- list(
+    policy = p_list,
+    opponent_W = opponent_W,
+    p_list = p_list,
+    n_draws = 16L,
+    seed = 2026L,
+    chunk_size = 2L
+  )
+
+  # Zero attribute effects: any intercept is pure position effect, so the
+  # position-marginalized win probability is exactly 0.5.
+  mu_flat <- do.call(cs_crossfit_q_policy_model_mu,
+                     c(mu_args, list(result = make_result(0.8, c(0, 0), "binomial"))))
+  expect_equal(mu_flat, rep(0.5, nrow(opponent_W)), tolerance = 1e-12)
+
+  # Gaussian LPM keeps its 0.5 level under marginalization.
+  mu_gauss <- do.call(cs_crossfit_q_policy_model_mu,
+                      c(mu_args, list(result = make_result(0.5, c(0, 0), "gaussian"))))
+  expect_equal(mu_gauss, rep(0.5, nrow(opponent_W)), tolerance = 1e-12)
+
+  # With attribute effects, mu must be invariant to the sign of the position
+  # intercept (a position effect cannot move a positionless estimand).
+  mu_pos <- do.call(cs_crossfit_q_policy_model_mu,
+                    c(mu_args, list(result = make_result(0.8, c(0.4, -0.2), "binomial"))))
+  mu_neg <- do.call(cs_crossfit_q_policy_model_mu,
+                    c(mu_args, list(result = make_result(-0.8, c(0.4, -0.2), "binomial"))))
+  expect_equal(mu_pos, mu_neg, tolerance = 1e-12)
+})

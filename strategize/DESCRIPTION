@@ -1,7 +1,7 @@
 Package: strategize
 Type: Package
 Title: Tools for Learning Adversarial or Non-Adversarial Optimal Distributions in High-Dimensional Conjoint Experiments
-Version: 0.0.1
+Version: 0.0.2
 Date: 2025-12-25
 Authors@R: c(person("Connor T.", "Jerzak", email = "connor.jerzak@austin.utexas.edu", role = c("aut", "cre"), comment = c(ORCID = "0000-0001-9858-2050")), person("Priyanshi", "Chandra", email = "i19ma012@amhd.svnit.ac.in", role = "aut", comment = c(ORCID = "0009-0003-1625-8823")), person("Rishi", "Hazra", email = "rishihazra@college.harvard.edu", role = "aut", comment = c(ORCID = "0000-0001-5018-4440")))
 Author: Connor T. Jerzak [aut, cre] (ORCID: <https://orcid.org/0000-0001-9858-2050>),
