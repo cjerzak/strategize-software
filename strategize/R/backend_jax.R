@@ -417,12 +417,14 @@ strategize_register_jax_svi_helpers <- function() {
 }
 
 initialize_jax <- function(conda_env = "strategize_env",
-                           conda_env_required = TRUE) {
+                           conda_env_required = TRUE,
+                           data_parallel = NULL) {
   # reticulate is declared in Imports - use :: syntax
   reticulate::use_condaenv(condaenv = conda_env, required = conda_env_required)
   
   # Import Python packages once, storing them in strenv
   strenv$jax <- reticulate::import("jax")
+  strategize_initialize_data_parallel(data_parallel)
   strategize_configure_jax_compilation_cache(strenv$jax)
   strenv$jnp <- reticulate::import("jax.numpy")
   strenv$np  <- reticulate::import("numpy")
@@ -436,10 +438,14 @@ initialize_jax <- function(conda_env = "strategize_env",
   )
   strategize_register_jax_transformer_helpers()
   strategize_register_jax_svi_helpers()
+  strategize_dp_register_updates()
   
   # setup numerical precisions
   strenv$jaxFloatType <- strenv$jnp$float32
   #strenv$dtj <- strenv$jnp$float64; strenv$jax$config$update("jax_enable_x64", TRUE) # use float64
   strenv$dtj <- strenv$jnp$float32; strenv$jax$config$update("jax_enable_x64", FALSE) # use float32
+  if (strategize_dp_enabled()) {
+    strenv$data_parallel$require_equal(strategize_dp_execution_identity(), "R/Python training implementation")
+  }
 }
 strenv <- new.env( parent = emptyenv() )

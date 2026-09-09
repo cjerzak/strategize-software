@@ -301,8 +301,19 @@ generate_ModelOutcome <- function(){
   ok_ <- F;ok_counter <- 0; while(ok_ == F){
       message(sprintf("ok_counter = %s", ok_counter))
       ok_counter <- ok_counter + 1
-      interacted_dat <- data.frame(); 
-      force_no_intercept <- FALSE
+      interacted_dat <- data.frame();
+      # In the differenced forced-choice design the outcome is "profile shown in
+      # position 1 wins", so a fitted intercept is a display-position effect, not
+      # an attribute effect. The estimand marginalizes over position, which on the
+      # logit scale corresponds to an intercept-free (antisymmetric) pair model;
+      # keeping the intercept biases duplicated-orientation crossfit evaluation
+      # and shifts Q_reference away from 0.5. Adversarial fits keep it (there the
+      # group-first orientation makes it a substantive party effect), as do
+      # gaussian fits (their level belongs at ~0.5/grand mean, not 0).
+      force_no_intercept <- isTRUE(diff) &&
+        !isTRUE(adversarial) &&
+        identical(glm_family, "binomial") &&
+        !isTRUE(getOption("strategize.glm_position_intercept", FALSE))
       
       if( ( nrow(W) <= choose(ncol(W),2) ) ){
         message("WARNING! More regression parameters than observations, enforcing sparsity...")
@@ -1551,10 +1562,12 @@ generate_ModelOutcome <- function(){
 	              Y_glm ~ glm_input_refit
 	            }
 	          } else {
-	            if (force_no_intercept) {
-	              force_no_intercept <- FALSE
-	            }
-	            glm_refit <- Y_glm ~ 1
+	            # All pairwise columns aliased away. Under the intercept-free
+	            # regime an intercept-only fallback would re-estimate the position
+	            # effect in exactly the case where the model carries zero attribute
+	            # signal, so fit the empty model instead (every prediction becomes
+	            # 0.5 after the link).
+	            glm_refit <- if (force_no_intercept) Y_glm ~ 0 else Y_glm ~ 1
 	          }
 	          my_model <- try(glm(glm_refit, family = glm_family), silent = TRUE)
           if (inherits(my_model, "try-error")) {
@@ -1585,11 +1598,14 @@ generate_ModelOutcome <- function(){
             main_info$d_index <- integer(0)
           }
         }
-	        if(!is.null(varcov_cluster_variable)){
+	        if (length(coef(my_model)) == 0L) {
+	          # Empty (degenerate) model: no parameters, so the covariance is 0x0;
+	          # sandwich::vcovCL cannot handle a coefficient-free fit.
+	          vcov_OutcomeModel <- matrix(0, nrow = 0L, ncol = 0L)
+	        } else if(!is.null(varcov_cluster_variable)){
 	          if(length(unique(varcov_cluster_variable))==1){ stop("Only 1 implied cluster in varcov_cluster_variable -- cannot compute cluster varcov")}
 	          vcov_OutcomeModel <- sandwich::vcovCL(my_model, cluster = varcov_cluster_variable_glm, type = "HC1")
-	        }
-	        if(is.null(varcov_cluster_variable)){
+	        } else {
 	          vcov_OutcomeModel <- vcov(  my_model, complete = T)
 	        }
 		        if (force_no_intercept) {
@@ -1599,7 +1615,9 @@ generate_ModelOutcome <- function(){
 	        coef_vec <- coef(my_model)
 	        if (force_no_intercept) {
 	          model_coef_vec <- coef_vec
-	          EST_INTERCEPT_tf <- strenv$jnp$array(0, dtype = strenv$dtj)
+	          # (1,1) shape, matching the with-intercept branch: a rank-0 array
+	          # breaks jnp$concatenate with the (n,1) coefficient array downstream.
+	          EST_INTERCEPT_tf <- strenv$jnp$array(as.matrix(0), dtype = strenv$dtj)
 	        } else {
           model_coef_vec <- coef_vec[-1]
           EST_INTERCEPT_tf <- strenv$jnp$array(as.matrix(coef_vec[1]), dtype = strenv$dtj)

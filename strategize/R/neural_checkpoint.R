@@ -48,6 +48,7 @@ neural_svi_checkpoint_strip_control <- function(mcmc_control) {
   out$checkpoint_resume <- NULL
   out$checkpoint_n_checks <- NULL
   out$checkpoint_compress <- NULL
+  out$data_parallel <- NULL
   out
 }
 
@@ -320,6 +321,18 @@ neural_svi_checkpoint_save_snapshot <- function(path,
 
 neural_svi_checkpoint_load_snapshot <- function(path, type = c("latest", "best")) {
   type <- match.arg(type)
+  if (!is.null(strenv$data_parallel)) {
+    full <- reticulate::py_to_r(strenv$data_parallel$load_checkpoint_payload(path, type))
+    if (!is.null(full)) {
+      snapshot <- unserialize(as.raw(full$payload))
+      if (!identical(snapshot$execution_identity, strategize_dp_execution_identity())) {
+        stop("Full-state recovery requires identical source, versions, precision and PRNG settings.", call. = FALSE)
+      }
+      snapshot$full_state_generation <- full$generation
+      return(snapshot)
+    }
+  }
+  strategize_dp_primary(function() {
   file <- neural_svi_checkpoint_snapshot_path(path, type)
   if (!file.exists(file)) {
     return(NULL)
@@ -330,6 +343,7 @@ neural_svi_checkpoint_load_snapshot <- function(path, type = c("latest", "best")
     return(NULL)
   }
   snapshot
+  }, "read legacy checkpoint")
 }
 
 neural_svi_checkpoint_assert_fingerprint <- function(snapshot,

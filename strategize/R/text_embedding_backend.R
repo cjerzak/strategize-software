@@ -703,7 +703,13 @@ cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "aut
   )
   registered <- FALSE
   python <- ""
-  if (!is.null(envs) && nrow(envs) > 0L && "name" %in% names(envs)) {
+  prefix <- path.expand(conda_env)
+  if (file.exists(file.path(prefix, "conda-meta", "history"))) {
+    # Conda prefixes outside envs_dirs need not have a registered short name.
+    # reticulate accepts these paths; inspect the same interpreter it will use.
+    registered <- TRUE
+    python <- file.path(prefix, if (.Platform$OS.type == "windows") "python.exe" else "bin/python")
+  } else if (!is.null(envs) && nrow(envs) > 0L && "name" %in% names(envs)) {
     idx <- match(conda_env, as.character(envs$name))
     if (!is.na(idx)) {
       registered <- TRUE

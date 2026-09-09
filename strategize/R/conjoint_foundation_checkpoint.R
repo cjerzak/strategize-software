@@ -114,6 +114,9 @@ cs_foundation_orbax_load_tree <- function(path, abstract_tree, array_manifest) {
     } else {
       NULL
     }
+    if (strategize_dp_enabled()) {
+      return(strenv$data_parallel$load_inference_tree(restore_path, abstract_tree, restore_args))
+    }
     if (!is.null(restore_args)) {
       return(ocp$PyTreeCheckpointer()$restore(
         restore_path,

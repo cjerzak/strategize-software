@@ -1,2 +1,4 @@
 ^doc$
 ^Meta$
+(^|/)__pycache__(/|$)
+(^|/)\.pytest_cache(/|$)
