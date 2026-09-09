@@ -525,6 +525,10 @@ cs2step_eval_outcome_model_neural <- function(Y,
                                              neural_mcmc_control = NULL,
                                              varcov_cluster_variable = NULL,
                                              nFolds_glm = 3L) {
+  if (!is.null(neural_mcmc_control$data_parallel)) {
+    initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required,
+                   data_parallel = neural_mcmc_control$data_parallel)
+  }
   if (!"jnp" %in% ls(envir = strenv) || !"np" %in% ls(envir = strenv)) {
     ok <- tryCatch({
       initialize_jax(conda_env = conda_env, conda_env_required = conda_env_required)
@@ -2547,7 +2551,7 @@ cs2step_neural_to_r_array <- function(x) {
 
 cs2step_ordinal_thresholds_from_raw <- function(raw) {
   raw <- as.matrix(raw)
-  if (!length(raw)) {
+  if (!length(raw) || ncol(raw) == 1L) {
     return(raw)
   }
   out <- raw
@@ -2631,6 +2635,11 @@ cs2step_neural_coerce_prediction_output <- function(pred,
                                                     sigma = NULL,
                                                     model_info = NULL,
                                                     pairwise_prediction = FALSE) {
+  if (!is.null(model_info$ordinal_prediction_thresholds)) {
+    ordinal_thresholds <- model_info$ordinal_prediction_thresholds
+    ordinal_threshold_raw <- NULL
+    target_experiment_index <- 0L
+  }
   if (identical(likelihood, "mixed")) {
     logits <- if (is.list(pred) && !is.null(pred$logits)) {
       pred$logits

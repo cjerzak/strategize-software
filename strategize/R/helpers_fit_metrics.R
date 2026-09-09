@@ -112,7 +112,7 @@ cs_make_stratified_folds <- function(n, n_folds, y = NULL, cluster = NULL, seed 
   fold_by_group <- integer(length(group_index))
   for (stratum in unique(strata)) {
     stratum_idx <- which(strata == stratum)
-    stratum_idx <- sample(stratum_idx, length(stratum_idx))
+    stratum_idx <- stratum_idx[sample.int(length(stratum_idx))]
     start_fold <- if (length(fold_loads)) {
       order(fold_loads, seq_len(k))[1L]
     } else {

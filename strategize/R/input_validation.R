@@ -80,16 +80,21 @@ NULL
 #'   \code{ceiling(svi_steps / early_stopping_n_checks)}. Use
 #'   \code{neural_mcmc_control$early_stopping_patience} (default \code{3}) to
 #'   control how many consecutive non-improving validation checks are tolerated
-#'   before stopping. For compact streaming SVI, \code{early_stopping = TRUE}
-#'   enables validation best-checkpoint selection but still runs the full
-#'   \code{svi_steps} budget. Set
+#'   before stopping, including compact streaming SVI. Set
 #'   \code{neural_mcmc_control$early_stopping_validation_frac} (default \code{0.05})
 #'   to retain approximately that fraction of evaluable observations in the
 #'   held-out validation split, and optionally
 #'   \code{neural_mcmc_control$early_stopping_validation_max_n} (default
 #'   \code{2048}) to cap the retained validation size after fraction-based
 #'   sizing. Set \code{early_stopping_validation_max_n = NULL} to disable that
-#'   cap. Checkpoint gradient diagnostics are enabled by default for SVI fits
+#'   cap. Validation retains whole respondent clusters, so its size can exceed
+#'   the requested cap by at most one cluster. By default,
+#'   \code{svi_objective_normalization = "per_observation"} scales the complete
+#'   ELBO gradient by the reciprocal observation count before global-norm
+#'   clipping. The likelihood-to-KL ratio and reported ELBO are unchanged. Use
+#'   \code{"none"} for the former summed-gradient convention. Optimizer
+#'   diagnostics record actual clipping counts and update-to-parameter ratios.
+#'   Checkpoint gradient diagnostics are enabled by default for SVI fits
 #'   and are evaluated at the early-stopping checkpoint cadence; set
 #'   \code{neural_mcmc_control$gradient_diagnostics = FALSE} to disable them.
 #'   Universal mixed-likelihood fits use
@@ -1117,6 +1122,12 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
         call. = FALSE
       )
     }
+  }
+  objective_normalization <- neural_mcmc_control[["svi_objective_normalization"]]
+  if (!is.null(objective_normalization) &&
+      (!is.character(objective_normalization) || length(objective_normalization) != 1L ||
+       is.na(objective_normalization) || !objective_normalization %in% c("per_observation", "none"))) {
+    stop("'neural_mcmc_control$svi_objective_normalization' must be 'per_observation' or 'none'.", call. = FALSE)
   }
   n_checks <- if (!is.null(neural_mcmc_control)) {
     neural_mcmc_control[["early_stopping_n_checks"]]

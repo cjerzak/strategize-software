@@ -21,6 +21,33 @@ make_text_embedding_host <- function(...) {
   modifyList(defaults, list(...))
 }
 
+test_that("backend inspection accepts an explicit conda prefix", {
+  prefix <- tempfile("standalone-conda-")
+  dir.create(file.path(prefix, "conda-meta"), recursive = TRUE)
+  dir.create(file.path(prefix, "bin"))
+  file.create(file.path(prefix, "conda-meta", "history"))
+  python <- file.path(prefix, if (.Platform$OS.type == "windows") "python.exe" else "bin/python")
+  file.create(python)
+  withr::defer(unlink(prefix, recursive = TRUE))
+  testthat::local_mocked_bindings(
+    conda_list = function(...) data.frame(name = "unrelated", python = "/other/bin/python"),
+    .package = "reticulate"
+  )
+  testthat::local_mocked_bindings(
+    cs2step_resolve_conda_binary = function(...) "/test/conda",
+    cs2step_python_module_probe = function(interpreter, modules) {
+      expect_identical(interpreter, python)
+      list(ok = setNames(rep(TRUE, length(modules)), modules), details = character(), status = 0L)
+    },
+    .package = "strategize"
+  )
+  state <- strategize:::cs2step_backend_env_state(prefix)
+  expect_true(state$registered)
+  expect_true(state$python_exists)
+  expect_true(state$core_modules_ready)
+  expect_identical(state$python, python)
+})
+
 test_that("text embedding selector chooses MLX on Apple Silicon in auto mode", {
   host <- make_text_embedding_host(
     os = "Darwin",
