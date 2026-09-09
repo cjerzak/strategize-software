@@ -690,16 +690,15 @@ cv_strategize       <-          function(
         
         # out of sample test of pi* on new estimates 
         q_vec_in <- c(q_vec_in, Qoptimized__[[split_]][[1]]$Q_point)
-        q_vec_out <- c(q_vec_out, 
-          unlist(Qoptimized__[[split_]][[2]]$QFXN(
-          "pi_star_ast" = Qoptimized__[[split_]][[1]]$pi_star_red_ast,
-          "pi_star_dag" = Qoptimized__[[split_]][[1]]$pi_star_red_dag,
-          "EST_INTERCEPT_tf_ast" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
-          "EST_COEFFICIENTS_tf_ast" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp,
-          "EST_INTERCEPT_tf_dag" = Qoptimized__[[split_]][[2]]$est_intercept_jnp,
-          "EST_COEFFICIENTS_tf_dag" = Qoptimized__[[split_]][[2]]$est_coefficients_jnp
-          )$tolist()[[1]])
-        )
+        q_vec_out <- c(q_vec_out, cs_cv_policy_value(
+          training = Qoptimized__[[split_]][[1]],
+          evaluation = Qoptimized__[[split_]][[2]],
+          outcome_model_type = outcome_model_type, diff = diff,
+          adversarial = adversarial, force_gaussian = force_gaussian,
+          temperature = temperature, primary_pushforward = primary_pushforward,
+          primary_n_entrants = primary_n_entrants, primary_n_field = primary_n_field,
+          seed = 123L + as.integer(split_)
+        ))
       }
       outsamp_results <- as.data.frame(rbind(outsamp_results, 
                                              c(lambda__, mean(q_vec_out), se(q_vec_out), 0)))

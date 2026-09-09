@@ -41,7 +41,7 @@ cs_glm_design_size_error_message <- function(glm_input, main_dat, interacted_dat
       "Post-screen GLM design is too large%s: %d column(s) for %d observation(s); ",
       "limit is %d column(s). Requested use_regularization=%s; screening_applied=%s; ",
       "final columns: main=%d, interactions=%d. This check runs after ",
-      "regularization/glinternet screening, so setting use_regularization=TRUE may ",
+      "explicit-feature interaction screening, so setting use_regularization=TRUE may ",
       "already have happened and may not be sufficient."
     ),
     context,
@@ -488,84 +488,27 @@ generate_ModelOutcome <- function(){
         UsedRegularization <- TRUE
         if(!presaved_outcome_model){
         if(K == 1){
-            # glinternet is in Imports - use :: syntax
-            InteractionPairs <- t(utils::combn(1:nrow(main_info), m = 2))
-            InteractionPairs <- InteractionPairs[main_info$d[ InteractionPairs[,1] ] != main_info$d[ InteractionPairs[,2] ], , drop = FALSE]
-            if (nrow(InteractionPairs) == 0) {
-              InteractionPairs <- NULL
-            }
-
-            # A fully degenerate (single-value) response makes glinternet's C
-            # group_lasso segfault; skip screening entirely and fall back to the
-            # unregularized path (mirrors the NULL-result fallback below).
-            if (!glm_response_has_variation(Y_glm)) {
-              use_regularization <- FALSE
-              interaction_info <- interaction_info[0, , drop = FALSE]
-              interacted_dat <- matrix(numeric(0), nrow = NROW(main_dat), ncol = 0L)
-              force_no_interactions <- TRUE
-              ok_ <- TRUE
-              next
-            }
-
-            message("Starting a glinternet fit...")
-            n_obs_glm <- length(Y_glm)
-            nFolds_glm_use <- min(nFolds_glm, floor(n_obs_glm / 2))
-            glinternet_results <- tryCatch({
-              if (nFolds_glm_use < 2L) {
-                glinternet::glinternet(X = main_dat,
-                                       Y = Y_glm, family = glm_family,
-                                       numLevels = rep(1,times = ncol(main_dat)),
-                                       interactionPairs = InteractionPairs)
-              } else {
-                glinternet::glinternet.cv(X = main_dat,
-                                          Y = Y_glm, family = glm_family,
-                                          numLevels = rep(1,times = ncol(main_dat)),
-                                          interactionPairs = InteractionPairs,
-                                          nFolds = nFolds_glm_use )
-              }
-            }, error = function(e) NULL)
-
-            if (is.null(glinternet_results)) {
-              use_regularization <- FALSE
-              interaction_info <- interaction_info[0, , drop = FALSE]
-              interacted_dat <- matrix(numeric(0), nrow = NROW(main_dat), ncol = 0L)
-              force_no_interactions <- TRUE
-              ok_ <- TRUE
-              next
-            }
-            message("Done with glinternet fit...")
-            keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
-            keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
-            if(is.null(keep_MainWithInter)){
-              glinternet_results <- glinternet::glinternet(X = main_dat,
-                                               Y = Y_glm, family = glm_family,
-                                               numLevels = rep(1,times = ncol(main_dat)),
-                                               interactionPairs = InteractionPairs,
-                                               numToFind = 1L)
-              keep_OnlyMain <- glinternet_results$activeSet[[length(glinternet_results$activeSet)]]$cont
-              keep_MainWithInter <- glinternet_results$activeSet[[length(glinternet_results$activeSet)]]$contcont
-            }
-            AllMain <- sort(unique(c(keep_OnlyMain, c(keep_MainWithInter))))
-
-            # some debugging checks
-            # main_info <- main_info_PreRegularization
-            # interaction_info <- interaction_info_PreRegularization
-
-            # adjust main
-            main_info <- main_info[main_info$d %in% main_info$d[AllMain],]
+            # Screen the same columns that the final pairwise model fits.
+            # Interacting already-differenced main effects creates an even
+            # predictor under profile reversal and misses genuine interactions.
+            selected <- cs_glm_screen_features(
+              main_dat, interacted_dat, Y_glm, glm_family,
+              n_folds = nFolds_glm,
+              cluster = varcov_cluster_variable_glm,
+              intercept = !force_no_intercept
+            )
+            # Retain all levels of a selected factor pair, and all main effects,
+            # so the refit respects hierarchy and keeps a stable policy encoding.
+            pair_key <- function(info) paste(pmin(info$d, info$dp),
+                                             pmax(info$d, info$dp), sep = "_")
+            keep_pairs <- pair_key(interaction_info)[selected]
+            interaction_info <- interaction_info[
+              pair_key(interaction_info) %in% keep_pairs, , drop = FALSE]
             main_info$d_adj <- cumsum(!duplicated(main_info$d))
-            regularization_adjust_hash <- c(main_info$d_adj)
-            names(regularization_adjust_hash) <- main_info$d
-
-            # adjust inter
-            keep_inter_d <- cbind(main_info_PreRegularization$d[keep_MainWithInter[,1]],
-                                  main_info_PreRegularization$d[keep_MainWithInter[,2]])
-            keep_inter_col <- apply(keep_inter_d,1,function(zer){ paste(sort(zer),collapse="_") })
-            interaction_info_col <- apply(cbind(interaction_info$d,interaction_info$dp),1,function(zer){ paste(sort(zer),collapse="_") })
-            interaction_info_keep_indices <- which( interaction_info_col %in% keep_inter_col )
-            interaction_info <- interaction_info[interaction_info_keep_indices,]
+            regularization_adjust_hash <- stats::setNames(main_info$d_adj, main_info$d)
             interaction_info$d_adj <- regularization_adjust_hash[as.character(interaction_info$d)]
             interaction_info$dp_adj <- regularization_adjust_hash[as.character(interaction_info$dp)]
+
         }
         if(K > 1){
             factorhet_design <- cs_factorhet_prepare_design(
@@ -1065,19 +1008,6 @@ generate_ModelOutcome <- function(){
 		          )
 		        }
 
-		        # Pre-compute glinternet's allowable interaction column pairs once.
-		        InteractionPairs_all <- NULL
-		        if (use_nested_eval && nrow(main_info_eval) >= 2L) {
-		          InteractionPairs_all <- t(utils::combn(seq_len(nrow(main_info_eval)), m = 2))
-		          InteractionPairs_all <- InteractionPairs_all[
-		            main_info_eval$d[InteractionPairs_all[, 1]] != main_info_eval$d[InteractionPairs_all[, 2]],
-		            ,
-		            drop = FALSE
-		          ]
-		          if (nrow(InteractionPairs_all) == 0L) {
-		            InteractionPairs_all <- NULL
-		          }
-		        }
 
 		        pred_oos <- rep(NA_real_, n_eval_total)
 		        by_fold <- vector("list", n_folds_use)
@@ -1223,115 +1153,19 @@ generate_ModelOutcome <- function(){
 		              integer(0)
 		            }
 
-		            # Optional glinternet-based screening (performed inside each fold).
-		            selected_pair_keys <- character(0)
-		            screening_used <- FALSE
-		            if (!force_no_interactions_eval && isTRUE(used_regularization_eval)) {
-		              screening_used <- TRUE
-		              main_train_full <- main_obs_eval[train_pos, , drop = FALSE]
-
-		              # If the training fold has no usable signal, skip screening.
-		              # glinternet's C group_lasso segfaults on a degenerate (single-value)
-		              # response, which is common in tiny nested folds, so also require the
-		              # training response to carry variation before invoking it.
-		              col_sd_main <- tryCatch(apply(main_train_full, 2, sd), error = function(e) NULL)
-		              if (glm_response_has_variation(y_train) &&
-		                  !is.null(col_sd_main) &&
-		                  any(is.finite(col_sd_main) & col_sd_main > 0)) {
-		                n_obs_glm <- length(y_train)
-		                nFolds_glm_use <- if (exists("nFolds_glm", inherits = TRUE) &&
-		                                      is.numeric(nFolds_glm) &&
-		                                      length(nFolds_glm) == 1L &&
-		                                      is.finite(nFolds_glm)) {
-		                  min(as.integer(nFolds_glm), floor(n_obs_glm / 2))
-		                } else {
-		                  floor(n_obs_glm / 2)
-		                }
-		                glinternet_results <- tryCatch({
-		                  if (nFolds_glm_use < 2L) {
-		                    glinternet::glinternet(
-		                      X = main_train_full,
-		                      Y = y_train,
-		                      family = glm_family,
-		                      numLevels = rep(1, times = ncol(main_train_full)),
-		                      interactionPairs = InteractionPairs_all
-		                    )
-		                  } else {
-		                    glinternet::glinternet.cv(
-		                      X = main_train_full,
-		                      Y = y_train,
-		                      family = glm_family,
-		                      numLevels = rep(1, times = ncol(main_train_full)),
-		                      interactionPairs = InteractionPairs_all,
-		                      nFolds = nFolds_glm_use
-		                    )
-		                  }
-		                }, error = function(e) NULL)
-
-		                keep_OnlyMain <- NULL
-		                keep_MainWithInter <- NULL
-		                if (!is.null(glinternet_results) &&
-		                    !is.null(glinternet_results$activeSet) &&
-		                    length(glinternet_results$activeSet) >= 1L) {
-		                  keep_OnlyMain <- glinternet_results$activeSet[[1]]$cont
-		                  keep_MainWithInter <- glinternet_results$activeSet[[1]]$contcont
-		                }
-		                if (!is.null(glinternet_results) && is.null(keep_MainWithInter)) {
-		                  glinternet_results2 <- tryCatch({
-		                    glinternet::glinternet(
-		                      X = main_train_full,
-		                      Y = y_train,
-		                      family = glm_family,
-		                      numLevels = rep(1, times = ncol(main_train_full)),
-		                      interactionPairs = InteractionPairs_all,
-		                      numToFind = 1L
-		                    )
-		                  }, error = function(e) NULL)
-		                  if (!is.null(glinternet_results2) &&
-		                      !is.null(glinternet_results2$activeSet) &&
-		                      length(glinternet_results2$activeSet) >= 1L) {
-		                    as_last <- glinternet_results2$activeSet[[length(glinternet_results2$activeSet)]]
-		                    keep_OnlyMain <- as_last$cont
-		                    keep_MainWithInter <- as_last$contcont
-		                  }
-		                }
-
-		                AllMain <- sort(unique(c(keep_OnlyMain, c(keep_MainWithInter))))
-		                if (length(AllMain) > 0L) {
-		                  selected_factors <- unique(main_info_eval$d[AllMain])
-		                  if (length(selected_factors) > 0L) {
-		                    main_keep <- main_info_eval$d %in% selected_factors
-		                  }
-		                }
-
-		                if (!is.null(keep_MainWithInter) && length(keep_MainWithInter) > 0L) {
-		                  keep_MainWithInter <- as.matrix(keep_MainWithInter)
-		                  if (ncol(keep_MainWithInter) == 2L) {
-		                    keep_inter_d <- cbind(
-		                      main_info_eval$d[keep_MainWithInter[, 1]],
-		                      main_info_eval$d[keep_MainWithInter[, 2]]
-		                    )
-		                    selected_pair_keys <- apply(keep_inter_d, 1, function(zer) {
-		                      paste(sort(zer), collapse = "_")
-		                    })
-		                  }
-		                }
-		              }
-
-		              # If screening failed, fall back to using the full main-effect set.
-		              if (!any(main_keep)) {
-		                main_keep <- rep(TRUE, ncol(main_obs_eval))
-		              }
-		            }
-
-		            if (!force_no_interactions_eval &&
-		                nrow(interaction_info_full) > 0L) {
-		              if (length(selected_pair_keys) > 0L && length(interaction_pair_col_full) == nrow(interaction_info_full)) {
-		                interaction_keep_idx <- which(interaction_pair_col_full %in% selected_pair_keys)
-		              }
-		            } else {
-		              interaction_keep_idx <- integer(0)
-		            }
+                # Use exactly the same explicit-feature screen as the outer
+                # fit, with all preprocessing confined to this training fold.
+                screening_used <- !force_no_interactions_eval && isTRUE(used_regularization_eval)
+                if (screening_used) {
+                  selected <- cs_glm_screen_features(
+                    main_obs_eval[train_pos, , drop = FALSE],
+                    compute_interactions_obs(train_pos, interaction_info_full),
+                    y_train, glm_family, n_folds = nFolds_glm,
+                    cluster = if (!is.null(cluster_eval)) cluster_eval[train_pos] else NULL,
+                    intercept = !force_no_intercept)
+                  selected_pair_keys <- interaction_pair_col_full[selected]
+                  interaction_keep_idx <- which(interaction_pair_col_full %in% selected_pair_keys)
+                }
 
 		            X_main_train <- main_obs_eval[train_pos, main_keep, drop = FALSE]
 		            X_main_test <- main_obs_eval[test_pos, main_keep, drop = FALSE]

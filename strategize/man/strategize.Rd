@@ -313,16 +313,24 @@ fields \code{Q_crossfit}, \code{Q_reference_crossfit}, and
 relative to the assignment-policy baseline.}
 
 \item{crossfit_q_control}{Optional list controlling cross-fitted Q evaluation.
-Supported entries include \code{folds}, \code{seed}, \code{split_by},
-\code{estimators}, \code{headline}, \code{weight_clip},
-\code{n_policy_draws}, \code{chunk_size}, \code{return_fold_results}, and
-\code{perspective_group}. For adversarial runs, \code{perspective_group}
-selects the candidate group whose win probability is reported; if omitted,
-the first sorted group label is used. The adversarial estimator assumes
-independent group-specific profile assignment under \code{p_list}. The
-default headline estimator is doubly robust
-(\code{"dr"}), with IPS, SNIPS, and model-only diagnostics returned in
-\code{Q_crossfit_info}.}
+Supports \code{folds}, \code{seed}, \code{split_by}, \code{estimators},
+\code{headline}, \code{weight_clip}, \code{n_policy_draws},
+\code{chunk_size}, \code{return_fold_results}, and \code{perspective_group}.
+The default headline is \code{"dr_hajek"}; ordinary DR, IPS, SNIPS and
+model-only values remain diagnostics. For average-case \code{K = 1},
+\code{adaptive_lambda = TRUE} selects the smallest feasible penalty in
+\code{lambda_path} separately inside each training fold. Feasibility uses
+\code{design_ess_fraction_min}, \code{design_abs_ess_min}, and
+\code{design_max_weight}, without heldout outcomes. The selected policy
+and every attempted penalty retain diagnostics; failure of the entire path
+is explicitly recorded. \code{policy_benchmark = TRUE} evaluates marginal
+probability recipes from the same fold models using \code{amce_tau_grid}.
+Saved contributions include respondent IDs, policy weights, and predictions.
+Use \code{split_by = "respondent_id"} to keep repeated tasks together.
+Adversarial selection of \code{perspective_group} defaults to the first
+sorted label; independent group-specific assignment under \code{p_list}
+is assumed. Adaptive selection and marginal benchmarks require average-case
+\code{K = 1}; other supported crossfit modes retain their fixed-penalty path.}
 
 \item{nMonte_adversarial}{Integer specifying the number of Monte Carlo samples used in adversarial
 or max-min steps, e.g., sampling from the opposing candidate's distribution to approximate

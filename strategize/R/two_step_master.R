@@ -259,16 +259,24 @@
 #'   relative to the assignment-policy baseline.
 #'
 #' @param crossfit_q_control Optional list controlling cross-fitted Q evaluation.
-#'   Supported entries include \code{folds}, \code{seed}, \code{split_by},
-#'   \code{estimators}, \code{headline}, \code{weight_clip},
-#'   \code{n_policy_draws}, \code{chunk_size}, \code{return_fold_results}, and
-#'   \code{perspective_group}. For adversarial runs, \code{perspective_group}
-#'   selects the candidate group whose win probability is reported; if omitted,
-#'   the first sorted group label is used. The adversarial estimator assumes
-#'   independent group-specific profile assignment under \code{p_list}. The
-#'   default headline estimator is doubly robust
-#'   (\code{"dr"}), with IPS, SNIPS, and model-only diagnostics returned in
-#'   \code{Q_crossfit_info}.
+#'   Supports \code{folds}, \code{seed}, \code{split_by}, \code{estimators},
+#'   \code{headline}, \code{weight_clip}, \code{n_policy_draws},
+#'   \code{chunk_size}, \code{return_fold_results}, and \code{perspective_group}.
+#'   The default headline is \code{"dr_hajek"}; ordinary DR, IPS, SNIPS and
+#'   model-only values remain diagnostics. For average-case \code{K = 1},
+#'   \code{adaptive_lambda = TRUE} selects the smallest feasible penalty in
+#'   \code{lambda_path} separately inside each training fold. Feasibility uses
+#'   \code{design_ess_fraction_min}, \code{design_abs_ess_min}, and
+#'   \code{design_max_weight}, without heldout outcomes. The selected policy
+#'   and every attempted penalty retain diagnostics; failure of the entire path
+#'   is explicitly recorded. \code{policy_benchmark = TRUE} evaluates marginal
+#'   probability recipes from the same fold models using \code{amce_tau_grid}.
+#'   Saved contributions include respondent IDs, policy weights, and predictions.
+#'   Use \code{split_by = "respondent_id"} to keep repeated tasks together.
+#'   Adversarial selection of \code{perspective_group} defaults to the first
+#'   sorted label; independent group-specific assignment under \code{p_list}
+#'   is assumed. Adaptive selection and marginal benchmarks require average-case
+#'   \code{K = 1}; other supported crossfit modes retain their fixed-penalty path.
 #'
 #' @param nMonte_adversarial Integer specifying the number of Monte Carlo samples used in adversarial
 #'   or max-min steps, e.g., sampling from the opposing candidate's distribution to approximate
@@ -1423,7 +1431,8 @@ strategize       <-          function(
                                      )  
   }
 
-  use_exact <- !( use_gd <- (any(pi_star_exact<0) | any(pi_star_exact>1)  | adversarial |  diff | 
+  use_exact <- !( use_gd <- (!identical(glm_family, "gaussian") |
+    identical(outcome_model_type, "neural") | any(pi_star_exact<0) | any(pi_star_exact>1)  | adversarial |  diff |
     (abs(sum(pi_star_exact) - sum(unlist(p_list_full))) > 1e-5) ))
   if( use_gd ){
 
@@ -2572,7 +2581,9 @@ strategize       <-          function(
   }
   
   message("strategize() call has finished...\n-------------")
-  result_out <- list(   "pi_star_point" = pi_star_list,
+  result_out <- list(   "correctness_contract" = cs_correctness_contract(),
+                  "glm_family" = glm_family,
+                  "pi_star_point" = pi_star_list,
                   "pi_star_se" = pi_star_se_list,
                   
                   "Q_point" = q_star,
@@ -2856,6 +2867,7 @@ strategize       <-          function(
     result_out$Q_reference_crossfit <- crossfit_q_result$Q_reference_crossfit
     result_out$Q_gain_crossfit <- crossfit_q_result$Q_gain_crossfit
     result_out$Q_crossfit_info <- crossfit_q_result
+    result_out$Q_policy_benchmark_info <- crossfit_q_result$policy_benchmark
   }
   return(result_out)
 }

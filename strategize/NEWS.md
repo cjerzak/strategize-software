@@ -1,3 +1,19 @@
+# Development: September 9, 2026 correctness repairs
+
+- Binomial policy reports and CV integrate categorical profiles, with exact
+  enumeration on small supports and hard Monte Carlo otherwise. The GLM
+  optimizer's relaxation is confined to its optimization objective. Discrete
+  reporting retains likelihood-ratio derivatives for uncertainty calculations.
+- Pairwise interaction screening, including nested predictive evaluation, now
+  regularizes the actual differences of within-profile products with glmnet.
+  Refits retain all main effects and all levels of selected factor pairs.
+- Average-case K=1 crossfit can select penalties using design overlap constraints,
+  retain candidate diagnostics and respondent evaluation contributions, and
+  evaluate marginal probability recipes from the same training-fold models.
+  Evaluation Monte Carlo draws are independent across respondent clusters.
+- Results record a correctness contract so downstream reporting can reject
+  pre-repair fitted artifacts. Existing results require a new fit.
+
 # strategize 0.0.2
 
 ## Statistical fixes

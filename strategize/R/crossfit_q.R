@@ -9,7 +9,14 @@ cs_crossfit_q_default_control <- function(control = NULL) {
     n_policy_draws = 1000L,
     chunk_size = 2000L,
     return_fold_results = TRUE,
-    perspective_group = NULL
+    perspective_group = NULL,
+    adaptive_lambda = FALSE,
+    lambda_path = c(0.015, 0.03, 0.06, 0.12, 0.24, 0.48, 0.96),
+    design_ess_fraction_min = 0.02,
+    design_abs_ess_min = 100,
+    design_max_weight = 750,
+    policy_benchmark = FALSE,
+    amce_tau_grid = c(0, 0.5, 1, 2, 4)
   )
   if (is.null(control)) {
     control <- list()
@@ -62,6 +69,19 @@ cs_crossfit_q_default_control <- function(control = NULL) {
   if (is.na(out$chunk_size) || out$chunk_size < 1L) {
     stop("'crossfit_q_control$chunk_size' must be an integer >= 1.", call. = FALSE)
   }
+  out$adaptive_lambda <- isTRUE(out$adaptive_lambda)
+  out$policy_benchmark <- isTRUE(out$policy_benchmark)
+  for (name in c("lambda_path", "amce_tau_grid")) {
+    out[[name]] <- sort(unique(as.numeric(out[[name]])))
+    if (!length(out[[name]]) || any(!is.finite(out[[name]]) | out[[name]] < 0))
+      stop(sprintf("crossfit_q_control$%s must contain finite nonnegative values.", name), call. = FALSE)
+  }
+  for (name in c("design_ess_fraction_min", "design_abs_ess_min", "design_max_weight")) {
+    if (length(out[[name]]) != 1L || !is.finite(out[[name]]) || out[[name]] <= 0)
+      stop(sprintf("crossfit_q_control$%s must be positive and finite.", name), call. = FALSE)
+  }
+  if (out$design_ess_fraction_min > 1 || out$design_max_weight < 1)
+    stop("Invalid design overlap thresholds.", call. = FALSE)
   out
 }
 
@@ -104,6 +124,10 @@ cs_crossfit_q_validate <- function(Y, W, pair_id, profile_order, p_list,
   if (control$split_by == "respondent_id" && is.null(respondent_id)) {
     stop("crossfit_q_control$split_by = 'respondent_id' requires respondent_id.", call. = FALSE)
   }
+  if (control$split_by == "respondent_id" &&
+      (length(respondent_id) != length(Y) || anyNA(respondent_id) ||
+       any(!nzchar(as.character(respondent_id)))))
+    stop("Respondent splits require complete respondent IDs for every profile row.", call. = FALSE)
   if (is.null(p_list) || !length(p_list)) {
     stop("crossfit_q requires a non-empty p_list.", call. = FALSE)
   }
@@ -124,6 +148,9 @@ cs_crossfit_q_validate <- function(Y, W, pair_id, profile_order, p_list,
     stop("crossfit_q requires every pair_id to identify exactly two rows.", call. = FALSE)
   }
   pair_mat <- pair_info$pair_mat
+  if (control$split_by == "respondent_id" &&
+      any(as.character(respondent_id[pair_mat[, 1]]) != as.character(respondent_id[pair_mat[, 2]])))
+    stop("Both alternatives in a pair must share a respondent ID.", call. = FALSE)
   pair_sums <- y_num[pair_mat[, 1]] + y_num[pair_mat[, 2]]
   if (any(pair_sums != 1, na.rm = TRUE)) {
     stop("crossfit_q requires exactly one selected profile per pair.", call. = FALSE)
@@ -1696,7 +1723,9 @@ cs_crossfit_q_weight_diagnostics <- function(w, w_used) {
 }
 
 cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows,
-                                    p_list, control, fold) {
+                                    p_list, control, fold, policy = NULL,
+                                    pair_id = NULL, respondent_id = NULL,
+                                    policy_name = "learned", policy_info = NULL) {
   W <- as.data.frame(W, stringsAsFactors = FALSE, check.names = FALSE)
   pair_mat_test <- pair_mat[test_pair_rows, , drop = FALSE]
   focal_idx <- c(pair_mat_test[, 1], pair_mat_test[, 2])
@@ -1705,7 +1734,7 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
   focal_W <- W[focal_idx, , drop = FALSE]
   opponent_W <- W[opponent_idx, , drop = FALSE]
 
-  policy <- cs_crossfit_q_extract_policy(train_result)
+  if (is.null(policy)) policy <- cs_crossfit_q_extract_policy(train_result)
   # Predict once on the fit-canonical orientation (pair_mat column 1 focal) and
   # take the forced-choice complement for the swapped duplicates. The model's
   # intercept is a display-position effect estimated in the canonical
@@ -1719,31 +1748,26 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
     p_list
   )
   m_obs <- c(m_pair, 1 - m_pair)
-  set.seed(as.integer(control$seed + 1009L * fold))
-  common_uniforms <- matrix(
-    stats::runif(as.integer(control$n_policy_draws) * length(p_list)),
-    nrow = as.integer(control$n_policy_draws)
-  )
-  mu_policy <- cs_crossfit_q_policy_model_mu(
-    policy = policy,
-    opponent_W = opponent_W,
-    result = train_result,
-    p_list = p_list,
-    n_draws = control$n_policy_draws,
-    seed = control$seed + 1009L * fold,
-    chunk_size = control$chunk_size,
-    uniforms = common_uniforms
-  )
-  mu_reference <- cs_crossfit_q_policy_model_mu(
-    policy = p_list,
-    opponent_W = opponent_W,
-    result = train_result,
-    p_list = p_list,
-    n_draws = control$n_policy_draws,
-    seed = control$seed + 1009L * fold,
-    chunk_size = control$chunk_size,
-    uniforms = common_uniforms
-  )
+  # Independent integration draws across evaluation clusters let respondent
+  # uncertainty include Monte Carlo variation. Target/reference and benchmark
+  # policies still share draws within a cluster for paired comparisons.
+  clusters <- if (is.null(respondent_id)) as.character(rep(test_pair_rows, 2L)) else
+    as.character(respondent_id[focal_idx])
+  groups <- split(seq_along(focal_idx), clusters)
+  mu_policy <- mu_reference <- numeric(length(focal_idx))
+  for (g in seq_along(groups)) {
+    idx <- groups[[g]]
+    draw_seed <- as.integer((as.double(control$seed) + 1009 * fold + 7919 * g) %% .Machine$integer.max)
+    set.seed(draw_seed)
+    common_uniforms <- matrix(stats::runif(control$n_policy_draws * length(p_list)),
+                              nrow = control$n_policy_draws)
+    mu_policy[idx] <- cs_crossfit_q_policy_model_mu(policy, opponent_W[idx, , drop = FALSE],
+      train_result, p_list, n_draws = control$n_policy_draws, seed = draw_seed,
+      chunk_size = control$chunk_size, uniforms = common_uniforms)
+    mu_reference[idx] <- cs_crossfit_q_policy_model_mu(p_list, opponent_W[idx, , drop = FALSE],
+      train_result, p_list, n_draws = control$n_policy_draws, seed = draw_seed,
+      chunk_size = control$chunk_size, uniforms = common_uniforms)
+  }
 
   p_focal <- cs_crossfit_q_policy_prob(focal_W, p_list, p_list)
   pi_focal <- cs_crossfit_q_policy_prob(focal_W, policy, p_list)
@@ -1780,7 +1804,7 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
   )
   estimates <- estimates[control$estimators]
   reference <- reference[control$estimators]
-  data.frame(
+  values <- data.frame(
     fold = fold,
     n_pairs = nrow(pair_mat_test),
     n_oriented = length(y_oriented),
@@ -1805,6 +1829,23 @@ cs_crossfit_q_fold_eval <- function(train_result, Y, W, pair_mat, test_pair_rows
     weight_clipped = diagnostics$clipped,
     stringsAsFactors = FALSE
   )
+  values$policy_name <- policy_name
+  if (!is.null(policy_info)) {
+    for (name in setdiff(names(policy_info), "policy_name")) values[[name]] <- policy_info[[name]]
+  }
+  pair_rows <- rep(test_pair_rows, 2L)
+  attr(values, "contributions") <- data.frame(
+    fold = fold, policy_name = policy_name, pair_row = pair_rows,
+    pair_id = if (is.null(pair_id)) as.character(pair_rows) else as.character(pair_id[focal_idx]),
+    respondent_id = if (is.null(respondent_id)) NA_character_ else as.character(respondent_id[focal_idx]),
+    focal_row = focal_idx, opponent_row = opponent_idx,
+    y = y_oriented, m_obs = m_obs, mu_policy = mu_policy, mu_reference = mu_reference,
+    w = w, w_used = w_used, w_reference_used = w_ref_used,
+    integration_sampling = "independent_evaluation_clusters",
+    stringsAsFactors = FALSE)
+  attr(values, "predictions") <- data.frame(fold = fold, y = y_oriented, pred = m_obs)
+  values
+
 }
 
 cs_crossfit_q_fold_error_message <- function(fold, n_folds, split_by,
@@ -1941,6 +1982,11 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
     )
   }
 
+  if ((isTRUE(control$adaptive_lambda) || isTRUE(control$policy_benchmark)) &&
+      (isTRUE(adversarial) || validation$K != 1L)) {
+    stop("Adaptive overlap selection and AMCE benchmarks currently require average-case K = 1.", call. = FALSE)
+  }
+  lambda_candidates <- benchmark_folds <- list()
   fold_results <- list()
   for (fold in seq_len(fold_obj$n_folds)) {
     test_pair_rows <- which(fold_obj$fold_id == fold)
@@ -2009,8 +2055,14 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
       compute_hessian = FALSE,
       crossfit_q = FALSE
     )
-    train_result <- tryCatch(
-      do.call(strategize, train_args),
+    selection <- NULL
+    train_result <- tryCatch({
+      if (!isTRUE(adversarial) && validation$K == 1L) {
+        selection <- cs_crossfit_select_policy(train_args, control, fold,
+                                               n_oriented = 2L * length(test_pair_rows))
+        selection$result
+      } else do.call(strategize, train_args)
+    },
       error = function(e) {
         stop(
           cs_crossfit_q_fold_error_message(
@@ -2064,8 +2116,23 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
         test_pair_rows = test_pair_rows,
         p_list = p_list,
         control = control,
-        fold = fold
+        fold = fold, pair_id = pair_id, respondent_id = respondent_id,
+        policy_info = selection$info
       )
+      lambda_candidates[[fold]] <- selection$candidates
+      if (isTRUE(control$policy_benchmark)) {
+        benchmark_folds[[length(benchmark_folds) + 1L]] <- fold_results[[fold]]
+        benchmarks <- cs_crossfit_amce_policies(train_result, p_list, control,
+                                                 fold, 2L * length(test_pair_rows))
+        for (name in c("amce_max", "amce_soft")) {
+          bench <- benchmarks[[name]]
+          benchmark_folds[[length(benchmark_folds) + 1L]] <- cs_crossfit_q_fold_eval(
+            train_result, Y, W, pair_mat, test_pair_rows, p_list, control, fold,
+            policy = bench$policy, pair_id = pair_id, respondent_id = respondent_id,
+            policy_name = name, policy_info = bench$info)
+        }
+      }
+
     }
   }
 
@@ -2251,7 +2318,13 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
   })
   summary_df <- do.call(rbind, summary_rows)
   summary_df <- summary_df[match(control$estimators, summary_df$estimator), , drop = FALSE]
+  selection_summary <- cs_crossfit_selection_summary(fold_df[!duplicated(fold_df$fold), , drop = FALSE])
+  for (name in names(selection_summary)) summary_df[[name]] <- selection_summary[[name]]
   headline_row <- summary_df[summary_df$estimator == control$headline, , drop = FALSE]
+  contributions <- do.call(rbind, lapply(fold_results, attr, which = "contributions"))
+  predictions <- do.call(rbind, lapply(fold_results, attr, which = "predictions"))
+  fit_metrics <- data.frame(model = "overall", metric_scope = "crossfit",
+                            auc = cs_compute_auc(predictions$y, predictions$pred))
   list(
     Q_crossfit = headline_row$Q_crossfit[[1L]],
     Q_reference_crossfit = headline_row$Q_reference_crossfit[[1L]],
@@ -2259,6 +2332,12 @@ cs_crossfit_q_strategize <- function(Y, W, X = NULL, lambda = NULL,
     estimator = control$headline,
     summary = summary_df,
     folds = if (isTRUE(control$return_fold_results)) fold_df else NULL,
+    contributions = if (control$return_fold_results) contributions else NULL,
+    predictions = if (control$return_fold_results) predictions else NULL,
+    fit_metrics = fit_metrics,
+    lambda_candidates = do.call(rbind, lambda_candidates),
+    policy_benchmark = cs_crossfit_benchmark_summary(benchmark_folds, control),
+    provenance = "respondent_crossfit_discrete_v2",
     control = control,
     split = list(
       split_by = control$split_by,
