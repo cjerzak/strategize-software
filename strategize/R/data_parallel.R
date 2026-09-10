@@ -45,6 +45,15 @@ strategize_dp_primary <- function(fn, label = "primary operation") {
   unserialize(as.raw(bytes))
 }
 
+strategize_dp_all_call <- function(fn, label) {
+  if (!strategize_dp_enabled()) return(fn())
+  value <- NULL
+  error <- NULL
+  tryCatch(value <- fn(), error = function(e) error <<- conditionMessage(e))
+  strenv$data_parallel$agree_status(error, label)
+  value
+}
+
 strategize_dp_batch <- function(args) {
   if (!strategize_dp_enabled()) return(args)
   reticulate::py_to_r(strenv$data_parallel$place_batch(args))

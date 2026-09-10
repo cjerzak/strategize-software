@@ -121,19 +121,45 @@ test_that("muon dimension-number tree handles guide-location aliases but not gui
   }
 })
 
-test_that("muon falls back for auto_diagonal guide because matrix structure is unavailable", {
+test_that("muon rejects guides that flatten the matrix structure", {
+  for (explicit in c(FALSE, TRUE)) {
+    expect_error(strategize:::neural_resolve_svi_optimizer_tag(
+      "muon", "auto_diagonal", explicit), "auto_diagonal.*incompatible")
+  }
+  expect_identical(strategize:::neural_resolve_svi_optimizer_tag("adam", "auto_diagonal"), "adam")
+})
+
+test_that("default Muon requires the full Optax API", {
+  skip_if_not_installed("reticulate")
+  testthat::local_mocked_bindings(py_has_attr = function(x, name) name %in% names(x), .package = "reticulate")
+  env <- strategize:::strenv
+  for (api in list(list(), list(contrib = list(muon = function(...) NULL)))) {
+    old <- env$optax
+    env$optax <- api
+    tryCatch({
+      expect_error(strategize:::neural_resolve_svi_optimizer_tag("muon", "auto_normal"), "requires optax")
+      expect_error(strategize:::neural_resolve_svi_optimizer_tag("muon", "auto_normal", TRUE), "requires optax")
+    }, finally = { env$optax <- old })
+  }
+})
+
+test_that("direct dense neural SVI uses Muon when the optimizer is omitted", {
   skip_on_cran()
   skip_if_no_jax()
-  strategize:::initialize_jax(conda_env = "strategize_env", conda_env_required = TRUE)
-
-  expected <- strategize:::neural_default_svi_fallback_optimizer()
-  expect_warning(
-    resolved <- strategize:::neural_resolve_svi_optimizer_tag(
-      optimizer_tag = "muon",
-      guide_name = "auto_diagonal",
-      user_supplied_optimizer = TRUE
-    ),
-    "auto_diagonal"
-  )
-  expect_identical(resolved, expected)
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+  W <- data.frame(feature = rep(c("A", "B"), 8L))
+  names_list <- strategize:::cs2step_build_names_list(W)
+  W_idx <- strategize:::cs2step_encode_W_indices(W, names_list = names_list, unknown = "error")
+  fit <- strategize:::cs2step_eval_outcome_model_neural(
+    Y = rep(c(1, 0, 0, 1), 4L), W_idx = W_idx, names_list = names_list,
+    factor_levels = vapply(names_list, function(x) length(x[[1L]]), integer(1)),
+    diff = TRUE, pair_id = rep(seq_len(8L), each = 2L), profile_order = rep(1:2, 8L),
+    neural_mcmc_control = list(ModelDims = 8L, ModelDepth = 1L,
+      subsample_method = "batch_vi", uncertainty_scope = "output", transformer_ffn = "swiglu",
+      svi_steps = 2L, svi_num_draws = 1L, batch_size = 4L,
+      early_stopping = FALSE, eval_enabled = FALSE, gradient_diagnostics = FALSE))
+  diagnostics <- fit$neural_model_info$optimizer_diagnostics
+  expect_identical(diagnostics$optimizer, "muon")
+  expect_identical(diagnostics$muon_partition_status, "verified")
+  expect_gt(diagnostics$muon_parameter_count, 0)
 })

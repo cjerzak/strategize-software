@@ -5407,43 +5407,21 @@ neural_get_init_to_value <- function() {
   NULL
 }
 
-neural_can_use_adamw_optimizer <- function() {
-  (reticulate::py_has_attr(strenv$numpyro$optim, "AdamW") ||
-     reticulate::py_has_attr(strenv$optax, "adamw"))
-}
-
-neural_default_svi_fallback_optimizer <- function() {
-  if (isTRUE(neural_can_use_adamw_optimizer())) "adamw" else "adam"
-}
-
 neural_resolve_svi_optimizer_tag <- function(optimizer_tag,
                                              guide_name = NULL,
                                              user_supplied_optimizer = FALSE) {
-  if (identical(optimizer_tag, "muon") &&
-      identical(guide_name, "auto_diagonal")) {
-    optimizer_tag <- neural_default_svi_fallback_optimizer()
-    warning(
-      sprintf(
-        "optimizer='muon' is incompatible with vi_guide='auto_diagonal'; falling back to '%s'.",
-        optimizer_tag
-      ),
-      call. = FALSE
-    )
-    return(optimizer_tag)
+  if (!identical(optimizer_tag, "muon")) return(optimizer_tag)
+  if (identical(guide_name, "auto_diagonal")) {
+    stop("optimizer='muon' requires matrix-shaped guide parameters; vi_guide='auto_diagonal' is incompatible. Use auto_normal/auto_delta or explicitly select another optimizer.", call. = FALSE)
   }
-  muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
-    reticulate::py_has_attr(strenv$optax$contrib, "muon")
-  if (identical(optimizer_tag, "muon") &&
-      !isTRUE(user_supplied_optimizer) &&
-      !isTRUE(muon_available)) {
-    optimizer_tag <- neural_default_svi_fallback_optimizer()
-    warning(
-      sprintf(
-        "Default optimizer 'muon' is unavailable; falling back to '%s'.",
-        optimizer_tag
-      ),
-      call. = FALSE
-    )
+  if (!reticulate::py_has_attr(strenv$optax, "contrib") ||
+      !reticulate::py_has_attr(strenv$optax$contrib, "muon") ||
+      !reticulate::py_has_attr(strenv$optax$contrib, "MuonDimensionNumbers")) {
+    stop("optimizer='muon' requires optax.contrib.muon and MuonDimensionNumbers. Update Optax or explicitly select another optimizer.", call. = FALSE)
+  }
+  # Resolve the partition before checkpoint restoration, including API failures.
+  if (is.null(neural_get_muon_dimension_numbers_callable())) {
+    stop("optimizer='muon' requires explicit weight dimension numbers.", call. = FALSE)
   }
   optimizer_tag
 }
@@ -19272,7 +19250,7 @@ generate_ModelOutcome_neural <- function(){
       n_particles <- 1L
     }
     optimizer_raw <- if (!is.null(mcmc_control$optimizer)) {
-      tolower(as.character(mcmc_control$optimizer))
+      tolower(trimws(as.character(mcmc_control$optimizer)))
     } else {
       character(0)
     }
@@ -19441,14 +19419,13 @@ generate_ModelOutcome_neural <- function(){
       end_factor <- 0.01
     }
     end_factor <- max(0, min(end_factor, 1))
-    # Resolve the optimizer tag before the checkpoint fingerprint is computed
-    # (the fingerprint includes it, and resolution may change it, e.g. the
-    # muon -> adamw fallback).
-    optimizer_tag <- neural_resolve_svi_optimizer_tag(
+    # Validate the requested optimizer before fingerprinting or restoring state.
+    # Muon must never silently change optimizer or scientific settings.
+    optimizer_tag <- strategize_dp_all_call(function() neural_resolve_svi_optimizer_tag(
       optimizer_tag = optimizer_tag,
       guide_name = guide_name,
       user_supplied_optimizer = user_supplied_optimizer
-    )
+    ), "optimizer preflight")
     # The checkpoint is restored BEFORE the LR schedule is built so that a
     # partial-run resume can continue the schedule from the completed step
     # (offset below) instead of re-entering warmup at peak LR mid-run.
@@ -19581,13 +19558,13 @@ generate_ModelOutcome_neural <- function(){
       }
       optax_optim
     }
-    muon_available <- reticulate::py_has_attr(strenv$optax, "contrib") &&
-      reticulate::py_has_attr(strenv$optax$contrib, "muon")
     # optimizer_tag was resolved above, before the checkpoint fingerprint.
     optimizer_diagnostics <- list(
       optimizer_status = "configured",
       optimizer = optimizer_tag,
-      optimizer_requested = if (isTRUE(user_supplied_optimizer)) optimizer_raw else NA_character_,
+      optimizer_requested = optimizer_tag,
+      muon_parameter_count = NA_real_,
+      auxiliary_adam_parameter_count = NA_real_,
       user_supplied_optimizer = isTRUE(user_supplied_optimizer),
       schedule_name = schedule_tag,
       svi_lr = svi_lr,
@@ -19628,71 +19605,15 @@ generate_ModelOutcome_neural <- function(){
         )
       }
     } else if (optimizer_tag == "muon") {
-      if (isTRUE(muon_available)) {
-        muon_dimnums <- tryCatch(
-          neural_get_muon_dimension_numbers_callable(),
-          error = function(e) NULL
-        )
-        # Never run Muon without the explicit weight partition: optax's default
-        # ('muon' iff ndim == 2) would orthogonalize embedding tables and output
-        # heads -- the known-bad Muon usage the partition regex exists to
-        # prevent. Fall back to adamw/adam loudly instead of degrading silently.
-        muon_adam_fallback <- function(reason) {
-          fallback_tag <- neural_default_svi_fallback_optimizer()
-          warning(sprintf(paste0(
-            "optimizer='muon' cannot be configured safely (%s); ",
-            "falling back to '%s'. A partition-less Muon would orthogonalize ",
-            "embedding tables and output heads."
-          ), reason, fallback_tag), call. = FALSE)
-          optimizer_tag <<- fallback_tag
-          if (identical(fallback_tag, "adamw") &&
-              reticulate::py_has_attr(strenv$optax, "adamw")) {
-            strenv$optax$adamw(learning_rate = lr_schedule, weight_decay = 0)
-          } else {
-            strenv$optax$adam(learning_rate = lr_schedule)
-          }
-        }
-        optax_optim <- if (is.null(muon_dimnums)) {
-          muon_adam_fallback("Muon weight dimension numbers are unavailable")
-        } else {
-          muon_kwargs <- list(
-            learning_rate = lr_schedule,
-            adam_weight_decay = 0,
-            consistent_rms = 0.2,
-            muon_weight_dimension_numbers = muon_dimnums
-          )
-          tryCatch(
-            do.call(strenv$optax$contrib$muon, muon_kwargs),
-            error = function(e) {
-              muon_kwargs_fallback <- list(
-                learning_rate = lr_schedule,
-                muon_weight_dimension_numbers = muon_dimnums
-              )
-              tryCatch(
-                do.call(strenv$optax$contrib$muon, muon_kwargs_fallback),
-                error = function(e2) {
-                  muon_adam_fallback(sprintf(
-                    "installed optax rejected the Muon weight partition: %s",
-                    conditionMessage(e2)
-                  ))
-                }
-              )
-            }
-          )
-        }
-        optax_to_numpyro_optimizer(optax_optim)
-      } else {
-        stop(
-          "optimizer='muon' requested, but optax.contrib.muon is unavailable.",
-          call. = FALSE
-        )
-      }
+      strategize_dp_all_call(function() optax_to_numpyro_optimizer(
+        optim_module$strict_muon_optimizer(
+          learning_rate = lr_schedule,
+          dimension_numbers = neural_get_muon_dimension_numbers_callable()
+        )), "Muon construction")
     } else {
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
       optax_to_numpyro_optimizer(optax_optim)
     }
-    # The muon safety fallback may have downgraded the tag mid-construction.
-    optimizer_diagnostics$optimizer <- optimizer_tag
     # With a mean-field AutoNormal/AutoDiagonalNormal guide, every weight latent is
     # Normal-prior / Normal-posterior, so the per-site KL is available in closed
     # form. TraceMeanField_ELBO substitutes that analytic KL for Trace_ELBO's

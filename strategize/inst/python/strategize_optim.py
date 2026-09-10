@@ -1,5 +1,6 @@
 """Full-objective gradient normalization and diagnostics for SVI optimizers."""
 
+import math
 from typing import NamedTuple
 
 import jax
@@ -7,6 +8,66 @@ import jax.numpy as jnp
 import optax
 
 _tree_norm = getattr(getattr(optax, "tree", None), "norm", optax.global_norm)
+
+
+def _states(tree, name):
+    """Inspect named Optax states without transferring parameter arrays to host."""
+    match = lambda x: type(x).__name__ == name
+    return [x for x in jax.tree.leaves(tree, is_leaf=match) if match(x)]
+
+
+def muon_partition_diagnostics(state, params=None, dimension_numbers=None):
+    """Verify actual momentum leaves against the explicit hidden-weight partition."""
+    muon = _states(state, "MuonState")
+    adam = _states(state, "ScaleByAdamState")
+    if len(muon) != 1 or len(adam) != 1:
+        raise ValueError("Strict Muon requires one Muon momentum state and one auxiliary Adam state")
+
+    def shapes(tree):
+        return {path: tuple(x.shape) for path, x in jax.tree_util.tree_flatten_with_path(tree)[0]}
+
+    actual_muon, actual_adam = shapes(muon[0].mu), shapes(adam[0].mu)
+    if sum(math.prod(s) for s in actual_muon.values()) <= 0:
+        raise ValueError("Strict Muon found no eligible hidden matrices in the optimizer state")
+    if actual_adam != shapes(adam[0].nu):
+        raise ValueError("Strict Muon auxiliary Adam moment trees disagree")
+    if params is not None:
+        dims = dimension_numbers(params)
+        labels = jax.tree.map(lambda d: d is not None, dims,
+                             is_leaf=lambda d: d is None or isinstance(d, optax.contrib.MuonDimensionNumbers))
+        labels = dict(jax.tree_util.tree_flatten_with_path(labels)[0])
+        expected = shapes(params)
+        if (actual_muon != {p: s for p, s in expected.items() if labels[p]} or
+                actual_adam != {p: s for p, s in expected.items() if not labels[p]}):
+            raise ValueError("Strict Muon momentum state does not match the requested weight partition")
+    return {"muon_partition_status": "verified",
+            "muon_parameter_count": sum(math.prod(s) for s in actual_muon.values()),
+            "auxiliary_adam_parameter_count": sum(math.prod(s) for s in actual_adam.values())}
+
+
+def strict_muon_optimizer(learning_rate, dimension_numbers):
+    """Construct Muon with fixed scientific settings; never substitute an optimizer."""
+    if not callable(dimension_numbers):
+        raise ValueError("Strict Muon requires an explicit weight dimension-number callable")
+    try:
+        optimizer = optax.contrib.muon(
+            learning_rate=learning_rate, weight_decay=0, adam_weight_decay=0,
+            consistent_rms=0.2, muon_weight_dimension_numbers=dimension_numbers)
+    except Exception as exc:
+        raise ValueError("Cannot construct strict Muon with the required settings; update Optax "
+                         "or explicitly select a supported alternative optimizer") from exc
+
+    def init(params):
+        state = optimizer.init(params)
+        muon_partition_diagnostics(state, params, dimension_numbers)
+        return state
+
+    def update(grads, state, params=None, **extra_args):
+        # Shape/tree checks also validate restored states, once per JIT trace.
+        muon_partition_diagnostics(state, params, dimension_numbers)
+        return optimizer.update(grads, state, params, **extra_args)
+
+    return optax.GradientTransformationExtraArgs(init, update)
 
 
 class UpdateDiagnosticsState(NamedTuple):
@@ -75,7 +136,7 @@ def update_diagnostics(optim_state):
     s = states[0]
     count = int(s.count)
     clipped = int(s.clipped_count)
-    return {
+    result = {
         "update_diagnostics_status": "actual_optimizer_updates",
         "update_count": count,
         "clipped_update_count": clipped,
@@ -86,3 +147,6 @@ def update_diagnostics(optim_state):
         "last_update_parameter_ratio": float(s.update_parameter_ratio),
         "max_update_parameter_ratio": float(s.max_update_parameter_ratio),
     }
+    if _states(s.inner_state, "MuonState"):
+        result.update(muon_partition_diagnostics(s.inner_state))
+    return result

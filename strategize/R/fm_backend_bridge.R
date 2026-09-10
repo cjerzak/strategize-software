@@ -20,6 +20,8 @@
 #'     \code{X_present_compact} as named formals.}
 #'   \item{\code{checkpoint_restore_helpers}}{The Orbax checkpoint restore
 #'     primitives are exported through this bridge.}
+#'   \item{\code{strict_muon_optimizer_v1}}{Muon training fails on incompatible
+#'     dependencies or guides and verifies the actual momentum partition.}
 #'   \item{\code{training_row_validity_guard}}{Universal training validates
 #'     outcome rows against their declared family at ingestion.}
 #' }
@@ -35,7 +37,7 @@ strategize_fm_backend <- function() {
       "compact_training",
       "checkpoint_restore_helpers",
       "training_row_validity_guard",
-      "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1"
+      "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1", "strict_muon_optimizer_v1"
     ),
     `%||%` = `%||%`,
     initialize_jax = initialize_jax,
