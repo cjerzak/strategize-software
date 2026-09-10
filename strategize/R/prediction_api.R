@@ -3490,6 +3490,9 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   }
   out <- model_info
   out$jit_cache_key <- NULL
+  if (!is.null(out$transformer_moe_router_bias)) {
+    out$transformer_moe_router_bias <- cs2step_neural_to_r_array(out$transformer_moe_router_bias)
+  }
 
   if (is.null(out$pairwise_bernoulli_logit_scale) &&
       !is.null(out$params$log_pairwise_bernoulli_logit_scale)) {
@@ -3927,6 +3930,7 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
     return(NULL)
   }
   out <- model_info
+  neural_validate_saved_transformer_moe(out)
   out$jit_cache_key <- NULL
   if (is.null(out$pairwise_bernoulli_logit_scale) &&
       !is.null(out$params$log_pairwise_bernoulli_logit_scale)) {

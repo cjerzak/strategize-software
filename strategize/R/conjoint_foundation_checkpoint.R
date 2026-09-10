@@ -88,9 +88,11 @@ cs_foundation_build_restore_args_tree <- function(array_manifest, ocp) {
 }
 
 cs_foundation_orbax_restore_path <- function(path) {
-  pytree_path <- file.path(path, "pytree")
-  if (dir.exists(pytree_path)) {
-    return(pytree_path)
+  # Orbax v1 writes a nested tree directory: older releases used "pytree",
+  # current releases use "state". PyTreeCheckpointer needs that directory.
+  for (name in c("pytree", "state")) {
+    tree_path <- file.path(path, name)
+    if (dir.exists(tree_path)) return(tree_path)
   }
   path
 }

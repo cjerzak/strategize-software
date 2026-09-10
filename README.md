@@ -12,6 +12,26 @@ Today the package supports:
 - cached predictor and neural bundle I/O with `save_strategic_predictor()`, `load_strategic_predictor()`, `save_neural_outcome_bundle()`, and `load_neural_outcome_bundle()`
 - foundation-model runtime support: load trained `preference.fm` checkpoints, run saved adapted predictors, and extract embeddings
 
+New neural SVI fits default to transformer MoE: eight routed experts, top-2
+selection, one shared expert, and expert width equal to `ModelDims`. Models with
+two or more layers retain one initial dense layer. Set
+`neural_mcmc_control$transformer_ffn = "swiglu"` to fit a dense transformer;
+the default `"auto"` retains dense layers for full Bayesian MCMC.
+
+`neural_mcmc_control$transformer_moe` accepts `n_routed_experts` (8),
+`n_experts_per_tok` (2), `n_shared_experts` (1), `moe_d_ff` (`"auto"`),
+`first_k_dense` (`"auto"`), `routed_scaling_factor` (1), `capacity_factor` (1.5),
+and `router_bias_rate` (0.001). Training uses capacity-limited routing with a
+shared-expert fallback. Prediction and policy derivatives evaluate all selected
+contributions, so prediction batching cannot change routing capacity.
+
+Multi-GPU training uses global masked routing counts while expert activations
+stay local. Router correction biases are explicit SVI state, updated once per
+accepted optimizer step and saved with matching weights. The implementation
+supports scanned updates, multiple SVI particles, and full-state recovery.
+Data parallelism remains opt-in; existing dense bundles and the separate
+covariate-value encoder retain their behavior.
+
 # Installation
 
 Install the package directly from GitHub:

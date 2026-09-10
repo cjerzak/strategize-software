@@ -35,7 +35,7 @@ strategize_fm_backend <- function() {
       "compact_training",
       "checkpoint_restore_helpers",
       "training_row_validity_guard",
-      "data_parallel_svi_v1", "full_svi_state_resume"
+      "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1"
     ),
     `%||%` = `%||%`,
     initialize_jax = initialize_jax,
@@ -63,6 +63,8 @@ strategize_fm_backend <- function() {
     cs_foundation_restore_text_matrix = cs_foundation_restore_text_matrix,
     cs_foundation_restore_theta_mean = cs_foundation_restore_theta_mean,
     neural_params_from_theta = neural_params_from_theta,
+    neural_resolve_transformer_moe = neural_resolve_transformer_moe,
+    neural_moe_control_from_info = neural_moe_control_from_info,
     neural_unstack_standard_transformer_layers = neural_unstack_standard_transformer_layers,
     neural_resolve_max_factor_tokens = neural_resolve_max_factor_tokens,
     neural_validate_factor_token_budget = neural_validate_factor_token_budget,

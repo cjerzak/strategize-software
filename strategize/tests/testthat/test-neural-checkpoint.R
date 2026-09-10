@@ -1,3 +1,16 @@
+test_that("foundation restoration recognizes both Orbax v1 directory layouts", {
+  path <- tempfile()
+  dir.create(path)
+  withr::defer(unlink(path, recursive = TRUE))
+  resolve <- strategize:::cs_foundation_orbax_restore_path
+  expect_identical(resolve(path), path)
+  dir.create(file.path(path, "pytree"))
+  expect_identical(resolve(path), file.path(path, "pytree"))
+  unlink(file.path(path, "pytree"), recursive = TRUE)
+  dir.create(file.path(path, "state"))
+  expect_identical(resolve(path), file.path(path, "state"))
+})
+
 test_that("neural SVI checkpoints write and read latest/best snapshots", {
   tmp <- tempfile()
   fingerprint <- strategize:::neural_svi_checkpoint_fingerprint(list(

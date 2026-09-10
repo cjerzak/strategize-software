@@ -1762,7 +1762,7 @@ neural_params_from_theta <- function(theta_vec, model_info){
     } else first
     params$ordinal_thresholds <- strenv$jnp$cumsum(increments, axis = 1L)
   }
-  params
+  neural_moe_attach_params(params, model_info)
 }
 
 neural_build_param_schema <- function(params,
@@ -1901,7 +1901,8 @@ neural_build_param_schema <- function(params,
                        paste0("W_v_l", l_),
                        paste0("W_o_l", l_),
                        paste0("W_ff1_l", l_),
-                       paste0("W_ff2_l", l_))
+                       paste0("W_ff2_l", l_),
+                       paste0(neural_moe_weight_bases(), l_))
     }
   }
   param_names <- c(param_names,
@@ -1974,7 +1975,12 @@ neural_standard_transformer_stack_map <- function() {
     RMS_q_layers = "RMS_q_l",
     RMS_k_layers = "RMS_k_l",
     alpha_attn_layers = "alpha_attn_l",
-    alpha_ff_layers = "alpha_ff_l"
+    alpha_ff_layers = "alpha_ff_l",
+    W_moe_router_layers = "W_moe_router_l",
+    W_moe_expert1_layers = "W_moe_expert1_l",
+    W_moe_expert2_layers = "W_moe_expert2_l",
+    W_moe_shared1_layers = "W_moe_shared1_l",
+    W_moe_shared2_layers = "W_moe_shared2_l"
   )
 }
 
@@ -1992,11 +1998,13 @@ neural_has_stacked_standard_transformer <- function(params) {
   }
   required <- c(
     "W_q_layers", "W_k_layers", "W_v_layers", "W_o_layers",
-    "W_ff1_layers", "W_ff2_layers",
     "RMS_attn_layers", "RMS_ff_layers",
     "alpha_attn_layers", "alpha_ff_layers"
   )
-  all(required %in% names(params))
+  all(required %in% names(params)) && (
+    all(c("W_ff1_layers", "W_ff2_layers") %in% names(params)) ||
+      all(paste0("W_moe_", c("router", "expert1", "expert2", "shared1", "shared2"), "_layers") %in% names(params))
+  )
 }
 
 neural_stack_standard_transformer_layers <- function(params,
@@ -2014,9 +2022,11 @@ neural_stack_standard_transformer_layers <- function(params,
   for (stack_name in names(map)) {
     legacy_base <- unname(map[[stack_name]])
     legacy_names <- paste0(legacy_base, seq_len(model_depth))
-    if (!all(legacy_names %in% names(params))) {
-      next
+    if (neural_has_transformer_moe(params) &&
+        (grepl("^W_moe_", stack_name) || stack_name %in% c("W_ff1_layers", "W_ff2_layers"))) {
+      legacy_names <- legacy_names[legacy_names %in% names(params)]
     }
+    if (!length(legacy_names) || !all(legacy_names %in% names(params))) next
     values <- lapply(legacy_names, function(name) params[[name]])
     if (any(vapply(values, is.null, logical(1)))) {
       next
@@ -2052,7 +2062,9 @@ neural_unstack_standard_transformer_layers <- function(params, model_depth = NUL
     shape <- dim(value)
     if (is.null(shape)) shape <- length(value)
     depth <- shape[[1L]]
-    if (!is.null(model_depth) && depth != as.integer(model_depth)) {
+    partial_ff <- neural_has_transformer_moe(params) &&
+      (grepl("^W_moe_", stack_name) || stack_name %in% c("W_ff1_layers", "W_ff2_layers"))
+    if (!is.null(model_depth) && depth != as.integer(model_depth) && !partial_ff) {
       stop(sprintf("%s has %d layers; expected %d.", stack_name, depth, model_depth), call. = FALSE)
     }
     for (layer in seq_len(depth)) {
@@ -2060,7 +2072,12 @@ neural_unstack_standard_transformer_layers <- function(params, model_depth = NUL
       index <- c(list(value, layer), rep(list(TRUE), length(shape) - 1L), list(drop = FALSE))
       slice <- if (length(shape) == 1L) value[[layer]] else do.call(`[`, index)
       dim(slice) <- if (length(shape) > 2L) shape[-1L] else NULL
-      out[[paste0(map[[stack_name]], layer)]] <- slice
+      layer_index <- layer
+      if (grepl("^W_moe_", stack_name)) {
+        total_depth <- model_depth %||% dim(cs2step_neural_to_r_array(params$W_q_layers))[[1L]]
+        layer_index <- as.integer(total_depth) - depth + layer
+      }
+      out[[paste0(map[[stack_name]], layer_index)]] <- slice
     }
     out[[stack_name]] <- NULL
   }
@@ -4746,6 +4763,8 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(paste(as.character(model_info$level_struct_feature_names %||% character(0)), collapse = "|"), error = function(e) "na"),
     tryCatch(as.character(model_info$covariate_value_encoding), error = function(e) "na"),
     tryCatch(as.character(model_info$shared_projection_value_encoder), error = function(e) "na"),
+    digest::digest(list(model_info$transformer_ffn, model_info$transformer_moe,
+                        model_info$transformer_moe_router_bias), algo = "xxhash64"),
     tryCatch(as.character(neural_low_rank_interaction_rank(model_info)), error = function(e) "na"),
     tryCatch(as.character(model_info$low_rank_logit_transform %||% "none"), error = function(e) "na"),
     tryCatch(as.character(model_info$low_rank_logit_bound %||% "none"), error = function(e) "na"),
@@ -5448,6 +5467,7 @@ neural_muon_target_name_regex <- function() {
   paste0(
     "^(",
     "W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross",
+    "|W_moe_(expert[12]|shared[12])_l\\d+",
     "|W_factor_struct|W_level_struct",
     "|W_factor_fuse_(1|2)|W_covariate_fuse_(1|2)",
     "|W_covariate_value_(conditioner_1|conditioner_2|basis)",
@@ -5494,7 +5514,8 @@ neural_muon_targets_matrix_weight <- function(name, ndim = NULL) {
   }
   if (!is.null(ndim)) {
     ndim <- suppressWarnings(as.integer(ndim)[1L])
-    if (is.na(ndim) || ndim != 2L) {
+    expected_ndim <- if (grepl("^W_moe_expert[12]_l", normalized_name)) 3L else 2L
+    if (is.na(ndim) || ndim != expected_ndim) {
       return(FALSE)
     }
   }
@@ -5558,12 +5579,13 @@ neural_get_muon_dimension_numbers_callable <- local({
         "            use_muon = False",
         "            try:",
         "                ndim = getattr(value, 'ndim', None)",
-        "                if ndim == 2 and normalized_name and _STRATEGIZE_MUON_KEY_RE.match(normalized_name):",
+        "                expected_ndim = 3 if normalized_name and re.match(r'W_moe_expert[12]_l', normalized_name) else 2",
+        "                if ndim == expected_ndim and normalized_name and _STRATEGIZE_MUON_KEY_RE.match(normalized_name):",
         "                    use_muon = True",
         "            except Exception:",
         "                use_muon = False",
         "",
-        "            out_leaves.append(optax.contrib.MuonDimensionNumbers() if use_muon else None)",
+        "            out_leaves.append(optax.contrib.MuonDimensionNumbers(ndim - 2, ndim - 1) if use_muon else None)",
         "        return tree_util.tree_unflatten(treedef, out_leaves)",
         "",
         "    if hasattr(params, 'items'):",
@@ -5572,11 +5594,11 @@ neural_get_muon_dimension_numbers_callable <- local({
         "            name = str(k)",
         "            normalized_name = _strategize_muon_normalize_name(name)",
         "            use_muon = (",
-        "                getattr(v, 'ndim', None) == 2",
+        "                getattr(v, 'ndim', None) == (3 if normalized_name and re.match(r'W_moe_expert[12]_l', normalized_name) else 2)",
         "                and normalized_name is not None",
         "                and _STRATEGIZE_MUON_KEY_RE.match(normalized_name)",
         "            )",
-        "            out[k] = optax.contrib.MuonDimensionNumbers() if use_muon else None",
+        "            out[k] = optax.contrib.MuonDimensionNumbers(v.ndim - 2, v.ndim - 1) if use_muon else None",
         "        try:",
         "            return params.__class__(out)",
         "        except Exception:",
@@ -8603,6 +8625,17 @@ neural_run_transformer_scan_standard <- function(tokens,
     role = "self",
     fail_on_forced = TRUE
   )
+  if (neural_has_transformer_moe(params)) {
+    strategize_register_moe_helpers()
+    cfg <- neural_moe_config(model_info, params)
+    return(strenv$jax_moe$transformer_scan(
+      tokens, token_mask, params[grepl("_layers$|^RMS_final$", names(params))], cfg,
+      params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
+      ai(model_info$n_heads), ai(model_info$head_dim),
+      reticulate::py$`_strategize_self_attention`, as.character(attention_resolve$backend),
+      neural_attention_dtype_mode(model_info), ai(neural_attention_padding_multiple(model_info))
+    ))
+  }
   strenv$jax_transformer_scan_standard(
     tokens,
     token_mask,
@@ -8730,14 +8763,22 @@ neural_run_transformer <- function(tokens,
         model_dims = model_info$model_dims
       )
       h_ff_norm <- neural_rms_norm(h_ff, RMS_ff, model_info$model_dims)
-      ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h_ff_norm, Wff1)
+      ff_input <- h_ff_norm
     } else {
       h1 <- tokens + alpha_attn * attn_out
       h1_norm <- neural_rms_norm(h1, RMS_ff, model_info$model_dims)
-      ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", h1_norm, Wff1)
+      ff_input <- h1_norm
     }
-    ff_act <- neural_swiglu(ff_pre)
-    ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
+    if (!is.null(params[[paste0("W_moe_router_l", l_)]])) {
+      strategize_register_moe_helpers()
+      ff_out <- strenv$jax_moe$ffn(ff_input, token_mask,
+        params[grepl("^W_moe_", names(params))], neural_moe_config(model_info, params), ai(l_),
+        params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias)
+    } else {
+      ff_pre <- strenv$jnp$einsum("ntm,mf->ntf", ff_input, Wff1)
+      ff_act <- neural_swiglu(ff_pre)
+      ff_out <- strenv$jnp$einsum("ntf,fm->ntm", ff_act, Wff2)
+    }
     if (isTRUE(use_full_attn_residual)) {
       residual_history <- neural_append_residual_history(residual_history, ff_out)
       tokens <- ff_out
@@ -11240,6 +11281,8 @@ generate_ModelOutcome_neural <- function(){
     RMS_scale = 0.25,
     qk_rms_scale = 0.1,
     moe_load_balance_lambda = 0.01,
+    transformer_ffn = "auto",
+    transformer_moe = NULL,
     residual_weight_depth_scale = "floor_one",
     svi_lr_plate_rescale = TRUE,
     # For single-candidate normal outcomes, optimize/report the average-case
@@ -11804,6 +11847,16 @@ generate_ModelOutcome_neural <- function(){
       attention_fallback_reason
     }
   ))
+  transformer_config <- neural_resolve_transformer_moe(
+    mcmc_control, ModelDims, ModelDepth,
+    use_svi = identical(tolower(as.character(uncertainty_scope)), "output") ||
+      identical(subsample_method, "batch_vi")
+  )
+  transformer_moe <- transformer_config$transformer_moe
+  mcmc_control$transformer_ffn <- transformer_config$transformer_ffn
+  mcmc_control$transformer_moe <- transformer_moe
+  if (!is.null(transformer_moe)) mcmc_control$transformer_moe$n_moe_layers <- NULL
+  transformer_moe_router_bias <- mcmc_control$init_transformer_moe_router_bias %||% NULL
   FFDim <- ai(ai(round(MD_int * WideMultiplicationFactor)))
   init_policy <- neural_resolve_init_policy(
     model_depth = ModelDepth,
@@ -13679,6 +13732,13 @@ generate_ModelOutcome_neural <- function(){
         )
         warm_shape <- if (is.null(warm_val)) NULL else p2d_shape_of(warm_val)
         init_shape <- p2d_shape_of(init_val)
+        # R marshals a length-one numeric vector as a Python scalar. Restore
+        # its vector axis (e.g. Q/K normalization with head_dim = 1).
+        if (!is.null(warm_val) && identical(warm_shape, integer(0)) &&
+            identical(init_shape, 1L)) {
+          warm_val <- strenv$jnp$reshape(warm_val, reticulate::tuple(1L))
+          warm_shape <- 1L
+        }
         if (!is.null(warm_val) && !is.null(warm_shape) &&
             !is.null(init_shape) && identical(warm_shape, init_shape)) {
           init_val <- warm_val
@@ -14637,38 +14697,64 @@ generate_ModelOutcome_neural <- function(){
         }
       )
 
-      W_ff1_name <- paste0("W_ff1_l", l_)
-      W_ff1_shape <- reticulate::tuple(ModelDims, ai(2L * FFDim))
-      W_ff1_l <- p2d(
-        name = W_ff1_name,
-        sample_fxn = function() {
-          sample_loc_scale(W_ff1_name, tau_w_l, W_ff1_shape)
-        },
-        init_fxn = function() {
-          p2d_init_normal(W_ff1_name, tau_w_l, W_ff1_shape)
+      is_moe_layer <- !is.null(transformer_moe) && l_ > transformer_moe$first_k_dense
+      if (is_moe_layer) {
+        expert_width <- ai(transformer_moe$moe_d_ff)
+        shared_width <- ai(expert_width * transformer_moe$n_shared_experts)
+        expert_count <- ai(transformer_moe$n_routed_experts)
+        output_scale <- 1 / sqrt(1 + transformer_moe$routed_scaling_factor^2 / transformer_moe$n_experts_per_tok)
+        shapes <- list(
+          router = reticulate::tuple(ModelDims, expert_count),
+          expert1 = reticulate::tuple(expert_count, ModelDims, ai(2L * expert_width)),
+          expert2 = reticulate::tuple(expert_count, expert_width, ModelDims),
+          shared1 = reticulate::tuple(ModelDims, ai(2L * shared_width)),
+          shared2 = reticulate::tuple(shared_width, ModelDims)
+        )
+        for (kind in names(shapes)) {
+          name <- paste0("W_moe_", kind, "_l", l_)
+          sd <- if (kind == "router") 1 / sqrt(as.numeric(ModelDims)) else tau_w_l
+          if (kind == "expert2") sd <- sd * sqrt(as.numeric(ModelDims) / expert_width) * output_scale
+          if (kind == "shared2") sd <- sd * sqrt(as.numeric(ModelDims) / shared_width) * output_scale
+          shape <- shapes[[kind]]
+          layer_params[[name]] <- p2d(name,
+            sample_fxn = function() strenv$numpyro$sample(name, strenv$numpyro$distributions$Normal(0., sd)$expand(shape)),
+            init_fxn = function() p2d_init_normal(name, sd, shape))
         }
-      )
+      } else {
+        W_ff1_name <- paste0("W_ff1_l", l_)
+        W_ff1_shape <- reticulate::tuple(ModelDims, ai(2L * FFDim))
+        W_ff1_l <- p2d(
+          name = W_ff1_name,
+          sample_fxn = function() {
+            sample_loc_scale(W_ff1_name, tau_w_l, W_ff1_shape)
+          },
+          init_fxn = function() {
+            p2d_init_normal(W_ff1_name, tau_w_l, W_ff1_shape)
+          }
+        )
 
-      W_ff2_name <- paste0("W_ff2_l", l_)
-      W_ff2_shape <- reticulate::tuple(FFDim, ModelDims)
-      ff2_fan_scale <- as.numeric(sqrt(as.numeric(ModelDims) / max(1, as.numeric(FFDim))))
-      tau_w_ff2_l <- tau_w_l * ff2_fan_scale
-      W_ff2_l <- p2d(
-        name = W_ff2_name,
-        sample_fxn = function() {
-          sample_loc_scale(W_ff2_name, tau_w_ff2_l, W_ff2_shape)
-        },
-        init_fxn = function() {
-          p2d_init_normal(W_ff2_name, tau_w_ff2_l, W_ff2_shape)
-        }
-      )
+        W_ff2_name <- paste0("W_ff2_l", l_)
+        W_ff2_shape <- reticulate::tuple(FFDim, ModelDims)
+        ff2_fan_scale <- as.numeric(sqrt(as.numeric(ModelDims) / max(1, as.numeric(FFDim))))
+        tau_w_ff2_l <- tau_w_l * ff2_fan_scale
+        W_ff2_l <- p2d(
+          name = W_ff2_name,
+          sample_fxn = function() {
+            sample_loc_scale(W_ff2_name, tau_w_ff2_l, W_ff2_shape)
+          },
+          init_fxn = function() {
+            p2d_init_normal(W_ff2_name, tau_w_ff2_l, W_ff2_shape)
+          }
+        )
+
+        layer_params[[paste0("W_ff1_l", l_)]] <- W_ff1_l
+        layer_params[[paste0("W_ff2_l", l_)]] <- W_ff2_l
+      }
 
       layer_params[[paste0("W_q_l", l_)]] <- W_q_l
       layer_params[[paste0("W_k_l", l_)]] <- W_k_l
       layer_params[[paste0("W_v_l", l_)]] <- W_v_l
       layer_params[[paste0("W_o_l", l_)]] <- W_o_l
-      layer_params[[paste0("W_ff1_l", l_)]] <- W_ff1_l
-      layer_params[[paste0("W_ff2_l", l_)]] <- W_ff2_l
       layer_params[[paste0("RMS_attn_l", l_)]] <- RMS_attn_l
       if (!is.null(pseudo_query_attn_l)) {
         layer_params[[paste0("pseudo_query_attn_l", l_)]] <- pseudo_query_attn_l
@@ -15108,6 +15194,7 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     params_view <- c(params_view, layer_params)
+    params_view$transformer_moe_router_bias <- transformer_moe_router_bias
     if (isTRUE(pairwise) && isTRUE(use_cross_attn)) {
       params_view$alpha_cross <- alpha_cross
       params_view$RMS_cross <- RMS_cross
@@ -15486,6 +15573,7 @@ generate_ModelOutcome_neural <- function(){
       attention_resolved_backend = attention_resolved_backend,
       attention_fallback_reason = attention_fallback_reason
     )
+    transformer_model_info$transformer_moe <- transformer_moe
     model_info_local <- neural_make_runtime_token_model_info(
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
@@ -15812,6 +15900,7 @@ generate_ModelOutcome_neural <- function(){
                                     Yb,
                                     obs_scale_b = obs_scale) {
       if (strategize_dp_enabled()) strenv$data_parallel$set_branch("pair")
+      neural_moe_set_branch("pair", obs_scale_b, ai(Xl$shape[[1]]))
       stage_idx <- neural_stage_index(pl, pr, model_info_local)
       matchup_idx <- NULL
       if (isTRUE(use_matchup_token)) {
@@ -16008,6 +16097,7 @@ generate_ModelOutcome_neural <- function(){
                                            obs_scale_b = NULL) {
       if (strategize_dp_enabled()) strenv$data_parallel$set_branch("single")
       N_batch <- ai(Xb$shape[[1]])
+      neural_moe_set_branch("single", obs_scale_b, N_batch)
       schema_dropout_context <- neural_sample_schema_dropout_masks(
         model_info_local,
         n_batch = N_batch
@@ -16264,6 +16354,7 @@ generate_ModelOutcome_neural <- function(){
       attention_resolved_backend = attention_resolved_backend,
       attention_fallback_reason = attention_fallback_reason
     )
+    transformer_model_info$transformer_moe <- transformer_moe
     model_info_local <- neural_make_runtime_token_model_info(
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
@@ -16375,6 +16466,7 @@ generate_ModelOutcome_neural <- function(){
                                     Yb,
                                     obs_scale_b = obs_scale) {
       N_batch <- ai(Xb$shape[[1]])
+      neural_moe_set_branch("single", obs_scale_b, N_batch)
       schema_dropout_context <- neural_sample_schema_dropout_masks(
         model_info_local,
         n_batch = N_batch
@@ -18314,7 +18406,7 @@ generate_ModelOutcome_neural <- function(){
       maybe_site(paste0("RMS_ff_l", l_))
 
       tau_name <- paste0("tau_w_", l_)
-      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l", neural_moe_weight_bases())) {
         params_out[[paste0(base, l_)]] <- get_loc_scale_site_value(paste0(base, l_), tau_name)
       }
     }
@@ -18332,6 +18424,7 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("pseudo_query_final")
     maybe_site("RMS_final")
 
+    params_out$transformer_moe_router_bias <- get_site_value("_transformer_moe_bias") %||% transformer_moe_router_bias
     params_out
   }
 
@@ -18444,6 +18537,7 @@ generate_ModelOutcome_neural <- function(){
   validation_model_info$default_time_embedding <- default_time_embedding
   validation_model_info$default_time_present <- default_time_present
   validation_model_info$time_context_dim <- time_context_dim
+  validation_model_info <- neural_moe_architecture_fields(validation_model_info, transformer_moe, transformer_moe_router_bias)
   validation_return_logits <- identical(likelihood, "mixed")
   validation_predict_pair_jit <- if (isTRUE(pairwise_mode)) {
     neural_get_predict_jit(
@@ -18884,11 +18978,16 @@ generate_ModelOutcome_neural <- function(){
   run_mcmc_after_svi <- isTRUE(output_only_mode) && isTRUE(subsample_method %in% c("batch", "full"))
   emit_transformer_structure_banner <- function() {
     message(sprintf(
-      "Bayesian Transformer complete. Pairwise=%s, Heads=%d, Depth=%d, Hidden=%d; likelihood=%s.",
+      "Bayesian Transformer complete. Pairwise=%s, Heads=%d, Depth=%d, Hidden=%d; FFN=%s; likelihood=%s.",
       pairwise_mode,
       TransformerHeads,
       ModelDepth,
       MD_int,
+      if (is.null(transformer_moe)) "swiglu" else sprintf(
+        "MoE (%d experts, top-%d, %d shared, width %d, %d dense prefix)",
+        transformer_moe$n_routed_experts, transformer_moe$n_experts_per_tok,
+        transformer_moe$n_shared_experts, transformer_moe$moe_d_ff,
+        transformer_moe$first_k_dense),
       likelihood
     ))
   }
@@ -19137,6 +19236,11 @@ generate_ModelOutcome_neural <- function(){
     emit_transformer_structure_banner()
     if (!is.null(strenv$numpyro) && reticulate::py_has_attr(strenv$numpyro, "clear_param_store")) {
       tryCatch(strenv$numpyro$clear_param_store(), error = function(e) NULL)
+    }
+    if (!is.null(transformer_moe)) {
+      strategize_register_moe_helpers()
+      model_fn <- strenv$jax_moe$wrap_model(model_fn, transformer_moe,
+        initial_bias = transformer_moe_router_bias, runtime = strenv$data_parallel)
     }
     guide_name <- if (!is.null(mcmc_control$vi_guide)) {
       tolower(as.character(mcmc_control$vi_guide))
@@ -19607,12 +19711,12 @@ generate_ModelOutcome_neural <- function(){
         strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
       }
     })
-    svi <- strenv$numpyro$infer$SVI(
-      model = model_fn,
-      guide = guide,
-      optim = svi_optim,
-      loss = elbo_loss
-    )
+    svi <- if (is.null(transformer_moe)) {
+      strenv$numpyro$infer$SVI(model = model_fn, guide = guide, optim = svi_optim, loss = elbo_loss)
+    } else {
+      strenv$jax_moe$MoESVI(model = model_fn, guide = guide, optim = svi_optim,
+                           loss = elbo_loss, cfg = transformer_moe)
+    }
     # Activate the MoE load-balancing auxiliary factor (Issue 5) for the duration of
     # SVI training so it enters the ELBO; deactivated before posterior sampling /
     # prediction so it never perturbs predictive outputs.
@@ -19932,6 +20036,9 @@ generate_ModelOutcome_neural <- function(){
             )
           }
         )
+      }
+      if (!is.null(transformer_moe) && !is.null(param_sites)) {
+        param_sites[["_transformer_moe_bias"]] <- svi_params_current[["_transformer_moe_bias"]]
       }
       param_sites
     }
@@ -21754,6 +21861,10 @@ generate_ModelOutcome_neural <- function(){
       "ok"
     }
     optimizer_diagnostics$universal_loss_weighting <- universal_loss_weighting_diagnostics
+    if (!is.null(transformer_moe) && !is.null(svi_state)) {
+      optimizer_diagnostics$transformer_moe <- lapply(
+        strenv$jax_moe$diagnostics(strategize_dp_local(svi_state)), cs2step_neural_to_r_array)
+    }
     if (is.null(final_update_diagnostics)) {
       final_update_diagnostics <- reticulate::py_to_r(
         optim_module$update_diagnostics(strategize_dp_local(svi_state)$optim_state)
@@ -21859,6 +21970,13 @@ generate_ModelOutcome_neural <- function(){
     }, error = function(e) NULL)
   }
 
+  if (isTRUE(run_mcmc_after_svi) && !is.null(transformer_moe)) {
+    transformer_moe_router_bias <- SVIParams[["_transformer_moe_bias"]]
+    p2d_warm_start_values <- modifyList(p2d_warm_start_values, as.list(SVIParams))
+    # The wrapper only collects training routing statistics; inference and the
+    # output-head sampler use the original model with fixed trained trunk sites.
+    model_fn <- strenv$jax_moe$unwrap_model(model_fn)
+  }
   if (!isTRUE(use_svi) || isTRUE(run_mcmc_after_svi)) {
     strenv$numpyro$set_host_device_count(mcmc_control$n_chains)
     if (!isTRUE(use_svi)) {
@@ -22008,7 +22126,12 @@ generate_ModelOutcome_neural <- function(){
       return(NULL)
     }
     legacy_base <- unname(map[[name]])
-    parts <- lapply(seq_len(ModelDepth), function(l_) {
+    layer_indices <- seq_len(ModelDepth)
+    if (!is.null(transformer_moe)) {
+      if (grepl("^W_moe_", legacy_base)) layer_indices <- layer_indices[layer_indices > transformer_moe$first_k_dense]
+      if (legacy_base %in% c("W_ff1_l", "W_ff2_l")) layer_indices <- layer_indices[layer_indices <= transformer_moe$first_k_dense]
+    }
+    parts <- lapply(layer_indices, function(l_) {
       legacy_name <- paste0(legacy_base, l_)
       if (legacy_base %in% c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
         return(get_loc_scale_draws(legacy_name, paste0("tau_w_", l_)))
@@ -22235,7 +22358,7 @@ generate_ModelOutcome_neural <- function(){
     maybe_site(paste0("RMS_k_l", l_))
     maybe_site(paste0("RMS_ff_l", l_))
 
-    for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l")) {
+    for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l", neural_moe_weight_bases())) {
       name <- paste0(base, l_)
       tau_name <- paste0("tau_w_", l_)
       draws <- get_loc_scale_draws(name, tau_name)
@@ -22419,6 +22542,12 @@ generate_ModelOutcome_neural <- function(){
   predict_model_info$token_family_levels <- token_family_levels
   predict_model_info$experiment_token_mode <- experiment_token_mode
   predict_model_info$covariate_value_encoding <- covariate_value_encoding
+  if (!is.null(transformer_moe)) {
+    transformer_moe_router_bias <- get_svi_param("_transformer_moe_bias")
+    if (is.null(transformer_moe_router_bias)) stop("Selected MoE weights are missing router biases.", call. = FALSE)
+    ParamsMean$transformer_moe_router_bias <- transformer_moe_router_bias
+  }
+  predict_model_info <- neural_moe_architecture_fields(predict_model_info, transformer_moe, transformer_moe_router_bias)
   predict_model_info$shared_projection_value_encoder <- shared_projection_value_encoder
   predict_pair_jit_response <- if (isTRUE(pairwise_mode)) {
     neural_get_predict_jit(
@@ -23323,7 +23452,9 @@ generate_ModelOutcome_neural <- function(){
     param_offsets = param_offsets,
     n_params = ai(param_total),
     uncertainty_scope = uncertainty_scope,
-    transformer_ffn = "swiglu",
+    transformer_ffn = transformer_config$transformer_ffn,
+    transformer_moe = transformer_moe,
+    transformer_moe_router_bias = if (is.null(transformer_moe_router_bias)) NULL else cs2step_neural_to_r_array(transformer_moe_router_bias),
     fused_token_mlp = "swiglu",
     factor_levels = factor_levels,
     factor_index_list = factor_index_list,

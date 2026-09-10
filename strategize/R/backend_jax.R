@@ -437,6 +437,7 @@ initialize_jax <- function(conda_env = "strategize_env",
     error = function(e) NULL
   )
   strategize_register_jax_transformer_helpers()
+  strategize_register_moe_helpers()
   strategize_register_jax_svi_helpers()
   strategize_dp_register_updates()
   

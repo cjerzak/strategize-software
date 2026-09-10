@@ -195,7 +195,18 @@ approximation. Defaults to \code{"glm"}.}
 
 \item{neural_mcmc_control}{Optional list overriding default MCMC settings used when
 \code{outcome_model_type = "neural"}. Named entries override the defaults in
-\code{two_step_model_outcome_neural.R}. Set
+\code{two_step_model_outcome_neural.R}.
+\code{transformer_ffn = "auto"} enables transformer MoE for SVI and dense
+SwiGLU for full MCMC. Select \code{"swiglu"} to use dense layers with SVI.
+The \code{transformer_moe} list defaults to eight routed experts,
+top-2 routing, one shared expert, expert width \code{ModelDims}, and one
+dense prefix layer (zero when \code{ModelDepth = 1}). Its controls are
+\code{n_routed_experts}, \code{n_experts_per_tok}, \code{n_shared_experts},
+\code{moe_d_ff}, \code{first_k_dense}, \code{routed_scaling_factor}
+(default 1), \code{capacity_factor} (1.5), and \code{router_bias_rate}
+(0.001). Capacity limits apply during training over valid global tokens;
+prediction uses exact selected experts with frozen router biases. Saved
+models retain their architecture during adaptation. Set
 \code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
 uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
 neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG

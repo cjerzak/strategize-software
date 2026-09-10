@@ -370,7 +370,8 @@ class Runtime:
         from jax.flatten_util import ravel_pytree
         from numpyro.infer.svi import _make_loss_fn, SVIState
         def step(state, args):
-            if state.mutable_state is not None:
+            moe_config = getattr(svi, "moe_config", None)
+            if state.mutable_state is not None and moe_config is None:
                 raise ValueError("Data parallel SVI requires a stateless model/guide")
             self.in_svi_shard, self.branch = True, "all"
             self.collective_chain = jnp.array(0., dtype=jnp.float32)
@@ -383,10 +384,13 @@ class Runtime:
                           for k, v in args.items()}
                 loss_fn = _make_loss_fn(svi.loss, step_rng, svi.constrain_fn, svi.model,
                                        svi.guide, (), scaled, svi.static_kwargs,
-                                       mutable_state=None)
-                (loss, _), grads = jax.value_and_grad(loss_fn, has_aux=True)(svi.optim.get_params(state.optim_state))
+                                       mutable_state=state.mutable_state)
+                (loss, mutable), grads = jax.value_and_grad(loss_fn, has_aux=True)(svi.optim.get_params(state.optim_state))
                 flat, unravel = ravel_pytree(grads)
                 packed = jnp.concatenate((flat, loss.reshape(1)))
+                if moe_config is not None:
+                    from strategize_moe import _depend
+                    packed = _depend(packed, self.collective_chain)
                 packed = jax.lax.psum(packed, "data") / self.device_count
                 grads, loss = unravel(packed[:-1]), packed[-1]
                 if gradients:
@@ -394,7 +398,12 @@ class Runtime:
                 finite = jnp.isfinite(packed).all()
                 optim = jax.lax.cond(finite, lambda _: svi.optim.update(grads, state.optim_state, value=loss),
                                      lambda _: state.optim_state, None)
-                return SVIState(optim, None, rng), jnp.where(finite, loss, jnp.nan)
+                if moe_config is not None:
+                    from strategize_moe import commit_state
+                    finite = finite & jnp.all(jnp.stack([jnp.isfinite(a).all() for a in jax.tree.leaves((optim, mutable))]))
+                    optim = jax.tree.map(lambda a, b: jnp.where(finite, a, b), optim, state.optim_state)
+                    mutable = commit_state(state.mutable_state, mutable, finite, moe_config)
+                return SVIState(optim, mutable, rng), jnp.where(finite, loss, jnp.nan)
             finally:
                 self.in_svi_shard = False
                 self.collective_chain = None
@@ -534,7 +543,10 @@ class Runtime:
                 "precision": str(jax.config.jax_default_matmul_precision),
                 "prng": str(jax.config.jax_default_prng_impl), "x64": bool(jax.config.jax_enable_x64),
                 "device_memory": {str(d.id): d.memory_stats() for d in jax.local_devices()},
-                "runtime_sha256": _sha(__file__)}
+                "runtime_sha256": hashlib.sha256("".join(
+                    _sha(Path(__file__).with_name(name)) for name in
+                    ("strategize_distributed.py", "strategize_moe.py", "strategize_optim.py")
+                ).encode()).hexdigest()}
 
     def acquire_lock(self, path):
         def lock():
