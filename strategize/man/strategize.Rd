@@ -203,10 +203,22 @@ top-2 routing, one shared expert, expert width \code{ModelDims}, and one
 dense prefix layer (zero when \code{ModelDepth = 1}). Its controls are
 \code{n_routed_experts}, \code{n_experts_per_tok}, \code{n_shared_experts},
 \code{moe_d_ff}, \code{first_k_dense}, \code{routed_scaling_factor}
-(default 1), \code{capacity_factor} (1.5), and \code{router_bias_rate}
-(0.001). Capacity limits apply during training over valid global tokens;
+(default 1), \code{capacity_factor} (1.5), \code{router_bias_rate}
+(0.001), \code{compute_dtype} (\code{"bfloat16"}; \code{"float32"} is also
+supported), and \code{activation_checkpointing} (\code{TRUE}). Standard MoE
+transformers use BF16 projections and residual activations with FP32 master
+weights, optimizer state, routing scores, and normalization reductions.
+Checkpointing recomputes attention and expert activations during backward
+computation without repeating routing collectives. Expert dispatch uses
+bounded blocks of accepted local assignments; it does not allocate a global
+capacity buffer on each device. Capacity limits apply during training over valid global tokens;
 prediction uses exact selected experts with frozen router biases. Saved
-models retain their architecture during adaptation. Set
+models retain their architecture and compute precision during adaptation;
+older models without precision metadata retain FP32 behavior. Compact SVI
+donates owned state buffers when finite-update rejection is supported, keeps
+best parameters on the host, and saves full-state checkpoints with raw,
+parameter-free metadata. Legacy parameter-only checkpoints remain readable.
+Set
 \code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
 uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
 neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG

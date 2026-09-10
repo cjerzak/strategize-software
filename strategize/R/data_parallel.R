@@ -40,8 +40,8 @@ strategize_dp_primary <- function(fn, label = "primary operation") {
     tryCatch(value <- fn(), error = function(e) error <<- conditionMessage(e))
   }
   strenv$data_parallel$agree_status(error, label)
-  bytes <- if (strategize_dp_primary_rank()) as.integer(serialize(value, NULL, version = 3L)) else integer(0)
-  bytes <- reticulate::py_to_r(strenv$data_parallel$broadcast_array(bytes))
+  bytes <- if (strategize_dp_primary_rank()) serialize(value, NULL, version = 3L) else raw(0)
+  bytes <- reticulate::py_to_r(strenv$data_parallel$broadcast_bytes(bytes))
   unserialize(as.raw(bytes))
 }
 
@@ -71,20 +71,20 @@ strategize_dp_register_updates <- function() {
   strenv$jax_svi_gradient_diagnostics_local <- strenv$jax_svi_gradient_diagnostics
   strenv$jax_svi_update_jit_cache_info_local <- strenv$jax_svi_update_jit_cache_info
   strenv$jax_svi_update_jit_cache_clear_local <- strenv$jax_svi_update_jit_cache_clear
-  strenv$jax_svi_update <- function(svi, state, args, ...) {
-    if (strategize_dp_enabled()) return(reticulate::py_to_r(strenv$data_parallel$update(svi, state, args)))
+  strenv$jax_svi_update <- function(svi, state, args, ..., donate_state = FALSE) {
+    if (strategize_dp_enabled()) return(reticulate::py_to_r(strenv$data_parallel$update(svi, state, args, donate = donate_state)))
     strenv$data_parallel$begin_update()
     start <- proc.time()[["elapsed"]]
-    out <- strenv$jax_svi_update_local(svi, state, args, ...)
+    out <- strenv$jax_svi_update_local(svi, state, args, ..., donate_state = donate_state)
     strategize_jax_block_until_ready(out)
     strenv$data_parallel$record_local_timing(proc.time()[["elapsed"]] - start)
     out
   }
-  strenv$jax_svi_update_scan <- function(svi, state, args, ...) {
-    if (strategize_dp_enabled()) return(reticulate::py_to_r(strenv$data_parallel$update(svi, state, args, scan = TRUE)))
+  strenv$jax_svi_update_scan <- function(svi, state, args, ..., donate_state = FALSE) {
+    if (strategize_dp_enabled()) return(reticulate::py_to_r(strenv$data_parallel$update(svi, state, args, scan = TRUE, donate = donate_state)))
     strenv$data_parallel$begin_update()
     start <- proc.time()[["elapsed"]]
-    out <- strenv$jax_svi_update_scan_local(svi, state, args, ...)
+    out <- strenv$jax_svi_update_scan_local(svi, state, args, ..., donate_state = donate_state)
     strategize_jax_block_until_ready(out)
     strenv$data_parallel$record_local_timing(proc.time()[["elapsed"]] - start)
     out

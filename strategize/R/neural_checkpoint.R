@@ -274,18 +274,21 @@ neural_svi_checkpoint_make_payload <- function(snapshot_type,
                                                early_stopping = NULL,
                                                optimizer_diagnostics = NULL,
                                                svi_budget_info = NULL,
-                                               checkpoint_context = NULL) {
+                                               checkpoint_context = NULL,
+                                               full_state = FALSE) {
   list(
-    schema_version = 1L,
+    schema_version = if (isTRUE(full_state)) 3L else 1L,
     artifact_type = "strategize_neural_svi_checkpoint_snapshot",
-    checkpoint_semantics = "parameter_warm_start",
+    checkpoint_semantics = if (isTRUE(full_state)) "full_svi_state" else "parameter_warm_start",
     snapshot_type = snapshot_type,
     created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
     fingerprint = fingerprint,
     completed_step = as.integer(completed_step %||% 0L),
     resolved_svi_steps = as.integer(resolved_svi_steps %||% NA_integer_),
-    svi_params = neural_svi_checkpoint_params_to_r(svi_params),
-    prediction_params = neural_svi_checkpoint_params_to_r(prediction_params),
+    # Full checkpoints already contain these arrays, including the frozen
+    # router and guide state. Keep the R payload independent of model size.
+    svi_params = if (isTRUE(full_state)) NULL else neural_svi_checkpoint_params_to_r(svi_params),
+    prediction_params = if (isTRUE(full_state)) NULL else neural_svi_checkpoint_params_to_r(prediction_params),
     loss_history = as.numeric(loss_history %||% numeric(0)),
     validation_history = as.numeric(validation_history %||% numeric(0)),
     best_metric = as.numeric(best_metric %||% NA_real_),

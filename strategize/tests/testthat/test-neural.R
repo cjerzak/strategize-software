@@ -1797,7 +1797,7 @@ test_that("runtime covariate defaults are JAX-normalized for covariate transform
   expect_true(all(is.finite(as.numeric(basis_r))))
 })
 
-test_that("shared_projection emits ordered fused covariate tokens with padding masks", {
+test_that("shared_projection emits ordered fused covariate tokens without unused padding", {
   skip_if_no_jax()
   strategize:::initialize_jax()
 
@@ -1871,11 +1871,10 @@ test_that("shared_projection emits ordered fused covariate tokens with padding m
   tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$mask))
 
-  expect_equal(dim(tok_cov_r), c(1L, 3L, 2L))
-  expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
+  expect_equal(dim(tok_cov_r), c(1L, 2L, 2L))
+  expect_equal(as.numeric(mask_r[1, ]), c(1, 1))
   expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_swiglu_value(c(80, 160)), tolerance = 1e-6)
   expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_swiglu_value(c(40, 80)), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
 })
 
 test_that("shared_projection emits active fused tokens for missing-in-row covariates", {
@@ -1955,10 +1954,9 @@ test_that("shared_projection emits active fused tokens for missing-in-row covari
   tok_cov_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$tokens))
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cov_info$mask))
 
-  expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
+  expect_equal(as.numeric(mask_r[1, ]), c(1, 1))
   expect_equal(drop(tok_cov_r[1, 1, ]), neural_test_swiglu_value(c(40, 80)), tolerance = 1e-6)
   expect_equal(drop(tok_cov_r[1, 2, ]), neural_test_swiglu_value(c(7, 9)), tolerance = 1e-6)
-  expect_equal(drop(tok_cov_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
 
   cov_absent <- strategize:::add_context_tokens(
     model_info = model_info,
@@ -2318,7 +2316,7 @@ test_that("shared_projection name_dist_moe conditions value token on metadata an
   )
 })
 
-test_that("fused factor tokenization emits ordered factor/value tokens with padding masks", {
+test_that("fused factor tokenization emits ordered factor/value tokens without unused padding", {
   skip_if_no_jax()
   strategize:::initialize_jax()
 
@@ -2443,11 +2441,10 @@ test_that("fused factor tokenization emits ordered factor/value tokens with padd
   tok_r <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info$tokens))
   mask_r <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info$mask))
 
-  expect_equal(dim(tok_r), c(1L, 3L, 2L))
-  expect_equal(as.numeric(mask_r[1, ]), c(1, 1, 0))
+  expect_equal(dim(tok_r), c(1L, 2L, 2L))
+  expect_equal(as.numeric(mask_r[1, ]), c(1, 1))
   expect_equal(drop(tok_r[1, 1, ]), c(7.4, 8.5), tolerance = 1e-4)
   expect_equal(drop(tok_r[1, 2, ]), c(22.4, 2.4), tolerance = 1e-4)
-  expect_equal(drop(tok_r[1, 3, ]), c(0, 0), tolerance = 1e-6)
   expect_true(isTRUE(model_info$factor_schema_supplied))
 
   model_info_normal <- model_info
@@ -2497,7 +2494,7 @@ test_that("fused factor tokenization emits ordered factor/value tokens with padd
     return_mask = TRUE
   )
   mask_missing_flag <- reticulate::py_to_r(strategize:::strenv$np$array(cand_info_missing_flag$mask))
-  expect_equal(as.numeric(mask_missing_flag[1, ]), c(1, 1, 0))
+  expect_equal(as.numeric(mask_missing_flag[1, ]), c(1, 1))
 })
 
 test_that("default fused structural metadata distinguishes same-cardinality factors", {

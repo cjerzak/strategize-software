@@ -164,8 +164,7 @@ cs2step_neural_extract_context_prepared <- function(params,
 
   ctx_packed <- neural_pack_token_block(
     tokens = ctx_tokens,
-    token_mask = ctx_mask,
-    trim_tokens = neural_active_context_token_budget(model_info)
+    token_mask = ctx_mask
   )
   choice_tok <- neural_prepare_choice_token_batch(model_info, params, n_batch)
   choice_mask <- strenv$jnp$ones(list(n_batch, 1L), dtype = strenv$dtj)

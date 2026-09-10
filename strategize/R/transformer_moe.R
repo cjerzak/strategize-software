@@ -13,7 +13,8 @@ neural_resolve_transformer_moe <- function(control = NULL, model_dims = 128L,
   }
   defaults <- list(n_routed_experts = 8L, n_experts_per_tok = 2L,
                    n_shared_experts = 1L, moe_d_ff = "auto", first_k_dense = "auto",
-                   routed_scaling_factor = 1, capacity_factor = 1.5, router_bias_rate = 0.001)
+                   routed_scaling_factor = 1, capacity_factor = 1.5, router_bias_rate = 0.001,
+                   compute_dtype = "bfloat16", activation_checkpointing = TRUE)
   overrides <- control$transformer_moe %||% list()
   if (!is.list(overrides) || (length(overrides) &&
       (is.null(names(overrides)) || any(!nzchar(names(overrides))) || anyDuplicated(names(overrides))))) {
@@ -22,6 +23,14 @@ neural_resolve_transformer_moe <- function(control = NULL, model_dims = 128L,
   unknown <- setdiff(names(overrides), names(defaults))
   if (length(unknown)) stop(sprintf("Unknown transformer_moe field(s): %s.", paste(unknown, collapse = ", ")), call. = FALSE)
   cfg <- modifyList(defaults, overrides)
+  if (!is.character(cfg$compute_dtype) || length(cfg$compute_dtype) != 1L ||
+      is.na(cfg$compute_dtype) || !cfg$compute_dtype %in% c("float32", "bfloat16")) {
+    stop("'transformer_moe$compute_dtype' must be 'float32' or 'bfloat16'.", call. = FALSE)
+  }
+  if (!is.logical(cfg$activation_checkpointing) || length(cfg$activation_checkpointing) != 1L ||
+      is.na(cfg$activation_checkpointing)) {
+    stop("'transformer_moe$activation_checkpointing' must be TRUE or FALSE.", call. = FALSE)
+  }
   if (identical(cfg$moe_d_ff, "auto")) cfg$moe_d_ff <- as.integer(model_dims)
   if (identical(cfg$first_k_dense, "auto")) cfg$first_k_dense <- min(1L, as.integer(model_depth) - 1L)
   for (name in c("n_routed_experts", "n_experts_per_tok", "n_shared_experts", "moe_d_ff", "first_k_dense")) {
@@ -97,7 +106,12 @@ neural_moe_architecture_fields <- function(info, cfg, bias = NULL) {
 
 neural_moe_control_from_info <- function(info) {
   cfg <- info[["transformer_moe"]]
-  if (!is.null(cfg)) cfg$n_moe_layers <- NULL
+  if (!is.null(cfg)) {
+    cfg$n_moe_layers <- NULL
+    # Older saved models predate explicit compute precision. Preserve their
+    # FP32 behavior when resuming/adapting them under the new defaults.
+    cfg$compute_dtype <- cfg$compute_dtype %||% "float32"
+  }
   list(transformer_ffn = info$transformer_ffn %||% "swiglu", transformer_moe = cfg)
 }
 

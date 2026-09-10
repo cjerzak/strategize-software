@@ -142,3 +142,15 @@ test_that("neural SVI checkpoint cleanup is manifest guarded", {
     "valid strategize manifest"
   )
 })
+test_that("full-state metadata excludes model arrays without converting them", {
+  payload <- strategize:::neural_svi_checkpoint_make_payload(
+    snapshot_type = "latest", fingerprint = list(hash = "test"),
+    completed_step = 5L, resolved_svi_steps = 10L,
+    svi_params = list(weight = numeric(1000000)),
+    prediction_params = list(weight = numeric(1000000)), full_state = TRUE)
+  expect_identical(payload$schema_version, 3L)
+  expect_identical(payload$checkpoint_semantics, "full_svi_state")
+  expect_null(payload$svi_params)
+  expect_null(payload$prediction_params)
+  expect_lt(length(serialize(payload, NULL)), 4096L)
+})

@@ -34,18 +34,66 @@ def swiglu(x, w1, w2):
     return (jax.nn.silu(gate) * value) @ w2
 
 
-def selected_experts(x, w1, w2, indices):
-    """Exact selected experts, including under vmap/grad/jvp/scan composition.
+def selected_experts(x, w1, w2, indices, keep=None):
+    """Compute accepted assignments in compact, single-expert matrix blocks.
 
-    Chunking bounds gathered weight storage independently of observation count.
-    Unlike capacity buffers, independent predictions never compete for slots.
+    Capacity is decided by the caller, before sorting. Each block gathers one
+    expert matrix, not a copy per token. Rematerialize the block computation so
+    reverse-mode AD retains neither gathered weights nor expanded FFN values.
+    The loop bound allows at most one partial block per expert; it is independent
+    of the global routing capacity and works under grad, jvp, vmap and scan.
     """
-    def one(args):
-        xx, idx = args
-        pre = jnp.einsum("d,kdf->kf", xx, w1[idx])
-        gate, value = jnp.split(pre, 2, axis=-1)
-        return jnp.einsum("kf,kfd->kd", jax.nn.silu(gate) * value, w2[idx])
-    return jax.lax.map(one, (x, indices), batch_size=min(32, x.shape[0]))
+    n, k = indices.shape
+    if not n:
+        return jnp.zeros((n, k, x.shape[-1]), x.dtype)
+    experts, assignments = w1.shape[0], n * k
+    keep = jnp.ones_like(indices, bool) if keep is None else keep
+    expert_ids = jnp.where(keep.reshape(-1), indices.reshape(-1), experts)
+    order = jnp.argsort(expert_ids, stable=True)
+    counts = jnp.bincount(expert_ids, length=experts + 1)[:experts]
+    starts = jnp.cumsum(counts) - counts
+    block_size = min(64, assignments)
+    blocks = (counts + block_size - 1) // block_size
+    block_ends = jnp.cumsum(blocks)
+    # ceil(sum(counts)/B) + E-1 bounds sum(ceil(counts[e]/B)).
+    max_blocks = (assignments + block_size - 1) // block_size + experts - 1
+    offsets = jnp.arange(block_size)
+
+    def compute(expert, positions, valid):
+        rows = jnp.where(valid[:, None], x[positions // k], 0)
+        values = swiglu(rows, w1[expert].astype(x.dtype), w2[expert].astype(x.dtype))
+        return jnp.where(valid[:, None], values, 0)
+
+    # The conditional belongs INSIDE remat. Otherwise its backward residuals
+    # save all closed-over weights on every scan iteration, even though the
+    # active branch checkpoints its matrix multiplies.
+    @functools.partial(jax.checkpoint, prevent_cse=False)
+    def block(i, out):
+        def active(out):
+            expert = jnp.sum(i >= block_ends)
+            within = (i - (block_ends[expert] - blocks[expert])) * block_size + offsets
+            valid = within < counts[expert]
+            positions = order[jnp.minimum(starts[expert] + within, assignments - 1)]
+            values = compute(expert, positions, valid)
+            # All accepted positions are unique. The partial-block padding is
+            # dropped rather than writing repeatedly into a shared sentinel.
+            return out.at[jnp.where(valid, positions, assignments)].set(values, mode="drop")
+        return jax.lax.cond(i < block_ends[-1], active, lambda out: out, out)
+
+    out = jax.lax.fori_loop(0, max_blocks, block, jnp.zeros((assignments, x.shape[-1]), x.dtype))
+    return out.reshape(n, k, x.shape[-1])
+
+
+def compute_dtype(cfg, fallback):
+    # Missing metadata belongs to an older FP32 model. New fits explicitly save
+    # their compute dtype; inference never chooses precision from its hardware.
+    return jnp.bfloat16 if cfg.get("compute_dtype", "float32") == "bfloat16" else fallback
+
+
+def expert_output(x, w1, w2, shared1, shared2, indices, gates, keep):
+    out = selected_experts(x, w1, w2, indices, keep)
+    return (out.astype(jnp.float32) * gates[..., None]).sum(1).astype(x.dtype) + swiglu(
+        x, shared1.astype(x.dtype), shared2.astype(x.dtype))
 
 
 def _depend(value, chain):
@@ -109,29 +157,13 @@ def dispatch(x, mask, router, w1, w2, shared1, shared2, bias, cfg,
         flat_e = indices.reshape(repeats, -1)
         global_rank = ranks + jnp.take_along_axis(prefix, flat_e, axis=1)
         keep = ((global_rank < cutoff) & (ranks >= 0)).reshape(n, k) & valid[:, None]
-        cap_bound = max(int(cf * total_bound * k / experts), min(total_bound, 256))
-        # Local arrival ranks compact all repeats into the same expert buffer.
-        local_rank = (jnp.cumsum(assignments, axis=0) * assignments).sum(-1) - 1
-        local_cap = min(cap_bound, n)
-        # Below the minimum-capacity floor no valid assignment can overflow.
-        # Use the same exact kernel on one device and on small local shards.
-        if total_bound <= 256:
-            out = selected_experts(x2, w1, w2, indices)
-        else:
-            slots = jnp.where(keep.reshape(-1), local_rank, local_cap)
-            flat_e = indices.reshape(-1)
-            buf = jnp.zeros((experts, local_cap + 1, d), x.dtype)
-            buf = buf.at[flat_e, slots].set(jnp.repeat(x2, k, axis=0))
-            pre = jnp.einsum("ecd,edf->ecf", buf, w1)
-            gate, value = jnp.split(pre, 2, axis=-1)
-            values = jnp.einsum("ecf,efd->ecd", jax.nn.silu(gate) * value, w2)
-            out = values[flat_e, slots].reshape(n, k, d)
     else:
         keep = jnp.broadcast_to(valid[:, None], (n, k))
-        out = selected_experts(x2, w1, w2, indices)
-
-    out = jnp.where(keep[..., None], out, 0)
-    y = (out * gates[..., None].astype(out.dtype)).sum(1) + swiglu(x2, shared1, shared2)
+    # This remat boundary contains no collectives. Routing/all_gather above runs
+    # exactly once in the forward pass, in the qualified global order.
+    compute = jax.checkpoint(expert_output, prevent_cse=False) if cfg.get("activation_checkpointing", True) else expert_output
+    y = compute(x2.astype(compute_dtype(cfg, x2.dtype)), w1, w2, shared1, shared2, indices, gates, keep)
+    y = y.astype(x.dtype)
     y = jnp.where(valid[:, None], y, 0).reshape(shape)
     attempted = assignments.astype(jnp.float32).sum(0)
     accepted = (assignments * keep.reshape(-1, 1)).astype(jnp.float32).sum(0)
@@ -340,6 +372,8 @@ def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
     """Homogeneous scans for the dense prefix and routed suffix."""
     cfg, params = dict(cfg), dict(params)
     prefix, depth, dims = int(cfg["first_k_dense"]), int(params["W_q_layers"].shape[0]), tokens.shape[-1]
+    output_dtype = tokens.dtype
+    tokens = tokens.astype(compute_dtype(cfg, tokens.dtype))
     ctx = _context.get()
     if ctx is not None:
         bias = ctx.bias
@@ -349,7 +383,8 @@ def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
     if bias.shape != (depth - prefix, int(cfg["n_routed_experts"])):
         raise ValueError("MoE router bias shape does not match layer/expert counts")
     def norm(x, gain):
-        return x * jax.lax.rsqrt(jnp.mean(x * x, -1, keepdims=True) + 1e-6) * gain
+        value = x.astype(jnp.float32)
+        return (value * jax.lax.rsqrt(jnp.mean(value * value, -1, keepdims=True) + 1e-6) * gain).astype(x.dtype)
     common = [params[name + "_layers"] for name in
               ("W_q", "W_k", "W_v", "W_o", "RMS_attn", "RMS_ff", "alpha_attn", "alpha_ff")]
     use_qk = "RMS_q_layers" in params and "RMS_k_layers" in params
@@ -358,17 +393,21 @@ def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
     def attention(x, layer):
         wq, wk, wv, wo, rms_attn, rms_ff, alpha_attn, alpha_ff, rms_q, rms_k = layer
         z = norm(x, rms_attn)
-        q, k, v = [(z @ w).reshape(*x.shape[:-1], int(n_heads), int(head_dim)) for w in (wq, wk, wv)]
+        q, k, v = [(z @ w.astype(z.dtype)).reshape(*x.shape[:-1], int(n_heads), int(head_dim)) for w in (wq, wk,wv)]
         if use_qk:
             q, k = norm(q, rms_q), norm(k, rms_k)
         a = attention_fn(q, k, v, mask, dims, int(n_heads), int(head_dim),
                          attention_backend, attention_dtype, int(padding_multiple)).reshape(x.shape)
-        h = x + alpha_attn * (a @ wo)
+        h = x + alpha_attn.astype(x.dtype) * (a.astype(x.dtype) @ wo.astype(x.dtype))
         return h, norm(h, rms_ff), alpha_ff
+    if cfg.get("activation_checkpointing", True):
+        attention = jax.checkpoint(attention, prevent_cse=False)
     if prefix:
         def dense(x, layer):
             h, z, alpha = attention(x, layer[:10])
-            return h + alpha * swiglu(z, layer[10], layer[11]), None
+            return h + alpha.astype(h.dtype) * swiglu(z, layer[10].astype(z.dtype), layer[11].astype(z.dtype)), None
+        if cfg.get("activation_checkpointing", True):
+            dense = jax.checkpoint(dense, prevent_cse=False)
         xs = tuple(a[:prefix] for a in common) + (params["W_ff1_layers"], params["W_ff2_layers"])
         tokens, _ = jax.lax.scan(dense, tokens, xs)
     def routed(carry, layer):
@@ -377,10 +416,10 @@ def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
         y, stats, chain = dispatch(z, mask, *layer[10:15], layer[15], cfg,
             training=ctx is not None, row_mask=None if ctx is None else ctx.row_mask,
             runtime=None if ctx is None else ctx.runtime, chain=chain)
-        return (h + alpha * y, chain), stats
+        return (h + alpha.astype(h.dtype) * y, chain), stats
     xs = tuple(a[prefix:] for a in common) + tuple(params[f"W_moe_{name}_layers"]
         for name in ("router", "expert1", "expert2", "shared1", "shared2")) + (bias,)
     (tokens, chain), stats = jax.lax.scan(routed, (tokens, jnp.float32(0) if ctx is None else ctx.chain), xs)
     if ctx is not None:
         ctx.add(stats, chain)
-    return norm(tokens, params["RMS_final"])
+    return norm(tokens, params["RMS_final"]).astype(output_dtype)

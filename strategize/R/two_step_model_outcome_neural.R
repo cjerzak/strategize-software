@@ -5061,28 +5061,56 @@ neural_active_candidate_token_budget <- function(model_info) {
   as.integer(n_tokens + aux_tokens)
 }
 
-neural_active_context_token_budget <- function(model_info) {
-  base_tokens <- as.integer(isTRUE(model_info$has_experiment_token)) +
-    as.integer(neural_place_context_enabled(model_info)) +
-    as.integer(neural_time_context_enabled(model_info)) +
-    as.integer(isTRUE(model_info$has_stage_token)) +
-    as.integer(neural_respondent_group_context_enabled(model_info)) +
-    as.integer(isTRUE(model_info$has_matchup_token))
-  covariate_tokens <- 0L
-  if (isTRUE(model_info$has_covariate_fused_tokens) || isTRUE(model_info$has_covariate_tokens)) {
-    n_tokens <- neural_max_order_length(
-      order_list = model_info$covariate_order_by_experiment %||% NULL,
-      default_order = model_info$default_covariate_order %||% NULL
-    )
-    if (length(n_tokens) != 1L || is.na(n_tokens) || n_tokens < 1L) {
-      n_tokens <- tryCatch(ai(model_info$n_resp_covariates), error = function(e) 0L)
-      if (length(n_tokens) != 1L || is.null(n_tokens) || is.na(n_tokens) || n_tokens < 1L) {
-        n_tokens <- length(model_info$covariate_names %||% character(0))
-      }
-    }
-    covariate_tokens <- as.integer(n_tokens)
+neural_trim_schema_tokens <- function(tokens, token_mask, order_list = NULL,
+                                      default_order = NULL, experiment_idx = NULL,
+                                      explicit_order = NULL) {
+  # Lookup rows are padded at their ends. Use the same lookup/default decision
+  # as the token builder; a pooled default can be much wider than any study.
+  # Custom orders can contain valid tokens anywhere, so retain their full width.
+  width <- ai(token_mask$shape[[2]])
+  if (!is.null(explicit_order)) return(list(tokens = tokens, mask = token_mask))
+  bound <- if (!is.null(experiment_idx) && length(order_list %||% list()) > 0L) {
+    neural_max_order_length(order_list = order_list)
+  } else if (!is.null(default_order)) {
+    length(default_order)
+  } else width
+  if (bound >= width) return(list(tokens = tokens, mask = token_mask))
+  rows <- strenv$jnp$arange(ai(bound))
+  list(tokens = strenv$jnp$take(tokens, rows, axis = 1L),
+       mask = strenv$jnp$take(token_mask, rows, axis = 1L))
+}
+
+neural_pack_single_sequence <- function(choice_tok, choice_mask,
+                                        ctx_tokens, ctx_mask, cand_tokens, cand_mask,
+                                        model_info) {
+  ctx <- if (is.null(ctx_tokens)) NULL else neural_pack_token_block(
+    ctx_tokens, ctx_mask)
+  cand <- neural_pack_token_block(cand_tokens, cand_mask)
+  parts <- list(choice_tok)
+  masks <- list(choice_mask)
+  if (!is.null(ctx)) {
+    parts <- c(parts, list(ctx$tokens))
+    masks <- c(masks, list(ctx$mask))
   }
-  as.integer(base_tokens + covariate_tokens)
+  list(tokens = strenv$jnp$concatenate(c(parts, list(cand$tokens)), axis = 1L),
+       mask = strenv$jnp$concatenate(c(masks, list(cand$mask)), axis = 1L))
+}
+
+neural_take_token_info <- function(info, rows) {
+  # Used to take one of two identical context repetitions in the pair path.
+  # Their global covariate-routing mean (and auxiliary term) is identical.
+  list(tokens = if (is.null(info$tokens)) NULL else strenv$jnp$take(info$tokens, rows, axis = 0L),
+       mask = if (is.null(info$mask)) NULL else strenv$jnp$take(info$mask, rows, axis = 0L),
+       moe_aux = info$moe_aux)
+}
+
+neural_reuse_context_info <- function(info) {
+  # The value encoder also contributes to a mean auxiliary penalty. Preserve
+  # its multiplicity across towers/branches without repeating its collective.
+  if (isTRUE(strenv$moe_aux_active) && length(info$moe_aux) > 0L) {
+    strenv$moe_aux_pending <- c(strenv$moe_aux_pending %||% list(), info$moe_aux)
+  }
+  info
 }
 
 neural_pack_token_block <- function(tokens,
@@ -5167,20 +5195,14 @@ neural_pack_candidate_sequence <- function(choice_tok,
     choice_tok <- choice_tok + cand_summary
   }
 
-  ctx_trim <- neural_active_context_token_budget(model_info)
-  cand_trim <- neural_active_candidate_token_budget(model_info)
   ctx_width <- if (is.null(ctx_mask)) {
     0L
   } else {
     tryCatch(ai(ctx_mask$shape[[2]]), error = function(e) 0L)
   }
   cand_width <- tryCatch(ai(cand_mask$shape[[2]]), error = function(e) 0L)
-  if (length(ctx_trim) != 1L || is.na(ctx_trim) || ctx_trim < 0L) {
-    ctx_trim <- ctx_width
-  }
-  if (length(cand_trim) != 1L || is.na(cand_trim) || cand_trim < 1L) {
-    cand_trim <- cand_width
-  }
+  ctx_trim <- ctx_width
+  cand_trim <- cand_width
   if (isTRUE(preserve_candidate_tail)) {
     ctx_packed <- if (is.null(ctx_tokens)) {
       list(tokens = NULL, mask = NULL)
@@ -5237,20 +5259,14 @@ neural_pack_full_cross_sequence <- function(choice_tok,
                                             model_info,
                                             ctx_tokens = NULL,
                                             ctx_mask = NULL) {
-  ctx_trim <- neural_active_context_token_budget(model_info)
-  cand_trim <- neural_active_candidate_token_budget(model_info)
   ctx_width <- if (is.null(ctx_mask)) {
     0L
   } else {
     tryCatch(ai(ctx_mask$shape[[2]]), error = function(e) 0L)
   }
   left_width <- tryCatch(ai(left_mask$shape[[2]]), error = function(e) 0L)
-  if (length(ctx_trim) != 1L || is.na(ctx_trim) || ctx_trim < 0L) {
-    ctx_trim <- ctx_width
-  }
-  if (length(cand_trim) != 1L || is.na(cand_trim) || cand_trim < 1L) {
-    cand_trim <- left_width
-  }
+  ctx_trim <- ctx_width
+  cand_trim <- left_width
   ctx_packed <- if (is.null(ctx_tokens)) {
     list(tokens = NULL, mask = NULL)
   } else {
@@ -7070,7 +7086,10 @@ neural_build_covariate_fused_tokens <- function(model_info,
     family_name = "covariate_fused"
   )
 
-  list(tokens = fused_tokens, mask = strenv$jnp$astype(token_mask, strenv$dtj))
+  neural_trim_schema_tokens(fused_tokens, strenv$jnp$astype(token_mask, strenv$dtj),
+    order_list = model_info$covariate_order_by_experiment,
+    default_order = model_info$default_covariate_order %||% seq.int(0L, n_covariates - 1L),
+    experiment_idx = experiment_idx, explicit_order = resp_cov_order)
 }
 
 neural_add_token_family_embedding <- function(tokens,
@@ -7692,7 +7711,10 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
     family_name = "factor_fused"
   )
 
-  list(tokens = fused_tokens, mask = strenv$jnp$astype(token_mask, strenv$dtj))
+  neural_trim_schema_tokens(fused_tokens, strenv$jnp$astype(token_mask, strenv$dtj),
+    order_list = model_info$factor_order_by_experiment,
+    default_order = model_info$default_factor_order %||% integer(0),
+    experiment_idx = experiment_idx, explicit_order = factor_order)
 }
 
 neural_build_candidate_tokens_hard <- function(X_idx, party_idx, model_info,
@@ -7766,7 +7788,8 @@ neural_build_context_tokens_batch <- function(model_info,
                                               return_mask = FALSE,
                                               context_present = NULL,
                                               schema_dropout_masks = NULL){
-  add_context_tokens(model_info = model_info,
+  n_aux_before <- length(strenv$moe_aux_pending)
+  out <- add_context_tokens(model_info = model_info,
                      resp_party_idx = resp_party_idx,
                      stage_idx = stage_idx,
                      matchup_idx = matchup_idx,
@@ -7781,6 +7804,11 @@ neural_build_context_tokens_batch <- function(model_info,
                      return_mask = return_mask,
                      context_present = context_present,
                      schema_dropout_masks = schema_dropout_masks)
+  if (isTRUE(return_mask) && isTRUE(strenv$moe_aux_active)) {
+    n_aux_added <- length(strenv$moe_aux_pending) - n_aux_before
+    if (n_aux_added > 0L) out$moe_aux <- tail(strenv$moe_aux_pending, n_aux_added)
+  }
+  out
 }
 
 # SOFT (mean-embedding) relaxation -- the differentiable policy path.
@@ -7951,7 +7979,9 @@ neural_build_factor_fused_tokens_soft <- function(pi_vec,
     base_name = "E_factor_fused_base",
     family_name = "factor_fused"
   )
-  list(tokens = fused_tokens, mask = strenv$jnp$astype(token_mask, strenv$dtj))
+  neural_trim_schema_tokens(fused_tokens, strenv$jnp$astype(token_mask, strenv$dtj),
+    default_order = model_info$default_factor_order %||% integer(0),
+    explicit_order = factor_order)
 }
 
 neural_build_candidate_tokens_soft <- function(pi_vec, party_idx, role_id, model_info, params = NULL,
@@ -8159,7 +8189,8 @@ neural_encode_respondent_tower_prepared <- function(params,
                                                     matchup_idx = NULL,
                                                     context_present = NULL,
                                                     schema_dropout_masks = NULL,
-                                                    transformer_model_info = NULL) {
+                                                    transformer_model_info = NULL,
+                                                    context_info = NULL) {
   if (is.null(transformer_model_info)) {
     transformer_model_info <- model_info
   }
@@ -8204,7 +8235,7 @@ neural_encode_respondent_tower_prepared <- function(params,
     context_present <- neural_batch_vector_jnp(context_present, dtype = strenv$dtj)
   }
   n_batch <- ai(resp_party_idx$shape[[1]])
-  ctx_info <- neural_build_context_tokens_batch(
+  ctx_info <- if (!is.null(context_info)) neural_reuse_context_info(context_info) else neural_build_context_tokens_batch(
     model_info = model_info,
     resp_party_idx = resp_party_idx,
     stage_idx = stage_idx,
@@ -8227,8 +8258,7 @@ neural_encode_respondent_tower_prepared <- function(params,
   if (!is.null(ctx_info$tokens)) {
     ctx_packed <- neural_pack_token_block(
       tokens = ctx_info$tokens,
-      token_mask = ctx_info$mask,
-      trim_tokens = neural_active_context_token_budget(model_info)
+      token_mask = ctx_info$mask
     )
     token_parts <- c(token_parts, list(ctx_packed$tokens))
     mask_parts <- c(mask_parts, list(ctx_packed$mask))
@@ -8259,7 +8289,8 @@ neural_encode_candidate_profile_tower_hard <- function(params,
                                                        factor_order = NULL,
                                                        context_present = NULL,
                                                        schema_dropout_masks = NULL,
-                                                       transformer_model_info = NULL) {
+                                                       transformer_model_info = NULL,
+                                                       candidate_info = NULL) {
   if (is.null(transformer_model_info)) {
     transformer_model_info <- model_info
   }
@@ -8278,7 +8309,7 @@ neural_encode_candidate_profile_tower_hard <- function(params,
     context_present <- neural_batch_vector_jnp(context_present, dtype = strenv$dtj)
   }
   n_batch <- ai(X_idx$shape[[1]])
-  cand_info <- neural_build_candidate_tokens_hard(
+  cand_info <- candidate_info %||% neural_build_candidate_tokens_hard(
     X_idx,
     party_idx,
     model_info = model_info,
@@ -8436,7 +8467,8 @@ neural_low_rank_pair_delta_prepared <- function(params,
                                                 schema_dropout_right = NULL,
                                                 transformer_model_info = NULL,
                                                 out_dim = NULL,
-                                                dtype = NULL) {
+                                                dtype = NULL,
+                                                context_info = NULL, candidate_info = NULL) {
   if (!isTRUE(neural_has_low_rank_interaction(params, model_info))) {
     n_batch <- ai(Xl$shape[[1]])
     out_dim_use <- out_dim %||% 1L
@@ -8477,7 +8509,8 @@ neural_low_rank_pair_delta_prepared <- function(params,
     matchup_idx = matchup_idx,
     context_present = context_present,
     schema_dropout_masks = schema_dropout_context,
-    transformer_model_info = transformer_model_info
+    transformer_model_info = transformer_model_info,
+    context_info = context_info
   )
   cand_readout <- neural_encode_candidate_profile_tower_hard(
     params = params,
@@ -8489,7 +8522,8 @@ neural_low_rank_pair_delta_prepared <- function(params,
     factor_order = factor_order_all,
     context_present = context_present_all,
     schema_dropout_masks = schema_dropout_all,
-    transformer_model_info = transformer_model_info
+    transformer_model_info = transformer_model_info,
+    candidate_info = candidate_info
   )
   idx_left <- strenv$jnp$arange(n_batch)
   idx_right <- strenv$jnp$arange(n_batch, ai(2L * n_batch))
@@ -8536,7 +8570,8 @@ neural_low_rank_single_utility_prepared <- function(params,
                                                     schema_dropout_candidate = NULL,
                                                     transformer_model_info = NULL,
                                                     out_dim = NULL,
-                                                    dtype = NULL) {
+                                                    dtype = NULL,
+                                                context_info = NULL, candidate_info = NULL) {
   if (!isTRUE(neural_has_low_rank_interaction(params, model_info))) {
     n_batch <- ai(X_idx$shape[[1]])
     out_dim_use <- out_dim %||% 1L
@@ -8559,7 +8594,8 @@ neural_low_rank_single_utility_prepared <- function(params,
     matchup_idx = matchup_idx,
     context_present = context_present,
     schema_dropout_masks = schema_dropout_context,
-    transformer_model_info = transformer_model_info
+    transformer_model_info = transformer_model_info,
+    context_info = context_info
   )
   cand_readout <- neural_encode_candidate_profile_tower_hard(
     params = params,
@@ -8571,7 +8607,8 @@ neural_low_rank_single_utility_prepared <- function(params,
     factor_order = factor_order,
     context_present = context_present,
     schema_dropout_masks = schema_dropout_candidate,
-    transformer_model_info = transformer_model_info
+    transformer_model_info = transformer_model_info,
+    candidate_info = candidate_info
   )
   neural_low_rank_interaction_logits(
     respondent_final = resp_readout$final,
@@ -8649,6 +8686,12 @@ neural_run_transformer <- function(tokens,
   }
   residual_mode <- neural_transformer_residual_mode(model_info)
   use_full_attn_residual <- identical(residual_mode, "full_attn")
+  if (!isTRUE(use_full_attn_residual) && neural_has_transformer_moe(params) &&
+      !neural_has_stacked_standard_transformer(params)) {
+    # All standard MoE towers, including interaction and prediction towers,
+    # share the same precision and rematerialization implementation.
+    params <- neural_stack_standard_transformer_layers(params, model_info$model_depth, drop_legacy = TRUE)
+  }
   if (isTRUE(use_full_attn_residual)) {
     neural_validate_full_attn_compatibility(
       model_info = model_info,
@@ -15802,14 +15845,15 @@ generate_ModelOutcome_neural <- function(){
         include_tail_summary = neural_fused_classification_summary_enabled(model_info_local)
       )
       if (!isTRUE(return_tokens)) {
-        return(phi)
+        return(list(phi = phi, context_info = ctx_info, candidate_info = cand_info))
       }
       cand_out <- neural_extract_candidate_tokens(
         transformer_out,
         transformer_model_info,
         n_candidate_tokens = neural_candidate_token_count_from_mask(seq_info$cand_mask)
       )
-      list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = seq_info$cand_mask)
+      list(phi = phi, cand_tokens_out = cand_out, cand_token_mask = seq_info$cand_mask,
+           context_info = ctx_info, candidate_info = cand_info)
     }
 
     encode_candidate_pair <- function(Xl, Xr, pl, pr, resp_p, resp_c, resp_c_present = NULL,
@@ -15848,19 +15892,22 @@ generate_ModelOutcome_neural <- function(){
         phi_all <- enc_all$phi
         cand_all <- enc_all$cand_tokens_out
       } else {
-        phi_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
+        enc_all <- encode_candidate(X_all, p_all, resp_p_all, resp_c_all,
                                     resp_c_present_all, experiment_idx_all,
                                     stage_all, matchup_all,
                                     context_present = context_present_all,
                                     schema_dropout_context = schema_dropout_context_all,
                                     schema_dropout_candidate = schema_dropout_all)
+        phi_all <- enc_all$phi
         cand_all <- NULL
       }
       idx_left <- strenv$jnp$arange(N_batch)
       idx_right <- strenv$jnp$arange(N_batch, 2L * N_batch)
       out <- list(
         phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
-        phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L)
+        phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L),
+        context_info = neural_take_token_info(enc_all$context_info, idx_left),
+        candidate_info = enc_all$candidate_info
       )
       if (isTRUE(use_cross_attn)) {
         out$cand_left_out <- strenv$jnp$take(cand_all, idx_left, axis = 0L)
@@ -16022,7 +16069,9 @@ generate_ModelOutcome_neural <- function(){
             schema_dropout_right = schema_dropout_right,
             transformer_model_info = transformer_model_info,
             out_dim = ai(logits$shape[[2]]),
-            dtype = logits$dtype
+            dtype = logits$dtype,
+            context_info = phi_pair$context_info,
+            candidate_info = phi_pair$candidate_info
           )
         }
         if (isTRUE(use_cross_term)) {
@@ -16136,7 +16185,8 @@ generate_ModelOutcome_neural <- function(){
           schema_dropout_candidate = schema_dropout_candidate,
           transformer_model_info = transformer_model_info,
           out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype
+          dtype = logits$dtype,
+          context_info = ctx_info, candidate_info = cand_info
         )
       }
       logits <- logits + neural_additive_single_logits_prepared(
@@ -16476,17 +16526,12 @@ generate_ModelOutcome_neural <- function(){
       )
       cand_tokens <- cand_info$tokens
       cand_mask <- cand_info$mask
-      token_parts <- list(choice_tok)
-      if (!is.null(ctx_tokens)) {
-        token_parts <- c(token_parts, list(ctx_tokens))
-      }
-      token_parts <- c(token_parts, list(cand_tokens))
-      tokens <- strenv$jnp$concatenate(token_parts, axis = 1L)
-      token_mask <- if (!is.null(ctx_tokens)) {
-        strenv$jnp$concatenate(list(choice_mask, ctx_mask, cand_mask), axis = 1L)
-      } else {
-        strenv$jnp$concatenate(list(choice_mask, cand_mask), axis = 1L)
-      }
+      # Compact padding exactly as in the other towers, without introducing
+      # the candidate-summary addition used by the pairwise choice token.
+      seq_info <- neural_pack_single_sequence(choice_tok, choice_mask,
+        ctx_tokens, ctx_mask, cand_tokens, cand_mask, model_info_local)
+      tokens <- seq_info$tokens
+      token_mask <- seq_info$mask
       transformer_out <- run_transformer(tokens, token_mask = token_mask, return_details = TRUE)
       choice_out <- neural_extract_choice_representation(
         transformer_out,
@@ -16508,7 +16553,8 @@ generate_ModelOutcome_neural <- function(){
           schema_dropout_candidate = schema_dropout_candidate,
           transformer_model_info = transformer_model_info,
           out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype
+          dtype = logits$dtype,
+          context_info = ctx_info, candidate_info = cand_info
         )
       }
       logits <- logits + neural_additive_single_logits_prepared(
@@ -20360,20 +20406,23 @@ generate_ModelOutcome_neural <- function(){
       if (!isTRUE(svi_checkpoint$enabled)) {
         return(NULL)
       }
-      if (is.null(svi_params_current) && !is.null(svi_state_current)) {
+      full_state <- isTRUE(compact_training) && !is.null(svi_state_current)
+      if (!isTRUE(full_state) && is.null(svi_params_current) && !is.null(svi_state_current)) {
         svi_params_current <- tryCatch(svi$get_params(strategize_dp_local(svi_state_current)), error = function(e) NULL)
       }
       svi_params_current <- strategize_dp_local(svi_params_current)
-      if (is.null(svi_params_current)) {
+      if (!isTRUE(full_state) && is.null(svi_params_current)) {
         return(NULL)
       }
-      if (is.null(prediction_params_current)) {
+      if (!isTRUE(full_state) && is.null(prediction_params_current)) {
         prediction_params_current <- tryCatch(
           extract_svi_param_sites(svi_params_current),
           error = function(e) NULL
         )
       }
-      payload <- neural_svi_checkpoint_make_payload(
+      payload <- strategize_dp_all_call(function() {
+        if (isTRUE(full_state) && !strategize_dp_primary_rank()) return(NULL)
+        out <- neural_svi_checkpoint_make_payload(
         snapshot_type = type,
         fingerprint = svi_checkpoint_fingerprint,
         completed_step = as.integer(step_current %||% svi_steps_completed %||% 0L),
@@ -20388,16 +20437,21 @@ generate_ModelOutcome_neural <- function(){
         early_stopping = early_stopping_info,
         optimizer_diagnostics = optimizer_diagnostics,
         svi_budget_info = svi_budget_info,
-        checkpoint_context = checkpoint_context()
-      )
-      if (isTRUE(compact_training) && !is.null(svi_state_current)) {
-        payload$schema_version <- 2L
-        payload$checkpoint_semantics <- "full_svi_state"
-        payload$execution_identity <- strategize_dp_execution_identity()
-        strenv$data_parallel$save_checkpoint(
-          svi_checkpoint$path, type, svi_state_current,
-          as.integer(serialize(payload, NULL, version = 3L))
+        checkpoint_context = checkpoint_context(),
+        full_state = full_state
         )
+        if (isTRUE(full_state)) out$execution_identity <- strategize_dp_execution_identity()
+        out
+      }, "prepare checkpoint metadata")
+      if (isTRUE(full_state)) {
+        bytes <- strategize_dp_all_call(function() {
+          if (strategize_dp_primary_rank()) serialize(payload, NULL, version = 3L) else raw(0)
+        }, "serialize checkpoint metadata")
+        generation <- strenv$data_parallel$save_checkpoint(
+          svi_checkpoint$path, type, svi_state_current,
+          bytes
+        )
+        if (!is.null(payload)) payload$full_state_generation <- reticulate::py_to_r(generation)
         return(payload)
       }
       neural_svi_checkpoint_save_snapshot(
@@ -20439,6 +20493,32 @@ generate_ModelOutcome_neural <- function(){
       })
       names(out) <- names(params_list)
       out
+    }
+
+    checkpoint_state_template <- function() {
+      # Only a guide/optimizer prototype is needed. No update is performed and
+      # no sampler draw is consumed, including when rebuilding a completed fit.
+      pool <- compact_sampling_pool()
+      idx <- if (isTRUE(universal_mixed_mode)) {
+        c(head(pool[pool <= n_universal_pair_obs], 2L),
+          head(pool[pool > n_universal_pair_obs], 2L))
+      } else head(pool, 2L)
+      args <- compact_batch_args(idx)
+      if (strategize_dp_enabled()) {
+        strenv$data_parallel$init_svi(svi, rng_key, args)
+      } else do.call(svi$init, c(list(rng_key), args))
+    }
+    checkpoint_restore_params <- function(snapshot, template = NULL) {
+      if (!is.null(snapshot$svi_params)) {
+        return(neural_svi_checkpoint_params_to_jax(snapshot$svi_params))
+      }
+      if (!identical(snapshot$checkpoint_semantics, "full_svi_state")) {
+        stop("Checkpoint is missing its parameter values.", call. = FALSE)
+      }
+      if (is.null(template)) template <- checkpoint_state_template()
+      restored <- strenv$data_parallel$restore_state(
+        svi_checkpoint$path, template, snapshot$full_state_generation)
+      svi$get_params(strategize_dp_local(restored))
     }
 
     checkpoint_resume_params <- NULL
@@ -20500,7 +20580,16 @@ generate_ModelOutcome_neural <- function(){
         } else {
           svi_checkpoint_latest
         }
-        SVIParams <- neural_svi_checkpoint_params_to_jax(checkpoint_final_snapshot$svi_params)
+        if (identical(svi_checkpoint_latest$checkpoint_semantics, "full_svi_state")) {
+          svi_state <- strenv$data_parallel$restore_state(
+            svi_checkpoint$path, checkpoint_state_template(), svi_checkpoint_latest$full_state_generation)
+          SVIParams <- if (identical(checkpoint_final_snapshot$full_state_generation,
+                                    svi_checkpoint_latest$full_state_generation)) {
+            svi$get_params(strategize_dp_local(svi_state))
+          } else checkpoint_restore_params(checkpoint_final_snapshot, svi_state)
+        } else {
+          SVIParams <- checkpoint_restore_params(checkpoint_final_snapshot)
+        }
         SVIPosteriorDraws <- checkpoint_prediction_params_to_draws(
           checkpoint_final_snapshot$prediction_params
         )
@@ -20558,7 +20647,8 @@ generate_ModelOutcome_neural <- function(){
       if (!is.null(compact_saved_rng_state) && length(compact_saved_rng_state) > 1L) {
         assign(".Random.seed", compact_saved_rng_state, envir = .GlobalEnv)
       }
-      if (checkpoint_resume_completed > 0L && is.null(checkpoint_resume_params)) {
+      if (checkpoint_resume_completed > 0L && is.null(checkpoint_resume_params) &&
+          !identical(svi_checkpoint_latest$checkpoint_semantics, "full_svi_state")) {
         checkpoint_resume_completed <- 0L
       }
       init_idx <- compact_sample_obs_idx()
@@ -20578,6 +20668,9 @@ generate_ModelOutcome_neural <- function(){
           svi_checkpoint$path, svi_state, svi_checkpoint_latest$full_state_generation
         )
       }
+      # Initialization can reuse warm-start arrays owned by the caller's base
+      # model. Donation must never invalidate that saved model's parameters.
+      svi_state <- strenv$data_parallel$owned_state(svi_state)
       checkpoint_resume_params <- NULL
       if (!is.null(compact_saved_rng_state) && length(compact_saved_rng_state) > 1L) {
         assign(".Random.seed", compact_saved_rng_state, envir = .GlobalEnv)
@@ -20791,7 +20884,6 @@ generate_ModelOutcome_neural <- function(){
       if (is.na(no_improve_checks) || no_improve_checks < 0L) {
         no_improve_checks <- 0L
       }
-      compact_best_svi_state <- NULL
       compact_best_svi_params <- NULL
       compact_validation_errors <- 0L
       compact_metric_failures <- 0L
@@ -20877,8 +20969,8 @@ generate_ModelOutcome_neural <- function(){
           improved_metric <- !is.finite(best_metric) || metric_value < best_metric
           if (isTRUE(improved_metric)) {
             best_metric <<- metric_value
-            compact_best_svi_state <<- svi_state
-            compact_best_svi_params <<- tryCatch(svi$get_params(strategize_dp_local(svi_state)), error = function(e) NULL)
+            compact_best_svi_params <<- strenv$data_parallel$host_copy(
+              svi$get_params(strategize_dp_local(svi_state)))
             early_stopping_info$best_step <<- as.integer(svi_steps_completed)
             early_stopping_info$best_metric <<- metric_value
             no_improve_checks <<- 0L
@@ -21046,8 +21138,10 @@ generate_ModelOutcome_neural <- function(){
           }
           if (!is.null(stacked_batch_args)) {
             scan_result <- tryCatch(
-              strenv$jax_svi_update_scan(svi, svi_state, stacked_batch_args),
+              strenv$jax_svi_update_scan(svi, svi_state, stacked_batch_args,
+                donate_state = isTRUE(compact_update_stable_available)),
               error = function(e) {
+                if (grepl("Donated SVI update failed", conditionMessage(e), fixed = TRUE)) stop(e)
                 compact_scan_error <<- conditionMessage(e)
                 compact_update_jit_status <<- "scan_failed"
                 NULL
@@ -21128,7 +21222,8 @@ generate_ModelOutcome_neural <- function(){
           obs_idx <- compact_sample_obs_idx()
           batch_args <- compact_batch_args(obs_idx)
           update_result <- tryCatch(
-            strenv$jax_svi_update(svi, svi_state, batch_args),
+            strenv$jax_svi_update(svi, svi_state, batch_args,
+              donate_state = isTRUE(compact_update_stable_available)),
             error = function(e) {
               compact_jit_error <<- conditionMessage(e)
               compact_update_jit_status <<- "single_failed"
@@ -21332,9 +21427,7 @@ generate_ModelOutcome_neural <- function(){
           early_stopping_info$best_metric <- best_metric
           early_stopping_info <- neural_finalize_validation_metrics(early_stopping_info)
           if (!is.null(compact_best_svi_params)) {
-            SVIParams <- compact_best_svi_params
-          } else if (!is.null(compact_best_svi_state)) {
-            SVIParams <- tryCatch(svi$get_params(compact_best_svi_state), error = function(e) NULL)
+            SVIParams <- strenv$data_parallel$device_copy(compact_best_svi_params)
           }
           if (isTRUE(svi_checkpoint$enabled) && is.null(SVIParams)) {
             svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
@@ -21343,7 +21436,7 @@ generate_ModelOutcome_neural <- function(){
             )
             if (!is.null(svi_checkpoint_best) &&
                 is.finite(svi_checkpoint_best$best_metric %||% NA_real_)) {
-              SVIParams <- neural_svi_checkpoint_params_to_jax(svi_checkpoint_best$svi_params)
+              SVIParams <- checkpoint_restore_params(svi_checkpoint_best, svi_state)
               SVIPosteriorDraws <- checkpoint_prediction_params_to_draws(
                 svi_checkpoint_best$prediction_params
               )

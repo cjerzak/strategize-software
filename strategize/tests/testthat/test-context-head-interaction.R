@@ -792,8 +792,10 @@ test_that("attn candidate token slicing is stable with context tokens", {
       return_tokens = TRUE
     )
 
-    expect_equal(as.integer(out$cand_left_out$shape[[2]]), 1L)
-    expect_equal(as.integer(out$cand_right_out$shape[[2]]), 1L)
+    # Keep the actual factor, party and relation tokens, even without has_*
+    # metadata flags. Context tokens must stay outside the candidate slice.
+    expect_equal(as.integer(out$cand_left_out$shape[[2]]), 3L)
+    expect_equal(as.integer(out$cand_right_out$shape[[2]]), 3L)
   }
 })
 

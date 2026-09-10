@@ -97,7 +97,7 @@ def test_checkpoint_commit_and_corruption(runtime,tmp_path):
     root=tmp_path/"full-state"
     assert len([p for p in root.iterdir() if p.is_dir()]) == 2
     (root/"partial").mkdir()
-    assert runtime.load_checkpoint_payload(tmp_path)["payload"].tolist() == [2]
+    assert list(runtime.load_checkpoint_payload(tmp_path)["payload"]) == [2]
     pointer=json.loads((root/"latest.json").read_text())
     (root/pointer["generation"]/"metadata.rds").write_bytes(b"corrupt")
     with pytest.raises(RuntimeError,match="checksum"):

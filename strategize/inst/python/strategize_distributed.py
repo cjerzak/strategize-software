@@ -180,7 +180,7 @@ class Runtime:
             raise RuntimeError(f"Workers disagree on {label}: {values}")
 
     def broadcast_array(self, value):
-        """Small variable-length one-dimensional host data, including R raw bytes."""
+        """Small variable-length one-dimensional integer host data."""
         value = np.asarray(value, dtype=np.int32).reshape(-1)
         if self.count == 1:
             return value
@@ -188,6 +188,23 @@ class Runtime:
         n = int(mh.broadcast_one_to_all(np.array(value.size, np.int32), self.primary))
         buf = value if self.primary else np.zeros(n, np.int32)
         return np.asarray(mh.broadcast_one_to_all(buf, self.primary))
+
+    @staticmethod
+    def _raw_bytes(value):
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return np.frombuffer(value, dtype=np.uint8)
+        # Accept the old integer-vector transport for existing callers.
+        return np.asarray(value, dtype=np.uint8).reshape(-1)
+
+    def broadcast_bytes(self, value):
+        """R raw vectors cross reticulate as bytearrays, without int32 expansion."""
+        value = self._raw_bytes(value)
+        if self.count > 1:
+            from jax.experimental import multihost_utils as mh
+            n = int(mh.broadcast_one_to_all(np.array(value.size, np.int32), self.primary))
+            value = value if self.primary else np.zeros(n, np.uint8)
+            value = np.asarray(mh.broadcast_one_to_all(value, self.primary))
+        return bytearray(value)
 
     def primary_json(self, fn, label):
         result = self.coordinated(lambda: fn() if self.primary else None, label)
@@ -201,6 +218,18 @@ class Runtime:
                 raise ValueError("Expected replicated training state")
             return a.addressable_data(0)
         return jax.tree.map(local, tree)
+
+    def host_copy(self, tree):
+        # An owned copy matters on CPU too: np.asarray may alias a JAX buffer
+        # that the next update donates. No GPU state survives in this snapshot.
+        return jax.tree.map(lambda a: np.array(a, copy=True), self.local_tree(tree))
+
+    def device_copy(self, tree):
+        return jax.tree.map(jnp.asarray, tree)
+
+    def owned_state(self, tree):
+        """Detach initialization/warm-start aliases before enabling donation."""
+        return jax.tree.map(lambda a: a.copy(), tree)
 
     def replicate(self, tree, broadcast=False):
         if not self.enabled:
@@ -409,9 +438,9 @@ class Runtime:
                 self.collective_chain = None
         return (lambda state, args: jax.lax.scan(step, state, args)) if scan else step
 
-    def _compile(self, svi, args, state, scan=False, gradients=False):
+    def _compile(self, svi, args, state, scan=False, gradients=False, donate=False):
         shapes = dict(self.shapes)
-        key = (id(svi), scan, gradients, tuple(
+        key = (id(svi), scan, gradients, donate, tuple(
             (k, shapes.get(k), None if v is None else (v.shape, str(v.dtype)))
             for k, v in args.items()))
         if key in self.executables:
@@ -443,7 +472,8 @@ class Runtime:
             print(f"SVI rank {self.rank}: compiling {'gradients' if gradients else 'scan' if scan else 'update'}", flush=True)
         compiled = self.coordinated(lambda: jax.jit(
             fn, in_shardings=(self.rep, self._argument_shardings(args, scan)),
-            out_shardings=self.rep if gradients else (self.rep, self.rep)
+            out_shardings=self.rep if gradients else (self.rep, self.rep),
+            donate_argnums=(0,) if donate and not gradients else ()
         ).lower(state, args).compile(), "compile SVI")
         hlo = compiled.as_text()
         schedule = collective_execution_schedule(hlo)
@@ -472,21 +502,28 @@ class Runtime:
         self.compile_count += 1
         return compiled
 
-    def update(self, svi, state, args, scan=False):
+    def update(self, svi, state, args, scan=False, donate=False):
         args = dict(args)
-        fn = self._compile(svi, args, state, scan=scan)
+        fn = self._compile(svi, args, state, scan=scan, donate=donate)
         self.begin_update()
         start = time.monotonic()
-        result = fn(state, args)
-        jax.block_until_ready(result)
-        self.record_local_timing(time.monotonic() - start)
-        finite = np.isfinite(np.asarray(self.local_tree(result[1]))).all()
-        self.agree_status(None if finite else "nonfinite loss", "SVI update")
-        if len(self.timings) == 1:
-            self.check_replicas(result[1], "first losses")
-            if os.environ.get("STRATEGIZE_DP_VERIFY_REPLICAS") == "1":
-                self.check_replicas(result[0], "first optimizer state")
-        return result
+        try:
+            result = fn(state, args)
+            jax.block_until_ready(result)
+            self.record_local_timing(time.monotonic() - start)
+            finite = np.isfinite(np.asarray(self.local_tree(result[1]))).all()
+            self.agree_status(None if finite else "nonfinite loss", "SVI update")
+            if len(self.timings) == 1:
+                self.check_replicas(result[1], "first losses")
+                if os.environ.get("STRATEGIZE_DP_VERIFY_REPLICAS") == "1":
+                    self.check_replicas(result[0], "first optimizer state")
+            return result
+        except Exception as exc:
+            # Post-update validation can fail after donation has consumed the
+            # input too. Never let the R scan fallback retry that old state.
+            if donate:
+                raise RuntimeError(f"Donated SVI update failed; its input state cannot be retried: {exc}") from exc
+            raise
 
     def begin_update(self):
         chunks = os.environ.get("STRATEGIZE_DP_TRACE_CHUNKS", "")
@@ -516,16 +553,25 @@ class Runtime:
                 "grad_n_nonfinite": sum(int(np.sum(~np.isfinite(a))) for a in leaves), "grad_n_elements": n}
 
     def check_replicas(self, tree, label="replicas"):
-        # Compare actual local copies. Only qualification gathers full state.
-        flat = np.concatenate([np.asarray(a).reshape(-1).astype(np.float64)
-                               for a in jax.tree.leaves(self.local_tree(tree))])
-        if not np.isfinite(flat).all():
-            self.agree_status("nonfinite state", label)
-        else:
-            self.agree_status(None, label)
-        values = self.gather_json(flat.tolist())
-        if any(not np.allclose(v, values[0], rtol=1e-5, atol=1e-6) for v in values[1:]):
-            raise RuntimeError(f"{label} differ across workers")
+        # Qualification can inspect a large optimizer state. Never expand it
+        # into Python floats/JSON or stage the whole state in host memory.
+        leaves, structure = jax.tree.flatten(self.local_tree(tree))
+        self.require_equal((str(structure), [(a.shape, str(a.dtype)) for a in leaves]),
+                           label + " structure")
+        if self.count > 1:
+            from jax.experimental import multihost_utils as mh
+        finite, equal = True, True
+        for leaf in leaves:
+            flat = leaf.reshape(-1)
+            chunk_size = max(1, 1024**2 // leaf.dtype.itemsize)
+            for start in range(0, flat.size, chunk_size):
+                chunk = np.asarray(flat[start:start + chunk_size])
+                finite = bool(np.isfinite(chunk).all()) and finite
+                if self.count > 1:
+                    reference = np.asarray(mh.broadcast_one_to_all(chunk, self.primary))
+                    equal = bool(np.allclose(chunk, reference, rtol=1e-5, atol=1e-6)) and equal
+        self.agree_status("nonfinite state" if not finite else
+                          "copies differ across workers" if not equal else None, label)
 
     def cache_info(self):
         return {"size": len(self.executables), "compile_count": self.compile_count}
@@ -586,7 +632,8 @@ class Runtime:
             arrays = {f"leaf_{i:06d}": np.asarray(a) for i, a in enumerate(leaves)}
             with self._checkpointer() as writer:
                 writer.save(str(directory / "arrays"), arrays)
-            (directory / "metadata.rds").write_bytes(np.asarray(payload, np.uint8).tobytes())
+            with (directory / "metadata.rds").open("wb") as stream:
+                stream.write(self._raw_bytes(payload))
             meta = {"schema": "strategize-full-svi-v1", "treedef": str(tree),
                     "leaves": {k: {"shape": list(a.shape), "dtype": a.dtype.str} for k, a in arrays.items()},
                     "versions": self.metadata()["versions"]}
@@ -645,7 +692,7 @@ class Runtime:
         if generation is None:
             return None
         raw = np.frombuffer((directory / "metadata.rds").read_bytes(), np.uint8) if self.primary else np.zeros(0, np.uint8)
-        return {"generation": generation, "payload": self.broadcast_array(raw)}
+        return {"generation": generation, "payload": self.broadcast_bytes(raw)}
 
     def restore_state(self, path, template, generation):
         def read():
