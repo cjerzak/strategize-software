@@ -240,6 +240,14 @@
 #' @param compute_se Logical indicating whether standard errors should be computed for the final
 #'   estimates (via the delta method or related expansions). Defaults to \code{FALSE}.
 #'
+#' @param policy_control Optional execution controls. \code{loop = "auto"}
+#'   uses a compiled scan for GLMs and the R loop for neural outcomes;
+#'   \code{"r"} selects the reference loop. \code{trace = FALSE} omits full
+#'   per-iteration policy snapshots. \code{remat = TRUE} checkpoints scan steps
+#'   during full-trace differentiation. \code{se_chunk_size = 16L} bounds the
+#'   number of Jacobian output rows differentiated together. In
+#'   \code{cv_strategize()}, \code{reuse_outcomes = TRUE} reuses fitted GLMs
+#'   within each fold across penalties. These controls preserve the objective.
 #' @param se_method Character string specifying the SE computation method when \code{compute_se = TRUE}.
 #'   \code{"full"} differentiates through the full optimization trace (default). \code{"implicit"}
 #'   uses implicit differentiation at the solution (adversarial equilibrium or non-adversarial optimum).
@@ -583,13 +591,15 @@ strategize       <-          function(
                                             rain_variant = "alg10_staged",
                                             rain_output = "last",
                                             compute_hessian = TRUE,
-                                            hessian_max_dim = 50L){
+                                            hessian_max_dim = 50L,
+                                            policy_control = NULL){
   # [1.] ast then dag 
   #   ast is 1, based on sort(unique(competing_group_variable_candidate))[1]
   #   dag is 2, based on sort(unique(competing_group_variable_candidate))[2]
   # [2.] when simplex constrained with holdout, LAST entry is held out 
   
   message("-------------\nstrategize() call has begun...")
+  policy_control <- cs_policy_control(policy_control)
 
   if (!is.logical(force_reinforce) || length(force_reinforce) != 1L || is.na(force_reinforce)) {
     stop("'force_reinforce' must be TRUE or FALSE.", call. = FALSE)
@@ -941,7 +951,9 @@ strategize       <-          function(
     }
 
     # run models with inputs: W_; Y_; varcov_cluster_variable_;
-    if(outcome_model_type == "glm"){ eval(body(generate_ModelOutcome), envir = evaluation_environment) } # linear w interactions
+    if(outcome_model_type == "glm"){
+      cs_policy_fit_glm(evaluation_environment, policy_control$.fit_cache)
+    }
     if(outcome_model_type == "neural"){ eval(body(generate_ModelOutcome_neural), envir = evaluation_environment) }
     
     # define combined parameter vector & fxn for reextracting intercept & coefficient
@@ -1368,6 +1380,15 @@ strategize       <-          function(
                               ifelse(DisaggreateQ, yes = "Multi", no = "Single") )))
   }
 
+  glm_pair_helpers <- if (outcome_model_type == "glm" && adversarial) {
+    cs_policy_module()$GLMPairs(main_indices_i0,
+      if (is.null(inter_indices_i0)) integer(0) else inter_indices_i0,
+      if (is.null(inter_indices_i0)) integer(0) else as.integer(interaction_info$dl_index_adj - 1L),
+      if (is.null(inter_indices_i0)) integer(0) else as.integer(interaction_info$dplp_index_adj - 1L),
+      binomial = identical(glm_family, "binomial"), ast_prop = as.numeric(strenv$AstProp),
+      dag_prop = as.numeric(strenv$DagProp), strength = as.numeric(primary_strength))
+  } else NULL
+
   # Pretty Pi function
   {
     length_full_simplex <- length( unique( unlist( w_orig ) ) )
@@ -1500,6 +1521,12 @@ strategize       <-          function(
 
   # get jax seed into correct type
   jax_seed <- strenv$jax$random$PRNGKey( ai(runif(1,1,1000)) )
+  policy_rain_eta <- if (is.null(rain_eta)) {
+    if (is.null(rain_L)) max(learning_rate_max, 1e-8) else 1 / (8 * rain_L)
+  } else rain_eta
+  policy_schedule <- cs_policy_schedule(nSGD, optimism, rain_lambda %||% 0,
+    rain_gamma %||% 0, rain_L, policy_rain_eta, rain_output)
+  policy_loop_runner <- NULL
 
   # Obtain solution via exact calculation
   message("Starting optimization...")
@@ -1544,14 +1571,18 @@ strategize       <-          function(
       return( results_vec )
     }
     results_vec <- FxnForJacobian( list(EST_INTERCEPT_tf,EST_COEFFICIENTS_tf) )
-    jacobian_mat <- strenv$jax$jacobian(FxnForJacobian, 0L)(  list(EST_INTERCEPT_tf,
-                                                                   EST_COEFFICIENTS_tf) ) 
+    jacobian_mat <- NULL
+    if (compute_se) {
+      jacobian_mat <- strenv$jax$jacobian(FxnForJacobian, 0L)(list(EST_INTERCEPT_tf,
+                                                               EST_COEFFICIENTS_tf))
 
     # reshape jacobian and process results
     jacobian_mat_exact <- jacobian_mat <- cbind(
         strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[1]],1L),1L))),
         strenv$np$array(strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$squeeze(jacobian_mat[[2]],1L),2L))) )
-    vcov_OutcomeModel_concat <- vcov_OutcomeModel_ast_jnp
+    }
+    vcov_OutcomeModel_blocks <- if (compute_se) list(vcov_OutcomeModel_ast_jnp) else NULL
+    vcov_OutcomeModel_concat <- if (compute_se) vcov_OutcomeModel_ast_jnp else NULL
     q_star_exact <- q_star <- strenv$np$array( strenv$jnp$take(results_vec, 0L) )
     pi_star_full <- strenv$np$array( strenv$jnp$take(results_vec,
                                                      strenv$jnp$array((1L:length(results_vec))[-c(1:3)] -1L)))
@@ -1588,6 +1619,11 @@ strategize       <-          function(
     InitializeQMonteFxns_ <- paste(deparse(InitializeQMonteFxns_impl),collapse="\n")
     InitializeQMonteFxns_ <- gsub(InitializeQMonteFxns_, pattern = "function \\(\\)", replacement = "")
     InitializeQMonteFxns_ <- eval( parse( text = InitializeQMonteFxns_ ), envir = evaluation_environment )
+    if (isTRUE(policy_control$.evaluation_only)) {
+      return(cs_policy_evaluation_context(evaluation_environment))
+    }
+    # A runner belongs to this fitted model/cluster; never share it across fits.
+    policy_loop_runner <- NULL
 
     # setup gd functions dparams
     environment(FullGetQStar_) <- evaluation_environment # keep to avoid having to pass all subparameters like nMonte 
@@ -1665,81 +1701,28 @@ strategize       <-          function(
     QFXN <- q_with_pi_star_full[[2]]$QFXN
     q_with_pi_star_full <- strenv$jnp$array(q_with_pi_star_full[[1]], strenv$dtj)
     
-    if(!use_optax){
-      inv_learning_rate_ast_vec <- unlist(  lapply(strenv$inv_learning_rate_ast_vec,
-                                                   function(zer){ strenv$np$array(zer) }))
-    }
-    
-    grad_mag_ast_vec <- unlist(  lapply(strenv$grad_mag_ast_vec,function(zer){
-      strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) ))  }) )
-    try(suppressWarnings(plot( grad_mag_ast_vec, main = "Gradient Magnitude Evolution (ast)", log ="y")),T)
-    try(points(lowess(grad_mag_ast_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
-    
-    if(adversarial){ 
-      grad_mag_dag_vec <- try(unlist(  lapply(strenv$grad_mag_dag_vec,function(zer){
-        strenv$np$array(strenv$jnp$sqrt( strenv$jnp$sum(strenv$jnp$square(strenv$jnp$array(zer,strenv$dtj))) )) }) ),T)
-      try(suppressWarnings(plot( grad_mag_dag_vec , main = "Gradient Magnitude Evolution (dag)",log="y")),T)
-      try(points(lowess(grad_mag_dag_vec), cex = 2, type = "l",lwd = 2, col = "red"), T)
-    }
-    
-    loss_ast_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_ast_vec,0L))
-    try(suppressWarnings(plot( loss_ast_vec, main = "Value (ast)", log ="y")),T)
-    if(adversarial){ 
-      loss_dag_vec <- strenv$np$array(strenv$jnp$stack(strenv$loss_dag_vec,0L))
-      try(suppressWarnings(plot( loss_dag_vec, main = "Value (dag)", log ="y")),T)
-    }
-    
-    pi_star_red <- getQPiStar_gd(
-                        REGRESSION_PARAMETERS_ast = REGRESSION_PARAMS_jax_ast_jnp,
-                        REGRESSION_PARAMETERS_dag = REGRESSION_PARAMS_jax_dag_jnp,
-                        REGRESSION_PARAMETERS_ast0 = REGRESSION_PARAMS_jax_ast0_jnp,
-                        REGRESSION_PARAMETERS_dag0 = REGRESSION_PARAMS_jax_dag0_jnp,
-                        P_VEC_FULL_ast = p_vec_full_ast_jnp,
-                        P_VEC_FULL_dag = p_vec_full_dag_jnp,
-                        SLATE_VEC_ast = SLATE_VEC_ast_jnp, 
-                        SLATE_VEC_dag = SLATE_VEC_dag_jnp,
-                        LAMBDA = strenv$jnp$array(  lambda  ),
-                        SEED   = jax_seed,
-                        functionList = list(dQ_da_ast, dQ_da_dag,
-                                            QFXN),
-                        a_i_ast = a_vec_init_ast, 
-                        a_i_dag = a_vec_init_dag, 
-                        functionReturn  = FALSE,
-                        gd_full_simplex = FALSE, 
-                        quiet           = FALSE,
-                        optimism        = optimism,                            # 
-                        optimism_coef   = optimism_coef,
-                        rain_lambda     = rain_lambda,
-                        rain_gamma      = rain_gamma,
-                        rain_L          = rain_L,
-                        rain_eta        = rain_eta,
-                        rain_variant    = rain_variant,
-                        rain_output     = rain_output,
-                        force_reinforce = force_reinforce
-                        )
-    pi_star_red <- strenv$np$array(pi_star_red)[-c(1:3),]
-    pi_star_red_ast <- strenv$jnp$array(as.matrix(  pi_star_red[1:(length(pi_star_red)/2)] ) )
-    pi_star_red_dag <- strenv$jnp$array(as.matrix(  pi_star_red[-c(1:(length(pi_star_red)/2))]))
+    inv_learning_rate_ast_vec <- cs_policy_numeric_history(strenv$inv_learning_rate_ast_vec)
+    grad_mag_ast_vec <- cs_policy_numeric_history(strenv$grad_mag_ast_vec)
+    grad_mag_dag_vec <- cs_policy_numeric_history(strenv$grad_mag_dag_vec)
+    loss_ast_vec <- cs_policy_numeric_history(strenv$loss_ast_vec)
+    loss_dag_vec <- cs_policy_numeric_history(strenv$loss_dag_vec)
+
+    # Both representations come from the same accepted final policy.
+    pi_star_red_ast <- strenv$a2Simplex_diff_use(a_i_ast_optimized)
+    pi_star_red_dag <- strenv$a2Simplex_diff_use(a_i_dag_optimized)
 
     q_star_gd <- q_star <- strenv$np$array(  q_with_pi_star_full )[1]
     # sanity check: 
     # strenv$np$array(  q_with_pi_star_full )[1]  - sum(strenv$np$array(  q_with_pi_star_full )[2:3]*c(strenv$AstProp, strenv$DagProp)) 
     pi_star_full_gd <- pi_star_full <- strenv$np$array( q_with_pi_star_full )[-c(1:3)]
 
-    #  https://github.com/google/jax/issues/1696 
-    jacobian_mat_gd <- jacobian_mat <- matrix(0, ncol = 4*REGRESSION_PARAMS_jax_ast_jnp$shape[[1]],
-                                                 nrow = q_with_pi_star_full$shape[[1]])
-    diag(jacobian_mat_gd) <- diag(jacobian_mat) <- 1
-    if (is.null(dim(vcov_OutcomeModel_ast_jnp))) {
-      vcov_OutcomeModel_concat <- rep(0, length(vcov_OutcomeModel_ast_jnp) * 4L)
-    } else {
-      vcov_OutcomeModel_concat <- matrix(0, nrow = nrow(vcov_OutcomeModel_ast_jnp) * 4L,
-                                            ncol = nrow(vcov_OutcomeModel_ast_jnp) * 4L)
-    }
+    jacobian_mat_gd <- jacobian_mat <- NULL
+    vcov_OutcomeModel_concat <- vcov_OutcomeModel_blocks <- NULL
     if(compute_se){
       message("Computing SEs...")
       # Preserve convergence history before jacrev re-runs getQPiStar_gd.
       convergence_cache <- list(
+        extragrad_eval_points = strenv$extragrad_eval_points,
         grad_mag_ast_vec = strenv$grad_mag_ast_vec,
         grad_mag_dag_vec = strenv$grad_mag_dag_vec,
         loss_ast_vec = strenv$loss_ast_vec,
@@ -1762,31 +1745,23 @@ strategize       <-          function(
         rain_anchor_bar_norm_ast = strenv$rain_anchor_bar_norm_ast,
         rain_anchor_bar_norm_dag = strenv$rain_anchor_bar_norm_dag
       )
-      # first, compute vcov
-      if (is.null(dim(vcov_OutcomeModel_ast_jnp))) {
-        vcov_OutcomeModel_concat <- c(vcov_OutcomeModel_ast_jnp,
-                                      vcov_OutcomeModel_dag_jnp,
-                                      vcov_OutcomeModel_ast0_jnp,
-                                      vcov_OutcomeModel_dag0_jnp)
-      } else {
-        vcov_OutcomeModel_concat <- as.matrix( Matrix::bdiag( list(
-                                            vcov_OutcomeModel_ast_jnp,
-                                            vcov_OutcomeModel_dag_jnp,
-                                            vcov_OutcomeModel_ast0_jnp,
-                                            vcov_OutcomeModel_dag0_jnp  )  ) )
-      }
+      vcov_OutcomeModel_blocks <- list(vcov_OutcomeModel_ast_jnp,
+        vcov_OutcomeModel_dag_jnp, vcov_OutcomeModel_ast0_jnp, vcov_OutcomeModel_dag0_jnp)
+      # Keep the compatibility field sparse, and use the blocks for arithmetic.
+      vcov_OutcomeModel_concat <- if (all(vapply(vcov_OutcomeModel_blocks,
+          function(x) is.null(dim(x)), logical(1)))) {
+        unlist(vcov_OutcomeModel_blocks, use.names = FALSE)
+      } else Matrix::bdiag(lapply(vcov_OutcomeModel_blocks, function(x) {
+        if (is.null(dim(x))) Matrix::Diagonal(x = x) else x
+      }))
 
       se_method_effective <- se_method
       if (se_method_effective == "full") {
-        # jacfwd uses forward-mode automatic differentiation, which is more efficient for "tall" Jacobian matrices
-        # jacrev uses reverse-mode, which is more efficient for "wide" Jacobian matrices.
-        # For near-square matrices, jacfwd probably has an edge over jacrev.
-        # note: do not jit compile as computation only used once (compilation induces overhead)
-        jacobian_mat <- strenv$jax$jacrev(getQPiStar_gd, 0L:3L)(
-                                    REGRESSION_PARAMS_jax_ast_jnp,
-                                    REGRESSION_PARAMS_jax_dag_jnp,
-                                    REGRESSION_PARAMS_jax_ast0_jnp,
-                                    REGRESSION_PARAMS_jax_dag0_jnp,
+        differentiated_args <- list(REGRESSION_PARAMS_jax_ast_jnp,
+          REGRESSION_PARAMS_jax_dag_jnp, REGRESSION_PARAMS_jax_ast0_jnp,
+          REGRESSION_PARAMS_jax_dag0_jnp)
+        full_policy_output <- function(theta) {
+          getQPiStar_gd(theta[[1L]], theta[[2L]], theta[[3L]], theta[[4L]],
                                     p_vec_full_ast_jnp,
                                     p_vec_full_dag_jnp,
                                     SLATE_VEC_ast_jnp, 
@@ -1808,11 +1783,13 @@ strategize       <-          function(
                                     rain_L = rain_L,
                                     rain_eta = rain_eta,
                                     rain_variant = rain_variant,
-                                    rain_output = rain_output
-                                    )
-        jacobian_mat_gd <- jacobian_mat <- lapply(jacobian_mat,function(l_){
-          strenv$np$array( strenv$jnp$squeeze(strenv$jnp$squeeze(strenv$jnp$array(l_,strenv$dtj),1L),2L) ) })
-        jacobian_mat_gd <- jacobian_mat <- do.call(cbind, jacobian_mat)
+                                    rain_output = rain_output,
+                                    force_reinforce = force_reinforce
+          )
+        }
+        jacobian_parts <- cs_policy_module()$chunked_jacrev(full_policy_output,
+          differentiated_args, chunk_size = policy_control$se_chunk_size)
+        jacobian_mat_gd <- jacobian_mat <- do.call(cbind, lapply(jacobian_parts, as.matrix))
       } else {
         message("Computing SEs via implicit differentiation...")
         reshape_jac <- function(jac){
@@ -2053,6 +2030,7 @@ strategize       <-          function(
         jacobian_mat_gd <- jacobian_mat <- as.matrix(strenv$np$array(jacobian_mat))
       }
       # plot(colMeans(abs(jacobian_mat_gd)))
+      strenv$extragrad_eval_points <- convergence_cache$extragrad_eval_points
       strenv$grad_mag_ast_vec <- convergence_cache$grad_mag_ast_vec
       strenv$grad_mag_dag_vec <- convergence_cache$grad_mag_dag_vec
       strenv$loss_ast_vec <- convergence_cache$loss_ast_vec
@@ -2079,22 +2057,15 @@ strategize       <-          function(
 
   # the first three entries of output are:
   # Qhat_population, Qhat_ast, Qhat_dag
-  if (is.null(dim(vcov_OutcomeModel_concat))) {
-    vcov_diag <- as.numeric(vcov_OutcomeModel_concat)
-    n_params <- ncol(jacobian_mat)
-    if (length(vcov_diag) < n_params) {
-      vcov_diag <- c(vcov_diag, rep(0, n_params - length(vcov_diag)))
-    }
-    if (length(vcov_diag) > n_params) {
-      vcov_diag <- vcov_diag[seq_len(n_params)]
-    }
-    vcov_diag_out <- as.numeric((jacobian_mat ^ 2) %*% vcov_diag)
-    vcov_PiStar <- diag(vcov_diag_out)
+  if (compute_se) {
+    vcov_PiStar <- cs_policy_covariance(jacobian_mat, vcov_OutcomeModel_blocks)
+    policy_variances <- diag(vcov_PiStar)
   } else {
-    vcov_PiStar <- jacobian_mat %*% vcov_OutcomeModel_concat %*% t(jacobian_mat)
+    vcov_PiStar <- NULL
+    policy_variances <- rep(0, if (use_gd) q_with_pi_star_full$shape[[1L]] else results_vec$shape[[1L]])
   }
-  q_star <- as.matrix(   q_star  )
-  q_star_se <- sqrt(  diag( vcov_PiStar )[1] )
+  q_star <- as.matrix(q_star)
+  q_star_se <- sqrt(policy_variances[1L])
 
   # In-sample Q at the reference (randomization) policy p_list, evaluated via
   # the same report-phase estimator as q_star so the two are on identical
@@ -2172,14 +2143,14 @@ strategize       <-          function(
 
   # drop the q part
   if(diff == T){ 
-    pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)] )
+    pi_star_se <- sqrt(  policy_variances[-c(1:3)] )
   }
   if(diff == F){
     # CHECK HERE - CHECK 
     take_indices <- 1:length( pi_star_numeric )
     if(use_gd){ take_indices <- 1:(length(pi_star_numeric)/2 )  }
     pi_star_numeric <- pi_star_numeric[take_indices]
-    pi_star_se <- sqrt(  diag( vcov_PiStar )[-c(1:3)][take_indices] )
+    pi_star_se <- sqrt(  policy_variances[-c(1:3)][take_indices] )
     
     # setup pretty pi's
     pi_star_se_list <- pi_star_list <- list()
@@ -2636,7 +2607,8 @@ strategize       <-          function(
                   "est_coefficients_jnp" = strenv$jnp$array(EST_COEFFICIENTS_tf),
 
                   "vcov_outcome_model" = vcov_OutcomeModel,
-                  "vcov_outcome_model_concat" = vcov_OutcomeModel_concat, 
+                  "vcov_outcome_model_concat" = vcov_OutcomeModel_concat,
+                  "vcov_outcome_model_blocks" = vcov_OutcomeModel_blocks,
                   "jacobian_mat" = jacobian_mat, 
                   "optim_type" = optim_type,
                   "optimism" = optimism,
@@ -2674,6 +2646,8 @@ strategize       <-          function(
                   "AstProp" = strenv$AstProp,   
                   "DagProp" = strenv$DagProp,   
                   "strenv" = strenv,
+                  ".policy_eval_state" = cs_policy_eval_state(),
+                  "policy_control" = policy_control[c("loop", "trace", "remat", "se_chunk_size", "reuse_outcomes")],
                   "Y_models" = list(
                     "my_model_ast_jnp"  = my_model_ast_jnp,
                     "my_model_ast0_jnp" = my_model_ast0_jnp,
@@ -2694,20 +2668,13 @@ strategize       <-          function(
 
                   # Convergence history for diagnostics
                   "convergence_history" = tryCatch({
-                    # Helper to safely convert JAX/Python objects to numeric
-                    safe_to_numeric <- function(x) {
-                      tryCatch({
-                        strenv$np$array(x)
-                      }, error = function(e) NA_real_)
-                    }
-
                     list(
-                      "grad_ast" = unlist(lapply(strenv$grad_mag_ast_vec, safe_to_numeric)),
-                      "grad_dag" = unlist(lapply(strenv$grad_mag_dag_vec, safe_to_numeric)),
-                      "loss_ast" = unlist(lapply(strenv$loss_ast_vec, safe_to_numeric)),
-                      "loss_dag" = unlist(lapply(strenv$loss_dag_vec, safe_to_numeric)),
-                      "inv_lr_ast" = unlist(lapply(strenv$inv_learning_rate_ast_vec, safe_to_numeric)),
-                      "inv_lr_dag" = unlist(lapply(strenv$inv_learning_rate_dag_vec, safe_to_numeric)),
+                      "grad_ast" = cs_policy_numeric_history(strenv$grad_mag_ast_vec),
+                      "grad_dag" = cs_policy_numeric_history(strenv$grad_mag_dag_vec),
+                      "loss_ast" = cs_policy_numeric_history(strenv$loss_ast_vec),
+                      "loss_dag" = cs_policy_numeric_history(strenv$loss_dag_vec),
+                      "inv_lr_ast" = cs_policy_numeric_history(strenv$inv_learning_rate_ast_vec),
+                      "inv_lr_dag" = cs_policy_numeric_history(strenv$inv_learning_rate_dag_vec),
                       # objective_gradient_mode records the estimator used for
                       # the optimization objective. The REINFORCE fields are
                       # optimizer diagnostics: EMA baselines, reward moments,
@@ -2718,32 +2685,32 @@ strategize       <-          function(
                         "pathwise"
                       },
                       "reinforce_baseline_ast" = if (!is.null(strenv$reinforce_baseline_ast_vec)) {
-                        unlist(lapply(strenv$reinforce_baseline_ast_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$reinforce_baseline_ast_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "reinforce_baseline_dag" = if (!is.null(strenv$reinforce_baseline_dag_vec)) {
-                        unlist(lapply(strenv$reinforce_baseline_dag_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$reinforce_baseline_dag_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "reinforce_reward_mean_ast" = if (!is.null(strenv$reinforce_reward_mean_ast_vec)) {
-                        unlist(lapply(strenv$reinforce_reward_mean_ast_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$reinforce_reward_mean_ast_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "reinforce_reward_mean_dag" = if (!is.null(strenv$reinforce_reward_mean_dag_vec)) {
-                        unlist(lapply(strenv$reinforce_reward_mean_dag_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$reinforce_reward_mean_dag_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "reinforce_reward_var_ast" = if (!is.null(strenv$reinforce_reward_var_ast_vec)) {
-                        unlist(lapply(strenv$reinforce_reward_var_ast_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$reinforce_reward_var_ast_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "reinforce_reward_var_dag" = if (!is.null(strenv$reinforce_reward_var_dag_vec)) {
-                        unlist(lapply(strenv$reinforce_reward_var_dag_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$reinforce_reward_var_dag_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
@@ -2773,12 +2740,12 @@ strategize       <-          function(
                       "rain_variant" = rain_variant,
                       "rain_output" = rain_output,
                       "rain_lambda" = if (!is.null(strenv$rain_lambda_vec)) {
-                        unlist(lapply(strenv$rain_lambda_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$rain_lambda_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "rain_lambda_sum" = if (!is.null(strenv$rain_lambda_sum_vec)) {
-                        unlist(lapply(strenv$rain_lambda_sum_vec, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$rain_lambda_sum_vec)
                       } else {
                         rep(NA_real_, nSGD)
                       },
@@ -2788,12 +2755,12 @@ strategize       <-          function(
                         rep(NA_integer_, nSGD)
                       },
                       "rain_anchor_bar_norm_ast" = if (!is.null(strenv$rain_anchor_bar_norm_ast)) {
-                        unlist(lapply(strenv$rain_anchor_bar_norm_ast, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$rain_anchor_bar_norm_ast)
                       } else {
                         rep(NA_real_, nSGD)
                       },
                       "rain_anchor_bar_norm_dag" = if (!is.null(strenv$rain_anchor_bar_norm_dag)) {
-                        unlist(lapply(strenv$rain_anchor_bar_norm_dag, safe_to_numeric))
+                        cs_policy_numeric_history(strenv$rain_anchor_bar_norm_dag)
                       } else {
                         rep(NA_real_, nSGD)
                       }

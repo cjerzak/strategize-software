@@ -117,7 +117,8 @@ test_that("extragrad uses joint look-ahead for both players", {
     competing_group_variable_respondent = adv_data$competing_group_variable_respondent,
     competing_group_variable_candidate = adv_data$competing_group_variable_candidate,
     competing_group_competition_variable_candidate = adv_data$competing_group_competition_variable_candidate,
-    optimism = "extragrad"
+    optimism = "extragrad",
+    policy_control = list(trace = TRUE)
   )
 
   eval_points <- result$strenv$extragrad_eval_points

@@ -196,6 +196,7 @@ InitializeQMonteFxns <- function(){
   # 3. Precomputation of all C combinations 
   
   Qpop_pair <- build_qpop_pair(compile_fxn, getQStar_diff_MultiGroup)
+  glm_pairs <- if (exists("glm_pair_helpers", inherits = TRUE)) glm_pair_helpers else NULL
   
   # Helper: primary head-to-head win prob κ_A(t, t') within A's primary
   TEMP_PUSHF <- strenv$primary_strength
@@ -223,6 +224,14 @@ InitializeQMonteFxns <- function(){
     LAMBDA_, Q_SIGN, SEED_IN_LOOP               # (unused here)
   ){
     
+    if (!is.null(glm_pairs)) {
+      ka_e <- glm_pairs$scores(TSAMP_ast, list(COEFFICIENTS_ast0_))
+      ka_f <- glm_pairs$scores(strenv$jax$lax$stop_gradient(TSAMP_ast_PrimaryComp), list(COEFFICIENTS_ast0_))
+      kb_e <- glm_pairs$scores(TSAMP_dag, list(COEFFICIENTS_dag0_))
+      kb_f <- glm_pairs$scores(strenv$jax$lax$stop_gradient(TSAMP_dag_PrimaryComp), list(COEFFICIENTS_dag0_))
+      kA <- glm_pairs$primary(ka_e, strenv$jnp$transpose(ka_f), INTERCEPT_ast0_)
+      kB <- glm_pairs$primary(kb_e, strenv$jnp$transpose(kb_f), INTERCEPT_dag0_)
+    } else {
     # ---- Primary κ matrices ----
     # κ_A[i,j] = Pr_A_primary( t_i beats t'_j )
     if (use_neural) {
@@ -260,12 +269,27 @@ InitializeQMonteFxns <- function(){
     # causalimages::image2(strenv$np$array(kA))
     # View(strenv$np$array(kA))
     
+    }
+
     # Averages for push-forward weights
     kA_mean_over_field   <- kA$mean(axis=1L)  # [nA]   E_field[κ | entrant]
     kB_mean_over_field   <- kB$mean(axis=1L)  # [nB]
     kA_mean_over_entrant <- kA$mean(axis=0L)  # [nA']  E_entrant[κ | field]
     kB_mean_over_entrant <- kB$mean(axis=0L)  # [nB']
     
+    if (!is.null(glm_pairs)) {
+      coefficients <- list(COEFFICIENTS_ast_, COEFFICIENTS_dag_)
+      sa <- glm_pairs$scores(TSAMP_ast, coefficients)
+      sb <- glm_pairs$scores(TSAMP_dag, coefficients)
+      fa <- glm_pairs$scores(TSAMP_ast_PrimaryComp, coefficients)
+      fb <- glm_pairs$scores(TSAMP_dag_PrimaryComp, coefficients)
+      block <- function(a, b) glm_pairs$population(strenv$jnp$expand_dims(a, 1L),
+        strenv$jnp$expand_dims(b, 0L), INTERCEPT_ast_, INTERCEPT_dag_)
+      C_tu <- block(sa, sb)
+      C_tu_field <- block(sa, fb)
+      C_field_u <- block(fa, sb)
+      C_field_field <- block(fa, fb)
+    } else {
     # ---- General-election blocks for the four primary outcomes (2×2) ----
     {
     # C(t_i, u_s)
@@ -305,6 +329,8 @@ InitializeQMonteFxns <- function(){
     }, in_axes = 0L)(TSAMP_ast_PrimaryComp)   # [nA', nB']
     }
     
+    }
+
     # ---- Push-forward mixture weights (profile-specific) ----
     # Eq. (PrimaryPushforward) implies weights depend on each profile's primary win rate.
     one <- strenv$OneTf_flat
@@ -517,6 +543,7 @@ InitializeQMonteFxns_MCSampling <- function(){
   })
   
   Qpop_pair <- build_qpop_pair(compile_fxn, getQStar_diff_MultiGroup)
+  glm_pairs <- if (exists("glm_pair_helpers", inherits = TRUE)) glm_pair_helpers else NULL
   
   TEMP_PUSHF <- strenv$primary_strength
   groups_pool <- if (exists("GroupsPool", inherits = TRUE)) GroupsPool else NULL
@@ -554,6 +581,15 @@ InitializeQMonteFxns_MCSampling <- function(){
       
       one <- strenv$OneTf_flat
 
+      if (!is.null(glm_pairs)) {
+        scores <- glm_pairs$scores(strenv$jnp$stack(list(TSAMP_ast, TSAMP_dag,
+          TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp)),
+          list(COEFFICIENTS_ast_, COEFFICIENTS_dag_))
+        score <- function(i) strenv$jnp$take(scores, as.integer(i), axis = 0L)
+        pair <- function(a, b) glm_pairs$population(score(a), score(b), INTERCEPT_ast_, INTERCEPT_dag_)
+        C_tt <- pair(0L, 1L); C_tf <- pair(0L, 3L)
+        C_ft <- pair(2L, 1L); C_ff <- pair(2L, 3L)
+      } else {
       C_tt <- Qpop_pair(TSAMP_ast, TSAMP_dag,
                         INTERCEPT_ast_, COEFFICIENTS_ast_,
                         INTERCEPT_dag_, COEFFICIENTS_dag_)
@@ -566,6 +602,8 @@ InitializeQMonteFxns_MCSampling <- function(){
       C_ff <- Qpop_pair(TSAMP_ast_PrimaryComp, TSAMP_dag_PrimaryComp,
                         INTERCEPT_ast_, COEFFICIENTS_ast_,
                         INTERCEPT_dag_, COEFFICIENTS_dag_)
+
+      }
 
       q_ast <- kA * kB * C_tt +
                kA * (one - kB) * C_tf +
@@ -602,6 +640,7 @@ InitializeQMonteFxns_MultiCandidate <- function(){
   # Multi-candidate primaries with nomination probabilities from pairwise win rates
 
   Qpop_pair <- build_qpop_pair(compile_fxn, getQStar_diff_MultiGroup)
+  glm_pairs <- if (exists("glm_pair_helpers", inherits = TRUE)) glm_pair_helpers else NULL
 
   TEMP_PUSHF <- strenv$primary_strength
   groups_pool <- if (exists("GroupsPool", inherits = TRUE)) GroupsPool else NULL
@@ -653,6 +692,12 @@ InitializeQMonteFxns_MultiCandidate <- function(){
         pA <- strenv$jax$nn$softmax(utilityA)
         pB <- strenv$jax$nn$softmax(utilityB)
       } else {
+        if (!is.null(glm_pairs)) {
+          sa <- glm_pairs$scores(cand_ast, list(COEFFICIENTS_ast0_))
+          sb <- glm_pairs$scores(cand_dag, list(COEFFICIENTS_dag0_))
+          kA <- glm_pairs$primary(sa, strenv$jnp$transpose(sa), INTERCEPT_ast0_)
+          kB <- glm_pairs$primary(sb, strenv$jnp$transpose(sb), INTERCEPT_dag0_)
+        } else {
         # Pairwise primary win probabilities within each party
         if (use_neural) {
           kA <- strenv$jax$vmap(function(t_i){
@@ -678,6 +723,8 @@ InitializeQMonteFxns_MultiCandidate <- function(){
               kappa_pair(u_i, u_j, INTERCEPT_dag0_, COEFFICIENTS_dag0_)
             }, in_axes = 0L)(cand_dag)
           }, in_axes = 0L)(cand_dag)
+        }
+
         }
 
         # Multinomial logit nomination probabilities based on Bradley-Terry utility
@@ -717,6 +764,13 @@ InitializeQMonteFxns_MultiCandidate <- function(){
         pB <- strenv$jax$nn$softmax(utilityB)
       }
 
+      if (!is.null(glm_pairs)) {
+        coefs <- list(COEFFICIENTS_ast_, COEFFICIENTS_dag_)
+        sa <- glm_pairs$scores(cand_ast, coefs)
+        sb <- glm_pairs$scores(cand_dag, coefs)
+        C_ab <- glm_pairs$population(strenv$jnp$expand_dims(sa, 1L),
+          strenv$jnp$expand_dims(sb, 0L), INTERCEPT_ast_, INTERCEPT_dag_)
+      } else {
       # General-election outcomes across all nominee pairs
       C_ab <- strenv$jax$vmap(function(t_i){
         strenv$jax$vmap(function(u_j){
@@ -725,6 +779,8 @@ InitializeQMonteFxns_MultiCandidate <- function(){
                     INTERCEPT_dag_, COEFFICIENTS_dag_)
         }, in_axes = 0L)(cand_dag)
       }, in_axes = 0L)(cand_ast)
+
+      }
 
       pA_col <- strenv$jnp$expand_dims(pA, 1L)
       pB_row <- strenv$jnp$expand_dims(pB, 0L)

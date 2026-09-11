@@ -6,6 +6,11 @@ cs_cv_policy_value <- function(training, evaluation, outcome_model_type, diff,
                                 temperature = 0.5, primary_pushforward = "mc",
                                 primary_n_entrants = 1L, primary_n_field = 1L,
                                 seed = 123L) {
+  if (!is.null(evaluation$.policy_eval_state)) {
+    previous <- cs_policy_eval_state()
+    on.exit(list2env(previous, envir = strenv), add = TRUE)
+    list2env(evaluation$.policy_eval_state, envir = strenv)
+  }
   gather <- evaluation$gather_fxn
   ast <- gather(evaluation$REGRESSION_PARAMETERS_ast)
   dag <- gather(evaluation$REGRESSION_PARAMETERS_dag)

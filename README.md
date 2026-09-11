@@ -51,6 +51,18 @@ strategize::build_backend(conda_env = "strategize_env")
 
 This creates a conda environment with JAX, numpy, optax, equinox, numpyro, Orbax checkpoint support, and the other Python-side dependencies used by the package.
 
+GLM policy optimization uses a compiled iteration loop and returns both policy
+representations from one solve. `compute_se = FALSE` skips policy Jacobians and
+covariance propagation. Full-trace GLM SEs use checkpointed iterations and bounded
+Jacobian batches; the `se_method` interpretation is unchanged. CV reuses each
+fold's fitted GLMs across penalties with fixed per-partition seeds. For `K = 1`,
+held-out models are evaluated without running a policy solve; `K > 1` retains
+the existing one-step evaluation solve. Configure
+execution with `policy_control`: `loop = "r"` selects the reference loop,
+`trace = TRUE` retains detailed policy trajectories, and `se_chunk_size` sets
+the derivative batch size (default 16). Ordinary convergence diagnostics remain
+available with the default `trace = FALSE`.
+
 # Minimal Example
 
 The example below uses a simple pairwise conjoint setup with two factors and a binary forced-choice outcome.

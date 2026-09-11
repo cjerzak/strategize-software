@@ -66,10 +66,19 @@ strategize(
   rain_variant = "alg10_staged",
   rain_output = "last",
   compute_hessian = TRUE,
-  hessian_max_dim = 50L
+  hessian_max_dim = 50L,
+  policy_control = NULL
 )
 }
 \arguments{
+\item{policy_control}{Optional execution controls. \code{loop = "auto"} uses
+a compiled scan for GLMs and the R loop for neural outcomes; \code{"r"}
+selects the reference loop. \code{trace = FALSE} omits full per-iteration
+policy snapshots. \code{remat = TRUE} checkpoints scan steps during full-trace
+differentiation. \code{se_chunk_size = 16L} bounds the number of Jacobian
+output rows differentiated together. In \code{cv_strategize()},
+\code{reuse_outcomes = TRUE} reuses fitted GLMs within each fold across
+penalties. These controls preserve the objective.}
 \item{Y}{A numeric or binary vector of observed outcomes, typically in \code{\{0,1\}} for forced-choice
 conjoint tasks, indicating whether the profile was selected. For instance, \code{Y = 1} if
 candidate A was chosen over candidate B, and \code{Y = 0} otherwise. The length must match

@@ -362,6 +362,9 @@ cs_prepare_cv_folds <- function(folds,
 #'   \code{"alg10_staged"} (merged Algorithm 10 with recursive stage anchors; default) or
 #'   \code{"alg9_single_loop"} (single-loop variant; not yet implemented). Only used when
 #'   \code{optimism = "rain"}.
+#' @param policy_control Optional policy execution controls; see
+#'   \code{\link{strategize}}. Outcome fits are reused within each CV fold by
+#'   default, with fixed per-partition seeds across the penalty grid.
 #' @param rain_output Character string controlling the stage output for RAIN.
 #'   \code{"uniform_half"} samples uniformly from half-iterates within the stage (most faithful);
 #'   \code{"last"} returns the last iterate (default). Only used when \code{optimism = "rain"}.
@@ -522,7 +525,9 @@ cv_strategize       <-          function(
                                             rain_L = NULL,
                                             rain_eta = 0.001,
                                             rain_variant = "alg10_staged",
-                                            rain_output = "last"){
+                                            rain_output = "last",
+                                            policy_control = NULL){
+  policy_control <- cs_policy_control(policy_control)
   optimism <- match.arg(optimism, c("none", "ogda", "extragrad", "smp", "rain"))
   if (optimism == "rain") {
     rain_variant <- match.arg(rain_variant, c("alg10_staged", "alg9_single_loop"))
@@ -600,6 +605,14 @@ cv_strategize       <-          function(
     )
     indi_list <- cv_fold_obj$indi_list
     folds_use <- cv_fold_obj$n_folds
+    # Separate in-memory caches for each training/evaluation partition.
+    # Fixed per-partition seeds make outcome screening and policy initialization
+    # independent of penalty-grid ordering. Nothing is shared across folds.
+    cv_fit_caches <- lapply(seq_len(2L * folds_use), function(i) new.env(parent = emptyenv()))
+    cv_eval_models <- vector("list", folds_use)
+    cv_fit_seeds <- if (outcome_model_type == "glm") {
+      sample.int(.Machine$integer.max, 2L * folds_use)
+    } else NULL
     
     lambda_counter <- 0; for(lambda__ in lambda_seq){
       lambda_counter <- lambda_counter + 1
@@ -610,7 +623,12 @@ cv_strategize       <-          function(
       q_vec_in <- q_vec_out <- c()
       for(split_ in seq_len(folds_use)){
         message(sprintf("On fold %s",split_))
-        for(type_ in c(1,2)){ 
+        for(type_ in c(1,2)){
+          if (type_ == 2L && outcome_model_type == "glm" && isTRUE(policy_control$reuse_outcomes) &&
+              !is.null(cv_eval_models[[split_]])) {
+            Qoptimized__[[split_]][[type_]] <- cv_eval_models[[split_]]
+            next
+          }
           # in sample optimization of pi*, evaluation on OOS coefficients 
           use_indices <- indi_list[type_,split_][[1]]
           nSGD_use <- ifelse(type_ == 1, yes = nSGD, no = 1L)
@@ -619,6 +637,11 @@ cv_strategize       <-          function(
           if(type_ == 2){type_<-2}
           
           # strategize call
+          fold_control <- policy_control
+          if (isTRUE(policy_control$reuse_outcomes) && outcome_model_type == "glm") {
+            fold_control$.fit_cache <- cv_fit_caches[[2L * (split_ - 1L) + type_]]
+          }
+          fold_control$.evaluation_only <- type_ == 2L && K == 1L && outcome_model_type == "glm"
           strategize_args <- list(
             # input data
             Y = Y[use_indices],
@@ -636,6 +659,7 @@ cv_strategize       <-          function(
             slate_list = slate_list,
             use_optax = use_optax,
             lambda = lambda__,
+            policy_control = fold_control,
 
             # hyperparameters
             outcome_model_type = outcome_model_type,
@@ -686,7 +710,13 @@ cv_strategize       <-          function(
           if (!autoscale_rain_eta) {
             strategize_args$rain_eta <- rain_eta
           }
-          Qoptimized__[[split_]][[type_]] <- do.call(strategize, strategize_args)
+          Qoptimized__[[split_]][[type_]] <- if (outcome_model_type == "glm") {
+            cs_policy_with_seed(cv_fit_seeds[[2L * (split_ - 1L) + type_]],
+                                do.call(strategize, strategize_args))
+          } else do.call(strategize, strategize_args)
+          if (type_ == 2L && outcome_model_type == "glm" && isTRUE(policy_control$reuse_outcomes)) {
+            cv_eval_models[[split_]] <- Qoptimized__[[split_]][[type_]]
+          }
         }
         
         # out of sample test of pi* on new estimates 
@@ -741,6 +771,7 @@ cv_strategize       <-          function(
     lambda = lambda__, # this lambda is the one chosen via CV
     crossfit_q = crossfit_q,
     crossfit_q_control = crossfit_q_control,
+    policy_control = policy_control,
 
     # hyperparameters
     outcome_model_type = outcome_model_type,

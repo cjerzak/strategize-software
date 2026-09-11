@@ -27,6 +27,12 @@ skip_if_no_conda <- function(conda_env = "strategize_env") {
 
 #' Skip tests if JAX is not available
 skip_if_no_jax <- function(conda_env = "strategize_env") {
+  # Honour an explicitly selected isolated test environment.
+  if (nzchar(Sys.getenv("RETICULATE_PYTHON"))) {
+    if (!requireNamespace("reticulate", quietly = TRUE) ||
+        !reticulate::py_module_available("jax")) skip("JAX unavailable in RETICULATE_PYTHON")
+    return(invisible(NULL))
+  }
   skip_if_no_conda(conda_env)
 
   jax_available <- tryCatch({

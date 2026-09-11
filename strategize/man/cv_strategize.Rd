@@ -59,10 +59,14 @@ cv_strategize(
   rain_L = NULL,
   rain_eta = 0.001,
   rain_variant = "alg10_staged",
-  rain_output = "last"
+  rain_output = "last",
+  policy_control = NULL
 )
 }
 \arguments{
+\item{policy_control}{Optional policy execution controls; see
+\code{\link{strategize}}. Outcome fits are reused within each CV fold by
+default, with fixed per-partition seeds across the penalty grid.}
 \item{Y}{A numeric or binary response vector. If binary (e.g., 0–1), it should 
 correspond to forced-choice outcomes (1 if candidate \code{A} is chosen; 0 if 
 candidate \code{B} is chosen). If numeric, please see details in 

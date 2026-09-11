@@ -452,12 +452,44 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     invisible(NULL)
   }
 
-  # gradient descent iterations
+  policy_control_use <- if (exists("policy_control", inherits = TRUE)) {
+    policy_control
+  } else cs_policy_control()
+  if (!isTRUE(functionReturn)) policy_control_use$trace <- FALSE
+  use_scan <- identical(outcome_model_type, "glm") && policy_control_use$loop != "r"
+  if (policy_control_use$loop == "scan" && !use_scan) {
+    stop("policy_control$loop='scan' currently requires a GLM outcome model.", call. = FALSE)
+  }
+  strenv$policy_loop <- if (use_scan) "scan" else "r"
+  strenv$extragrad_eval_points <- NULL
+
+  if (use_scan) {
+    if (is.null(policy_loop_runner)) {
+      policy_loop_runner <<- cs_policy_module()$PolicyLoop(
+        grad_ast = grad_eval_ast, grad_dag = grad_eval_dag,
+        steps = as.integer(policy_schedule[[1L]]$shape[[1L]]),
+        adversarial = adversarial, optimism = optimism, optimism_coef = optimism_coef,
+        remat = policy_control_use$remat, trace = policy_control_use$trace,
+        optimizer = if (use_optax) optax_optimizer_ast else NULL, rain_eta = policy_rain_eta)
+    }
+    scan_result <- policy_loop_runner$run(a_i_ast, a_i_dag, SEED,
+      list(INTERCEPT_ast_, COEFFICIENTS_ast_, INTERCEPT_dag_, COEFFICIENTS_dag_,
+           INTERCEPT_ast0_, COEFFICIENTS_ast0_, INTERCEPT_dag0_, COEFFICIENTS_dag0_,
+           P_VEC_FULL_ast, P_VEC_FULL_dag, SLATE_VEC_ast, SLATE_VEC_dag, LAMBDA),
+      policy_schedule, history = isTRUE(functionReturn))
+    a_i_ast <- scan_result$a
+    a_i_dag <- scan_result$b
+    SEED <- scan_result$key
+    if (isTRUE(functionReturn)) {
+      cs_policy_store_history(scan_result, policy_control_use, adversarial, optimism, nSGD)
+    }
+  } else {
+  # R reference loop (also used for neural outcome objectives).
   strenv$grad_mag_ast_vec <- strenv$grad_mag_dag_vec <- rep(NA, times = nSGD)
   strenv$loss_ast_vec <- strenv$loss_dag_vec <- rep(NA, times = nSGD)
   strenv$inv_learning_rate_ast_vec <- strenv$inv_learning_rate_dag_vec <- rep(NA, times = nSGD)
   grad_prev_ast <- grad_prev_dag <- NULL
-  if (use_joint_extragrad) {
+  if (use_joint_extragrad && isTRUE(policy_control_use$trace)) {
     strenv$extragrad_eval_points <- vector("list", length = nSGD)
   }
   if (use_rain) {
@@ -678,7 +710,10 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
 
         if (use_uniform_half) {
           half_count <- half_count + 1L
-          if (stats::runif(1) <= 1 / half_count) {
+          select_half <- if (exists("policy_schedule", inherits = TRUE)) {
+            attr(policy_schedule, "choose")[[i]]
+          } else stats::runif(1) <= 1 / half_count
+          if (select_half) {
             half_sample_ast <- a_pred_ast
             if (adversarial) {
               half_sample_dag <- a_pred_dag
@@ -1143,7 +1178,7 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
       grad_prev_ast <- base_grad_ast
       strenv$inv_learning_rate_dag_vec[i] <- list( inv_learning_rate_da_dag )
       strenv$inv_learning_rate_ast_vec[i] <- list( inv_learning_rate_da_ast )
-      strenv$extragrad_eval_points[[i]] <- list(
+      if (isTRUE(policy_control_use$trace)) strenv$extragrad_eval_points[[i]] <- list(
         start = list(a_ast = start_ast, a_dag = start_dag),
         ast = list(a_pred_ast = a_pred_ast, a_pred_dag = a_pred_dag),
         dag = list(a_pred_ast = a_pred_ast, a_pred_dag = a_pred_dag)
@@ -1170,7 +1205,8 @@ getQPiStar_gd <-  function(REGRESSION_PARAMETERS_ast,
     strenv$smp_gamma_dag_vec <- if (adversarial) smp_gamma_dag_vec else NULL
   }
 
-  message("Saving output from gd [getQPiStar_gd]...")
+  }
+  if (!quiet) message("Saving output from gd [getQPiStar_gd]...")
   {
     pi_star_ast_full_simplex_ <- getPrettyPi( pi_star_ast_<-strenv$a2Simplex_diff_use(a_i_ast),
                                               strenv$ParameterizationType,
