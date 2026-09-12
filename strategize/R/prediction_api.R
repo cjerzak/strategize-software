@@ -1353,7 +1353,9 @@ cs2step_neural_align_struct_matrix <- function(x,
   out
 }
 
-cs2step_neural_default_factor_struct_matrix <- function(names_list, feature_names) {
+cs2step_neural_default_factor_struct_matrix <- function(names_list,
+                                                        feature_names,
+                                                        struct_feature_encoding = "legacy_v1") {
   factor_names <- names(names_list)
   factor_levels <- vapply(names_list, function(x) length(x[[1]]), integer(1))
   out <- matrix(0, nrow = length(factor_names), ncol = length(feature_names))
@@ -1365,14 +1367,19 @@ cs2step_neural_default_factor_struct_matrix <- function(names_list, feature_name
     }
   }
   put("type_categorical", 1)
-  put("cardinality_log", log1p(factor_levels))
+  put("cardinality_log", neural_struct_cardinality_feature(
+    factor_levels,
+    struct_feature_encoding = struct_feature_encoding
+  ))
   put("has_numeric_levels", vapply(names_list, function(x) {
     any(is.finite(suppressWarnings(as.numeric(x[[1]]))))
   }, logical(1)))
   out
 }
 
-cs2step_neural_default_level_struct_matrices <- function(names_list, feature_names) {
+cs2step_neural_default_level_struct_matrices <- function(names_list,
+                                                         feature_names,
+                                                         struct_feature_encoding = "legacy_v1") {
   factor_names <- names(names_list)
   setNames(lapply(factor_names, function(factor_name) {
     levels_here <- as.character(names_list[[factor_name]][[1]])
@@ -1389,8 +1396,14 @@ cs2step_neural_default_level_struct_matrices <- function(names_list, feature_nam
         out[seq_len(n_levels), "has_raw_value"] <- as.numeric(finite_numeric)
       }
       if ("raw_value_log1p_signed" %in% colnames(out)) {
-        out[seq_len(n_levels), "raw_value_log1p_signed"] <-
-          ifelse(finite_numeric, sign(numeric_levels) * log1p(abs(numeric_levels)), 0)
+        out[seq_len(n_levels), "raw_value_log1p_signed"] <- ifelse(
+          finite_numeric,
+          neural_struct_raw_value_feature(
+            numeric_levels,
+            struct_feature_encoding = struct_feature_encoding
+          ),
+          0
+        )
       }
       if ("level_rank01" %in% colnames(out)) {
         out[seq_len(n_levels), "level_rank01"] <- rank01
@@ -1421,7 +1434,11 @@ cs2step_neural_schema_structural_info <- function(schema, names_list, model_info
       field = "factor_struct_matrix"
     )
   } else {
-    cs2step_neural_default_factor_struct_matrix(names_list, factor_features)
+    cs2step_neural_default_factor_struct_matrix(
+      names_list,
+      factor_features,
+      struct_feature_encoding = model_info$struct_feature_encoding %||% "legacy_v1"
+    )
   }
   level_input <- schema$level_struct_matrices %||% NULL
   level_mats <- if (!is.null(level_input)) {
@@ -1461,7 +1478,11 @@ cs2step_neural_schema_structural_info <- function(schema, names_list, model_info
       )
     }), factor_names)
   } else {
-    cs2step_neural_default_level_struct_matrices(names_list, level_features)
+    cs2step_neural_default_level_struct_matrices(
+      names_list,
+      level_features,
+      struct_feature_encoding = model_info$struct_feature_encoding %||% "legacy_v1"
+    )
   }
   list(
     factor_struct_matrix = factor_mat,

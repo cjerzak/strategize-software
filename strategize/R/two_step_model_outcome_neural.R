@@ -472,6 +472,128 @@ neural_build_parameter_diagnostics <- function(params) {
   )
 }
 
+neural_text_pathway_specs <- function() {
+  list(
+    factor_name = list(weight = "W_factor_name_text", field = "factor_name_text"),
+    level_name = list(weight = "W_level_name_text", field = "level_name_text"),
+    experiment = list(weight = "W_experiment_text", field = "experiment_description_text"),
+    covariate_name = list(weight = "W_covariate_name_text", field = "covariate_name_text"),
+    covariate_value = list(weight = "W_covariate_value_text", field = "covariate_value_text")
+  )
+}
+
+neural_build_text_pathway_diagnostics <- function(params, model_info) {
+  # Per text pathway: how much of the projected token is a constant shared by
+  # every row (token_constant_share), whether the projection amplifies the raw
+  # corpus mean direction relative to an average direction
+  # (shared_direction_gain; 1 = neutral), and how separable projected rows are
+  # (discriminability). Computed on the model's actual inputs, i.e. after the
+  # text embedding normalizer when one is carried in model_info.
+  normalizer <- tryCatch(
+    neural_validate_text_embedding_normalizer(model_info$text_embedding_normalizer %||% NULL),
+    error = function(e) NULL
+  )
+  spec <- model_info$text_embedding_normalization %||% NULL
+  normalization_info <- list(
+    center = isTRUE(spec$center %||% !is.null(normalizer)),
+    remove_top_pcs = as.integer(normalizer$remove_top_pcs %||% spec$remove_top_pcs %||% 0L),
+    renormalize = isTRUE(normalizer$renormalize %||% spec$renormalize %||% FALSE),
+    fitted = !is.null(normalizer),
+    n_rows = as.integer(normalizer$n_rows %||% NA_integer_),
+    center_norm = as.numeric(normalizer$center_norm %||% NA_real_)
+  )
+  empty <- list(
+    text_pathway_status = "unavailable",
+    text_embedding_centered = !is.null(normalizer),
+    text_embedding_normalization = normalization_info,
+    pathway_summaries = data.frame(),
+    notes = character(0)
+  )
+  if (is.null(params) || !is.list(params) || is.null(model_info)) {
+    return(empty)
+  }
+  rows_out <- list()
+  notes <- character(0)
+  for (name in names(neural_text_pathway_specs())) {
+    pathway <- neural_text_pathway_specs()[[name]]
+    W <- params[[pathway$weight]]
+    text <- model_info[[pathway$field]]
+    if (is.null(W) || is.null(text)) {
+      next
+    }
+    summary_row <- tryCatch({
+      X <- neural_text_embedding_rows_r(text)
+      if (is.null(X) || nrow(X) < 2L) {
+        NULL
+      } else {
+        W_r <- as.matrix(cs2step_neural_to_r_array(W))
+        storage.mode(W_r) <- "double"
+        if (nrow(W_r) != ncol(X)) {
+          NULL
+        } else {
+          X <- unique(X)
+          n <- nrow(X)
+          mu_raw <- colMeans(X)
+          mu_raw_norm <- sqrt(sum(mu_raw ^ 2))
+          X_in <- neural_apply_text_embedding_normalizer_r(X, normalizer)
+          tokens <- X_in %*% W_r
+          token_norms <- sqrt(rowSums(tokens ^ 2))
+          med_token <- stats::median(token_norms)
+          mean_token <- colMeans(tokens)
+          input_norms <- sqrt(rowSums(X_in ^ 2))
+          med_input <- stats::median(input_norms)
+          w_rms_gain <- sqrt(sum(W_r ^ 2)) / sqrt(nrow(W_r))
+          discriminability <- NA_real_
+          raw_discriminability <- NA_real_
+          if (n >= 2L && med_token > 0) {
+            d_tok <- sqrt(rowSums((tokens[-1L, , drop = FALSE] - tokens[-n, , drop = FALSE]) ^ 2))
+            discriminability <- stats::median(d_tok) / med_token
+            raw_norms <- sqrt(rowSums(X ^ 2))
+            d_raw <- sqrt(rowSums((X[-1L, , drop = FALSE] - X[-n, , drop = FALSE]) ^ 2))
+            raw_discriminability <- stats::median(d_raw) / stats::median(raw_norms)
+          }
+          data.frame(
+            pathway = name,
+            weight = pathway$weight,
+            n_rows = as.integer(n),
+            text_dim = as.integer(ncol(X)),
+            model_dims = as.integer(ncol(W_r)),
+            token_constant_share = if (med_token > 0) sum(mean_token ^ 2) / med_token ^ 2 else NA_real_,
+            input_constant_share = if (med_input > 0) sum(colMeans(X_in) ^ 2) / med_input ^ 2 else NA_real_,
+            shared_direction_gain = if (mu_raw_norm > 0 && w_rms_gain > 0) {
+              sqrt(sum((mu_raw %*% W_r) ^ 2)) / (mu_raw_norm * w_rms_gain)
+            } else {
+              NA_real_
+            },
+            discriminability = discriminability,
+            raw_discriminability = raw_discriminability,
+            raw_shared_direction_norm = mu_raw_norm,
+            weight_rms = sqrt(mean(W_r ^ 2)),
+            stringsAsFactors = FALSE
+          )
+        }
+      }
+    }, error = function(e) {
+      notes <<- c(notes, sprintf("%s: %s", name, conditionMessage(e)))
+      NULL
+    })
+    if (!is.null(summary_row)) {
+      rows_out[[name]] <- summary_row
+    }
+  }
+  if (!length(rows_out)) {
+    empty$notes <- notes
+    return(empty)
+  }
+  list(
+    text_pathway_status = "ok",
+    text_embedding_centered = !is.null(normalizer),
+    text_embedding_normalization = normalization_info,
+    pathway_summaries = do.call(rbind, unname(rows_out)),
+    notes = notes
+  )
+}
+
 neural_build_gradient_diagnostics <- function(status = "ok",
                                               source = NA_character_,
                                               notes = character(0)) {
@@ -2533,6 +2655,58 @@ neural_fused_default_level_struct_feature_names <- function() {
   )
 }
 
+neural_struct_feature_encodings <- function() {
+  c("bounded_v2", "legacy_v1")
+}
+
+neural_resolve_struct_feature_encoding <- function(value = NULL) {
+  if (is.null(value)) {
+    return("bounded_v2")
+  }
+  if (!is.character(value) || length(value) != 1L || is.na(value) || !nzchar(value)) {
+    stop("'struct_feature_encoding' must be 'bounded_v2' or 'legacy_v1'.", call. = FALSE)
+  }
+  mode <- tolower(value)
+  if (!mode %in% neural_struct_feature_encodings()) {
+    stop(
+      sprintf("Unknown struct_feature_encoding '%s'; use 'bounded_v2' or 'legacy_v1'.", value),
+      call. = FALSE
+    )
+  }
+  mode
+}
+
+neural_bounded_signed_log1p <- function(x, scale = 4) {
+  # Bounded, monotone encoding for unbounded magnitudes: sign(x) * log1p(|x|)
+  # squashed through tanh(. / scale), so raw level values (observed up to 5e5,
+  # i.e. log1p ~ 13) and factor cardinalities share the [-1, 1] range of the
+  # rank features that sit beside them in the structural matrices.
+  x <- suppressWarnings(as.numeric(x))
+  x[!is.finite(x)] <- 0
+  out <- tanh(sign(x) * log1p(abs(x)) / scale)
+  out[!is.finite(out)] <- 0
+  out
+}
+
+neural_struct_cardinality_feature <- function(n_levels, struct_feature_encoding = "bounded_v2") {
+  encoding <- neural_resolve_struct_feature_encoding(struct_feature_encoding)
+  if (identical(encoding, "legacy_v1")) {
+    return(log1p(as.numeric(n_levels)))
+  }
+  neural_bounded_signed_log1p(n_levels)
+}
+
+neural_struct_raw_value_feature <- function(raw_values, struct_feature_encoding = "bounded_v2") {
+  encoding <- neural_resolve_struct_feature_encoding(struct_feature_encoding)
+  x <- suppressWarnings(as.numeric(raw_values))
+  if (identical(encoding, "legacy_v1")) {
+    out <- sign(x) * log1p(abs(x))
+    out[!is.finite(out)] <- 0
+    return(out)
+  }
+  neural_bounded_signed_log1p(x)
+}
+
 neural_default_level_names <- function(level_names = NULL, n_levels = NULL) {
   n_levels <- suppressWarnings(as.integer(n_levels %||% length(level_names %||% character(0))))
   if (length(n_levels) != 1L || is.na(n_levels) || n_levels < 0L) {
@@ -2552,7 +2726,9 @@ neural_default_level_names <- function(level_names = NULL, n_levels = NULL) {
 neural_make_default_fused_structural_info <- function(names_list = NULL,
                                                      factor_levels = NULL,
                                                      factor_names = NULL,
-                                                     level_names_list = NULL) {
+                                                     level_names_list = NULL,
+                                                     struct_feature_encoding = NULL) {
+  struct_feature_encoding <- neural_resolve_struct_feature_encoding(struct_feature_encoding)
   if (!is.null(names_list) && length(names_list) > 0L) {
     inferred_factor_names <- names(names_list)
     if (is.null(inferred_factor_names) || any(!nzchar(inferred_factor_names))) {
@@ -2621,7 +2797,10 @@ neural_make_default_fused_structural_info <- function(names_list = NULL,
     dimnames = list(factor_names, factor_features)
   )
   factor_mat[, "type_categorical"] <- 1
-  factor_mat[, "cardinality_log"] <- log1p(factor_levels)
+  factor_mat[, "cardinality_log"] <- neural_struct_cardinality_feature(
+    factor_levels,
+    struct_feature_encoding = struct_feature_encoding
+  )
   factor_mat[, sprintf("factor_identity_%d", seq_len(n_factors))] <- diag(n_factors)
 
   level_mats <- setNames(vector("list", n_factors), factor_names)
@@ -3005,7 +3184,9 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  calibration_scale = NULL,
                                                  calibration_prior_sd = NULL,
                                                  likelihood = "bernoulli",
-                                                 schema_dropout = NULL) {
+                                                 schema_dropout = NULL,
+                                                 text_embedding_normalizer = NULL,
+                                                 struct_feature_encoding = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
     if (is.null(x)) {
@@ -3150,7 +3331,13 @@ neural_make_runtime_token_model_info <- function(model_dims,
     calibration_scale = calibration_scale,
     calibration_prior_sd = calibration_prior_sd,
     likelihood = tolower(as.character(likelihood %||% "bernoulli")),
-    schema_dropout = neural_resolve_schema_dropout(schema_dropout)
+    schema_dropout = neural_resolve_schema_dropout(schema_dropout),
+    text_embedding_normalizer = neural_validate_text_embedding_normalizer(text_embedding_normalizer),
+    struct_feature_encoding = if (is.null(struct_feature_encoding)) {
+      NULL
+    } else {
+      neural_resolve_struct_feature_encoding(struct_feature_encoding)
+    }
   )
 }
 
@@ -4646,6 +4833,74 @@ neural_schema_dropout_active <- function(schema_dropout = NULL) {
   any(rates > 0)
 }
 
+neural_text_embedding_normalization_defaults <- function() {
+  list(center = TRUE, remove_top_pcs = 0L, renormalize = TRUE)
+}
+
+neural_text_embedding_normalization_off <- function() {
+  list(center = FALSE, remove_top_pcs = 0L, renormalize = FALSE)
+}
+
+neural_resolve_text_embedding_normalization <- function(value = NULL) {
+  if (is.null(value) || isTRUE(value)) {
+    return(neural_text_embedding_normalization_defaults())
+  }
+  if (identical(value, FALSE)) {
+    return(neural_text_embedding_normalization_off())
+  }
+  if (is.character(value) && length(value) == 1L && !is.na(value)) {
+    mode <- tolower(value)
+    if (mode %in% c("none", "off", "identity", "false")) {
+      return(neural_text_embedding_normalization_off())
+    }
+    if (mode %in% c("center", "centered", "default", "true")) {
+      return(neural_text_embedding_normalization_defaults())
+    }
+    stop(
+      sprintf("Unknown text_embedding_normalization '%s'; use TRUE, FALSE, or a named list.", value),
+      call. = FALSE
+    )
+  }
+  if (!is.list(value)) {
+    stop(
+      "'text_embedding_normalization' must be TRUE, FALSE, NULL, or a named list with 'center', 'remove_top_pcs', 'renormalize'.",
+      call. = FALSE
+    )
+  }
+  value_names <- names(value)
+  if (length(value) && (is.null(value_names) || any(!nzchar(value_names)))) {
+    stop("'text_embedding_normalization' overrides must be named.", call. = FALSE)
+  }
+  unknown <- setdiff(value_names, c("center", "remove_top_pcs", "renormalize"))
+  if (length(unknown) > 0L) {
+    stop(
+      sprintf("Unknown text_embedding_normalization field(s): %s.", paste(unknown, collapse = ", ")),
+      call. = FALSE
+    )
+  }
+  defaults <- neural_text_embedding_normalization_defaults()
+  center <- value$center %||% defaults$center
+  if (!is.logical(center) || length(center) != 1L || is.na(center)) {
+    stop("'text_embedding_normalization$center' must be TRUE or FALSE.", call. = FALSE)
+  }
+  remove_top_pcs <- suppressWarnings(as.integer(value$remove_top_pcs %||% defaults$remove_top_pcs))
+  if (length(remove_top_pcs) != 1L || is.na(remove_top_pcs) || remove_top_pcs < 0L) {
+    stop("'text_embedding_normalization$remove_top_pcs' must be a single non-negative integer.", call. = FALSE)
+  }
+  renormalize <- value$renormalize %||% defaults$renormalize
+  if (!is.logical(renormalize) || length(renormalize) != 1L || is.na(renormalize)) {
+    stop("'text_embedding_normalization$renormalize' must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!isTRUE(center) && remove_top_pcs > 0L) {
+    stop("'text_embedding_normalization$remove_top_pcs' requires center = TRUE.", call. = FALSE)
+  }
+  list(
+    center = isTRUE(center),
+    remove_top_pcs = remove_top_pcs,
+    renormalize = isTRUE(renormalize)
+  )
+}
+
 neural_resolve_token_runtime_config <- function(neural_token_info = NULL,
                                                 mcmc_control = NULL) {
   resolved <- neural_token_info %||% list()
@@ -4684,6 +4939,21 @@ neural_resolve_token_runtime_config <- function(neural_token_info = NULL,
       mcmc_control$low_rank_interaction_rank %||%
       mcmc_control$respondent_candidate_interaction_rank %||%
       0L
+  )
+  resolved$text_embedding_normalization <- neural_resolve_text_embedding_normalization(
+    resolved$text_embedding_normalization %||%
+      mcmc_control$text_embedding_normalization %||%
+      NULL
+  )
+  resolved$text_embedding_normalizer <- neural_validate_text_embedding_normalizer(
+    resolved$text_embedding_normalizer %||%
+      mcmc_control$text_embedding_normalizer %||%
+      NULL
+  )
+  resolved$struct_feature_encoding <- neural_resolve_struct_feature_encoding(
+    resolved$struct_feature_encoding %||%
+      mcmc_control$struct_feature_encoding %||%
+      NULL
   )
   resolved
 }
@@ -6415,11 +6685,174 @@ neural_text_matrix_jnp <- function(x) {
   x_jnp
 }
 
-neural_project_text_matrix <- function(text_matrix, projection) {
+neural_text_embedding_rows_r <- function(x) {
+  # One R matrix of embedding rows from a text matrix, a list of text matrices,
+  # or a (n, codes, dim) covariate-value tensor. Zero and non-finite rows
+  # (absent text) are dropped so they never move the corpus mean.
+  if (is.null(x)) {
+    return(NULL)
+  }
+  if (is.list(x) && !is.data.frame(x)) {
+    parts <- lapply(x, neural_text_embedding_rows_r)
+    parts <- parts[!vapply(parts, is.null, logical(1))]
+    if (!length(parts)) {
+      return(NULL)
+    }
+    return(do.call(rbind, parts))
+  }
+  arr <- tryCatch(cs2step_neural_to_r_array(x), error = function(e) x)
+  dims <- dim(arr)
+  mat <- if (is.null(dims)) {
+    matrix(as.numeric(arr), nrow = 1L)
+  } else if (length(dims) == 2L) {
+    as.matrix(arr)
+  } else {
+    # Column-major flattening keeps the trailing (embedding) axis as columns.
+    matrix(as.numeric(arr), ncol = dims[[length(dims)]])
+  }
+  storage.mode(mat) <- "double"
+  if (!nrow(mat) || !ncol(mat)) {
+    return(NULL)
+  }
+  keep <- is.finite(rowSums(mat)) & rowSums(mat * mat) > 0
+  if (!any(keep)) {
+    return(NULL)
+  }
+  mat[keep, , drop = FALSE]
+}
+
+neural_fit_text_embedding_normalizer <- function(spec = NULL, text_dim, sources = list()) {
+  # Fit the corpus-level text normalizer once on the training schema text. The
+  # encoder's vectors are unit-norm but share one large common direction
+  # (||mean|| ~ 0.77 for harrier), so an uncentered projection spends most of
+  # every token on a constant that is identical across levels and studies.
+  spec <- neural_resolve_text_embedding_normalization(spec)
+  text_dim <- suppressWarnings(as.integer(text_dim))
+  if (!isTRUE(spec$center) || length(text_dim) != 1L || is.na(text_dim) || text_dim < 1L) {
+    return(NULL)
+  }
+  rows <- neural_text_embedding_rows_r(sources)
+  if (is.null(rows) || nrow(rows) < 2L) {
+    return(NULL)
+  }
+  if (ncol(rows) != text_dim) {
+    stop(
+      sprintf(
+        "Text embedding normalization received %d-dimensional text but expected text_dim = %d.",
+        ncol(rows), text_dim
+      ),
+      call. = FALSE
+    )
+  }
+  rows <- unique(rows)
+  center <- colMeans(rows)
+  pc_basis <- NULL
+  k <- min(spec$remove_top_pcs, nrow(rows) - 1L, text_dim)
+  if (k > 0L) {
+    centered <- sweep(rows, 2L, center)
+    sv <- svd(centered, nu = 0L, nv = k)
+    pc_basis <- sv$v[, seq_len(k), drop = FALSE]
+  }
+  list(
+    version = 1L,
+    center = as.numeric(center),
+    pc_basis = pc_basis,
+    renormalize = isTRUE(spec$renormalize),
+    remove_top_pcs = as.integer(k),
+    n_rows = nrow(rows),
+    text_dim = text_dim,
+    center_norm = sqrt(sum(center ^ 2)),
+    source = "training_schema_text"
+  )
+}
+
+neural_validate_text_embedding_normalizer <- function(normalizer = NULL) {
+  if (is.null(normalizer)) {
+    return(NULL)
+  }
+  if (!is.list(normalizer) || is.null(normalizer$center)) {
+    stop("'text_embedding_normalizer' must be NULL or a list with a numeric 'center'.", call. = FALSE)
+  }
+  center <- suppressWarnings(as.numeric(normalizer$center))
+  if (!length(center) || any(!is.finite(center))) {
+    stop("'text_embedding_normalizer$center' must be a finite numeric vector.", call. = FALSE)
+  }
+  normalizer$center <- center
+  normalizer$text_dim <- as.integer(normalizer$text_dim %||% length(center))
+  if (!is.null(normalizer$pc_basis)) {
+    basis <- as.matrix(normalizer$pc_basis)
+    storage.mode(basis) <- "double"
+    if (nrow(basis) != length(center) || any(!is.finite(basis))) {
+      stop("'text_embedding_normalizer$pc_basis' must be a finite (text_dim x k) matrix.", call. = FALSE)
+    }
+    normalizer$pc_basis <- basis
+    normalizer$remove_top_pcs <- ncol(basis)
+  } else {
+    normalizer$remove_top_pcs <- 0L
+  }
+  normalizer$renormalize <- isTRUE(normalizer$renormalize %||% TRUE)
+  normalizer
+}
+
+neural_apply_text_embedding_normalizer_r <- function(x, normalizer = NULL, eps = 1e-6) {
+  # R twin of the JAX path, used by diagnostics and tests.
+  if (is.null(normalizer) || is.null(x)) {
+    return(x)
+  }
+  x <- as.matrix(x)
+  storage.mode(x) <- "double"
+  input_norm <- sqrt(rowSums(x * x))
+  out <- sweep(x, 2L, normalizer$center)
+  if (!is.null(normalizer$pc_basis)) {
+    out <- out - (out %*% normalizer$pc_basis) %*% t(normalizer$pc_basis)
+  }
+  if (isTRUE(normalizer$renormalize)) {
+    nrm <- sqrt(rowSums(out * out))
+    out <- out / pmax(nrm, eps)
+  }
+  out[input_norm <= eps, ] <- 0
+  out
+}
+
+neural_apply_text_embedding_normalizer <- function(x_jnp, normalizer = NULL, eps = 1e-6) {
+  # Center (optionally strip top PCs) and re-normalize text rows on the last
+  # axis. Rows that were zero on input (absent text) stay exactly zero.
+  if (is.null(normalizer) || is.null(x_jnp)) {
+    return(x_jnp)
+  }
+  dtype <- x_jnp$dtype
+  n_axes <- length(x_jnp$shape)
+  last_dim <- ai(x_jnp$shape[[n_axes]])
+  if (last_dim != length(normalizer$center)) {
+    stop(
+      sprintf(
+        "Text embedding normalizer expects %d-dimensional text but received %d.",
+        length(normalizer$center), last_dim
+      ),
+      call. = FALSE
+    )
+  }
+  center <- strenv$jnp$array(as.numeric(normalizer$center), dtype = dtype)
+  eps_j <- strenv$jnp$array(eps, dtype = dtype)
+  input_norm <- strenv$jnp$sqrt(strenv$jnp$sum(x_jnp * x_jnp, axis = -1L, keepdims = TRUE))
+  out <- x_jnp - center
+  if (!is.null(normalizer$pc_basis)) {
+    basis <- strenv$jnp$array(as.matrix(normalizer$pc_basis), dtype = dtype)
+    out <- out - strenv$jnp$matmul(strenv$jnp$matmul(out, basis), strenv$jnp$transpose(basis))
+  }
+  if (isTRUE(normalizer$renormalize)) {
+    nrm <- strenv$jnp$sqrt(strenv$jnp$sum(out * out, axis = -1L, keepdims = TRUE))
+    out <- out / strenv$jnp$maximum(nrm, eps_j)
+  }
+  strenv$jnp$where(input_norm > eps_j, out, strenv$jnp$zeros_like(out))
+}
+
+neural_project_text_matrix <- function(text_matrix, projection, normalizer = NULL) {
   text_jnp <- neural_text_matrix_jnp(text_matrix)
   if (is.null(text_jnp) || is.null(projection)) {
     return(NULL)
   }
+  text_jnp <- neural_apply_text_embedding_normalizer(text_jnp, normalizer)
   strenv$jnp$einsum("td,dm->tm", text_jnp, projection)
 }
 
@@ -6461,7 +6894,8 @@ neural_project_experiment_text <- function(model_info,
   if (!is.null(experiment_idx) && !is.null(model_info$experiment_description_text)) {
     exp_text_proj <- neural_project_text_matrix(
       model_info$experiment_description_text,
-      params$W_experiment_text
+      params$W_experiment_text,
+      normalizer = model_info$text_embedding_normalizer
     )
     if (!is.null(exp_text_proj)) {
       return(strenv$jnp$take(exp_text_proj, experiment_idx, axis = 0L))
@@ -6474,7 +6908,11 @@ neural_project_experiment_text <- function(model_info,
       n_batch = n_batch
     )
     if (!is.null(default_text)) {
-      return(strenv$jnp$einsum("td,dm->tm", default_text, params$W_experiment_text))
+      return(neural_project_text_matrix(
+        default_text,
+        params$W_experiment_text,
+        normalizer = model_info$text_embedding_normalizer
+      ))
     }
   }
   NULL
@@ -6873,7 +7311,8 @@ neural_build_covariate_fused_tokens <- function(model_info,
 
   cov_text_proj <- neural_project_text_matrix(
     model_info$covariate_name_text,
-    params$W_covariate_name_text
+    params$W_covariate_name_text,
+    normalizer = model_info$text_embedding_normalizer
   )
   name_tok_base <- strenv$jnp$zeros(list(n_batch, max_tokens, dims), dtype = strenv$dtj)
   if (!is.null(cov_text_proj)) {
@@ -7034,6 +7473,10 @@ neural_build_covariate_fused_tokens <- function(model_info,
         flat_text <- strenv$jnp$reshape(
           value_text_tensor,
           list(ai(n_covariates * n_value_codes), text_dim)
+        )
+        flat_text <- neural_apply_text_embedding_normalizer(
+          flat_text,
+          model_info$text_embedding_normalizer
         )
         gathered_text <- strenv$jnp$take(flat_text, flat_idx, axis = 0L)
         flat_present <- strenv$jnp$reshape(
@@ -7593,7 +8036,8 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
   factor_text_tok_all <- strenv$jnp$zeros(list(n_batch, D_local, dims), dtype = strenv$dtj)
   factor_text_proj <- neural_project_text_matrix(
     model_info$factor_name_text,
-    params$W_factor_name_text
+    params$W_factor_name_text,
+    normalizer = model_info$text_embedding_normalizer
   )
   if (!is.null(factor_text_proj)) {
     factor_text_tok_all <- strenv$jnp$reshape(
@@ -7642,7 +8086,8 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
         length(model_info$level_name_text) >= d_) {
       level_text_proj <- neural_project_text_matrix(
         model_info$level_name_text[[d_]],
-        params$W_level_name_text
+        params$W_level_name_text,
+        normalizer = model_info$text_embedding_normalizer
       )
       if (!is.null(level_text_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
@@ -7856,7 +8301,8 @@ neural_build_factor_fused_tokens_soft <- function(pi_vec,
   level_struct_token_list <- vector("list", n_factors)
   factor_text_proj <- neural_project_text_matrix(
     model_info$factor_name_text,
-    params$W_factor_name_text
+    params$W_factor_name_text,
+    normalizer = model_info$text_embedding_normalizer
   )
   factor_struct_proj <- neural_project_text_matrix(
     model_info$factor_struct_matrix,
@@ -7914,7 +8360,8 @@ neural_build_factor_fused_tokens_soft <- function(pi_vec,
         length(model_info$level_name_text) >= d_) {
       level_text_proj <- neural_project_text_matrix(
         model_info$level_name_text[[d_]],
-        params$W_level_name_text
+        params$W_level_name_text,
+        normalizer = model_info$text_embedding_normalizer
       )
       if (!is.null(level_text_proj)) {
         p_text <- match_probability_width(p_full, level_text_proj$shape[[1]])
@@ -12186,7 +12633,8 @@ generate_ModelOutcome_neural <- function(){
   if (identical(factor_tokenization, "fused") && !isTRUE(factor_schema_supplied)) {
     default_structural_info <- neural_make_default_fused_structural_info(
       names_list = if (exists("names_list", inherits = TRUE)) names_list else NULL,
-      factor_levels = factor_levels_int
+      factor_levels = factor_levels_int,
+      struct_feature_encoding = neural_token_info_use$struct_feature_encoding
     )
     factor_struct_matrix <- default_structural_info$factor_struct_matrix
     level_struct_matrices <- default_structural_info$level_struct_matrices
@@ -12476,6 +12924,42 @@ generate_ModelOutcome_neural <- function(){
     "pairwise" %in% universal_task_mode_levels &&
     "single" %in% universal_task_mode_levels
   text_semantic_dim <- as.integer(neural_token_info_use$text_dim %||% 0L)
+  struct_feature_encoding <- neural_resolve_struct_feature_encoding(
+    neural_token_info_use$struct_feature_encoding %||% NULL
+  )
+  text_embedding_normalization <- neural_resolve_text_embedding_normalization(
+    neural_token_info_use$text_embedding_normalization %||% NULL
+  )
+  # One corpus-level normalizer, fitted once on the training schema text and
+  # carried in model_info so prediction and adaptation apply the identical map.
+  # Adaptation fits inherit the foundation normalizer instead of refitting it.
+  text_embedding_normalizer <- neural_validate_text_embedding_normalizer(
+    neural_token_info_use$text_embedding_normalizer %||% NULL
+  )
+  if (is.null(text_embedding_normalizer) && text_semantic_dim > 0L) {
+    text_embedding_normalizer <- neural_fit_text_embedding_normalizer(
+      spec = text_embedding_normalization,
+      text_dim = text_semantic_dim,
+      sources = list(
+        factor_name_text,
+        level_name_text,
+        covariate_name_text,
+        experiment_description_text,
+        default_experiment_text,
+        covariate_value_text
+      )
+    )
+  }
+  if (!is.null(text_embedding_normalizer) && text_semantic_dim > 0L &&
+      length(text_embedding_normalizer$center) != text_semantic_dim) {
+    stop(
+      sprintf(
+        "text_embedding_normalizer center has %d dimensions but the schema text has %d.",
+        length(text_embedding_normalizer$center), text_semantic_dim
+      ),
+      call. = FALSE
+    )
+  }
   factor_struct_dim <- if (!is.null(factor_struct_matrix)) {
     ncol(as.matrix(factor_struct_matrix))
   } else {
@@ -15596,6 +16080,8 @@ generate_ModelOutcome_neural <- function(){
     )
     transformer_model_info$transformer_moe <- transformer_moe
     model_info_local <- neural_make_runtime_token_model_info(
+      text_embedding_normalizer = text_embedding_normalizer,
+      struct_feature_encoding = struct_feature_encoding,
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
       n_party_levels = ai(n_party_levels),
@@ -16384,6 +16870,8 @@ generate_ModelOutcome_neural <- function(){
     )
     transformer_model_info$transformer_moe <- transformer_moe
     model_info_local <- neural_make_runtime_token_model_info(
+      text_embedding_normalizer = text_embedding_normalizer,
+      struct_feature_encoding = struct_feature_encoding,
       model_dims = ModelDims,
       cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
       n_party_levels = ai(n_party_levels),
@@ -18531,6 +19019,11 @@ generate_ModelOutcome_neural <- function(){
   validation_model_info$factor_struct_feature_names <- factor_struct_feature_names
   validation_model_info$level_struct_feature_names <- level_struct_feature_names
   validation_model_info$covariate_name_text <- covariate_name_text
+  # Validation must see the same text normalization and structural encoding
+  # as the training forward pass.
+  validation_model_info$text_embedding_normalization <- text_embedding_normalization
+  validation_model_info$text_embedding_normalizer <- text_embedding_normalizer
+  validation_model_info$struct_feature_encoding <- struct_feature_encoding
   validation_model_info$covariate_names <- covariate_names_override
   validation_model_info$resp_cov_mean <- resp_cov_mean
   validation_model_info$resp_cov_scale <- resp_cov_scale
@@ -22556,6 +23049,9 @@ generate_ModelOutcome_neural <- function(){
   predict_model_info$token_family_levels <- token_family_levels
   predict_model_info$experiment_token_mode <- experiment_token_mode
   predict_model_info$covariate_value_encoding <- covariate_value_encoding
+  predict_model_info$text_embedding_normalization <- text_embedding_normalization
+  predict_model_info$text_embedding_normalizer <- text_embedding_normalizer
+  predict_model_info$struct_feature_encoding <- struct_feature_encoding
   if (!is.null(transformer_moe)) {
     transformer_moe_router_bias <- get_svi_param("_transformer_moe_bias")
     if (is.null(transformer_moe_router_bias)) stop("Selected MoE weights are missing router biases.", call. = FALSE)
@@ -23391,6 +23887,17 @@ generate_ModelOutcome_neural <- function(){
 
   early_stopping_info <- neural_finalize_validation_metrics(early_stopping_info)
   parameter_diagnostics <- neural_build_parameter_diagnostics(ParamsMean)
+  text_pathway_diagnostics <- tryCatch(
+    neural_build_text_pathway_diagnostics(ParamsMean, predict_model_info),
+    error = function(e) {
+      list(
+        text_pathway_status = "failed",
+        text_embedding_centered = !is.null(text_embedding_normalizer),
+        pathway_summaries = data.frame(),
+        notes = conditionMessage(e)
+      )
+    }
+  )
   convergence_diagnostics <- neural_build_convergence_diagnostics(
     parameter_diagnostics = parameter_diagnostics,
     svi_loss_curve = svi_loss_curve,
@@ -23576,6 +24083,9 @@ generate_ModelOutcome_neural <- function(){
     calibration_prior_sd = calibration_control$prior_sd %||% NULL,
     calibration_scale = calibration_scale_mean,
     schema_dropout = schema_dropout,
+    text_embedding_normalization = text_embedding_normalization,
+    text_embedding_normalizer = text_embedding_normalizer,
+    struct_feature_encoding = struct_feature_encoding,
     text_semantic_dim = as.integer(text_semantic_dim),
     factor_struct_dim = as.integer(factor_struct_dim),
     level_struct_dim = as.integer(level_struct_dim),
@@ -23679,6 +24189,7 @@ generate_ModelOutcome_neural <- function(){
     optimizer_diagnostics = optimizer_diagnostics,
     gradient_diagnostics = gradient_diagnostics,
     parameter_diagnostics = parameter_diagnostics,
+    text_pathway_diagnostics = text_pathway_diagnostics,
     stage_diagnostics = stage_diagnostics,
     training_seed = as.integer(neural_training_seed),
     training_seed_supplied = isTRUE(neural_training_seed_supplied),

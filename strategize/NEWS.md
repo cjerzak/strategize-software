@@ -1,3 +1,23 @@
+# Development: September 12, 2026 text-embedding input normalization
+
+- Schema text embeddings are centered with the mean of the training schema
+  text and re-normalized before the `W_*_name_text`, `W_experiment_text`, and
+  covariate-value projections (`text_embedding_normalization`, default on;
+  optional `remove_top_pcs`). Sentence encoders leave one shared direction in
+  every vector (about 60% of each unit vector for harrier), and uncentered
+  projections spent 70-89% of every factor/level token on that constant in the
+  576x8 Muon MoE foundation fit while the 192x8 Adam fit learned to suppress
+  it. The fitted normalizer is stored in `neural_model_info` and applied
+  identically during training validation, prediction, and adaptation; saved
+  models without one remain uncentered.
+- Structural features `raw_value_log1p_signed` and `cardinality_log` use the
+  bounded encoding `tanh(signed_log1p(x) / 4)` (`struct_feature_encoding =
+  "bounded_v2"`, default); saved models record their encoding and the
+  prediction-time default builders honor it (`"legacy_v1"` for older models).
+- `neural_model_info$text_pathway_diagnostics` reports, per text pathway, the
+  constant share of token energy, the gain applied to the raw shared
+  direction, and the separability of projected rows.
+
 # Development: September 9, 2026 correctness repairs
 
 - Binomial policy reports and CV integrate categorical profiles, with exact

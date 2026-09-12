@@ -5800,3 +5800,244 @@ test_that("hard profile draw mode emits one-hot average-case samples", {
   expect_true(all(rowSums(ast_mat) == 1))
   expect_true(all(rowSums(dag_mat) == 1))
 })
+
+# =============================================================================
+# Text-embedding normalization and structural feature encoding
+# =============================================================================
+
+test_that("text embedding normalization resolver handles defaults and overrides", {
+  defaults <- strategize:::neural_resolve_text_embedding_normalization(NULL)
+  expect_true(defaults$center)
+  expect_identical(defaults$remove_top_pcs, 0L)
+  expect_true(defaults$renormalize)
+  expect_identical(strategize:::neural_resolve_text_embedding_normalization(TRUE), defaults)
+  off <- strategize:::neural_resolve_text_embedding_normalization(FALSE)
+  expect_false(off$center)
+  expect_false(off$renormalize)
+  expect_identical(strategize:::neural_resolve_text_embedding_normalization("none"), off)
+  custom <- strategize:::neural_resolve_text_embedding_normalization(list(remove_top_pcs = 3))
+  expect_true(custom$center)
+  expect_identical(custom$remove_top_pcs, 3L)
+  expect_error(
+    strategize:::neural_resolve_text_embedding_normalization(list(center = FALSE, remove_top_pcs = 2)),
+    "requires center"
+  )
+  expect_error(
+    strategize:::neural_resolve_text_embedding_normalization(list(whiten = TRUE)),
+    "Unknown text_embedding_normalization"
+  )
+  expect_error(
+    strategize:::neural_resolve_text_embedding_normalization(list(remove_top_pcs = -1)),
+    "non-negative"
+  )
+})
+
+test_that("structural feature encoding resolver and bounded log1p behave", {
+  expect_identical(strategize:::neural_resolve_struct_feature_encoding(NULL), "bounded_v2")
+  expect_identical(strategize:::neural_resolve_struct_feature_encoding("legacy_v1"), "legacy_v1")
+  expect_error(strategize:::neural_resolve_struct_feature_encoding("v3"), "Unknown struct_feature_encoding")
+  x <- c(-500000, -1, 0, 1, 27, 2002, 500000, NA, Inf)
+  b <- strategize:::neural_bounded_signed_log1p(x)
+  expect_true(all(is.finite(b)))
+  expect_true(all(abs(b) <= 1))
+  expect_equal(b[3], 0)
+  expect_equal(b[1], -b[7])
+  expect_true(all(diff(b[1:7]) > 0))
+  expect_equal(b[8], 0)
+  expect_equal(b[9], 0)
+  expect_equal(
+    strategize:::neural_struct_raw_value_feature(c(10, 20), "legacy_v1"),
+    log1p(c(10, 20))
+  )
+  expect_equal(
+    strategize:::neural_struct_raw_value_feature(c(10, 20), "bounded_v2"),
+    tanh(log1p(c(10, 20)) / 4)
+  )
+  expect_equal(strategize:::neural_struct_cardinality_feature(200L, "legacy_v1"), log1p(200))
+  expect_lt(strategize:::neural_struct_cardinality_feature(200L, "bounded_v2"), 1)
+})
+
+test_that("default structural builders honor the struct feature encoding", {
+  names_list <- list(price = list(c("10", "20", "30")), color = list(c("red", "blue")))
+  legacy <- strategize:::neural_make_default_fused_structural_info(
+    names_list = names_list,
+    struct_feature_encoding = "legacy_v1"
+  )
+  bounded <- strategize:::neural_make_default_fused_structural_info(
+    names_list = names_list,
+    struct_feature_encoding = "bounded_v2"
+  )
+  expect_equal(unname(legacy$factor_struct_matrix[, "cardinality_log"]), log1p(c(3, 2)))
+  expect_equal(unname(bounded$factor_struct_matrix[, "cardinality_log"]), tanh(log1p(c(3, 2)) / 4))
+  level_features <- strategize:::neural_fused_default_level_struct_feature_names()
+  pred_legacy <- strategize:::cs2step_neural_default_level_struct_matrices(
+    names_list, level_features, struct_feature_encoding = "legacy_v1"
+  )
+  pred_bounded <- strategize:::cs2step_neural_default_level_struct_matrices(
+    names_list, level_features, struct_feature_encoding = "bounded_v2"
+  )
+  expect_equal(unname(pred_legacy$price[1:3, "raw_value_log1p_signed"]), log1p(c(10, 20, 30)))
+  expect_equal(unname(pred_bounded$price[1:3, "raw_value_log1p_signed"]), tanh(log1p(c(10, 20, 30)) / 4))
+  expect_equal(unname(pred_bounded$color[1:2, "raw_value_log1p_signed"]), c(0, 0))
+  factor_features <- strategize:::neural_fused_default_factor_struct_feature_names()
+  fac_legacy <- strategize:::cs2step_neural_default_factor_struct_matrix(
+    names_list, factor_features, struct_feature_encoding = "legacy_v1"
+  )
+  expect_equal(unname(fac_legacy[, "cardinality_log"]), log1p(c(3, 2)))
+})
+
+test_that("text embedding normalizer centers, renormalizes, and keeps absent rows zero", {
+  set.seed(11)
+  shared <- rnorm(16)
+  shared <- shared / sqrt(sum(shared ^ 2))
+  raw <- t(sapply(seq_len(40), function(i) {
+    v <- 0.8 * shared + 0.6 * rnorm(16) / 4
+    v / sqrt(sum(v ^ 2))
+  }))
+  raw <- rbind(raw, 0)
+  sources <- list(raw[1:20, ], list(raw[21:30, ], raw[31:41, ]))
+  normalizer <- strategize:::neural_fit_text_embedding_normalizer(
+    spec = TRUE, text_dim = 16L, sources = sources
+  )
+  expect_equal(length(normalizer$center), 16L)
+  expect_equal(normalizer$n_rows, 40L)
+  expect_gt(normalizer$center_norm, 0.5)
+  out <- strategize:::neural_apply_text_embedding_normalizer_r(raw, normalizer)
+  expect_equal(unname(out[41, ]), rep(0, 16))
+  norms <- sqrt(rowSums(out[1:40, ] ^ 2))
+  expect_equal(norms, rep(1, 40), tolerance = 1e-8)
+  expect_lt(sqrt(sum(colMeans(sweep(raw[1:40, ], 2L, normalizer$center)) ^ 2)), 1e-10)
+  expect_null(strategize:::neural_fit_text_embedding_normalizer(spec = FALSE, text_dim = 16L, sources = sources))
+  expect_null(strategize:::neural_fit_text_embedding_normalizer(spec = TRUE, text_dim = 16L, sources = list(raw[1, , drop = FALSE])))
+  expect_error(
+    strategize:::neural_fit_text_embedding_normalizer(spec = TRUE, text_dim = 8L, sources = sources),
+    "expected text_dim"
+  )
+  pcs <- strategize:::neural_fit_text_embedding_normalizer(
+    spec = list(remove_top_pcs = 2L), text_dim = 16L, sources = sources
+  )
+  expect_identical(dim(pcs$pc_basis), c(16L, 2L))
+  out_pcs <- strategize:::neural_apply_text_embedding_normalizer_r(raw[1:40, ], pcs)
+  expect_lt(max(abs(out_pcs %*% pcs$pc_basis)), 1e-8)
+  validated <- strategize:::neural_validate_text_embedding_normalizer(list(center = normalizer$center))
+  expect_identical(validated$remove_top_pcs, 0L)
+  expect_true(validated$renormalize)
+  expect_error(strategize:::neural_validate_text_embedding_normalizer(list(center = c(1, NA))), "finite")
+  expect_null(strategize:::neural_validate_text_embedding_normalizer(NULL))
+})
+
+test_that("text pathway diagnostics expose the shared-direction constant share", {
+  set.seed(12)
+  d_in <- 12L
+  d_out <- 6L
+  shared <- rnorm(d_in)
+  shared <- shared / sqrt(sum(shared ^ 2))
+  raw <- t(sapply(seq_len(30), function(i) {
+    v <- 0.8 * shared + 0.6 * rnorm(d_in) / 3
+    v / sqrt(sum(v ^ 2))
+  }))
+  # A projection that passes the shared direction only.
+  W_shared <- shared %o% rep(1, d_out) / sqrt(d_out)
+  # A projection orthogonal to the shared direction.
+  basis <- qr.Q(qr(cbind(shared, matrix(rnorm(d_in * d_out), d_in))))[, -1L, drop = FALSE]
+  W_orth <- basis[, seq_len(d_out)]
+  legacy_info <- list(factor_name_text = raw, level_name_text = list(raw[1:10, ], raw[11:30, ]))
+  diag_legacy <- strategize:::neural_build_text_pathway_diagnostics(
+    list(W_factor_name_text = W_shared, W_level_name_text = W_orth),
+    legacy_info
+  )
+  expect_identical(diag_legacy$text_pathway_status, "ok")
+  expect_false(diag_legacy$text_embedding_centered)
+  ps <- diag_legacy$pathway_summaries
+  expect_setequal(ps$pathway, c("factor_name", "level_name"))
+  fac <- ps[ps$pathway == "factor_name", ]
+  lev <- ps[ps$pathway == "level_name", ]
+  expect_gt(fac$token_constant_share, 0.9)
+  expect_gt(fac$shared_direction_gain, 1)
+  expect_lt(lev$token_constant_share, 0.5)
+  expect_lt(lev$shared_direction_gain, 0.1)
+  expect_equal(fac$n_rows, 30L)
+  expect_equal(fac$text_dim, d_in)
+  expect_equal(fac$model_dims, d_out)
+  normalizer <- strategize:::neural_fit_text_embedding_normalizer(
+    spec = TRUE, text_dim = d_in, sources = list(raw)
+  )
+  centered_info <- c(legacy_info, list(text_embedding_normalizer = normalizer, text_embedding_normalization = list(center = TRUE, remove_top_pcs = 0L, renormalize = TRUE)))
+  diag_centered <- strategize:::neural_build_text_pathway_diagnostics(
+    list(W_factor_name_text = W_shared, W_level_name_text = W_orth),
+    centered_info
+  )
+  expect_true(diag_centered$text_embedding_centered)
+  fac_c <- diag_centered$pathway_summaries[diag_centered$pathway_summaries$pathway == "factor_name", ]
+  # Per-row renormalization after centering leaves a small residual mean, so
+  # the shares drop by an order of magnitude rather than to exactly zero.
+  expect_lt(fac_c$input_constant_share, 0.01)
+  expect_lt(fac_c$token_constant_share, 0.1)
+  expect_lt(fac_c$token_constant_share, fac$token_constant_share / 5)
+  expect_equal(fac_c$shared_direction_gain, fac$shared_direction_gain)
+  empty <- strategize:::neural_build_text_pathway_diagnostics(list(), list())
+  expect_identical(empty$text_pathway_status, "unavailable")
+  expect_identical(nrow(empty$pathway_summaries), 0L)
+})
+
+test_that("JAX text normalizer matches the R twin and flows through projection", {
+  skip_if_no_jax()
+  strategize:::initialize_jax()
+  strenv <- strategize:::strenv
+  set.seed(13)
+  raw <- matrix(rnorm(8 * 10), nrow = 8)
+  raw <- raw / sqrt(rowSums(raw ^ 2))
+  raw[3, ] <- 0
+  normalizer <- strategize:::neural_fit_text_embedding_normalizer(
+    spec = list(remove_top_pcs = 1L), text_dim = 10L, sources = list(raw)
+  )
+  r_out <- strategize:::neural_apply_text_embedding_normalizer_r(raw, normalizer)
+  j_out <- strategize:::cs2step_neural_to_r_array(
+    strategize:::neural_apply_text_embedding_normalizer(
+      strategize:::neural_as_jnp_matrix(raw, dtype = strenv$dtj),
+      normalizer
+    )
+  )
+  expect_equal(unname(as.matrix(j_out)), unname(r_out), tolerance = 1e-5)
+  W <- matrix(rnorm(10 * 4), nrow = 10)
+  proj <- strategize:::cs2step_neural_to_r_array(
+    strategize:::neural_project_text_matrix(
+      raw,
+      strenv$jnp$array(W, dtype = strenv$dtj),
+      normalizer = normalizer
+    )
+  )
+  expect_equal(unname(as.matrix(proj)), unname(r_out %*% W), tolerance = 1e-4)
+  proj_raw <- strategize:::cs2step_neural_to_r_array(
+    strategize:::neural_project_text_matrix(raw, strenv$jnp$array(W, dtype = strenv$dtj))
+  )
+  expect_equal(unname(as.matrix(proj_raw)), unname(raw %*% W), tolerance = 1e-4)
+  expect_error(
+    strategize:::neural_apply_text_embedding_normalizer(
+      strategize:::neural_as_jnp_matrix(raw[, 1:5], dtype = strenv$dtj),
+      normalizer
+    ),
+    "expects 10-dimensional"
+  )
+})
+
+test_that("token runtime config resolves normalization, normalizer, and encoding", {
+  resolved <- strategize:::neural_resolve_token_runtime_config(
+    neural_token_info = list(),
+    mcmc_control = list()
+  )
+  expect_true(resolved$text_embedding_normalization$center)
+  expect_null(resolved$text_embedding_normalizer)
+  expect_identical(resolved$struct_feature_encoding, "bounded_v2")
+  inherited <- strategize:::neural_resolve_token_runtime_config(
+    neural_token_info = list(
+      text_embedding_normalizer = list(center = rep(0.1, 4)),
+      struct_feature_encoding = "legacy_v1",
+      text_embedding_normalization = FALSE
+    ),
+    mcmc_control = list(struct_feature_encoding = "bounded_v2")
+  )
+  expect_equal(inherited$text_embedding_normalizer$center, rep(0.1, 4))
+  expect_identical(inherited$struct_feature_encoding, "legacy_v1")
+  expect_false(inherited$text_embedding_normalization$center)
+})
