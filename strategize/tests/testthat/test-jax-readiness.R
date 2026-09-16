@@ -49,3 +49,30 @@ test_that("readiness checks still block nested JAX computations", {
     reticulate::import("numpy", convert = FALSE)$asarray(arr)
   )), matrix(128, 128, 128))
 })
+
+test_that("phase-boundary collection releases dead arrays and preserves live state and JITs", {
+  skip_if_no_jax()
+  py <- reticulate::py_run_string(paste(
+    "import jax, jax.numpy as jnp, weakref",
+    "traces = []",
+    "def update(x, counter=traces):",
+    "    counter.append(True)",
+    "    return x + 1",
+    "compiled_update = jax.jit(update)",
+    "live_state = compiled_update(jnp.arange(128.))",
+    sep = "\n"
+  ), local = TRUE, convert = FALSE)
+  temporary_array <- reticulate::import("jax.numpy", convert = FALSE)$ones(
+    reticulate::tuple(256L, 256L))
+  weak <- reticulate::import("weakref", convert = FALSE)$ref(temporary_array)
+  expect_false(inherits(weak(), "python.builtin.NoneType"))
+  rm(temporary_array)
+
+  strategize:::strategize_jax_collect_garbage()
+  expect_true(inherits(weak(), "python.builtin.NoneType"))
+  updated <- py$compiled_update(py$live_state)
+  expect_equal(as.numeric(reticulate::py_to_r(
+    reticulate::import("numpy", convert = FALSE)$asarray(updated)
+  )), seq_len(128) + 1)
+  expect_length(reticulate::py_to_r(py$traces), 1L)
+})

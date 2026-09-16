@@ -96,6 +96,15 @@ strategize_jax_block_until_ready <- function(x, max_depth = 20L) {
   invisible(x)
 }
 
+strategize_jax_collect_garbage <- function(runtime = strenv) {
+  # R accounts for the small Python handle, not its potentially large device
+  # allocation. Run finalizers before Python's cyclic GC, without invalidating
+  # JIT caches or deleting arrays still owned by a live optimizer/checkpoint.
+  invisible(gc(full = TRUE))
+  if (!is.null(runtime$py_gc)) runtime$py_gc$collect()
+  invisible(NULL)
+}
+
 strategize_svi_post_init_cleanup <- function(svi_state, runtime = strenv,
                                             enabled = tolower(Sys.getenv(
                                               "STRATEGIZE_SVI_POST_INIT_CLEANUP", "false"

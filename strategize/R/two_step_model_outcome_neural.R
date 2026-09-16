@@ -19130,11 +19130,7 @@ generate_ModelOutcome_neural <- function(){
     NULL
   }
 
-  svi_validation_predict_chunk <- function(param_sites, idx, fallback_params = NULL) {
-    params <- build_params_from_sites_for_svi_validation(
-      param_sites,
-      fallback_params = fallback_params
-    )
+  svi_validation_predict_chunk <- function(params, idx) {
     if (is.null(params) || length(idx) < 1L) {
       return(NULL)
     }
@@ -20568,21 +20564,25 @@ generate_ModelOutcome_neural <- function(){
         return(NA_real_)
       }
       param_sites <- extract_svi_param_sites(svi_params_current)
+      # Stack/reconstruct the prediction weights once per checkpoint. Repeating
+      # this for every validation batch creates large, short-lived device arrays
+      # whose external memory is invisible to R's automatic GC thresholds.
+      prediction_params <- build_params_from_sites_for_svi_validation(
+        param_sites, fallback_params = svi_params_current
+      )
       validation_batches <- validation_split$validation_batches %||% list(validation_split$validation_idx)
       validation_prediction_mode <- validation_split$validation_prediction_mode %||% "batched_fallback"
       pred_eval <- if (identical(validation_prediction_mode, "single_jit_call")) {
         svi_validation_predict_chunk(
-          param_sites,
-          validation_split$validation_idx,
-          fallback_params = svi_params_current
+          prediction_params,
+          validation_split$validation_idx
         )
       } else {
         pred_chunks <- vector("list", length(validation_batches))
         for (batch_idx in seq_along(validation_batches)) {
           pred_chunks[[batch_idx]] <- svi_validation_predict_chunk(
-            param_sites,
-            validation_batches[[batch_idx]],
-            fallback_params = svi_params_current
+            prediction_params,
+            validation_batches[[batch_idx]]
           )
         }
         combine_svi_validation_predictions(pred_chunks)
@@ -20630,6 +20630,10 @@ generate_ModelOutcome_neural <- function(){
       as.numeric(metric_value)
     }
     compute_svi_validation_metric <- function(svi_state_current, validation_split) {
+      # Release dead reticulate handles at the training/validation boundary;
+      # retain the live optimizer state and compiled update/prediction caches.
+      strategize_jax_collect_garbage()
+      on.exit(strategize_jax_collect_garbage(), add = TRUE)
       strategize_dp_primary(function() {
         compute_svi_validation_metric_local(strategize_dp_local(svi_state_current), validation_split)
       }, "validation")
