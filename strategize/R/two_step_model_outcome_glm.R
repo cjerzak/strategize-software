@@ -41,7 +41,7 @@ cs_glm_design_size_error_message <- function(glm_input, main_dat, interacted_dat
       "Post-screen GLM design is too large%s: %d column(s) for %d observation(s); ",
       "limit is %d column(s). Requested use_regularization=%s; screening_applied=%s; ",
       "final columns: main=%d, interactions=%d. This check runs after ",
-      "explicit-feature interaction screening, so setting use_regularization=TRUE may ",
+      "regularization/glinternet screening of explicit-feature interactions, so setting use_regularization=TRUE may ",
       "already have happened and may not be sufficient."
     ),
     context,
