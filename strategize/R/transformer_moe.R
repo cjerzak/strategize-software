@@ -84,6 +84,7 @@ neural_moe_config <- function(model_info, params = NULL) {
 
 neural_moe_set_branch <- function(branch, scale, rows) {
   if (!is.null(strenv$jax_moe)) strenv$jax_moe$set_branch(branch, scale, as.integer(rows))
+  if (!is.null(strenv$jax_attention)) strenv$jax_attention$set_branch(branch, scale, as.integer(rows))
   invisible(NULL)
 }
 

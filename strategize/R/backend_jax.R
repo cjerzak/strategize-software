@@ -50,6 +50,13 @@ strategize_jax_block_until_ready <- function(x, max_depth = 20L) {
       return(invisible(value))
     }
 
+    # Orbax restores host NumPy arrays, which are already ready. Treat them
+    # as leaves: as.list() materializes every element of a large checkpoint
+    # array and makes the fallback below walk millions of scalar values.
+    if (inherits(value, c("numpy.ndarray", "numpy.generic"))) {
+      return(invisible(value))
+    }
+
     blocked <- tryCatch({
       block_fn <- value$block_until_ready
       if (!is.null(block_fn)) {
@@ -87,6 +94,35 @@ strategize_jax_block_until_ready <- function(x, max_depth = 20L) {
 
   walk(x, 0L)
   invisible(x)
+}
+
+strategize_svi_post_init_cleanup <- function(svi_state, runtime = strenv,
+                                            enabled = tolower(Sys.getenv(
+                                              "STRATEGIZE_SVI_POST_INIT_CLEANUP", "false"
+                                            )) %in% c("1", "true", "yes")) {
+  if (!isTRUE(enabled)) return(invisible(NULL))
+  strategize_jax_block_until_ready(svi_state)
+  memory_snapshot <- function() {
+    tryCatch({
+      devices <- runtime$jax$local_devices()
+      if (reticulate::is_py_object(devices)) devices <- reticulate::py_to_r(devices)
+      lapply(devices, function(device) {
+        stats <- device$memory_stats()
+        if (reticulate::is_py_object(stats)) stats <- reticulate::py_to_r(stats)
+        list(device = as.character(device), memory = stats)
+      })
+    }, error = function(e) list(error = conditionMessage(e)))
+  }
+  before <- memory_snapshot()
+  invisible(gc(full = TRUE))
+  runtime$py_gc$collect()
+  runtime$jax$clear_caches()
+  runtime$py_gc$collect()
+  report <- list(before = before, after = memory_snapshot())
+  message("SVI_POST_INIT_MEMORY ", jsonlite::toJSON(
+    report, auto_unbox = TRUE, null = "null"
+  ))
+  invisible(report)
 }
 
 strategize_register_jax_transformer_helpers <- function() {
@@ -349,7 +385,8 @@ strategize_register_jax_svi_helpers <- function() {
     "        raise RuntimeError('numpyro.infer.svi._make_loss_fn is unavailable')",
     "    names = _strategize_svi_update_arg_names(batch_args)",
     "    args = {name: batch_args[name] for name in names}",
-    "    key = _strategize_svi_gradient_cache_key(svi, names)",
+    "    detailed = __import__('os').environ.get('STRATEGIZE_GRADIENT_BY_PARAMETER', '0') == '1'",
+    "    key = _strategize_svi_gradient_cache_key(svi, names) + (detailed,)",
     "    fn = _strategize_svi_gradient_jit_cache.get(key)",
     "    if fn is None:",
     "        _strategize_svi_gradient_jit_compile_count += 1",
@@ -368,17 +405,23 @@ strategize_register_jax_svi_helpers <- function() {
     "                mutable_state=state.mutable_state,",
     "            )",
     "            (_, _), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)",
-    "            return _strategize_svi_gradient_stats(grads)",
+    "            stats = _strategize_svi_gradient_stats(grads)",
+    "            if detailed:",
+    "                stats['by_parameter'] = {name: _strategize_svi_gradient_stats(value) for name, value in grads.items()}",
+    "            return stats",
     "        fn = jax.jit(_compiled)",
     "        _strategize_svi_gradient_jit_cache[key] = fn",
     "    stats = jax.device_get(fn(svi_state, args))",
-    "    return {",
+    "    result = {",
     "        'grad_l2': float(stats['grad_l2']),",
     "        'grad_rms': float(stats['grad_rms']),",
     "        'grad_max_abs': float(stats['grad_max_abs']),",
     "        'grad_n_nonfinite': int(stats['grad_n_nonfinite']),",
     "        'grad_n_elements': int(stats['grad_n_elements']),",
     "    }",
+    "    if detailed:",
+    "        result['by_parameter'] = {name: {key: float(value) for key, value in values.items()} for name, values in stats['by_parameter'].items()}",
+    "    return result",
     "",
     "def strategize_svi_gradient_jit_cache_info():",
     "    return {",

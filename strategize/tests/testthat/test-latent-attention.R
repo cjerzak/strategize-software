@@ -1,0 +1,22 @@
+test_that("attention controls distinguish fresh defaults from legacy metadata", {
+  resolve <- strategize:::neural_resolve_latent_attention
+  expect_identical(resolve()$architecture, "mha")
+  expect_identical(resolve(fitting = TRUE)$architecture, "mla_dsa")
+  expect_identical(resolve("mla_dsa", 288L)$kv_rank, 128L)
+  expect_error(resolve(list(top_k = 0)), "positive integer")
+  expect_error(resolve(list(architecture = "mla_dsa", indexer_loss_weight = 0)), "positive finite")
+  expect_error(resolve(list(architecture = "dsa")), "must be")
+  expect_error(resolve(list(kv_rank = 300)), "cannot exceed")
+  expect_error(resolve(list(typo = 1)), "Unknown")
+  expect_error(resolve(list("mla_dsa")), "named list")
+  validate <- strategize:::neural_validate_saved_latent_attention
+  expect_invisible(validate(list()))
+  info <- list(model_dims = 16L, param_names = "W_q_up_layers")
+  expect_error(validate(info), "disagree")
+  info$transformer_attention <- list(architecture = "mla_dsa")
+  expect_error(validate(info), "missing")
+  info$param_names <- sub("_l$", "_layers", strategize:::neural_latent_attention_param_bases())
+  expect_invisible(validate(info))
+  expect_true(strategize:::neural_muon_targets_matrix_weight("W_q_up_l1", 2L))
+  expect_false(strategize:::neural_muon_targets_matrix_weight("W_index_q_l1", 2L))
+})

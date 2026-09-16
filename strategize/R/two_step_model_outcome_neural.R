@@ -2024,7 +2024,8 @@ neural_build_param_schema <- function(params,
                        paste0("W_o_l", l_),
                        paste0("W_ff1_l", l_),
                        paste0("W_ff2_l", l_),
-                       paste0(neural_moe_weight_bases(), l_))
+                       paste0(neural_moe_weight_bases(), l_),
+                       paste0(neural_latent_attention_param_bases(), l_))
     }
   }
   param_names <- c(param_names,
@@ -2086,6 +2087,7 @@ neural_flatten_params <- function(params, schema, dtype = NULL) {
 
 neural_standard_transformer_stack_map <- function() {
   c(
+    setNames(neural_latent_attention_param_bases(), sub("_l$", "_layers", neural_latent_attention_param_bases())),
     W_q_layers = "W_q_l",
     W_k_layers = "W_k_l",
     W_v_layers = "W_v_l",
@@ -2581,8 +2583,10 @@ neural_make_transformer_model_info <- function(model_depth,
                                                attention_dtype = "auto",
                                                attention_padding_multiple = 8L,
                                                attention_resolved_backend = NULL,
-                                               attention_fallback_reason = NULL) {
+                                               attention_fallback_reason = NULL,
+                                               transformer_attention = NULL) {
   list(
+    transformer_attention = neural_resolve_latent_attention(transformer_attention, model_dims),
     model_depth = model_depth,
     model_dims = model_dims,
     n_heads = n_heads,
@@ -2886,7 +2890,8 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        attention_padding_multiple = 8L,
                                                        attention_resolved_backend = NULL,
                                                        attention_fallback_reason = NULL,
-                                                       jit_cache_key = NULL) {
+                                                       jit_cache_key = NULL,
+                                                       transformer_attention = NULL) {
   factor_tokenization <- neural_factor_tokenization(mode = factor_tokenization)
   factor_schema_supplied <- neural_factor_schema_supplied(
     factor_name_text = factor_name_text,
@@ -2917,7 +2922,8 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
     attention_dtype = attention_dtype,
     attention_padding_multiple = attention_padding_multiple,
     attention_resolved_backend = attention_resolved_backend,
-    attention_fallback_reason = attention_fallback_reason
+    attention_fallback_reason = attention_fallback_reason,
+    transformer_attention = transformer_attention
   )
   info$cand_party_to_resp_idx <- cand_party_to_resp_idx
   info$n_party_levels <- n_party_levels
@@ -5010,6 +5016,7 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$n_heads), error = function(e) "na"),
     tryCatch(as.character(model_info$head_dim), error = function(e) "na"),
     neural_transformer_residual_mode(model_info),
+    digest_field(model_info$transformer_attention),
     neural_attention_backend(model_info),
     neural_attention_dtype_mode(model_info),
     tryCatch(as.character(neural_attention_padding_multiple(model_info)), error = function(e) "na"),
@@ -5730,7 +5737,7 @@ neural_muon_target_name_regex <- function() {
   # normalization (Muon-on-vectors is discouraged); Adam handles it.
   paste0(
     "^(",
-    "W_(q|k|v|o)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross",
+    "W_(q|k|v|o|q_up)_l\\d+|W_ff(1|2)_l\\d+|W_(q|k|v|o)_cross",
     "|W_moe_(expert[12]|shared[12])_l\\d+",
     "|W_factor_struct|W_level_struct",
     "|W_factor_fuse_(1|2)|W_covariate_fuse_(1|2)",
@@ -9131,6 +9138,20 @@ neural_run_transformer <- function(tokens,
   if (is.null(params)) {
     params <- model_info$params
   }
+  latent_cfg <- neural_latent_attention_config(model_info, params)
+  if (!identical(latent_cfg$architecture, "mha")) {
+    if (!identical(neural_transformer_residual_mode(model_info), "standard"))
+      stop("MLA currently requires residual_mode='standard'.", call. = FALSE)
+    strategize_register_attention_helpers()
+    if (!neural_has_stacked_standard_transformer(params))
+      params <- neural_stack_standard_transformer_layers(params, model_info$model_depth, drop_legacy = TRUE)
+    output <- strenv$jax_attention$transformer_scan(tokens, token_mask,
+      params[grepl("_layers$|^RMS_final$", names(params))], latent_cfg,
+      if (neural_has_transformer_moe(params)) neural_moe_config(model_info, params) else NULL,
+      params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
+      ai(model_info$n_heads), ai(model_info$head_dim))
+    return(if (isTRUE(return_details)) list(tokens = output, readout_tokens = output) else output)
+  }
   residual_mode <- neural_transformer_residual_mode(model_info)
   use_full_attn_residual <- identical(residual_mode, "full_attn")
   if (!isTRUE(use_full_attn_residual) && neural_has_transformer_moe(params) &&
@@ -11732,6 +11753,7 @@ generate_ModelOutcome_neural <- function(){
     attention_backend = "auto",
     attention_dtype = "auto",
     attention_padding_multiple = 8L,
+    transformer_attention = list(architecture = "mha"),
     learned_pairwise_bernoulli_logit_scale = FALSE,
     pairwise_bernoulli_logit_scale_prior_sd = 0.5,
     pairwise_antisymmetry = "strict",
@@ -12282,6 +12304,20 @@ generate_ModelOutcome_neural <- function(){
   cand_heads <- (1:MD_int)[(MD_int %% (1:MD_int)) == 0L]
   TransformerHeads <- ai(cand_heads[which.min(abs(cand_heads - 8L))])
   head_dim <- ai(ai(MD_int / TransformerHeads))
+  transformer_attention <- neural_resolve_latent_attention(mcmc_control$transformer_attention, ModelDims, fitting = TRUE)
+  mcmc_control$transformer_attention <- transformer_attention
+  if (identical(transformer_attention$architecture, "mla_dsa") &&
+      !(identical(tolower(as.character(uncertainty_scope)), "output") || identical(subsample_method, "batch_vi")))
+    stop("MLA/DSA requires the joint SVI objective; use mla or mha for full MCMC.", call. = FALSE)
+  if (!identical(transformer_attention$architecture, "mha")) {
+    if (!identical(residual_mode, "standard")) stop("MLA requires residual_mode='standard'.", call. = FALSE)
+    if (identical(attention_backend, "cudnn")) stop("MLA/DSA uses XLA; attention_backend='cudnn' is unsupported.", call. = FALSE)
+    attention_backend <- "xla"
+    mcmc_control$attention_backend <- "xla"
+    strategize_register_attention_helpers()
+    message(sprintf("Attention architecture: %s; Q rank=%d; KV rank=%d; DSA top-k=%d.",
+      transformer_attention$architecture, transformer_attention$q_rank, transformer_attention$kv_rank, transformer_attention$top_k))
+  }
   attention_config_probe <- list(
     attention_backend = attention_backend,
     attention_dtype = attention_dtype,
@@ -15155,7 +15191,7 @@ generate_ModelOutcome_neural <- function(){
       }
 
       W_q_name <- paste0("W_q_l", l_)
-      W_q_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_q_shape <- reticulate::tuple(ModelDims, if (transformer_attention$architecture == "mha") ModelDims else transformer_attention$q_rank)
       W_q_l <- p2d(
         name = W_q_name,
         sample_fxn = function() {
@@ -15167,7 +15203,7 @@ generate_ModelOutcome_neural <- function(){
       )
 
       W_k_name <- paste0("W_k_l", l_)
-      W_k_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_k_shape <- reticulate::tuple(ModelDims, if (transformer_attention$architecture == "mha") ModelDims else transformer_attention$kv_rank)
       W_k_l <- p2d(
         name = W_k_name,
         sample_fxn = function() {
@@ -15179,7 +15215,8 @@ generate_ModelOutcome_neural <- function(){
       )
 
       W_v_name <- paste0("W_v_l", l_)
-      W_v_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_v_shape <- if (transformer_attention$architecture == "mha") reticulate::tuple(ModelDims, ModelDims) else
+        reticulate::tuple(transformer_attention$kv_rank, ai(2L * ModelDims))
       W_v_l <- p2d(
         name = W_v_name,
         sample_fxn = function() {
@@ -15260,6 +15297,21 @@ generate_ModelOutcome_neural <- function(){
       layer_params[[paste0("W_k_l", l_)]] <- W_k_l
       layer_params[[paste0("W_v_l", l_)]] <- W_v_l
       layer_params[[paste0("W_o_l", l_)]] <- W_o_l
+      if (!identical(transformer_attention$architecture, "mha")) {
+        shapes <- neural_latent_attention_shapes(transformer_attention, as.integer(ModelDims))
+        for (base in names(shapes)) {
+          name <- paste0(base, "_l", l_)
+          shape <- do.call(reticulate::tuple, as.list(as.integer(shapes[[base]])))
+          gain <- startsWith(base, "RMS_") || startsWith(base, "LN_")
+          sd <- if (base == "W_q_up") tau_w_l * sqrt(as.numeric(ModelDims) / transformer_attention$q_rank) else
+            if (startsWith(base, "W_")) 1 / sqrt(as.numeric(shapes[[base]][[1L]])) else 0.02
+          layer_params[[name]] <- if (gain) p2d(name,
+            sample_fxn = function() strenv$numpyro$sample(name, strenv$numpyro$distributions$LogNormal(0., qk_rms_scale)$expand(shape)),
+            init_fxn = function() strenv$jnp$ones(shape, dtype = strenv$dtj), constraint = p2d_constraint_positive) else p2d(name,
+            sample_fxn = function() strenv$numpyro$sample(name, strenv$numpyro$distributions$Normal(0., sd)$expand(shape)),
+            init_fxn = function() p2d_init_normal(name, sd, shape))
+        }
+      }
       layer_params[[paste0("RMS_attn_l", l_)]] <- RMS_attn_l
       if (!is.null(pseudo_query_attn_l)) {
         layer_params[[paste0("pseudo_query_attn_l", l_)]] <- pseudo_query_attn_l
@@ -16079,6 +16131,7 @@ generate_ModelOutcome_neural <- function(){
       attention_fallback_reason = attention_fallback_reason
     )
     transformer_model_info$transformer_moe <- transformer_moe
+    transformer_model_info$transformer_attention <- transformer_attention
     model_info_local <- neural_make_runtime_token_model_info(
       text_embedding_normalizer = text_embedding_normalizer,
       struct_feature_encoding = struct_feature_encoding,
@@ -16869,6 +16922,7 @@ generate_ModelOutcome_neural <- function(){
       attention_fallback_reason = attention_fallback_reason
     )
     transformer_model_info$transformer_moe <- transformer_moe
+    transformer_model_info$transformer_attention <- transformer_attention
     model_info_local <- neural_make_runtime_token_model_info(
       text_embedding_normalizer = text_embedding_normalizer,
       struct_feature_encoding = struct_feature_encoding,
@@ -18918,7 +18972,7 @@ generate_ModelOutcome_neural <- function(){
       maybe_site(paste0("RMS_ff_l", l_))
 
       tau_name <- paste0("tau_w_", l_)
-      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l", neural_moe_weight_bases())) {
+      for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l", neural_moe_weight_bases(), neural_latent_attention_param_bases())) {
         params_out[[paste0(base, l_)]] <- get_loc_scale_site_value(paste0(base, l_), tau_name)
       }
     }
@@ -18951,6 +19005,7 @@ generate_ModelOutcome_neural <- function(){
     attention_padding_multiple = attention_padding_multiple,
     attention_resolved_backend = attention_resolved_backend,
     attention_fallback_reason = attention_fallback_reason,
+    transformer_attention = transformer_attention,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     n_party_levels = ai(n_party_levels),
     n_candidate_tokens = n_candidate_tokens,
@@ -19753,6 +19808,11 @@ generate_ModelOutcome_neural <- function(){
     emit_transformer_structure_banner()
     if (!is.null(strenv$numpyro) && reticulate::py_has_attr(strenv$numpyro, "clear_param_store")) {
       tryCatch(strenv$numpyro$clear_param_store(), error = function(e) NULL)
+    }
+    if (identical(transformer_attention$architecture, "mla_dsa")) {
+      strategize_register_attention_helpers()
+      model_fn <- strenv$jax_attention$wrap_model(model_fn, length(Y_use),
+        transformer_attention$indexer_loss_weight, runtime = strenv$data_parallel)
     }
     if (!is.null(transformer_moe)) {
       strategize_register_moe_helpers()
@@ -21165,6 +21225,15 @@ generate_ModelOutcome_neural <- function(){
       # model. Donation must never invalidate that saved model's parameters.
       svi_state <- strenv$data_parallel$owned_state(svi_state)
       checkpoint_resume_params <- NULL
+      if (tolower(Sys.getenv("STRATEGIZE_SVI_POST_INIT_CLEANUP", "false")) %in%
+          c("1", "true", "yes")) {
+        # Retain the owned state and live guide/model values while releasing
+        # initialization wrappers and executables before the first update.
+        strategize_jax_block_until_ready(svi_state)
+        init_args <- NULL
+        if (exists("init_batch", inherits = FALSE)) init_batch <- NULL
+        strategize_svi_post_init_cleanup(svi_state)
+      }
       if (!is.null(compact_saved_rng_state) && length(compact_saved_rng_state) > 1L) {
         assign(".Random.seed", compact_saved_rng_state, envir = .GlobalEnv)
       }
@@ -22484,6 +22553,8 @@ generate_ModelOutcome_neural <- function(){
     # output-head sampler use the original model with fixed trained trunk sites.
     model_fn <- strenv$jax_moe$unwrap_model(model_fn)
   }
+  if (isTRUE(run_mcmc_after_svi) && identical(transformer_attention$architecture, "mla_dsa"))
+    model_fn <- strenv$jax_attention$unwrap_model(model_fn)
   if (!isTRUE(use_svi) || isTRUE(run_mcmc_after_svi)) {
     strenv$numpyro$set_host_device_count(mcmc_control$n_chains)
     if (!isTRUE(use_svi)) {
@@ -22865,7 +22936,7 @@ generate_ModelOutcome_neural <- function(){
     maybe_site(paste0("RMS_k_l", l_))
     maybe_site(paste0("RMS_ff_l", l_))
 
-    for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l", neural_moe_weight_bases())) {
+    for (base in c("W_q_l", "W_k_l", "W_v_l", "W_o_l", "W_ff1_l", "W_ff2_l", neural_moe_weight_bases(), neural_latent_attention_param_bases())) {
       name <- paste0(base, l_)
       tau_name <- paste0("tau_w_", l_)
       draws <- get_loc_scale_draws(name, tau_name)
@@ -22946,6 +23017,7 @@ generate_ModelOutcome_neural <- function(){
     attention_padding_multiple = attention_padding_multiple,
     attention_resolved_backend = attention_resolved_backend,
     attention_fallback_reason = attention_fallback_reason,
+    transformer_attention = transformer_attention,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     n_party_levels = ai(n_party_levels),
     n_candidate_tokens = n_candidate_tokens,
@@ -24204,7 +24276,8 @@ generate_ModelOutcome_neural <- function(){
     attention_dtype = attention_dtype,
     attention_padding_multiple = as.integer(attention_padding_multiple),
     attention_resolved_backend = attention_resolved_backend,
-    attention_fallback_reason = attention_fallback_reason
+    attention_fallback_reason = attention_fallback_reason,
+    transformer_attention = transformer_attention
   )
 
   if (isTRUE(save_outcome_model) && !isTRUE(neural_oos_eval_internal_flag)) {
