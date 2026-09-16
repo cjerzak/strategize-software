@@ -541,7 +541,7 @@ cs2step_resolve_conda_binary <- function(conda = "auto") {
   path.expand(conda_bin)
 }
 
-cs2step_python_probe <- function(python, code, env = character()) {
+cs2step_python_probe <- function(python, code, env = character(), timeout = 60L) {
   python <- path.expand(as.character(python %||% ""))
   if (!nzchar(python) || !file.exists(python)) {
     return(list(status = 127L, output = "python interpreter not found"))
@@ -552,10 +552,11 @@ cs2step_python_probe <- function(python, code, env = character()) {
   output <- tryCatch(
     suppressWarnings(system2(
       python,
-      script,
+      shQuote(script),
       stdout = TRUE,
       stderr = TRUE,
-      env = as.character(env %||% character())
+      env = as.character(env %||% character()),
+      timeout = timeout
     )),
     error = function(e) structure(conditionMessage(e), status = 127L)
   )
@@ -623,12 +624,38 @@ cs2step_python_distribution_probe <- function(python, distributions) {
   list(ok = ok, version = version, details = details, status = probe$status)
 }
 
-cs2step_python_jax_backend_probe <- function(python, platform = NULL) {
+cs2step_python_jax_backend_probe <- function(python, platform = NULL,
+                                            validate_computation = FALSE) {
   code <- paste(
     "import jax",
     "print('JAX_DEFAULT_BACKEND::' + str(jax.default_backend()))",
     sep = "\n"
   )
+  if (isTRUE(validate_computation)) {
+    code <- paste(code, paste(
+      "import jax.numpy as jnp",
+      "import numpy as np",
+      "jax.config.update('jax_enable_x64', False)",
+      "a = jnp.array([[1., 2.], [3., 4.]], dtype=jnp.float32)",
+      "def loss(w): return jnp.sum(jnp.square(a @ w))",
+      "value, grad = jax.jit(jax.value_and_grad(loss))(a)",
+      "np.testing.assert_allclose(np.asarray(value), 858., rtol=1e-5)",
+      "np.testing.assert_allclose(np.asarray(grad), [[104., 152.], [148., 216.]], rtol=1e-5)",
+      # Batched dropped indices must not overwrite the next batch. MoE uses
+      # this operation; device discovery and simple gradients miss the bug.
+      "x = jnp.ones((3, 10, 4), dtype=jnp.float32)",
+      "indices = jnp.array([[1, 3, 10]] * 3, dtype=jnp.int32)",
+      "values = jnp.broadcast_to(jnp.array([[1., 2., 99.], [3., 4., 99.], [5., 6., 99.]])[..., None], (3, 3, 4))",
+      "scatter = jax.jit(jax.vmap(lambda x, i, v: x.at[i].set(v, mode='drop')))",
+      "actual = np.asarray(scatter(x, indices, values))",
+      "expected = np.ones((3, 10, 4), dtype=np.float32)",
+      "expected[:, 1, :] = np.array([1., 3., 5.])[:, None]",
+      "expected[:, 3, :] = np.array([2., 4., 6.])[:, None]",
+      "np.testing.assert_array_equal(actual, expected, err_msg='Batched scatter-drop corrupted another batch')",
+      "print('JAX_COMPUTATION_OK')",
+      sep = "\n"
+    ), sep = "\n")
+  }
   platform <- as.character(platform %||% "")
   env <- if (nzchar(platform)) sprintf("JAX_PLATFORMS=%s", platform) else character()
   probe <- cs2step_python_probe(python, code, env = env)
@@ -637,6 +664,9 @@ cs2step_python_jax_backend_probe <- function(python, platform = NULL) {
   ok <- identical(probe$status, 0L) && nzchar(backend)
   if (nzchar(platform)) {
     ok <- ok && identical(backend, platform)
+  }
+  if (isTRUE(validate_computation)) {
+    ok <- ok && "JAX_COMPUTATION_OK" %in% probe$output
   }
   list(ok = ok, backend = backend, status = probe$status, output = probe$output)
 }
@@ -693,6 +723,19 @@ cs2step_backend_core_pip_packages <- function() {
     numpy = "numpy",
     "orbax.checkpoint" = "orbax-checkpoint"
   )
+}
+
+cs2step_backend_mps_pip_packages <- function() {
+  packages <- cs2step_backend_core_pip_packages()
+  # jax-mps 0.10 wheels use the StableHLO ABI from JAX/JAXlib 0.10.
+  # NumPyro 0.21.0 imports xla_pmap_p, removed in JAX 0.10. Use the
+  # upstream fix pinned by jax-mps until a compatible NumPyro release exists.
+  packages[["jax"]] <- "jax>=0.10.0,<0.11"
+  packages[["numpyro"]] <- paste0(
+    "numpyro @ https://github.com/pyro-ppl/numpyro/archive/",
+    "18c2cc135a524ae7ce4042c85f133048c57c6f92.zip"
+  )
+  c("jax-mps>=0.10.10,<0.11", "jaxlib>=0.10.0,<0.11", unname(packages))
 }
 
 cs2step_backend_env_state <- function(conda_env = "strategize_env", conda = "auto") {
@@ -873,11 +916,18 @@ cs2step_backend_host_info <- function() {
   if (!nzchar(machine) || is.na(machine)) {
     machine <- R.version$arch %||% ""
   }
+  macos_version <- if (identical(os, "Darwin")) {
+    probe <- cs2step_command_probe("/usr/bin/sw_vers", "-productVersion")
+    if (identical(probe$status, 0L) && length(probe$output)) trimws(probe$output[[1]]) else ""
+  } else {
+    ""
+  }
   list(
     os = os,
     machine = machine,
     is_macos = identical(os, "Darwin"),
-    is_arm64 = grepl("arm64|aarch64", machine, ignore.case = TRUE)
+    is_arm64 = grepl("arm64|aarch64", machine, ignore.case = TRUE),
+    macos_version = macos_version
   )
 }
 
@@ -888,9 +938,10 @@ cs2step_backend_mps_compatibility <- function(state) {
     return(list(
       compatible = FALSE,
       python_major_minor = "",
-      python_313 = FALSE,
+      python_supported = FALSE,
       jax_mps_installed = FALSE,
       jax_mps_version = "",
+      jax_versions_supported = FALSE,
       jax_backend = "",
       jax_backend_mps = FALSE,
       details = "python interpreter not found"
@@ -898,21 +949,28 @@ cs2step_backend_mps_compatibility <- function(state) {
   }
 
   python_version <- cs2step_python_version_major_minor(python)
-  python_313 <- identical(python_version$major_minor, "3.13")
-  dist_probe <- cs2step_python_distribution_probe(python, "jax-mps")
+  python_supported <- isTRUE(python_version$ok) &&
+    utils::compareVersion(python_version$major_minor, "3.11") >= 0L
+  dist_probe <- cs2step_python_distribution_probe(python, c("jax-mps", "jax", "jaxlib"))
   jax_mps_installed <- isTRUE(dist_probe$ok[["jax-mps"]])
-  jax_backend_probe <- if (python_313 && jax_mps_installed) {
-    cs2step_python_jax_backend_probe(python, platform = "mps")
+  jax_versions_supported <- all(vapply(c("jax", "jaxlib"), function(name) {
+    isTRUE(dist_probe$ok[[name]]) &&
+      grepl("^0\\.10\\.", dist_probe$version[[name]] %||% "")
+  }, logical(1L)))
+  jax_backend_probe <- if (python_supported && jax_mps_installed && jax_versions_supported) {
+    cs2step_python_jax_backend_probe(python, platform = "mps", validate_computation = TRUE)
   } else {
     list(ok = FALSE, backend = "", status = NA_integer_, output = character())
   }
 
   list(
-    compatible = python_313 && jax_mps_installed && isTRUE(jax_backend_probe$ok),
+    compatible = python_supported && jax_mps_installed && jax_versions_supported &&
+      isTRUE(jax_backend_probe$ok),
     python_major_minor = python_version$major_minor,
-    python_313 = python_313,
+    python_supported = python_supported,
     jax_mps_installed = jax_mps_installed,
     jax_mps_version = dist_probe$version[["jax-mps"]] %||% "",
+    jax_versions_supported = jax_versions_supported,
     jax_backend = jax_backend_probe$backend,
     jax_backend_mps = isTRUE(jax_backend_probe$ok),
     details = paste(c(python_version$output, dist_probe$details, jax_backend_probe$output), collapse = "\n")
@@ -921,22 +979,31 @@ cs2step_backend_mps_compatibility <- function(state) {
 
 cs2step_describe_mps_compatibility <- function(compatibility) {
   issues <- character()
-  if (!isTRUE(compatibility$python_313)) {
+  if (!isTRUE(compatibility$python_supported)) {
     found <- compatibility$python_major_minor %||% ""
     if (!nzchar(found)) {
       found <- "unknown"
     }
-    issues <- c(issues, sprintf("Python 3.13 required, found %s", found))
+    issues <- c(issues, sprintf("Python >=3.11 required, found %s", found))
   }
   if (!isTRUE(compatibility$jax_mps_installed)) {
     issues <- c(issues, "Python distribution 'jax-mps' is not installed")
+  }
+  if (!isTRUE(compatibility$jax_versions_supported)) {
+    issues <- c(issues, "JAX and JAXlib 0.10.x required by jax-mps 0.10")
   }
   if (!isTRUE(compatibility$jax_backend_mps)) {
     backend <- compatibility$jax_backend %||% ""
     if (!nzchar(backend)) {
       backend <- "unavailable"
     }
-    issues <- c(issues, sprintf("JAX default backend under JAX_PLATFORMS=mps is %s", backend))
+    issues <- c(issues, sprintf("MPS execution validation failed (reported backend: %s)", backend))
+    details <- compatibility$details %||% ""
+    if (nzchar(details)) {
+      lines <- strsplit(details, "\n", fixed = TRUE)[[1]]
+      errors <- grep("Error:|Exception:|Batched scatter-drop", lines, value = TRUE)
+      issues <- c(issues, paste(unique(c(tail(errors, 3L), tail(lines, 8L))), collapse = "\n"))
+    }
   }
   if (!length(issues)) {
     return("compatible")

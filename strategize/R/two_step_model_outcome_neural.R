@@ -2360,16 +2360,24 @@ neural_attention_jax_backend <- function() {
 }
 
 neural_attention_cuda_available <- function() {
-  backend <- neural_attention_jax_backend()
-  if (identical(backend, "gpu")) {
-    return(TRUE)
-  }
+  # JAX reports "gpu" for both CUDA and ROCm. cuDNN requires a CUDA
+  # client; the generic backend name cannot identify its implementation.
   devices <- tryCatch(strenv$jax$devices(), error = function(e) NULL)
   if (is.null(devices) || length(devices) < 1L) {
     return(FALSE)
   }
   any(vapply(devices, function(device) {
-    grepl("cuda", tolower(as.character(device)), fixed = TRUE)
+    platform_version <- tryCatch(
+      as.character(device$client$platform_version),
+      error = function(e) character()
+    )
+    if (length(platform_version) == 1L && !is.na(platform_version) &&
+        nzchar(platform_version)) {
+      return(grepl("cuda", tolower(platform_version), fixed = TRUE))
+    }
+    # Older JAX clients may expose only a vendor-specific device name.
+    description <- tryCatch(as.character(device), error = function(e) character())
+    any(grepl("cuda", tolower(description), fixed = TRUE))
   }, logical(1)))
 }
 

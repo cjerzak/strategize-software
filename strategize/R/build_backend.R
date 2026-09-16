@@ -5,11 +5,23 @@
 #' create and manage a compatible environment themselves.
 #'
 #' @details
-#' The default \code{backend = "auto"} preserves the existing non-MPS behavior.
+#' The default \code{backend = "auto"} retains host-aware installation
+#' (plain CPU JAX on macOS). It does not override \code{JAX_PLATFORMS} or
+#' uninstall plugins already present in an environment. To require CPU
+#' execution, set \code{Sys.setenv(JAX_PLATFORMS = "cpu")} before importing JAX.
 #' The \code{"mps"} backend is experimental, opt-in, and supported only on
-#' macOS Apple Silicon. It creates a Python 3.13 environment, installs
-#' \code{jax-mps}, verifies that JAX reports the MPS backend under
-#' \code{JAX_PLATFORMS=mps}, and recreates an existing incompatible environment.
+#' macOS 14 or later on Apple Silicon. It creates a Python 3.13 environment
+#' (existing Python 3.11 or later environments are accepted), installs
+#' \code{jax-mps} with compatible JAX/JAXlib 0.10 versions, and verifies a
+#' compiled calculation, its gradient, and batched scatter correctness under
+#' \code{JAX_PLATFORMS=mps}.
+#' NumPyro uses a pinned upstream compatibility fix until a release supports
+#' JAX 0.10. Existing environments are repaired in place; changing an
+#' incompatible Python version requires a new environment name or explicit
+#' \code{force_reinstall = TRUE}. Failed MPS validation stops with an error.
+#' MPS remains opt-in because qualification of \code{jax-mps} 0.10.11 fails
+#' the batched scatter check used by transformer MoE prediction; a reported
+#' GPU device is insufficient.
 #'
 #' @param conda_env Name of the conda environment in which to place the backends.
 #'   Defaults to \code{"strategize_env"}.
@@ -102,6 +114,10 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
       "backend = 'mps' requires macOS on Apple Silicon.",
       call. = FALSE
     )
+  }
+  if (identical(backend, "mps") && nzchar(host$macos_version %||% "") &&
+      utils::compareVersion(host$macos_version, "14.0") < 0L) {
+    stop("backend = 'mps' requires macOS 14 or later.", call. = FALSE)
   }
   if (identical(backend, "cuda") && !identical(host$os, "Linux")) {
     stop(
@@ -217,18 +233,32 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
 
   if (identical(backend, "mps") &&
       isTRUE(state$registered) && isTRUE(state$python_exists) &&
-      !isTRUE(mps_compatibility$compatible)) {
-    cs2step_backend_message(verbose,
-      "Conda environment '%s' is not compatible with backend = 'mps' (%s); recreating it.",
-      conda_env,
-      cs2step_describe_mps_compatibility(mps_compatibility)
+      !isTRUE(mps_compatibility$python_supported)) {
+    stop(
+      sprintf(
+        paste0(
+          "Conda environment '%s' needs Python >=3.11 for backend = 'mps'. ",
+          "Use a new conda_env or force_reinstall = TRUE to recreate it explicitly."
+        ),
+        conda_env
+      ),
+      call. = FALSE
     )
-    remove_env(conda_bin)
-    state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)
-    mps_compatibility <- NULL
   }
 
   if (isTRUE(state$registered) && !isTRUE(state$python_exists)) {
+    if (identical(backend, "mps")) {
+      stop(
+        sprintf(
+          paste0(
+            "Conda environment '%s' is registered but its Python interpreter is missing. ",
+            "Use a new conda_env or force_reinstall = TRUE to recreate it explicitly."
+          ),
+          conda_env
+        ),
+        call. = FALSE
+      )
+    }
     cs2step_backend_message(verbose,
       "Conda environment '%s' is registered but its Python interpreter is missing; recreating it.",
       conda_env
@@ -324,17 +354,16 @@ build_backend <- function(conda_env = "strategize_env", conda = "auto",
   missing_core <- names(state$core_module_status)[!state$core_module_status]
   needs_mps_install <- identical(backend, "mps") && !isTRUE(mps_compatibility$compatible)
   if (length(missing_core) > 0L || !isTRUE(state$python_exists) || needs_mps_install) {
-    # Install JAX first so later dependencies do not pin a CPU-only variant.
+    # Keep the MPS ABI constraints in the same resolver transaction as core
+    # dependencies; a later unconstrained install can otherwise upgrade JAX.
     if (identical(backend, "mps")) {
-      if (needs_mps_install) {
-        pip_install("jax-mps")
-      }
+      pip_install(cs2step_backend_mps_pip_packages())
     } else {
       install_jax()
+      pip_specs <- cs2step_backend_core_pip_packages()
+      other_pkgs <- unname(pip_specs[setdiff(names(pip_specs), "jax")])
+      pip_install(other_pkgs)
     }
-    pip_specs <- cs2step_backend_core_pip_packages()
-    other_pkgs <- unname(pip_specs[setdiff(names(pip_specs), "jax")])
-    pip_install(other_pkgs)
   }
 
   state <- cs2step_backend_env_state(conda_env = conda_env, conda = conda_bin)

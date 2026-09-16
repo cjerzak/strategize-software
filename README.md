@@ -51,6 +51,20 @@ strategize::build_backend(conda_env = "strategize_env")
 
 This creates a conda environment with JAX, numpy, optax, equinox, numpyro, Orbax checkpoint support, and the other Python-side dependencies used by the package.
 
+On Apple Silicon, `backend = "auto"` retains plain JAX installation. The
+experimental `backend = "mps"` installs `jax-mps` with compatible JAX/JAXlib
+and NumPyro dependencies, then checks compiled arithmetic, gradients, and
+batched scatter correctness. Qualification of `jax-mps` 0.10.11 fails the
+batched scatter check used by transformer MoE, so MPS is not selected automatically.
+Failed validation preserves the environment for investigation and reports
+the error. Existing Python 3.11 or later environments can be repaired in
+place; recreation requires `force_reinstall = TRUE`.
+
+Backend installation does not override JAX's choice in an existing
+environment that already contains a plugin. To require CPU execution, set
+`Sys.setenv(JAX_PLATFORMS = "cpu")` before the first JAX import, or use a
+separate environment without the MPS plugin.
+
 GLM policy optimization uses a compiled iteration loop and returns both policy
 representations from one solve. `compute_se = FALSE` skips policy Jacobians and
 covariance propagation. Full-trace GLM SEs use checkpointed iterations and bounded

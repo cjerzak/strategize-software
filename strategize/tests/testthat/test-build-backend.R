@@ -33,9 +33,10 @@ build_backend_mps_compat <- function(compatible = FALSE,
   list(
     compatible = compatible,
     python_major_minor = python_major_minor,
-    python_313 = identical(python_major_minor, "3.13"),
+    python_supported = utils::compareVersion(python_major_minor, "3.11") >= 0L,
     jax_mps_installed = jax_mps_installed,
-    jax_mps_version = if (jax_mps_installed) "0.1.0" else "",
+    jax_mps_version = if (jax_mps_installed) "0.10.10" else "",
+    jax_versions_supported = jax_mps_installed,
     jax_backend = jax_backend,
     jax_backend_mps = identical(jax_backend, "mps"),
     details = ""
@@ -745,7 +746,7 @@ test_that("build_backend selects CUDA 12 for mid-range drivers", {
   expect_false("jax[cuda13]" %in% installed)
 })
 
-test_that("build_backend with backend mps creates Python 3.13 and installs jax-mps first", {
+test_that("build_backend installs MPS and compatible dependencies in one transaction", {
   skip_on_cran()
   skip_if_not_installed("withr")
 
@@ -800,7 +801,7 @@ test_that("build_backend with backend mps creates Python 3.13 and installs jax-m
     },
     py_install = function(packages, envname, conda, pip, ...) {
       install_calls <<- c(install_calls, list(packages))
-      if ("jax-mps" %in% packages) {
+      if (any(grepl("^jax-mps", packages))) {
         mps_installed <<- TRUE
       }
       if (any(c("numpyro", "optax", "equinox", "numpy", "orbax-checkpoint") %in% packages)) {
@@ -817,15 +818,19 @@ test_that("build_backend with backend mps creates Python 3.13 and installs jax-m
 
   installed <- unlist(install_calls)
   expect_equal(create_versions, "3.13")
-  expect_equal(install_calls[[1]], "jax-mps")
+  expect_length(install_calls, 1L)
+  expect_true("jax-mps>=0.10.10,<0.11" %in% install_calls[[1]])
+  expect_true("jax>=0.10.0,<0.11" %in% install_calls[[1]])
+  expect_true("jaxlib>=0.10.0,<0.11" %in% install_calls[[1]])
+  expect_true(any(grepl("^numpyro @ https://github.com/pyro-ppl/numpyro/archive/18c2cc135a524ae7ce4042c85f133048c57c6f92.zip$", installed)))
   expect_false("jax" %in% installed)
-  expect_true(all(c("numpy", "equinox", "numpyro", "optax", "orbax-checkpoint") %in% installed))
+  expect_true(all(c("numpy", "equinox", "optax", "orbax-checkpoint") %in% installed))
   mps_script <- file.path(dirname(dirname(py_path)), "etc", "conda", "activate.d", "10-jax-mps.sh")
   expect_true(file.exists(mps_script))
   expect_true(any(grepl("JAX_PLATFORMS=mps", readLines(mps_script), fixed = TRUE)))
 })
 
-test_that("build_backend with backend mps recreates an incompatible existing env", {
+test_that("build_backend repairs MPS packages in a Python 3.12 env without removing it", {
   skip_on_cran()
   skip_if_not_installed("withr")
 
@@ -862,7 +867,7 @@ test_that("build_backend with backend mps recreates an incompatible existing env
     },
     cs2step_backend_env_state = states,
     cs2step_backend_mps_compatibility = function(state) {
-      compatible <- identical(python_version, "3.13") && mps_installed
+      compatible <- identical(python_version, "3.12") && mps_installed
       build_backend_mps_compat(
         compatible = compatible,
         python_major_minor = python_version,
@@ -891,7 +896,7 @@ test_that("build_backend with backend mps recreates an incompatible existing env
     },
     py_install = function(packages, envname, conda, pip, ...) {
       install_calls <<- c(install_calls, list(packages))
-      if ("jax-mps" %in% packages) {
+      if (any(grepl("^jax-mps", packages))) {
         mps_installed <<- TRUE
       }
       if (any(c("numpyro", "optax", "equinox", "numpy", "orbax-checkpoint") %in% packages)) {
@@ -906,9 +911,9 @@ test_that("build_backend with backend mps recreates an incompatible existing env
 
   build_backend(conda_env = "test_env", conda = "auto", backend = "mps")
 
-  expect_equal(remove_calls, 1L)
-  expect_equal(create_versions, "3.13")
-  expect_equal(install_calls[[1]], "jax-mps")
+  expect_equal(remove_calls, 0L)
+  expect_length(create_versions, 0L)
+  expect_true("jax-mps>=0.10.10,<0.11" %in% install_calls[[1]])
 })
 
 test_that("build_backend with backend mps is idempotent for a valid MPS env", {
@@ -1023,7 +1028,7 @@ test_that("build_backend force_reinstall rebuilds a valid MPS env", {
     },
     py_install = function(packages, envname, conda, pip, ...) {
       install_calls <<- c(install_calls, list(packages))
-      if ("jax-mps" %in% packages) {
+      if (any(grepl("^jax-mps", packages))) {
         mps_installed <<- TRUE
       }
       if (any(c("numpyro", "optax", "equinox", "numpy", "orbax-checkpoint") %in% packages)) {
@@ -1045,7 +1050,7 @@ test_that("build_backend force_reinstall rebuilds a valid MPS env", {
 
   expect_equal(remove_calls, 1L)
   expect_equal(create_versions, "3.13")
-  expect_equal(install_calls[[1]], "jax-mps")
+  expect_true("jax-mps>=0.10.10,<0.11" %in% install_calls[[1]])
 })
 
 test_that("build_backend with backend mps stops on unsupported hosts before env changes", {
@@ -1214,4 +1219,126 @@ test_that("build_backend with backend cuda uses CUDA driver detection on Linux",
   installed <- unlist(install_calls)
   expect_true("jax[cuda13]" %in% installed)
   expect_false("jax" %in% installed)
+})
+
+test_that("MPS setup preserves an existing unsupported Python environment", {
+  py_path <- withr::local_tempfile()
+  file.create(py_path)
+  testthat::local_mocked_bindings(
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", is_macos = TRUE, is_arm64 = TRUE, macos_version = "14.0")
+    },
+    cs2step_resolve_conda_binary = function(...) "/usr/bin/conda",
+    cs2step_backend_env_state = function(conda_env, conda) {
+      build_backend_mock_state(conda_env, conda, TRUE, py_path, TRUE, TRUE)
+    },
+    cs2step_backend_mps_compatibility = function(...) {
+      build_backend_mps_compat(python_major_minor = "3.10")
+    },
+    .package = "strategize"
+  )
+  testthat::local_mocked_bindings(
+    conda_remove = function(...) stop("must not remove the existing environment"),
+    conda_create = function(...) stop("must not recreate the existing environment"),
+    py_install = function(...) stop("must not alter the existing environment"),
+    .package = "reticulate"
+  )
+  expect_error(build_backend(backend = "mps"), "new conda_env or force_reinstall = TRUE")
+  expect_true(file.exists(py_path))
+})
+
+test_that("MPS setup rejects macOS versions without compatible wheels", {
+  testthat::local_mocked_bindings(
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", is_macos = TRUE, is_arm64 = TRUE, macos_version = "13.6")
+    },
+    cs2step_backend_env_state = function(...) stop("must not inspect environments"),
+    .package = "strategize"
+  )
+  expect_error(build_backend(backend = "mps", force_reinstall = TRUE), "macOS 14 or later")
+})
+
+test_that("an MPS device report alone cannot satisfy computation validation", {
+  testthat::local_mocked_bindings(
+    cs2step_python_probe = function(python, code, env) {
+      expect_equal(env, "JAX_PLATFORMS=mps")
+      expect_match(code, "jax.jit(jax.value_and_grad(loss))", fixed = TRUE)
+      expect_match(code, "jax.vmap(lambda x, i, v: x.at[i].set(v, mode='drop'))", fixed = TRUE)
+      list(status = 0L, output = "JAX_DEFAULT_BACKEND::mps")
+    },
+    .package = "strategize"
+  )
+  probe <- strategize:::cs2step_python_jax_backend_probe("python", "mps", TRUE)
+  expect_false(probe$ok)
+  expect_equal(probe$backend, "mps")
+})
+
+test_that("MPS compatibility checks JAX ABI and accepts supported existing Python", {
+  py_path <- withr::local_tempfile()
+  file.create(py_path)
+  jax_version <- "0.10.2"
+  computation_ok <- TRUE
+  testthat::local_mocked_bindings(
+    cs2step_python_version_major_minor = function(...) {
+      list(ok = TRUE, major_minor = "3.12", output = character())
+    },
+    cs2step_python_distribution_probe = function(...) {
+      list(
+        ok = c("jax-mps" = TRUE, jax = TRUE, jaxlib = TRUE),
+        version = c("jax-mps" = "0.10.10", jax = jax_version, jaxlib = jax_version),
+        details = character()
+      )
+    },
+    cs2step_python_jax_backend_probe = function(python, platform, validate_computation) {
+      expect_equal(platform, "mps")
+      expect_true(validate_computation)
+      list(ok = computation_ok, backend = "mps", output = "numerical validation")
+    },
+    .package = "strategize"
+  )
+  state <- list(python = py_path, python_exists = TRUE)
+  expect_true(strategize:::cs2step_backend_mps_compatibility(state)$compatible)
+  computation_ok <- FALSE
+  expect_false(strategize:::cs2step_backend_mps_compatibility(state)$compatible)
+  computation_ok <- TRUE
+  jax_version <- "0.11.1"
+  result <- strategize:::cs2step_backend_mps_compatibility(state)
+  expect_false(result$compatible)
+  expect_match(strategize:::cs2step_describe_mps_compatibility(result), "JAX and JAXlib 0.10.x")
+})
+
+test_that("failed MPS execution stops without a CPU fallback or activation script", {
+  py_path <- file.path(withr::local_tempdir(), "env", "bin", "python")
+  dir.create(dirname(py_path), recursive = TRUE)
+  file.create(py_path)
+  install_calls <- list()
+  testthat::local_mocked_bindings(
+    cs2step_backend_host_info = function() {
+      list(os = "Darwin", is_macos = TRUE, is_arm64 = TRUE, macos_version = "14.0")
+    },
+    cs2step_resolve_conda_binary = function(...) "/usr/bin/conda",
+    cs2step_backend_env_state = function(conda_env, conda) {
+      build_backend_mock_state(conda_env, conda, TRUE, py_path, TRUE, TRUE)
+    },
+    cs2step_backend_mps_compatibility = function(...) {
+      result <- build_backend_mps_compat(jax_mps_installed = TRUE, jax_backend = "mps")
+      result$jax_backend_mps <- FALSE
+      result$details <- "AssertionError: Batched scatter-drop corrupted another batch"
+      result
+    },
+    .package = "strategize"
+  )
+  testthat::local_mocked_bindings(
+    conda_remove = function(...) stop("must not remove the existing environment"),
+    conda_create = function(...) stop("must not recreate the existing environment"),
+    py_install = function(packages, ...) {
+      install_calls <<- c(install_calls, list(packages))
+      TRUE
+    },
+    .package = "reticulate"
+  )
+  expect_error(build_backend(backend = "mps"), "Batched scatter-drop corrupted another batch")
+  expect_length(install_calls, 1L)
+  expect_false("jax" %in% unlist(install_calls))
+  expect_false(file.exists(file.path(dirname(dirname(py_path)), "etc", "conda", "activate.d", "10-jax-mps.sh")))
 })
