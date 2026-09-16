@@ -1,0 +1,27 @@
+test_that("an absent respondent matrix never expands the pooled schema into tokens", {
+  prep <- strategize:::cs2step_neural_prepare_resp_cov
+  info <- list(covariate_names = paste0("cov", seq_len(774L)),
+    covariate_value_encoding = "shared_projection", max_covariate_tokens = 8L,
+    default_covariate_order = seq.int(0L, 773L))
+  absent <- prep(NULL, info, 2L)
+  expect_equal(dim(absent$values), c(2L, 774L))
+  expect_true(all(absent$present == 0))
+  expect_equal(dim(absent$order), c(2L, 8L))
+  expect_true(all(absent$order == -1L))
+  supplied <- prep(data.frame(cov7 = c(0, NA_real_), cov501 = c(2, 3)), info, 2L)
+  expect_equal(supplied$present[, 7L], c(1, 0))
+  expect_true(all(supplied$present[, 501L] == 1))
+  expect_true(all(supplied$present[, -c(7L, 501L)] == 0))
+  expect_equal(supplied$order[, 1:2], matrix(c(6L, 6L, 500L, 500L), nrow = 2L))
+  expect_true(all(supplied$order[, -c(1L, 2L)] == -1L))
+  expect_equal(supplied$values[, 7L], c(0, 0))
+  empty <- prep(data.frame(unrecognized = c(1, 2)), info, 2L)
+  expect_true(all(empty$present == 0))
+  expect_true(all(empty$order == -1L))
+  info$covariate_order_by_experiment <- list(integer(0), c(6L, 500L, 750L))
+  known <- prep(NULL, info, 2L, experiment_idx = c(0L, 1L))
+  expect_true(all(known$order[1L, ] == -1L))
+  expect_equal(known$order[2L, 1:3], c(6L, 500L, 750L))
+  expect_true(all(known$present == 0))
+  expect_error(prep(NULL, info, 2L, experiment_idx = c(0L, 2L)), "outside")
+})

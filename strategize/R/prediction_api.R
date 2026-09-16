@@ -1761,16 +1761,30 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
   colnames(values) <- covariate_names
   colnames(present) <- covariate_names
   order_idx <- if (identical(encoding, "shared_projection")) {
-    as.integer(
-      model_info$default_covariate_order %||%
-        seq.int(0L, n_covariates - 1L)
-    )
+    as.integer(model_info$default_covariate_order %||% seq.int(0L, n_covariates - 1L))
   } else {
     NULL
   }
+  supplied_idx <- integer(0)
   order_matrix <- function(order_idx_use = order_idx) {
     if (is.null(order_idx_use)) {
       return(NULL)
+    }
+    study_orders <- model_info$covariate_order_by_experiment %||% list()
+    if (length(study_orders) > 0L && !is.null(experiment_idx)) {
+      idx <- rep_len(as.integer(experiment_idx), n_rows) + 1L
+      if (anyNA(idx) || any(idx < 1L | idx > length(study_orders))) {
+        stop("Prediction covariate study indices are outside the saved schema.", call. = FALSE)
+      }
+      lookup <- neural_covariate_order_lookup_matrix(
+        study_orders, max_covariate_tokens = model_info$max_covariate_tokens %||% NULL)
+      return(lookup[idx, , drop = FALSE])
+    }
+    # A pooled dictionary is not a study schema. Unknown studies use only
+    # supplied named fields. Preserve legacy single-schema missing tokens.
+    if (length(study_orders) > 0L ||
+        length(order_idx_use) > neural_max_covariate_token_slots(model_info = model_info)) {
+      order_idx_use <- supplied_idx
     }
     neural_build_default_covariate_order_matrix(
       order_idx = order_idx_use,
@@ -1841,6 +1855,8 @@ cs2step_neural_prepare_resp_cov <- function(resp_cov_new,
       order = order_matrix()
     ))
   }
+
+  supplied_idx <- as.integer(idx - 1L)
 
   for (k in seq_along(idx)) {
     raw_vals <- resp_cov_new[[k]]
