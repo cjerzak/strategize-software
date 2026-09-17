@@ -37,7 +37,7 @@ strategize_fm_backend <- function() {
       "compact_training",
       "checkpoint_restore_helpers",
       "training_row_validity_guard",
-      "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1", "mla_dsa_v1", "strict_muon_optimizer_v1"
+      "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1", "mla_dsa_v1", "looped_transformer_v1", "strict_muon_optimizer_v1"
     ),
     `%||%` = `%||%`,
     initialize_jax = initialize_jax,
@@ -67,6 +67,7 @@ strategize_fm_backend <- function() {
     neural_params_from_theta = neural_params_from_theta,
     neural_resolve_transformer_moe = neural_resolve_transformer_moe,
     neural_resolve_latent_attention = neural_resolve_latent_attention,
+    neural_resolve_transformer_loop = neural_resolve_transformer_loop,
     neural_moe_control_from_info = neural_moe_control_from_info,
     neural_unstack_standard_transformer_layers = neural_unstack_standard_transformer_layers,
     neural_resolve_max_factor_tokens = neural_resolve_max_factor_tokens,

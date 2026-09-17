@@ -3969,6 +3969,7 @@ cs2step_neural_upgrade_model_info <- function(model_info) {
   out <- model_info
   neural_validate_saved_transformer_moe(out)
   neural_validate_saved_latent_attention(out)
+  out$transformer_loop <- neural_transformer_loop_config(out)
   out$jit_cache_key <- NULL
   if (is.null(out$pairwise_bernoulli_logit_scale) &&
       !is.null(out$params$log_pairwise_bernoulli_logit_scale)) {

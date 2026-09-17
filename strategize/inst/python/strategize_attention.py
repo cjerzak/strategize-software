@@ -17,9 +17,7 @@ import numpyro
 _context = ContextVar("strategize_attention_trace", default=None)
 
 
-def rms_norm(x, gain):
-    a = x.astype(jnp.float32)
-    return (a * jax.lax.rsqrt(jnp.mean(a * a, -1, keepdims=True) + 1e-6) * gain).astype(x.dtype)
+from strategize_transformer import rms_norm, run_layers
 
 
 def masked_softmax(scores, mask):
@@ -175,33 +173,20 @@ def unwrap_model(model):
     return model.__wrapped__
 
 
-def transformer_scan(tokens, mask, params, attention_cfg, ffn_cfg, bias, n_heads, head_dim):
-    """MLA through all layers, using the existing dense/MoE residual and routing."""
-    import strategize_moe as moe
-    p, cfg = dict(params), dict(attention_cfg)
-    ffn_cfg = None if ffn_cfg is None else dict(ffn_cfg)
-    depth = p["W_q_layers"].shape[0]
-    prefix = depth if ffn_cfg is None else int(ffn_cfg["first_k_dense"])
-    output_dtype = tokens.dtype
+def transformer_scan(tokens, mask, params, attention_cfg, ffn_cfg, bias, n_heads, head_dim,
+                     loop_cfg=None):
+    """MLA/DSA with the shared dense/MoE and recurrent-depth executor."""
+    cfg = dict(attention_cfg)
     if mask is not None:
         tokens = jnp.where(jnp.asarray(mask)[..., None] > 0, tokens, 0)
-    if ffn_cfg is not None:
-        tokens = tokens.astype(moe.compute_dtype(ffn_cfg, tokens.dtype))
-    attn_ctx, moe_ctx = _context.get(), moe._context.get()
-    collect = attn_ctx is not None and cfg["architecture"] == "mla_dsa"
+    ctx = _context.get()
+    collect = ctx is not None and cfg["architecture"] == "mla_dsa"
     row_weight = None
-    if attn_ctx is not None and attn_ctx.row_weight is not None:
-        rows = attn_ctx.row_weight.shape[0]
+    if ctx is not None and ctx.row_weight is not None:
+        rows = ctx.row_weight.shape[0]
         if tokens.shape[0] % rows:
             raise ValueError("Attention rows must repeat complete observation layouts")
-        row_weight = jnp.tile(attn_ctx.row_weight, tokens.shape[0] // rows)
-    common_names = [name[:-7] for name in p if name.endswith("_layers") and not name.startswith(("W_ff", "W_moe"))]
-    common = {name: p[name + "_layers"] for name in common_names}
-    if ffn_cfg is not None:
-        bias = moe_ctx.bias if moe_ctx is not None else bias
-        if bias is None:
-            raise ValueError("A saved MoE model must include frozen router biases")
-        bias = jnp.asarray(bias, jnp.float32)
+        row_weight = jnp.tile(ctx.row_weight, tokens.shape[0] // rows)
 
     def attention(x, layer):
         z = rms_norm(x, layer["RMS_attn"])
@@ -209,37 +194,8 @@ def transformer_scan(tokens, mask, params, attention_cfg, ffn_cfg, bias, n_heads
                                       collect_loss=collect, row_weight=row_weight)
         h = x + layer["alpha_attn"].astype(x.dtype) * a
         return h, rms_norm(h, layer["RMS_ff"]), layer["alpha_ff"], loss, count
-    remat = ffn_cfg is None or ffn_cfg.get("activation_checkpointing", True)
-    if remat:
-        attention = jax.checkpoint(attention, prevent_cse=False)
-    total_loss, total_count = jnp.float32(0), jnp.float32(0)
-    if prefix:
-        def dense(x, layer):
-            h, z, alpha, loss, count = attention(x, layer)
-            out = h + alpha.astype(h.dtype) * moe.swiglu(z, layer["W_ff1"].astype(z.dtype), layer["W_ff2"].astype(z.dtype))
-            return out, (loss, count)
-        layers = {name: value[:prefix] for name, value in common.items()}
-        layers.update(W_ff1=p["W_ff1_layers"], W_ff2=p["W_ff2_layers"])
-        tokens, (losses, counts) = jax.lax.scan(jax.checkpoint(dense, prevent_cse=False) if remat else dense, tokens, layers)
-        total_loss, total_count = losses.sum(), counts.sum()
-    if prefix < depth:
-        def routed(carry, layer):
-            x, chain = carry
-            h, z, alpha, loss, count = attention(x, layer)
-            weights = [layer["W_moe_" + name] for name in ("router", "expert1", "expert2", "shared1", "shared2")]
-            y, stats, chain = moe.dispatch(z, mask, *weights, layer["bias"], ffn_cfg,
-                training=moe_ctx is not None, row_mask=None if moe_ctx is None else moe_ctx.row_mask,
-                runtime=None if moe_ctx is None else moe_ctx.runtime, chain=chain)
-            return (h + alpha.astype(h.dtype) * y, chain), (stats, loss, count)
-        layers = {name: value[prefix:] for name, value in common.items()}
-        layers.update({"W_moe_" + name: p["W_moe_" + name + "_layers"] for name in
-                       ("router", "expert1", "expert2", "shared1", "shared2")})
-        layers["bias"] = bias
-        (tokens, chain), (stats, losses, counts) = jax.lax.scan(routed,
-            (tokens, jnp.float32(0) if moe_ctx is None else moe_ctx.chain), layers)
-        if moe_ctx is not None:
-            moe_ctx.add(stats, chain)
-        total_loss, total_count = total_loss + losses.sum(), total_count + counts.sum()
+
+    output, loss, count = run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg)
     if collect:
-        attn_ctx.add(total_loss, total_count)
-    return rms_norm(tokens, p["RMS_final"]).astype(output_dtype)
+        ctx.add(loss, count)
+    return output
