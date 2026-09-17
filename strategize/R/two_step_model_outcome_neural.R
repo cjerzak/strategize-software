@@ -2584,9 +2584,11 @@ neural_make_transformer_model_info <- function(model_depth,
                                                attention_padding_multiple = 8L,
                                                attention_resolved_backend = NULL,
                                                attention_fallback_reason = NULL,
-                                               transformer_attention = NULL) {
+                                               transformer_attention = NULL,
+                                               transformer_loop = NULL) {
   list(
     transformer_attention = neural_resolve_latent_attention(transformer_attention, model_dims),
+    transformer_loop = neural_resolve_transformer_loop(transformer_loop, model_depth),
     model_depth = model_depth,
     model_dims = model_dims,
     n_heads = n_heads,
@@ -2891,7 +2893,8 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
                                                        attention_resolved_backend = NULL,
                                                        attention_fallback_reason = NULL,
                                                        jit_cache_key = NULL,
-                                                       transformer_attention = NULL) {
+                                                       transformer_attention = NULL,
+                                                       transformer_loop = NULL) {
   factor_tokenization <- neural_factor_tokenization(mode = factor_tokenization)
   factor_schema_supplied <- neural_factor_schema_supplied(
     factor_name_text = factor_name_text,
@@ -2923,7 +2926,8 @@ neural_make_prepared_prediction_model_info <- function(model_depth,
     attention_padding_multiple = attention_padding_multiple,
     attention_resolved_backend = attention_resolved_backend,
     attention_fallback_reason = attention_fallback_reason,
-    transformer_attention = transformer_attention
+    transformer_attention = transformer_attention,
+    transformer_loop = transformer_loop
   )
   info$cand_party_to_resp_idx <- cand_party_to_resp_idx
   info$n_party_levels <- n_party_levels
@@ -5017,6 +5021,7 @@ neural_model_jit_cache_key <- function(model_info) {
     tryCatch(as.character(model_info$head_dim), error = function(e) "na"),
     neural_transformer_residual_mode(model_info),
     digest_field(model_info$transformer_attention),
+    digest_field(model_info$transformer_loop),
     neural_attention_backend(model_info),
     neural_attention_dtype_mode(model_info),
     tryCatch(as.character(neural_attention_padding_multiple(model_info)), error = function(e) "na"),
@@ -9094,15 +9099,18 @@ neural_run_transformer_scan_standard <- function(tokens,
     role = "self",
     fail_on_forced = TRUE
   )
-  if (neural_has_transformer_moe(params)) {
+  loop_cfg <- neural_transformer_loop_config(model_info)
+  loop_cfg$training <- isTRUE(model_info$transformer_training)
+  if (neural_has_transformer_moe(params) || loop_cfg$enabled) {
     strategize_register_moe_helpers()
-    cfg <- neural_moe_config(model_info, params)
+    cfg <- if (neural_has_transformer_moe(params)) neural_moe_config(model_info, params) else NULL
     return(strenv$jax_moe$transformer_scan(
       tokens, token_mask, params[grepl("_layers$|^RMS_final$", names(params))], cfg,
       params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
       ai(model_info$n_heads), ai(model_info$head_dim),
       reticulate::py$`_strategize_self_attention`, as.character(attention_resolve$backend),
-      neural_attention_dtype_mode(model_info), ai(neural_attention_padding_multiple(model_info))
+      neural_attention_dtype_mode(model_info), ai(neural_attention_padding_multiple(model_info)),
+      loop_cfg
     ))
   }
   strenv$jax_transformer_scan_standard(
@@ -9138,6 +9146,8 @@ neural_run_transformer <- function(tokens,
   if (is.null(params)) {
     params <- model_info$params
   }
+  loop_cfg <- neural_transformer_loop_config(model_info)
+  loop_cfg$training <- isTRUE(model_info$transformer_training)
   latent_cfg <- neural_latent_attention_config(model_info, params)
   if (!identical(latent_cfg$architecture, "mha")) {
     if (!identical(neural_transformer_residual_mode(model_info), "standard"))
@@ -9149,12 +9159,12 @@ neural_run_transformer <- function(tokens,
       params[grepl("_layers$|^RMS_final$", names(params))], latent_cfg,
       if (neural_has_transformer_moe(params)) neural_moe_config(model_info, params) else NULL,
       params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
-      ai(model_info$n_heads), ai(model_info$head_dim))
+      ai(model_info$n_heads), ai(model_info$head_dim), loop_cfg)
     return(if (isTRUE(return_details)) list(tokens = output, readout_tokens = output) else output)
   }
   residual_mode <- neural_transformer_residual_mode(model_info)
   use_full_attn_residual <- identical(residual_mode, "full_attn")
-  if (!isTRUE(use_full_attn_residual) && neural_has_transformer_moe(params) &&
+  if (!isTRUE(use_full_attn_residual) && (neural_has_transformer_moe(params) || loop_cfg$enabled) &&
       !neural_has_stacked_standard_transformer(params)) {
     # All standard MoE towers, including interaction and prediction towers,
     # share the same precision and rematerialization implementation.
@@ -11754,6 +11764,7 @@ generate_ModelOutcome_neural <- function(){
     attention_dtype = "auto",
     attention_padding_multiple = 8L,
     transformer_attention = list(architecture = "mha"),
+    transformer_loop = FALSE,
     learned_pairwise_bernoulli_logit_scale = FALSE,
     pairwise_bernoulli_logit_scale_prior_sd = 0.5,
     pairwise_antisymmetry = "strict",
@@ -12306,6 +12317,18 @@ generate_ModelOutcome_neural <- function(){
   head_dim <- ai(ai(MD_int / TransformerHeads))
   transformer_attention <- neural_resolve_latent_attention(mcmc_control$transformer_attention, ModelDims, fitting = TRUE)
   mcmc_control$transformer_attention <- transformer_attention
+  transformer_loop <- neural_transformer_loop_config(list(
+    transformer_loop = mcmc_control$transformer_loop, model_depth = ModelDepth,
+    residual_mode = residual_mode))
+  mcmc_control$transformer_loop <- transformer_loop
+  if (transformer_loop$enabled && transformer_loop$backprop_iterations > 0L &&
+      !identical(subsample_method, "batch_vi"))
+    stop("Truncated recurrent backpropagation requires SVI without subsequent MCMC.", call. = FALSE)
+  if (transformer_loop$enabled) message(sprintf(
+    "Looped transformer: %d prelude + %d core x %d iterations + %d coda; effective depth %.0f.",
+    transformer_loop$prelude_layers, ModelDepth - transformer_loop$prelude_layers - transformer_loop$coda_layers,
+    transformer_loop$iterations, transformer_loop$coda_layers,
+    neural_transformer_effective_depth(transformer_loop, ModelDepth)))
   if (identical(transformer_attention$architecture, "mla_dsa") &&
       !(identical(tolower(as.character(uncertainty_scope)), "output") || identical(subsample_method, "batch_vi")))
     stop("MLA/DSA requires the joint SVI objective; use mla or mha for full MCMC.", call. = FALSE)
@@ -12363,7 +12386,7 @@ generate_ModelOutcome_neural <- function(){
   transformer_moe_router_bias <- mcmc_control$init_transformer_moe_router_bias %||% NULL
   FFDim <- ai(ai(round(MD_int * WideMultiplicationFactor)))
   init_policy <- neural_resolve_init_policy(
-    model_depth = ModelDepth,
+    model_depth = neural_transformer_effective_depth(transformer_loop, ModelDepth),
     model_dims = ModelDims,
     RMS_scale = mcmc_control$RMS_scale,
     residual_weight_depth_scale = mcmc_control$residual_weight_depth_scale,
@@ -16132,6 +16155,8 @@ generate_ModelOutcome_neural <- function(){
     )
     transformer_model_info$transformer_moe <- transformer_moe
     transformer_model_info$transformer_attention <- transformer_attention
+    transformer_model_info$transformer_loop <- transformer_loop
+    transformer_model_info$transformer_training <- TRUE
     model_info_local <- neural_make_runtime_token_model_info(
       text_embedding_normalizer = text_embedding_normalizer,
       struct_feature_encoding = struct_feature_encoding,
@@ -16923,6 +16948,8 @@ generate_ModelOutcome_neural <- function(){
     )
     transformer_model_info$transformer_moe <- transformer_moe
     transformer_model_info$transformer_attention <- transformer_attention
+    transformer_model_info$transformer_loop <- transformer_loop
+    transformer_model_info$transformer_training <- TRUE
     model_info_local <- neural_make_runtime_token_model_info(
       text_embedding_normalizer = text_embedding_normalizer,
       struct_feature_encoding = struct_feature_encoding,
@@ -19006,6 +19033,7 @@ generate_ModelOutcome_neural <- function(){
     attention_resolved_backend = attention_resolved_backend,
     attention_fallback_reason = attention_fallback_reason,
     transformer_attention = transformer_attention,
+    transformer_loop = transformer_loop,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     n_party_levels = ai(n_party_levels),
     n_candidate_tokens = n_candidate_tokens,
@@ -23022,6 +23050,7 @@ generate_ModelOutcome_neural <- function(){
     attention_resolved_backend = attention_resolved_backend,
     attention_fallback_reason = attention_fallback_reason,
     transformer_attention = transformer_attention,
+    transformer_loop = transformer_loop,
     cand_party_to_resp_idx = cand_party_to_resp_idx_jnp,
     n_party_levels = ai(n_party_levels),
     n_candidate_tokens = n_candidate_tokens,
@@ -24281,7 +24310,8 @@ generate_ModelOutcome_neural <- function(){
     attention_padding_multiple = as.integer(attention_padding_multiple),
     attention_resolved_backend = attention_resolved_backend,
     attention_fallback_reason = attention_fallback_reason,
-    transformer_attention = transformer_attention
+    transformer_attention = transformer_attention,
+    transformer_loop = transformer_loop
   )
 
   if (isTRUE(save_outcome_model) && !isTRUE(neural_oos_eval_internal_flag)) {

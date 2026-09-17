@@ -368,58 +368,23 @@ def ffn(x, mask, params, cfg, layer, bias=None):
 
 
 def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
-                     attention_fn, attention_backend, attention_dtype, padding_multiple):
-    """Homogeneous scans for the dense prefix and routed suffix."""
-    cfg, params = dict(cfg), dict(params)
-    prefix, depth, dims = int(cfg["first_k_dense"]), int(params["W_q_layers"].shape[0]), tokens.shape[-1]
-    output_dtype = tokens.dtype
-    tokens = tokens.astype(compute_dtype(cfg, tokens.dtype))
-    ctx = _context.get()
-    if ctx is not None:
-        bias = ctx.bias
-    elif bias is None:
-        raise ValueError("A saved MoE model must include frozen router biases")
-    bias = jnp.asarray(bias, jnp.float32)
-    if bias.shape != (depth - prefix, int(cfg["n_routed_experts"])):
-        raise ValueError("MoE router bias shape does not match layer/expert counts")
-    def norm(x, gain):
-        value = x.astype(jnp.float32)
-        return (value * jax.lax.rsqrt(jnp.mean(value * value, -1, keepdims=True) + 1e-6) * gain).astype(x.dtype)
-    common = [params[name + "_layers"] for name in
-              ("W_q", "W_k", "W_v", "W_o", "RMS_attn", "RMS_ff", "alpha_attn", "alpha_ff")]
+                     attention_fn, attention_backend, attention_dtype, padding_multiple,
+                     loop_cfg=None):
+    """MHA with the shared dense/MoE and recurrent-depth executor."""
+    from strategize_transformer import rms_norm, run_layers
+    params = dict(params)
+    dims = tokens.shape[-1]
     use_qk = "RMS_q_layers" in params and "RMS_k_layers" in params
-    common += [params.get(name, jnp.ones((depth, int(head_dim)), tokens.dtype))
-               for name in ("RMS_q_layers", "RMS_k_layers")]
+
     def attention(x, layer):
-        wq, wk, wv, wo, rms_attn, rms_ff, alpha_attn, alpha_ff, rms_q, rms_k = layer
-        z = norm(x, rms_attn)
-        q, k, v = [(z @ w.astype(z.dtype)).reshape(*x.shape[:-1], int(n_heads), int(head_dim)) for w in (wq, wk,wv)]
+        z = rms_norm(x, layer["RMS_attn"])
+        q, k, v = [(z @ layer[name].astype(z.dtype)).reshape(*x.shape[:-1], int(n_heads), int(head_dim))
+                   for name in ("W_q", "W_k", "W_v")]
         if use_qk:
-            q, k = norm(q, rms_q), norm(k, rms_k)
+            q, k = rms_norm(q, layer["RMS_q"]), rms_norm(k, layer["RMS_k"])
         a = attention_fn(q, k, v, mask, dims, int(n_heads), int(head_dim),
                          attention_backend, attention_dtype, int(padding_multiple)).reshape(x.shape)
-        h = x + alpha_attn.astype(x.dtype) * (a.astype(x.dtype) @ wo.astype(x.dtype))
-        return h, norm(h, rms_ff), alpha_ff
-    if cfg.get("activation_checkpointing", True):
-        attention = jax.checkpoint(attention, prevent_cse=False)
-    if prefix:
-        def dense(x, layer):
-            h, z, alpha = attention(x, layer[:10])
-            return h + alpha.astype(h.dtype) * swiglu(z, layer[10].astype(z.dtype), layer[11].astype(z.dtype)), None
-        if cfg.get("activation_checkpointing", True):
-            dense = jax.checkpoint(dense, prevent_cse=False)
-        xs = tuple(a[:prefix] for a in common) + (params["W_ff1_layers"], params["W_ff2_layers"])
-        tokens, _ = jax.lax.scan(dense, tokens, xs)
-    def routed(carry, layer):
-        x, chain = carry
-        h, z, alpha = attention(x, layer[:10])
-        y, stats, chain = dispatch(z, mask, *layer[10:15], layer[15], cfg,
-            training=ctx is not None, row_mask=None if ctx is None else ctx.row_mask,
-            runtime=None if ctx is None else ctx.runtime, chain=chain)
-        return (h + alpha.astype(h.dtype) * y, chain), stats
-    xs = tuple(a[prefix:] for a in common) + tuple(params[f"W_moe_{name}_layers"]
-        for name in ("router", "expert1", "expert2", "shared1", "shared2")) + (bias,)
-    (tokens, chain), stats = jax.lax.scan(routed, (tokens, jnp.float32(0) if ctx is None else ctx.chain), xs)
-    if ctx is not None:
-        ctx.add(stats, chain)
-    return norm(tokens, params["RMS_final"]).astype(output_dtype)
+        h = x + layer["alpha_attn"].astype(x.dtype) * (a.astype(x.dtype) @ layer["W_o"].astype(x.dtype))
+        return h, rms_norm(h, layer["RMS_ff"]), layer["alpha_ff"], jnp.float32(0), jnp.float32(0)
+
+    return run_layers(tokens, mask, params, cfg, bias, attention, loop_cfg)[0]

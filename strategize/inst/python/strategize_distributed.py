@@ -591,7 +591,8 @@ class Runtime:
                 "device_memory": {str(d.id): d.memory_stats() for d in jax.local_devices()},
                 "runtime_sha256": hashlib.sha256("".join(
                     _sha(Path(__file__).with_name(name)) for name in
-                    ("strategize_distributed.py", "strategize_moe.py", "strategize_optim.py")
+                    ("strategize_distributed.py", "strategize_moe.py", "strategize_optim.py",
+                     "strategize_attention.py", "strategize_transformer.py")
                 ).encode()).hexdigest()}
 
     def acquire_lock(self, path):
