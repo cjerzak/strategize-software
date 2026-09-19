@@ -1,6 +1,7 @@
 """Full-objective gradient normalization and diagnostics for SVI optimizers."""
 
 import math
+import re
 from typing import NamedTuple
 
 import jax
@@ -79,9 +80,28 @@ class UpdateDiagnosticsState(NamedTuple):
     normalized_gradient_norm: object
     update_parameter_ratio: object
     max_update_parameter_ratio: object
+    prelude_gradient_norm: object
+    recurrent_core_gradient_norm: object
+    recurrent_core_scaled_gradient_norm: object
+    coda_gradient_norm: object
+    other_gradient_norm: object
 
 
-def normalized_optimizer(optimizer, objective_scale=1.0, clip_global_norm=None):
+def _layer_tuple(value):
+    if value is None:
+        return ()
+    if isinstance(value, (int, float)):
+        return (int(value),)
+    return tuple(int(x) for x in value)
+
+
+def _path_name(path):
+    return "/".join(str(getattr(part, "key", getattr(part, "idx", part))) for part in path)
+
+
+def normalized_optimizer(optimizer, objective_scale=1.0, clip_global_norm=None,
+                         prelude_layers=None, recurrent_core_layers=None,
+                         coda_layers=None, recurrent_gradient_scale=1.0):
     """Scale the entire ELBO gradient, then clip, then apply the optimizer.
 
     NumPyro continues reporting the original ELBO. Scaling all gradient leaves
@@ -96,16 +116,91 @@ def normalized_optimizer(optimizer, objective_scale=1.0, clip_global_norm=None):
     threshold = float(clip_global_norm) if clip_global_norm is not None else None
     if threshold is not None and not threshold > 0:
         raise ValueError("clip_global_norm must be positive")
+    layer_groups = {
+        "prelude": frozenset(_layer_tuple(prelude_layers)),
+        "core": frozenset(_layer_tuple(recurrent_core_layers)),
+        "coda": frozenset(_layer_tuple(coda_layers)),
+    }
+    if any(a & b for i, a in enumerate(layer_groups.values())
+           for b in list(layer_groups.values())[i + 1:]):
+        raise ValueError("Transformer gradient layer groups must be disjoint")
+    recurrent_gradient_scale = float(recurrent_gradient_scale)
+    if not 0 < recurrent_gradient_scale <= 1:
+        raise ValueError("recurrent_gradient_scale must be in (0, 1]")
+    ordered_layers = tuple(sorted(set().union(*layer_groups.values())))
     optimizer = optax.with_extra_args_support(optimizer)
+
+    def group_for_name(name):
+        if "loop_state_gain" in name or "loop_input_gain" in name:
+            return "core"
+        matches = re.findall(r"_l(\d+)(?:\D|$)", name)
+        if matches:
+            layer = int(matches[-1])
+            for group, layers in layer_groups.items():
+                if layer in layers:
+                    return group
+        return "other"
+
+    def stacked_mask(name, gradient, layers):
+        if not ordered_layers or gradient.ndim < 1:
+            return None
+        depth = max(ordered_layers)
+        size = gradient.shape[0]
+        if size == depth:
+            layer_numbers = range(1, depth + 1)
+        elif "W_moe_" in name and size < depth:
+            # Routed MoE stacks omit the dense prefix. Their first axis still
+            # follows transformer layer order, beginning after that prefix.
+            layer_numbers = range(depth - size + 1, depth + 1)
+        elif ("W_ff1_layers" in name or "W_ff2_layers" in name) and size < depth:
+            # Dense FFN stacks precede the routed MoE suffix.
+            layer_numbers = range(1, size + 1)
+        else:
+            return None
+        mask = jnp.asarray([layer in layers for layer in layer_numbers], gradient.dtype)
+        return mask.reshape((gradient.shape[0],) + (1,) * (gradient.ndim - 1))
+
+    def select_group(path, gradient, group):
+        name = _path_name(path)
+        if "_layers" in name:
+            mask = stacked_mask(
+                name, gradient, layer_groups[group] if group != "other" else set())
+            if mask is not None:
+                return gradient * (1 - sum(
+                    stacked_mask(name, gradient, layers) for layers in layer_groups.values()
+                )) if group == "other" else gradient * mask
+        return gradient if group_for_name(name) == group else jnp.zeros_like(gradient)
+
+    def scale_core(path, gradient):
+        name = _path_name(path)
+        if "_layers" in name:
+            mask = stacked_mask(name, gradient, layer_groups["core"])
+            if mask is not None:
+                return gradient * (1 + (recurrent_gradient_scale - 1) * mask)
+        if group_for_name(name) == "core":
+            return gradient * recurrent_gradient_scale
+        return gradient
+
+    def group_norm(tree, group):
+        selected = jax.tree_util.tree_map_with_path(
+            lambda path, gradient: select_group(path, gradient, group), tree)
+        return _tree_norm(selected)
 
     def init(params):
         zero = jnp.asarray(0.0, dtype=jnp.float32)
         return UpdateDiagnosticsState(optimizer.init(params), jnp.int32(0), jnp.int32(0),
+                                      zero, zero, zero, zero, zero,
                                       zero, zero, zero, zero, zero)
 
     def update(grads, state, params=None, **extra_args):
         raw_norm = _tree_norm(grads)
         scaled = jax.tree.map(lambda g: g * objective_scale, grads)
+        prelude_norm = group_norm(scaled, "prelude")
+        core_norm = group_norm(scaled, "core")
+        coda_norm = group_norm(scaled, "coda")
+        other_norm = group_norm(scaled, "other")
+        scaled = jax.tree_util.tree_map_with_path(scale_core, scaled)
+        core_scaled_norm = group_norm(scaled, "core")
         norm = _tree_norm(scaled)
         factor = jnp.asarray(1.0, dtype=norm.dtype)
         if threshold is not None:
@@ -120,6 +215,7 @@ def normalized_optimizer(optimizer, objective_scale=1.0, clip_global_norm=None):
             state.clipped_count + (factor < 1).astype(jnp.int32),
             state.clip_factor_sum + factor, raw_norm, norm, ratio,
             jnp.maximum(state.max_update_parameter_ratio, ratio),
+            prelude_norm, core_norm, core_scaled_norm, coda_norm, other_norm,
         )
 
     return optax.GradientTransformationExtraArgs(init, update)
@@ -146,6 +242,11 @@ def update_diagnostics(optim_state):
         "last_normalized_gradient_norm": float(s.normalized_gradient_norm),
         "last_update_parameter_ratio": float(s.update_parameter_ratio),
         "max_update_parameter_ratio": float(s.max_update_parameter_ratio),
+        "last_prelude_gradient_norm": float(s.prelude_gradient_norm),
+        "last_recurrent_core_gradient_norm": float(s.recurrent_core_gradient_norm),
+        "last_recurrent_core_scaled_gradient_norm": float(s.recurrent_core_scaled_gradient_norm),
+        "last_coda_gradient_norm": float(s.coda_gradient_norm),
+        "last_other_gradient_norm": float(s.other_gradient_norm),
     }
     if _states(s.inner_state, "MuonState"):
         result.update(muon_partition_diagnostics(s.inner_state))

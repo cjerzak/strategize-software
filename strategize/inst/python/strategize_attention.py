@@ -174,7 +174,7 @@ def unwrap_model(model):
 
 
 def transformer_scan(tokens, mask, params, attention_cfg, ffn_cfg, bias, n_heads, head_dim,
-                     loop_cfg=None):
+                     loop_cfg=None, return_details=False):
     """MLA/DSA with the shared dense/MoE and recurrent-depth executor."""
     cfg = dict(attention_cfg)
     if mask is not None:
@@ -195,7 +195,12 @@ def transformer_scan(tokens, mask, params, attention_cfg, ffn_cfg, bias, n_heads
         h = x + layer["alpha_attn"].astype(x.dtype) * a
         return h, rms_norm(h, layer["RMS_ff"]), layer["alpha_ff"], loss, count
 
-    output, loss, count = run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg)
+    result = run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg,
+                        return_details=return_details)
+    if return_details:
+        output, loss, count = result["output"], result["loss"], result["count"]
+    else:
+        output, loss, count = result
     if collect:
         ctx.add(loss, count)
-    return output
+    return result if return_details else output
