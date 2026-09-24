@@ -20,6 +20,87 @@ def _mean_over_valid(values, mask):
     return jnp.sum(values * valid) / jnp.maximum(jnp.sum(valid), 1)
 
 
+def attention_dtype(label, backend):
+    """'auto' is float32 except for cuDNN, which only runs in half precision."""
+    named = {"bf16": jnp.bfloat16, "bfloat16": jnp.bfloat16, "fp16": jnp.float16,
+             "float16": jnp.float16, "f16": jnp.float16, "half": jnp.float16,
+             "fp32": jnp.float32, "float32": jnp.float32, "f32": jnp.float32}
+    return named.get(str(label or "auto").lower(), jnp.bfloat16 if backend == "cudnn" else jnp.float32)
+
+
+def self_attention(Qh, Kh, Vh, token_mask, model_dims, n_heads, head_dim,
+                   attention_backend, attention_dtype_label, attention_padding_multiple,
+                   scale=None):
+    """Key-masked bidirectional attention over [batch, token, head, width].
+
+    'pallas' is the Triton flash kernel (CUDA and ROCm); padding forms its own
+    segment, so valid queries see exactly the valid keys. Padded query rows stay
+    finite but differ across backends; no caller reads them.
+    """
+    backend = str(attention_backend or "xla").lower()
+    scale = float(head_dim) ** -.5 if scale is None else float(scale)
+    if backend not in ("xla", "cudnn", "pallas") or not hasattr(jax.nn, "dot_product_attention"):
+        scores = jnp.einsum("nqhd,nkhd->nhqk", Qh, Kh) * jnp.asarray(scale, Qh.dtype)
+        if token_mask is not None:
+            scores = jnp.where((token_mask > 0)[:, None, None, :], scores,
+                               jnp.asarray(jnp.finfo(scores.dtype).min, scores.dtype))
+        return jnp.einsum("nhqk,nkhd->nqhd", jax.nn.softmax(scores, axis=-1), Vh)
+    n_batch, seq_len = Qh.shape[:2]
+    dtype = attention_dtype(attention_dtype_label, backend)
+    Q, K, V = (x.astype(dtype) for x in (Qh, Kh, Vh))
+    mask = jnp.ones((n_batch, seq_len), jnp.float32) if token_mask is None else token_mask
+    block = 16 if seq_len <= 16 else 32
+    seq_use = seq_len
+    if backend != "xla":
+        multiple = block if backend == "pallas" else max(int(attention_padding_multiple), 1)
+        seq_use = -(-seq_len // multiple) * multiple
+        pad = ((0, 0), (0, seq_use - seq_len))
+        Q, K, V = (jnp.pad(x, pad + ((0, 0), (0, 0))) for x in (Q, K, V))
+        mask = jnp.pad(mask, pad)
+    if backend == "pallas":
+        from jax.experimental.pallas.ops.gpu import attention as pallas_attention
+        context = pallas_attention.mha(Q, K, V, (mask > 0).astype(jnp.int32), sm_scale=scale,
+                                       block_sizes=pallas_attention.BlockSizes(*[block] * 6))
+    else:
+        key_mask = (mask > 0)[:, None, None, :]
+        if backend == "cudnn":
+            key_mask = jnp.broadcast_to(key_mask, (n_batch, 1, seq_use, seq_use))
+        context = jax.nn.dot_product_attention(Q, K, V, mask=key_mask, scale=scale,
+                                               implementation=backend)
+    return context[:, :seq_len].astype(Qh.dtype)
+
+
+_pallas_status = {}
+
+
+def pallas_status(head_dim):
+    """'' when the flash kernel compiles and matches XLA at this head width.
+
+    Probes once per width in a fresh thread: callers may be inside a JAX trace
+    (trace state is thread-local), and the probe needs concrete values.
+    """
+    key = (int(head_dim), jax.default_backend())
+    if key not in _pallas_status:
+        def probe():
+            try:
+                x = jax.random.normal(jax.random.PRNGKey(0), (2, 20, 2, int(head_dim)), jnp.float32)
+                mask = jnp.ones((2, 20)).at[1, 13:].set(0)
+
+                def loss(q, backend):
+                    out = self_attention(q, q, q, mask, 0, 2, head_dim, backend, "float32", 8)
+                    return jnp.sum(jnp.where(mask[..., None, None] > 0, out, 0) ** 2)
+                got = jax.jit(jax.value_and_grad(lambda q: loss(q, "pallas")))(x)
+                want = jax.value_and_grad(lambda q: loss(q, "xla"))(x)
+                ok = all(bool(jnp.allclose(a, b, rtol=2e-2, atol=2e-2)) for a, b in zip(got, want))
+                return "" if ok else "pallas_probe_mismatch"
+            except Exception as error:  # no Triton, unsupported GPU, shared-memory limit
+                return "pallas_probe_failed: " + (str(error).splitlines() or [type(error).__name__])[0][:160]
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(1) as pool:
+            _pallas_status[key] = pool.submit(probe).result()
+    return _pallas_status[key]
+
+
 def _state_diagnostics(states, initial, mask, active_iterations):
     previous = jnp.concatenate((initial[None], states[:-1]), axis=0)
     norm = jnp.linalg.norm(states.astype(jnp.float32), axis=-1)

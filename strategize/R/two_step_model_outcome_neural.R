@@ -2307,6 +2307,9 @@ neural_normalize_attention_backend <- function(value) {
     if (mode %in% c("cudnn", "cuda", "flash", "flash_attention", "flash-attention")) {
       return("cudnn")
     }
+    if (mode %in% c("pallas", "triton")) {
+      return("pallas")
+    }
   }
   NA_character_
 }
@@ -2368,26 +2371,24 @@ neural_attention_jax_backend <- function() {
   tryCatch(as.character(strenv$jax$default_backend()), error = function(e) NA_character_)
 }
 
-neural_attention_cuda_available <- function() {
-  # JAX reports "gpu" for both CUDA and ROCm. cuDNN requires a CUDA
-  # client; the generic backend name cannot identify its implementation.
+neural_attention_gpu_platform <- function() {
+  # JAX reports "gpu" for both CUDA and ROCm; the client platform version (or,
+  # for older clients, the device name) identifies the implementation.
   devices <- tryCatch(strenv$jax$devices(), error = function(e) NULL)
-  if (is.null(devices) || length(devices) < 1L) {
-    return(FALSE)
-  }
-  any(vapply(devices, function(device) {
-    platform_version <- tryCatch(
-      as.character(device$client$platform_version),
-      error = function(e) character()
-    )
-    if (length(platform_version) == 1L && !is.na(platform_version) &&
-        nzchar(platform_version)) {
-      return(grepl("cuda", tolower(platform_version), fixed = TRUE))
+  for (device in devices) {
+    text <- tryCatch(as.character(device$client$platform_version), error = function(e) character())
+    if (length(text) != 1L || is.na(text) || !nzchar(text)) {
+      text <- tryCatch(as.character(device), error = function(e) character())
     }
-    # Older JAX clients may expose only a vendor-specific device name.
-    description <- tryCatch(as.character(device), error = function(e) character())
-    any(grepl("cuda", tolower(description), fixed = TRUE))
-  }, logical(1)))
+    for (platform in c("cuda", "rocm")) {
+      if (any(grepl(platform, tolower(text), fixed = TRUE))) return(platform)
+    }
+  }
+  NA_character_
+}
+
+neural_attention_cuda_available <- function() {
+  identical(neural_attention_gpu_platform(), "cuda")
 }
 
 neural_attention_dtype_object <- function(dtype_mode, prefer_cudnn = FALSE) {
@@ -2407,101 +2408,72 @@ neural_attention_dtype_object <- function(dtype_mode, prefer_cudnn = FALSE) {
   list(dtype = strenv$jnp$float32, label = "float32")
 }
 
-neural_attention_resolve_backend <- function(model_info = NULL,
-                                             role = c("self", "cross"),
-                                             fail_on_forced = TRUE) {
-  role <- match.arg(role)
-  requested <- neural_attention_backend(model_info)
-  has_dpa <- neural_attention_has_dpa()
-  cuda_available <- neural_attention_cuda_available()
-  if (!isTRUE(has_dpa)) {
-    if (identical(requested, "cudnn") && isTRUE(fail_on_forced)) {
-      stop("attention_backend='cudnn' requires jax.nn.dot_product_attention.", call. = FALSE)
-    }
-    return(list(
-      requested = requested,
-      backend = "dense",
-      fallback_reason = "jax_dot_product_attention_unavailable",
-      cuda_available = isTRUE(cuda_available)
-    ))
-  }
-  if (identical(requested, "xla")) {
-    return(list(
-      requested = requested,
-      backend = "xla",
-      fallback_reason = NA_character_,
-      cuda_available = isTRUE(cuda_available)
-    ))
-  }
-  if (identical(requested, "cudnn")) {
-    if (!isTRUE(cuda_available)) {
-      if (isTRUE(fail_on_forced)) {
-        stop("attention_backend='cudnn' requires a CUDA-backed JAX device.", call. = FALSE)
-      }
-      return(list(
-        requested = requested,
-        backend = "xla",
-        fallback_reason = "cuda_unavailable",
-        cuda_available = FALSE
-      ))
-    }
-    if (identical(neural_attention_dtype_mode(model_info), "float32")) {
-      if (isTRUE(fail_on_forced)) {
-        stop("attention_backend='cudnn' requires attention_dtype='auto', 'bfloat16', or 'float16'.", call. = FALSE)
-      }
-      return(list(
-        requested = requested,
-        backend = "xla",
-        fallback_reason = "cudnn_requires_fp16_or_bf16",
-        cuda_available = TRUE
-      ))
-    }
-    if (!identical(role, "self")) {
-      return(list(
-        requested = requested,
-        backend = "xla",
-        fallback_reason = "cudnn_cross_attention_disabled",
-        cuda_available = TRUE
-      ))
-    }
-    return(list(
-      requested = requested,
-      backend = "cudnn",
-      fallback_reason = NA_character_,
-      cuda_available = TRUE
-    ))
-  }
-  if (isTRUE(cuda_available) && identical(role, "self")) {
-    if (identical(neural_attention_dtype_mode(model_info), "float32")) {
-      return(list(
-        requested = requested,
-        backend = "xla",
-        fallback_reason = "cudnn_requires_fp16_or_bf16",
-        cuda_available = TRUE
-      ))
-    }
-    return(list(
-      requested = requested,
-      backend = "cudnn",
-      fallback_reason = NA_character_,
-      cuda_available = TRUE
-    ))
-  }
-  list(
-    requested = requested,
-    backend = "xla",
-    fallback_reason = if (isTRUE(cuda_available)) "non_self_attention" else "cuda_unavailable",
-    cuda_available = isTRUE(cuda_available)
+# '' when the Triton flash kernel compiles and matches XLA at this head width.
+neural_attention_pallas_status <- function(head_dim) {
+  tryCatch(
+    as.character(strategize_register_transformer_module()$pallas_status(ai(head_dim))),
+    error = function(e) paste("pallas_probe_failed:", conditionMessage(e))
   )
 }
 
-neural_next_multiple <- function(x, multiple) {
-  x <- ai(x)
-  multiple <- ai(multiple)
-  if (multiple <= 1L) {
-    return(x)
+neural_attention_highest_precision <- function() {
+  value <- tryCatch(as.character(strenv$jax$config$jax_default_matmul_precision),
+                    error = function(e) character())
+  length(value) == 1L && tolower(value) %in% c("highest", "float32")
+}
+
+# Flash attention is the automatic default wherever it qualifies: the Pallas
+# (Triton) kernel in the requested precision on CUDA and ROCm, or cuDNN when
+# half precision is requested on CUDA. XLA is the fallback, with the reason.
+neural_attention_resolve_backend <- function(model_info = NULL,
+                                             role = c("self", "cross"),
+                                             fail_on_forced = TRUE,
+                                             head_dim = model_info$head_dim) {
+  role <- match.arg(role)
+  requested <- neural_attention_backend(model_info)
+  dtype_mode <- neural_attention_dtype_mode(model_info)
+  platform <- neural_attention_gpu_platform()
+  head_dim <- suppressWarnings(as.integer(head_dim %||% NA_integer_))
+  resolved <- function(backend, reason = NA_character_) {
+    if (requested %in% c("cudnn", "pallas") && !identical(backend, requested) &&
+        isTRUE(fail_on_forced) && identical(role, "self")) {
+      stop(sprintf("attention_backend='%s' cannot run here: %s.", requested, reason), call. = FALSE)
+    }
+    list(requested = requested, backend = backend, fallback_reason = reason,
+         cuda_available = identical(platform, "cuda"))
   }
-  as.integer(ceiling(x / multiple) * multiple)
+  if (!isTRUE(neural_attention_has_dpa())) {
+    return(resolved("dense", "jax_dot_product_attention_unavailable"))
+  }
+  if (identical(requested, "xla")) return(resolved("xla"))
+  if (!identical(role, "self")) return(resolved("xla", "non_self_attention"))
+  if (is.na(platform)) return(resolved("xla", "gpu_unavailable"))
+  half <- dtype_mode %in% c("bfloat16", "float16") ||
+    (identical(requested, "cudnn") && identical(dtype_mode, "auto"))
+  cudnn_reason <- if (!identical(platform, "cuda")) {
+    "cuda_unavailable"
+  } else if (!half) {
+    "cudnn_requires_fp16_or_bf16"
+  } else if (is.na(head_dim) || head_dim %% 8L != 0L || head_dim > 128L) {
+    "cudnn_head_dim"
+  } else {
+    NA_character_
+  }
+  if (identical(requested, "cudnn") || (half && is.na(cudnn_reason))) {
+    return(resolved(if (is.na(cudnn_reason)) "cudnn" else "xla", cudnn_reason))
+  }
+  # FP32 Pallas is slower than XLA on RDNA3 above 32-wide heads (gfx1102 bench).
+  pallas_reason <- if (is.na(head_dim)) {
+    "head_dim_unknown"
+  } else if (identical(requested, "auto") && identical(platform, "rocm") && head_dim > 32L) {
+    "rocm_pallas_head_dim"
+  } else if (identical(platform, "cuda") && neural_attention_highest_precision()) {
+    "pallas_tf32_precision"
+  } else {
+    status <- neural_attention_pallas_status(head_dim)
+    if (nzchar(status)) status else NA_character_
+  }
+  resolved(if (is.na(pallas_reason)) "pallas" else "xla", pallas_reason)
 }
 
 neural_attention_mask_value <- function(scores) {
@@ -2519,76 +2491,11 @@ neural_floor_sigma <- function(sigma, dtype = NULL) {
 
 neural_self_attention_context <- function(Qh, Kh, Vh, token_mask, model_info) {
   resolve <- neural_attention_resolve_backend(model_info, role = "self", fail_on_forced = TRUE)
-  if (identical(resolve$backend, "dense")) {
-    scale_ <- strenv$jnp$sqrt(strenv$jnp$array(as.numeric(ai(model_info$head_dim))))
-    scores <- strenv$jnp$einsum("nqhd,nkhd->nhqk", Qh, Kh) / scale_
-    if (!is.null(token_mask)) {
-      mask_use <- strenv$jnp$reshape(
-        strenv$jnp$astype(token_mask > 0, scores$dtype),
-        list(token_mask$shape[[1]], 1L, 1L, token_mask$shape[[2]])
-      )
-      # Choice/CLS tokens are always emitted by the packer, so every row has at least one valid key.
-      large_neg <- neural_attention_mask_value(scores)
-      scores <- strenv$jnp$where(mask_use > 0, scores, large_neg)
-    }
-    attn <- strenv$jax$nn$softmax(scores, axis = -1L)
-    return(strenv$jnp$einsum("nhqk,nkhd->nqhd", attn, Vh))
-  }
-
-  original_dtype <- Qh$dtype
-  n_batch <- ai(Qh$shape[[1]])
-  seq_len <- ai(Qh$shape[[2]])
-  n_heads <- ai(model_info$n_heads)
-  head_dim <- ai(model_info$head_dim)
-  backend <- resolve$backend
-  dtype_info <- neural_attention_dtype_object(
-    neural_attention_dtype_mode(model_info),
-    prefer_cudnn = identical(backend, "cudnn")
+  strategize_register_transformer_module()$self_attention(
+    Qh, Kh, Vh, token_mask, ai(model_info$model_dims), ai(model_info$n_heads),
+    ai(model_info$head_dim), resolve$backend, neural_attention_dtype_mode(model_info),
+    ai(neural_attention_padding_multiple(model_info))
   )
-  Q_use <- strenv$jnp$astype(Qh, dtype_info$dtype)
-  K_use <- strenv$jnp$astype(Kh, dtype_info$dtype)
-  V_use <- strenv$jnp$astype(Vh, dtype_info$dtype)
-
-  mask_use <- token_mask
-  if (is.null(mask_use)) {
-    mask_use <- strenv$jnp$ones(list(n_batch, seq_len), dtype = strenv$dtj)
-  }
-
-  seq_use <- seq_len
-  if (identical(backend, "cudnn")) {
-    pad_to <- neural_next_multiple(seq_len, neural_attention_padding_multiple(model_info))
-    pad_n <- ai(pad_to - seq_len)
-    if (pad_n > 0L) {
-      q_pad <- strenv$jnp$zeros(list(n_batch, pad_n, n_heads, head_dim), dtype = Q_use$dtype)
-      k_pad <- strenv$jnp$zeros(list(n_batch, pad_n, n_heads, head_dim), dtype = K_use$dtype)
-      v_pad <- strenv$jnp$zeros(list(n_batch, pad_n, n_heads, head_dim), dtype = V_use$dtype)
-      Q_use <- strenv$jnp$concatenate(list(Q_use, q_pad), axis = 1L)
-      K_use <- strenv$jnp$concatenate(list(K_use, k_pad), axis = 1L)
-      V_use <- strenv$jnp$concatenate(list(V_use, v_pad), axis = 1L)
-      mask_pad <- strenv$jnp$zeros(list(n_batch, pad_n), dtype = mask_use$dtype)
-      mask_use <- strenv$jnp$concatenate(list(mask_use, mask_pad), axis = 1L)
-      seq_use <- pad_to
-    }
-  }
-
-  key_mask <- strenv$jnp$reshape(mask_use > 0, list(n_batch, 1L, 1L, seq_use))
-  if (identical(backend, "cudnn")) {
-    attn_mask <- strenv$jnp$broadcast_to(key_mask, list(n_batch, 1L, seq_use, seq_use))
-  } else {
-    attn_mask <- key_mask
-  }
-  context_h <- strenv$jax$nn$dot_product_attention(
-    Q_use,
-    K_use,
-    V_use,
-    mask = attn_mask,
-    implementation = backend
-  )
-  if (seq_use != seq_len) {
-    keep_idx <- strenv$jnp$arange(seq_len)
-    context_h <- strenv$jnp$take(context_h, keep_idx, axis = 1L)
-  }
-  strenv$jnp$astype(context_h, original_dtype)
 }
 
 neural_make_transformer_model_info <- function(model_depth,
@@ -9126,7 +9033,7 @@ neural_run_transformer_scan_standard <- function(tokens,
       params[grepl("_layers$|^RMS_final$|^loop_(state|input)_gain$", names(params))], cfg,
       params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
       ai(model_info$n_heads), ai(model_info$head_dim),
-      reticulate::py$`_strategize_self_attention`, as.character(attention_resolve$backend),
+      strategize_register_transformer_module()$self_attention, as.character(attention_resolve$backend),
       neural_attention_dtype_mode(model_info), ai(neural_attention_padding_multiple(model_info)),
       loop_cfg, isTRUE(return_details)
     ))
@@ -9179,6 +9086,9 @@ neural_run_transformer <- function(tokens,
     strategize_register_attention_helpers()
     if (!neural_has_stacked_standard_transformer(params))
       params <- neural_stack_standard_transformer_layers(params, model_info$model_depth, drop_legacy = TRUE)
+    latent_cfg$attention_backend <- neural_attention_resolve_backend(
+      model_info, head_dim = latent_cfg$kv_rank)$backend
+    latent_cfg$attention_dtype <- neural_attention_dtype_mode(model_info)
     output <- strenv$jax_attention$transformer_scan(tokens, token_mask,
       params[grepl("_layers$|^RMS_final$|^loop_(state|input)_gain$", names(params))], latent_cfg,
       if (neural_has_transformer_moe(params)) neural_moe_config(model_info, params) else NULL,
@@ -11921,7 +11831,7 @@ generate_ModelOutcome_neural <- function(){
     }
     stop(
       "'neural_mcmc_control$attention_backend' must be one of ",
-      "'auto', 'xla', or 'cudnn'.",
+      "'auto', 'xla', 'pallas', or 'cudnn'.",
       call. = FALSE
     )
   }
@@ -12391,9 +12301,7 @@ generate_ModelOutcome_neural <- function(){
     stop("MLA/DSA requires the joint SVI objective; use mla or mha for full MCMC.", call. = FALSE)
   if (!identical(transformer_attention$architecture, "mha")) {
     if (!identical(residual_mode, "standard")) stop("MLA requires residual_mode='standard'.", call. = FALSE)
-    if (identical(attention_backend, "cudnn")) stop("MLA/DSA uses XLA; attention_backend='cudnn' is unsupported.", call. = FALSE)
-    attention_backend <- "xla"
-    mcmc_control$attention_backend <- "xla"
+    if (identical(attention_backend, "cudnn")) stop("MLA keeps latent attention in FP32; attention_backend='cudnn' is unsupported.", call. = FALSE)
     strategize_register_attention_helpers()
     message(sprintf("Attention architecture: %s; Q rank=%d; KV rank=%d; DSA top-k=%d.",
       transformer_attention$architecture, transformer_attention$q_rank, transformer_attention$kv_rank, transformer_attention$top_k))
@@ -12403,10 +12311,12 @@ generate_ModelOutcome_neural <- function(){
     attention_dtype = attention_dtype,
     attention_padding_multiple = attention_padding_multiple
   )
+  # MLA attends in its shared latent space; only its dense branch can use flash.
   attention_resolve <- neural_attention_resolve_backend(
     attention_config_probe,
     role = "self",
-    fail_on_forced = TRUE
+    fail_on_forced = TRUE,
+    head_dim = if (identical(transformer_attention$architecture, "mha")) head_dim else transformer_attention$kv_rank
   )
   attention_resolved_backend <- attention_resolve$backend
   attention_fallback_reason <- attention_resolve$fallback_reason
@@ -12417,7 +12327,7 @@ generate_ModelOutcome_neural <- function(){
   message(sprintf(
     paste0(
       "Neural attention backend: requested=%s; resolved=%s; dtype=%s; ",
-      "jax_backend=%s; cuda_available=%s; padding_multiple=%s; fallback=%s."
+      "jax_backend=%s; cuda_available=%s; padding_multiple=%s; fallback=%s%s."
     ),
     attention_backend,
     attention_resolved_backend,
@@ -12429,7 +12339,8 @@ generate_ModelOutcome_neural <- function(){
       "none"
     } else {
       attention_fallback_reason
-    }
+    },
+    if (identical(transformer_attention$architecture, "mla_dsa")) "; applies to the dense MLA branch; sparse DSA uses XLA" else ""
   ))
   transformer_config <- neural_resolve_transformer_moe(
     mcmc_control, ModelDims, ModelDepth,

@@ -64,6 +64,15 @@ neural_has_transformer_moe <- function(params) {
   any(grepl("^W_moe_router_(layers|l[0-9]+)$", names(params)))
 }
 
+strategize_register_transformer_module <- function() {
+  if (is.null(strenv$jax_transformer)) {
+    strenv$jax_transformer <- reticulate::import_from_path(
+      "strategize_transformer", path = system.file("python", package = "strategize"), convert = TRUE
+    )
+  }
+  invisible(strenv$jax_transformer)
+}
+
 strategize_register_moe_helpers <- function() {
   if (is.null(strenv$jax_moe)) {
     strenv$jax_moe <- reticulate::import_from_path(

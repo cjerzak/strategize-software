@@ -17,7 +17,7 @@ import numpyro
 _context = ContextVar("strategize_attention_trace", default=None)
 
 
-from strategize_transformer import rms_norm, run_layers
+from strategize_transformer import rms_norm, run_layers, self_attention
 
 
 def masked_softmax(scores, mask):
@@ -88,7 +88,14 @@ def mla_attention(x, mask, params, cfg, n_heads, head_dim, *, collect_loss=False
         out = context.astype(x.dtype) @ p["W_o"].astype(x.dtype)
         return jnp.where(valid[..., None], out, 0)
 
-    def dense(selected_mask):
+    def dense(selected_mask, padding_only=False):
+        if padding_only and cfg.get("attention_backend") == "pallas" and not (collect_loss and dsa):
+            # Flash kernel on identical logits: per-head scaled keys, shared latent values.
+            shared = latent.astype(jnp.float32)[:, :, None, :]
+            keys = shared * inverse_key_norm[..., None]
+            values = self_attention(absorbed_q, keys, jnp.broadcast_to(shared, keys.shape), valid,
+                                    0, n_heads, head_dim, "pallas", cfg.get("attention_dtype"), 8)
+            return finish(None, values), jnp.float32(0), jnp.float32(0)
         logits = jnp.einsum("bqhc,bkc->bqhk", absorbed_q, latent.astype(jnp.float32))
         logits = logits * inverse_key_norm.transpose(0, 2, 1)[:, None, :, :] / (head_dim ** .5)
         probs = masked_softmax(logits, selected_mask[:, :, None, :])
@@ -97,7 +104,7 @@ def mla_attention(x, mask, params, cfg, n_heads, head_dim, *, collect_loss=False
         return finish(probs, values), loss, count
 
     if not dsa or top_k >= length:
-        return dense(pair_valid)
+        return dense(pair_valid, padding_only=True)
     masked_scores = jnp.where(pair_valid, scores, jnp.float32(-1e30))
     top_values, top_indices = jax.lax.top_k(masked_scores, top_k + 1)
     indices = top_indices[..., :top_k]
