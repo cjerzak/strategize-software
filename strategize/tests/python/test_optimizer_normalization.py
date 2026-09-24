@@ -41,6 +41,57 @@ def test_scaling_preserves_likelihood_to_kl_ratio():
     np.testing.assert_allclose(updates, expected, rtol=1e-6)
 
 
+def test_recurrent_group_norms_and_use_count_normalization():
+    params = {name: jnp.array([1.]) for name in (
+        "W_q_l1", "W_q_l2", "W_q_l3", "loop_input_gain", "head")}
+    grads = {
+        "W_q_l1": jnp.array([1.]),
+        "W_q_l2": jnp.array([3.]),
+        "W_q_l3": jnp.array([2.]),
+        "loop_input_gain": jnp.array([4.]),
+        "head": jnp.array([6.]),
+    }
+    optim = normalized_optimizer(
+        optax.sgd(1.), prelude_layers=[1], recurrent_core_layers=[2],
+        coda_layers=[3], recurrent_gradient_scale=.5)
+    updates, state = jax.jit(optim.update)(grads, optim.init(params), params)
+    np.testing.assert_allclose(updates["W_q_l1"], [-1.])
+    np.testing.assert_allclose(updates["W_q_l2"], [-1.5])
+    np.testing.assert_allclose(updates["loop_input_gain"], [-2.])
+    np.testing.assert_allclose(updates["W_q_l3"], [-2.])
+    np.testing.assert_allclose(updates["head"], [-6.])
+    diag = update_diagnostics(state)
+    assert np.isclose(diag["last_prelude_gradient_norm"], 1.)
+    assert np.isclose(diag["last_recurrent_core_gradient_norm"], 5.)
+    assert np.isclose(diag["last_recurrent_core_scaled_gradient_norm"], 2.5)
+    assert np.isclose(diag["last_coda_gradient_norm"], 2.)
+    assert np.isclose(diag["last_other_gradient_norm"], 6.)
+
+
+def test_recurrent_group_mapping_covers_full_and_moe_suffix_stacks():
+    params = {
+        "W_q_layers": jnp.ones((8, 1)),
+        "W_moe_expert1_layers": jnp.ones((7, 1)),
+        "W_ff1_layers": jnp.ones((1, 1)),
+    }
+    grads = jax.tree.map(jnp.ones_like, params)
+    optim = normalized_optimizer(
+        optax.sgd(1.), prelude_layers=[1],
+        recurrent_core_layers=[2, 3, 4, 5, 6, 7], coda_layers=[8],
+        recurrent_gradient_scale=.5)
+    updates, state = jax.jit(optim.update)(grads, optim.init(params), params)
+    np.testing.assert_allclose(updates["W_q_layers"][:, 0],
+                               [-1., -.5, -.5, -.5, -.5, -.5, -.5, -1.])
+    np.testing.assert_allclose(updates["W_moe_expert1_layers"][:, 0],
+                               [-.5, -.5, -.5, -.5, -.5, -.5, -1.])
+    np.testing.assert_allclose(updates["W_ff1_layers"][:, 0], [-1.])
+    diag = update_diagnostics(state)
+    assert np.isclose(diag["last_prelude_gradient_norm"], np.sqrt(2.))
+    assert np.isclose(diag["last_recurrent_core_gradient_norm"], np.sqrt(12.))
+    assert np.isclose(diag["last_recurrent_core_scaled_gradient_norm"], np.sqrt(3.))
+    assert np.isclose(diag["last_coda_gradient_norm"], np.sqrt(2.))
+
+
 def test_numpyro_state_and_nonfinite_updates_preserve_telemetry():
     import numpyro
     from numpyro.infer import SVI, Trace_ELBO

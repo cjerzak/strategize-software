@@ -102,7 +102,8 @@ def _depend(value, chain):
 
 
 def dispatch(x, mask, router, w1, w2, shared1, shared2, bias, cfg,
-             *, training=False, row_mask=None, runtime=None, chain=None):
+             *, training=False, row_mask=None, runtime=None, chain=None,
+             return_routes=False):
     """Return output, local detached statistics, and collective dependency.
 
     A routing group follows [repeat, global observation, token] order. Repeats
@@ -113,7 +114,10 @@ def dispatch(x, mask, router, w1, w2, shared1, shared2, bias, cfg,
     x2 = x.reshape(-1, d)
     n, experts, k = x2.shape[0], int(cfg["n_routed_experts"]), int(cfg["n_experts_per_tok"])
     if not n:
-        return x, jnp.zeros((3 * experts + 3,), jnp.float32), jnp.float32(0)
+        result = (x, jnp.zeros((3 * experts + 3,), jnp.float32), jnp.float32(0))
+        if return_routes:
+            return (*result, jnp.empty((*shape[:-1], k), dtype=jnp.int32))
+        return result
     valid = jnp.ones(shape[:-1], bool) if mask is None else jnp.asarray(mask) > 0
     rows = shape[0] if row_mask is None else row_mask.shape[0]
     if shape[0] % rows:
@@ -170,7 +174,11 @@ def dispatch(x, mask, router, w1, w2, shared1, shared2, bias, cfg,
     detail = jnp.concatenate((attempted, accepted, attempted - accepted,
         jnp.stack((valid.astype(jnp.float32).sum(), (gates * valid[:, None]).sum(),
                    (gates * (valid[:, None] & ~keep)).sum()))))
-    return y, jax.lax.stop_gradient(detail), jax.lax.stop_gradient(chain)
+    result = (y, jax.lax.stop_gradient(detail), jax.lax.stop_gradient(chain))
+    if return_routes:
+        routed = jnp.where(valid[:, None], indices, -1).reshape(*shape[:-1], k)
+        return (*result, jax.lax.stop_gradient(routed))
+    return result
 
 
 class TraceContext:
@@ -369,7 +377,7 @@ def ffn(x, mask, params, cfg, layer, bias=None):
 
 def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
                      attention_fn, attention_backend, attention_dtype, padding_multiple,
-                     loop_cfg=None):
+                     loop_cfg=None, return_details=False):
     """MHA with the shared dense/MoE and recurrent-depth executor."""
     from strategize_transformer import rms_norm, run_layers
     params = dict(params)
@@ -387,4 +395,6 @@ def transformer_scan(tokens, mask, params, cfg, bias, n_heads, head_dim,
         h = x + layer["alpha_attn"].astype(x.dtype) * (a.astype(x.dtype) @ layer["W_o"].astype(x.dtype))
         return h, rms_norm(h, layer["RMS_ff"]), layer["alpha_ff"], jnp.float32(0), jnp.float32(0)
 
-    return run_layers(tokens, mask, params, cfg, bias, attention, loop_cfg)[0]
+    result = run_layers(tokens, mask, params, cfg, bias, attention, loop_cfg,
+                        return_details=return_details)
+    return result if return_details else result[0]

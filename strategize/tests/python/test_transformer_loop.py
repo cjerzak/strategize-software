@@ -46,10 +46,18 @@ def reference(x, mask, params, loop):
         embedded = jnp.where(mask[..., None] > 0, embedded, 0)
         z = jnp.zeros_like(embedded)
         keep = loop.get('backprop_iterations', 0) if loop.get('training', False) else 0
-        for i in range(loop['iterations']):
-            if keep and i == loop['iterations'] - keep:
+        iterations = int(loop.get('active_iterations', loop['iterations']))
+        for i in range(iterations):
+            if keep and i == iterations - keep:
                 z = jax.lax.stop_gradient(z)
-            z = layers((embedded + z) / jnp.sqrt(2.), pre, end)
+            if loop.get('reinjection') == 'rms_gated':
+                injected = embedded if i == 0 else norm_ref(
+                    params.get('loop_state_gain', 1.) * z +
+                    params.get('loop_input_gain', 1.) * embedded,
+                    jnp.ones(embedded.shape[-1]))
+            else:
+                injected = (embedded + z) / jnp.sqrt(2.)
+            z = layers(injected, pre, end)
         z = layers(z, end, depth)
     else:
         z = layers(z, 0, depth)
@@ -88,6 +96,26 @@ def test_masks_permutation_batching_and_inference_keeps_full_derivatives():
     close(jax.grad(objective)(x),jax.grad(full)(x),rtol=2e-3,atol=3e-4)
 
 
+def test_sampled_depth_gated_reinjection_and_activation_diagnostics():
+    x, m, p = dense_fixture(4)
+    p.update(loop_state_gain=jnp.array(.8), loop_input_gain=jnp.array(1.2))
+    loop = dict(enabled=True, iterations=2, active_iterations=jnp.int32(2),
+                max_iterations=4, prelude_layers=1, coda_layers=1,
+                reinjection='rms_gated', jacobian_power_iterations=1)
+    details = jax.jit(lambda xx: a.transformer_scan(
+        xx, m, p, CFG, None, None, 4, 4, loop, True))(x)
+    close(details['output'], reference(x, m, p, loop), rtol=2e-3, atol=3e-4)
+    assert int(details['active_iterations']) == 2
+    assert details['states'].shape[0] == 4
+    np.testing.assert_allclose(
+        details['states'][2:], jnp.broadcast_to(details['states'][1], details['states'][2:].shape))
+    assert np.isfinite(details['state_l2_mean'][:2]).all()
+    assert np.isnan(details['state_l2_mean'][2:]).all()
+    assert np.isnan(details['state_cosine_previous'][0])
+    assert np.isfinite(details['state_cosine_previous'][1])
+    assert float(details['core_jacobian_spectral_norm']) > 0
+
+
 def test_auxiliary_and_moe_statistics_count_each_shared_layer_use_without_tracer_leaks():
     # The existing MHA fixture has one dense layer followed by two MoE layers.
     _, x, p = transformer_fixture('float32', True)
@@ -109,6 +137,12 @@ def test_auxiliary_and_moe_statistics_count_each_shared_layer_use_without_tracer
     close(s[:,-3],jnp.array([3*2*9,2*9],dtype=jnp.float32))
     close(s[:,:4].sum(-1),2*s[:,-3])
     close(s[:,4:8].sum(-1),2*s[:,-3])
+    inference = moe.transformer_scan(
+        x, jnp.ones(x.shape[:2]), p, cfg, jnp.zeros((2, 4)), 2, 4,
+        attention, 'xla', 'auto', 8, loop, True)
+    assert np.isfinite(inference['moe_load_entropy']).all()
+    assert np.isnan(inference['moe_route_change_fraction'][0])
+    assert np.isfinite(inference['moe_route_change_fraction'][1:]).all()
     xx, m, pp = dense_fixture(4)
     def latent_model(xx):
         a.set_branch('single',jnp.array([1.,0.]),2)

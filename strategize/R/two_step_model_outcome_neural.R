@@ -2038,7 +2038,16 @@ neural_build_param_schema <- function(params,
                    "W_k_cross",
                    "W_v_cross",
                    "W_o_cross")
-  param_names <- c(param_names, "pseudo_query_final", "RMS_final", "W_add_out", "W_out", "b_out")
+  param_names <- c(
+    param_names,
+    "pseudo_query_final",
+    "loop_state_gain",
+    "loop_input_gain",
+    "RMS_final",
+    "W_add_out",
+    "W_out",
+    "b_out"
+  )
   if (!is.null(params$sigma)) {
     param_names <- c(param_names, "sigma")
   }
@@ -9089,7 +9098,8 @@ neural_low_rank_single_utility_prepared <- function(params,
 neural_run_transformer_scan_standard <- function(tokens,
                                                  model_info,
                                                  params,
-                                                 token_mask = NULL) {
+                                                 token_mask = NULL,
+                                                 return_details = FALSE) {
   if (!isTRUE(neural_has_stacked_standard_transformer(params))) {
     return(NULL)
   }
@@ -9107,21 +9117,21 @@ neural_run_transformer_scan_standard <- function(tokens,
     role = "self",
     fail_on_forced = TRUE
   )
-  loop_cfg <- neural_transformer_loop_config(model_info)
-  loop_cfg$training <- isTRUE(model_info$transformer_training)
+  loop_cfg <- neural_transformer_loop_runtime_config(model_info)
   if (neural_has_transformer_moe(params) || loop_cfg$enabled) {
     strategize_register_moe_helpers()
     cfg <- if (neural_has_transformer_moe(params)) neural_moe_config(model_info, params) else NULL
     return(strenv$jax_moe$transformer_scan(
-      tokens, token_mask, params[grepl("_layers$|^RMS_final$", names(params))], cfg,
+      tokens, token_mask,
+      params[grepl("_layers$|^RMS_final$|^loop_(state|input)_gain$", names(params))], cfg,
       params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
       ai(model_info$n_heads), ai(model_info$head_dim),
       reticulate::py$`_strategize_self_attention`, as.character(attention_resolve$backend),
       neural_attention_dtype_mode(model_info), ai(neural_attention_padding_multiple(model_info)),
-      loop_cfg
+      loop_cfg, isTRUE(return_details)
     ))
   }
-  strenv$jax_transformer_scan_standard(
+  output <- strenv$jax_transformer_scan_standard(
     tokens,
     token_mask,
     params$W_q_layers,
@@ -9144,6 +9154,10 @@ neural_run_transformer_scan_standard <- function(tokens,
     neural_attention_dtype_mode(model_info),
     ai(neural_attention_padding_multiple(model_info))
   )
+  if (isTRUE(return_details)) {
+    return(list(output = output))
+  }
+  output
 }
 
 neural_run_transformer <- function(tokens,
@@ -9154,8 +9168,10 @@ neural_run_transformer <- function(tokens,
   if (is.null(params)) {
     params <- model_info$params
   }
-  loop_cfg <- neural_transformer_loop_config(model_info)
-  loop_cfg$training <- isTRUE(model_info$transformer_training)
+  loop_cfg <- neural_transformer_loop_runtime_config(model_info)
+  collect_recurrent_details <- isTRUE(
+    model_info$transformer_loop_collect_diagnostics
+  )
   latent_cfg <- neural_latent_attention_config(model_info, params)
   if (!identical(latent_cfg$architecture, "mha")) {
     if (!identical(neural_transformer_residual_mode(model_info), "standard"))
@@ -9164,11 +9180,19 @@ neural_run_transformer <- function(tokens,
     if (!neural_has_stacked_standard_transformer(params))
       params <- neural_stack_standard_transformer_layers(params, model_info$model_depth, drop_legacy = TRUE)
     output <- strenv$jax_attention$transformer_scan(tokens, token_mask,
-      params[grepl("_layers$|^RMS_final$", names(params))], latent_cfg,
+      params[grepl("_layers$|^RMS_final$|^loop_(state|input)_gain$", names(params))], latent_cfg,
       if (neural_has_transformer_moe(params)) neural_moe_config(model_info, params) else NULL,
       params$transformer_moe_router_bias %||% model_info$transformer_moe_router_bias,
-      ai(model_info$n_heads), ai(model_info$head_dim), loop_cfg)
-    return(if (isTRUE(return_details)) list(tokens = output, readout_tokens = output) else output)
+      ai(model_info$n_heads), ai(model_info$head_dim), loop_cfg,
+      collect_recurrent_details)
+    if (isTRUE(return_details)) {
+      if (collect_recurrent_details) {
+        return(list(tokens = output$output, readout_tokens = output$output,
+                    recurrent = output))
+      }
+      return(list(tokens = output, readout_tokens = output))
+    }
+    return(if (collect_recurrent_details) output$output else output)
   }
   residual_mode <- neural_transformer_residual_mode(model_info)
   use_full_attn_residual <- identical(residual_mode, "full_attn")
@@ -9191,13 +9215,20 @@ neural_run_transformer <- function(tokens,
       tokens = tokens,
       model_info = model_info,
       params = params,
-      token_mask = token_mask
+      token_mask = token_mask,
+      return_details = collect_recurrent_details
     )
     if (!is.null(tokens_final)) {
       if (isTRUE(return_details)) {
-        return(list(tokens = tokens_final, readout_tokens = tokens_final))
+        if (collect_recurrent_details) {
+          return(list(tokens = tokens_final$output,
+                      readout_tokens = tokens_final$output,
+                      recurrent = tokens_final))
+        }
+        return(list(tokens = tokens_final,
+                    readout_tokens = tokens_final))
       }
-      return(tokens_final)
+      return(if (collect_recurrent_details) tokens_final$output else tokens_final)
     }
     # Stacked params usually drop the per-layer W_q_l1... entries
     # (drop_legacy = TRUE), in which case the R loop below cannot run -- it
@@ -12332,11 +12363,29 @@ generate_ModelOutcome_neural <- function(){
   if (transformer_loop$enabled && transformer_loop$backprop_iterations > 0L &&
       !identical(subsample_method, "batch_vi"))
     stop("Truncated recurrent backpropagation requires SVI without subsequent MCMC.", call. = FALSE)
-  if (transformer_loop$enabled) message(sprintf(
-    "Looped transformer: %d prelude + %d core x %d iterations + %d coda; effective depth %.0f.",
-    transformer_loop$prelude_layers, ModelDepth - transformer_loop$prelude_layers - transformer_loop$coda_layers,
-    transformer_loop$iterations, transformer_loop$coda_layers,
-    neural_transformer_effective_depth(transformer_loop, ModelDepth)))
+  if (transformer_loop$enabled) {
+    training_depth <- if (is.null(transformer_loop$training_iterations)) {
+      sprintf("fixed R=%d", transformer_loop$iterations)
+    } else {
+      paste0(
+        "sampled ",
+        paste0(
+          "R=", transformer_loop$training_iterations, " (",
+          formatC(100 * transformer_loop$training_probabilities, format = "fg"), "%)",
+          collapse = ", "
+        ),
+        sprintf("; inference R=%d", transformer_loop$iterations)
+      )
+    }
+    message(sprintf(
+      "Looped transformer: %d prelude + %d recurrent core + %d coda; %s; expected training depth %.1f.",
+      transformer_loop$prelude_layers,
+      ModelDepth - transformer_loop$prelude_layers - transformer_loop$coda_layers,
+      transformer_loop$coda_layers,
+      training_depth,
+      neural_transformer_effective_depth(transformer_loop, ModelDepth)
+    ))
+  }
   if (identical(transformer_attention$architecture, "mla_dsa") &&
       !(identical(tolower(as.character(uncertainty_scope)), "output") || identical(subsample_method, "batch_vi")))
     stop("MLA/DSA requires the joint SVI objective; use mla or mha for full MCMC.", call. = FALSE)
@@ -15533,6 +15582,15 @@ generate_ModelOutcome_neural <- function(){
       },
       constraint = p2d_constraint_positive
     )
+    loop_state_gain <- NULL
+    loop_input_gain <- NULL
+    if (isTRUE(transformer_loop$enabled) &&
+        identical(transformer_loop$reinjection, "rms_gated")) {
+      # Only the relative mixture matters after RMS normalization. Two
+      # positive learned scalars provide that control with negligible bloat.
+      loop_state_gain <- p2d_deterministic_gate("loop_state_gain", init_value = 1)
+      loop_input_gain <- p2d_deterministic_gate("loop_input_gain", init_value = 1)
+    }
     output_dim <- if (isTRUE(universal_enabled)) ai(universal_global_out_dim) else nOutcomes
     tau_w_out <- strenv$numpyro$sample(
       "tau_w_out",
@@ -15796,6 +15854,10 @@ generate_ModelOutcome_neural <- function(){
     }
     if (!is.null(pseudo_query_final)) {
       params_view$pseudo_query_final <- pseudo_query_final
+    }
+    if (!is.null(loop_state_gain)) {
+      params_view$loop_state_gain <- loop_state_gain
+      params_view$loop_input_gain <- loop_input_gain
     }
     params_view$RMS_final <- RMS_final
     if (!is.null(W_add_out)) {
@@ -16139,6 +16201,7 @@ generate_ModelOutcome_neural <- function(){
       resp_cov_present = resp_cov_present,
       n_rows = N_local
     )
+    loop_iterations_active <- neural_sample_transformer_loop_iterations(transformer_loop)
 
     shared_params <- sample_shared_transformer_params(D_local = D_local, pairwise = TRUE)
     params_view <- shared_params$params_view
@@ -16165,6 +16228,7 @@ generate_ModelOutcome_neural <- function(){
     transformer_model_info$transformer_attention <- transformer_attention
     transformer_model_info$transformer_loop <- transformer_loop
     transformer_model_info$transformer_training <- TRUE
+    transformer_model_info$transformer_loop_active_iterations <- loop_iterations_active
     model_info_local <- neural_make_runtime_token_model_info(
       text_embedding_normalizer = text_embedding_normalizer,
       struct_feature_encoding = struct_feature_encoding,
@@ -16934,6 +16998,7 @@ generate_ModelOutcome_neural <- function(){
       resp_cov_present = resp_cov_present,
       n_rows = N_local
     )
+    loop_iterations_active <- neural_sample_transformer_loop_iterations(transformer_loop)
 
     shared_params <- sample_shared_transformer_params(D_local = D_local, pairwise = FALSE)
     params_view <- shared_params$params_view
@@ -16958,6 +17023,7 @@ generate_ModelOutcome_neural <- function(){
     transformer_model_info$transformer_attention <- transformer_attention
     transformer_model_info$transformer_loop <- transformer_loop
     transformer_model_info$transformer_training <- TRUE
+    transformer_model_info$transformer_loop_active_iterations <- loop_iterations_active
     model_info_local <- neural_make_runtime_token_model_info(
       text_embedding_normalizer = text_embedding_normalizer,
       struct_feature_encoding = struct_feature_encoding,
@@ -19023,6 +19089,8 @@ generate_ModelOutcome_neural <- function(){
       params_out[[name]] <- get_loc_scale_site_value(name, "tau_cross_attn")
     }
     maybe_site("pseudo_query_final")
+    maybe_site("loop_state_gain")
+    maybe_site("loop_input_gain")
     maybe_site("RMS_final")
 
     params_out$transformer_moe_router_bias <- get_site_value("_transformer_moe_bias") %||% transformer_moe_router_bias
@@ -20176,10 +20244,31 @@ generate_ModelOutcome_neural <- function(){
       "strategize_optim", path = system.file("python", package = "strategize"), convert = FALSE
     )
     final_update_diagnostics <- NULL
+    gradient_prelude_layers <- if (isTRUE(transformer_loop$enabled)) {
+      as.integer(seq_len(transformer_loop$prelude_layers))
+    } else integer(0)
+    gradient_core_layers <- if (isTRUE(transformer_loop$enabled)) {
+      as.integer(seq.int(
+        transformer_loop$prelude_layers + 1L,
+        ModelDepth - transformer_loop$coda_layers
+      ))
+    } else integer(0)
+    gradient_coda_layers <- if (isTRUE(transformer_loop$enabled) &&
+                                transformer_loop$coda_layers > 0L) {
+      as.integer(seq.int(ModelDepth - transformer_loop$coda_layers + 1L, ModelDepth))
+    } else integer(0)
+    recurrent_gradient_scale <- if (isTRUE(transformer_loop$enabled) &&
+                                      isTRUE(transformer_loop$normalize_core_gradients)) {
+      1 / neural_transformer_training_mean_iterations(transformer_loop)
+    } else 1
     wrap_optax_optimizer <- function(optax_optim) {
       optim_module$normalized_optimizer(
         optax_optim, objective_scale = objective_scale,
-        clip_global_norm = if (isTRUE(clip_enabled)) clip_global_norm else NULL
+        clip_global_norm = if (isTRUE(clip_enabled)) clip_global_norm else NULL,
+        prelude_layers = gradient_prelude_layers,
+        recurrent_core_layers = gradient_core_layers,
+        coda_layers = gradient_coda_layers,
+        recurrent_gradient_scale = recurrent_gradient_scale
       )
     }
     optax_to_numpyro_optimizer <- function(optax_optim) {
@@ -20207,6 +20296,14 @@ generate_ModelOutcome_neural <- function(){
       clip_status = if (isTRUE(clip_enabled)) "enabled" else if (!is.finite(clip_global_norm)) "disabled" else "unavailable",
       objective_normalization = objective_normalization,
       objective_gradient_scale = objective_scale,
+      recurrent_gradient_scale = recurrent_gradient_scale,
+      recurrent_gradient_normalization = isTRUE(transformer_loop$enabled) &&
+        isTRUE(transformer_loop$normalize_core_gradients),
+      gradient_monitor_layer_groups = list(
+        prelude = gradient_prelude_layers,
+        recurrent_core = gradient_core_layers,
+        coda = gradient_coda_layers
+      ),
       objective_normalization_n = as.integer(n_obs_svi),
       steps_completed = NA_integer_,
       lr_trace = numeric(0),
@@ -23009,6 +23106,8 @@ generate_ModelOutcome_neural <- function(){
     }
   }
   maybe_site("pseudo_query_final")
+  maybe_gate("loop_state_gain")
+  maybe_gate("loop_input_gain")
   maybe_site("RMS_final")
 
   pairwise_bernoulli_logit_scale_mean <- 1.0
