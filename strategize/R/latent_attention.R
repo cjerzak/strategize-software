@@ -1,9 +1,9 @@
 # Fresh-fit defaults are explicit; old saved bundles without this field stay MHA.
 neural_resolve_latent_attention <- function(value = NULL, model_dims = 128L, fitting = FALSE) {
-  if (is.null(value)) value <- list(architecture = if (isTRUE(fitting)) "mla_dsa" else "mha")
+  if (is.null(value)) value <- list(architecture = if (isTRUE(fitting)) "mla" else "mha")
   if (is.character(value) && length(value) == 1L) value <- list(architecture = value)
   if (!is.list(value) || (length(value) && (is.null(names(value)) || any(!nzchar(names(value))) || anyDuplicated(names(value))))) stop("transformer_attention must be a named list or architecture name.", call. = FALSE)
-  defaults <- list(architecture = if (isTRUE(fitting)) "mla_dsa" else "mha",
+  defaults <- list(architecture = if (isTRUE(fitting)) "mla" else "mha",
     q_rank = max(1L, min(128L, as.integer(model_dims) %/% 2L)),
     kv_rank = max(1L, min(128L, as.integer(model_dims) %/% 2L)),
     indexer_heads = 2L, indexer_dim = 16L, top_k = 32L, indexer_loss_weight = 0.01)

@@ -1,7 +1,7 @@
 test_that("attention controls distinguish fresh defaults from legacy metadata", {
   resolve <- strategize:::neural_resolve_latent_attention
   expect_identical(resolve()$architecture, "mha")
-  expect_identical(resolve(fitting = TRUE)$architecture, "mla_dsa")
+  expect_identical(resolve(fitting = TRUE)$architecture, "mla")
   expect_identical(resolve("mla_dsa", 288L)$kv_rank, 128L)
   expect_error(resolve(list(top_k = 0)), "positive integer")
   expect_error(resolve(list(architecture = "mla_dsa", indexer_loss_weight = 0)), "positive finite")
