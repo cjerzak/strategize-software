@@ -15,6 +15,7 @@ cs2step_embedding_level <- function(level = c(
                                       "respondent_cls",
                                       "respondent_pool",
                                       "respondent_mean",
+                                      "candidate_tower",
                                       "all"
                                     )) {
   match.arg(level)
@@ -573,17 +574,36 @@ cs2step_neural_extract_prepared <- function(params,
     )
     out[[level]] <- readouts[[level]]
   }
-  if (identical(level, "all") && isTRUE(neural_has_readout_cls(model_info))) {
-    out <- c(out, cs2step_neural_extract_respondent_readouts_prepared(
+  if (identical(level, "candidate_tower") && !isTRUE(neural_has_readout_cls(model_info))) {
+    stop("Neural model does not expose candidate tower readouts (low_rank_interaction_rank = 0).", call. = FALSE)
+  }
+  if (level %in% c("candidate_tower", "all") && isTRUE(neural_has_readout_cls(model_info))) {
+    respondent <- cs2step_neural_extract_respondent_readouts_prepared(
       params = params,
       model_info = model_info,
       prep = prep
-    ))
-    out <- c(out, cs2step_neural_extract_candidate_readouts_prepared(
+    )
+    candidate <- cs2step_neural_extract_candidate_readouts_prepared(
       params = params,
       model_info = model_info,
       prep = prep
-    ))
+    )
+    if (identical(level, "all")) out <- c(out, respondent)
+    out <- c(out, candidate)
+    # Distilled tower utility g(r, c): the tower summary of the joint utility.
+    if (neural_has_tower_sufficiency(params)) {
+      tower_utility <- function(c) strenv$jnp$take(neural_low_rank_interaction_logits(
+        respondent$respondent_final, c, params, model_info = model_info,
+        pairwise_obs = isTRUE(prep$pairwise), surrogate = TRUE
+      ), 0L, axis = 1L) + strenv$jnp$take(
+        strenv$jnp$einsum("nm,mo->no", c, neural_tower_candidate_head(params)), 0L, axis = 1L)
+      if (isTRUE(prep$pairwise)) {
+        out$tower_utility_left <- tower_utility(candidate$candidate_left_final)
+        out$tower_utility_right <- tower_utility(candidate$candidate_right_final)
+      } else {
+        out$tower_utility <- tower_utility(candidate$candidate_final)
+      }
+    }
   }
   out
 }
@@ -607,6 +627,7 @@ cs2step_neural_extract_internal <- function(object,
                                               "respondent_cls",
                                               "respondent_pool",
                                               "respondent_mean",
+                                              "candidate_tower",
                                               "all"
                                             ),
                                             source_class = class(object)[[1]],
@@ -825,6 +846,7 @@ extract_embeddings.strategic_predictor <- function(object,
                                                      "respondent_cls",
                                                      "respondent_pool",
                                                      "respondent_mean",
+                                                     "candidate_tower",
                                                      "all"
                                                    ),
                                                    factor_schema = NULL,
@@ -1415,6 +1437,7 @@ extract_embeddings.conjoint_foundation_model <- function(object,
                                                            "respondent_cls",
                                                            "respondent_pool",
                                                            "respondent_mean",
+                                                           "candidate_tower",
                                                            "all"
                                                          ),
                                                          experiment_id = NULL,

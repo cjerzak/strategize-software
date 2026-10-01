@@ -1999,6 +1999,12 @@ neural_build_param_schema <- function(params,
   if (!is.null(params$W_rc_r) || !is.null(params$W_rc_c) || !is.null(params$W_rc_out)) {
     param_names <- c(param_names, "alpha_rc", "W_rc_r", "W_rc_c", "W_rc_out")
   }
+  if (!is.null(params$W_ts_cand)) {
+    param_names <- c(param_names, "W_ts_cand")
+  }
+  if (!is.null(params$W_to_cand)) {
+    param_names <- c(param_names, "W_to_cand")
+  }
   if (!is.null(params$log_pairwise_bernoulli_logit_scale)) {
     param_names <- c(param_names, "log_pairwise_bernoulli_logit_scale")
   }
@@ -3946,6 +3952,139 @@ neural_emit_moe_load_balance_factor <- function(n_obs_total) {
   strenv$numpyro$factor(
     "moe_load_balance",
     strenv$jnp$negative(scale_val * aux_total)
+  )
+  invisible(NULL)
+}
+
+# Batch-size learning-rate scaling. Under the per-observation objective a
+# larger batch lowers gradient noise rather than changing gradient scale; for
+# adaptive optimizers the square-root rule (Malladi et al., 2022) keeps the
+# update-noise dynamics comparable: lr x sqrt(batch / reference). Muon's
+# RMS-matched orthogonal updates have no established rule; sqrt is the natural
+# heuristic. Rules hold below the critical batch size. `reference` is the batch
+# at which svi_lr was tuned, so batch == reference leaves lr unchanged.
+neural_svi_lr_batch_scale <- function(batch_size, n_obs, mode = "none", reference = 64L) {
+  mode <- tolower(as.character(mode %||% "none"))
+  if (length(mode) != 1L || is.na(mode) || !mode %in% c("none", "sqrt")) {
+    stop("svi_lr_batch_scaling must be 'none' or 'sqrt'.", call. = FALSE)
+  }
+  if (identical(mode, "none")) {
+    return(1)
+  }
+  reference <- suppressWarnings(as.numeric(reference))
+  if (length(reference) != 1L || !is.finite(reference) || reference <= 0) {
+    stop("svi_lr_reference_batch_size must be a positive finite number.", call. = FALSE)
+  }
+  batch <- suppressWarnings(as.numeric(batch_size))
+  if (length(batch) != 1L || !is.finite(batch) || batch <= 0) {
+    return(1)
+  }
+  n_obs <- suppressWarnings(as.numeric(n_obs))
+  if (length(n_obs) == 1L && is.finite(n_obs) && n_obs > 0) {
+    batch <- min(batch, n_obs)
+  }
+  sqrt(batch / reference)
+}
+
+# Tower sufficiency: distil the joint utility into the respondent/candidate
+# towers so their embeddings summarize what the model actually uses. The
+# towers then leave the logit (see neural_low_rank_interaction_logits); the
+# presence of W_ts_cand in a saved bundle marks the mode.
+neural_resolve_tower_sufficiency <- function(value = NULL, low_rank_interaction_rank = 0L) {
+  if (is.null(value) || isFALSE(value)) {
+    return(list(enabled = FALSE, weight = 0))
+  }
+  if (isTRUE(value)) {
+    value <- list(enabled = TRUE)
+  }
+  if (!is.list(value) || (length(value) && is.null(names(value)))) {
+    stop("tower_sufficiency must be TRUE, FALSE, or list(enabled, weight).", call. = FALSE)
+  }
+  unknown <- setdiff(names(value), c("enabled", "weight", "mode"))
+  if (length(unknown)) {
+    stop("Unknown tower_sufficiency controls: ", paste(unknown, collapse = ", "), call. = FALSE)
+  }
+  if (!isTRUE(value$enabled %||% TRUE)) {
+    return(list(enabled = FALSE, weight = 0))
+  }
+  mode <- as.character(value$mode %||% "distill")
+  if (length(mode) != 1L || !mode %in% c("distill", "tower_only")) {
+    stop("tower_sufficiency$mode must be 'distill' or 'tower_only'.", call. = FALSE)
+  }
+  if (identical(mode, "tower_only")) {
+    if (ai(low_rank_interaction_rank) < 1L) {
+      stop("tower_sufficiency requires low_rank_interaction_rank > 0 (the respondent/candidate towers).",
+           call. = FALSE)
+    }
+    return(list(enabled = TRUE, weight = 0, mode = "tower_only"))
+  }
+  weight <- suppressWarnings(as.numeric(value$weight %||% 1))
+  if (length(weight) != 1L || !is.finite(weight) || weight <= 0) {
+    stop("tower_sufficiency$weight must be a positive finite number.", call. = FALSE)
+  }
+  if (ai(low_rank_interaction_rank) < 1L) {
+    stop("tower_sufficiency requires low_rank_interaction_rank > 0 (the respondent/candidate towers).",
+         call. = FALSE)
+  }
+  list(enabled = TRUE, weight = weight, mode = "distill")
+}
+
+neural_has_tower_sufficiency <- function(params) {
+  !is.null(params$W_ts_cand) || !is.null(params$W_to_cand)
+}
+
+# Tower-only utility: the prediction itself is the tower utility
+# g(r, c) = Delta(r, c) + c . W_to_cand; the joint sequence is not used.
+neural_tower_only <- function(params) {
+  !is.null(params$W_to_cand)
+}
+
+neural_tower_candidate_head <- function(params) {
+  params$W_to_cand %||% params$W_ts_cand
+}
+
+neural_combine_tower_term <- function(logits, term, params) {
+  if (neural_tower_only(params)) term else logits + term
+}
+
+# Collect the row-weighted squared error between the tower surrogate and the
+# joint pairwise utility difference (column 0, the pairwise logit). The target
+# is stop-gradient, so distillation never pulls the joint predictor.
+neural_collect_tower_sufficiency <- function(target_diff, surrogate_diff, weights = NULL) {
+  if (!isTRUE(strenv$tower_sufficiency_active)) {
+    return(invisible(NULL))
+  }
+  target <- strenv$jax$lax$stop_gradient(strenv$jnp$take(target_diff, 0L, axis = 1L))
+  err <- strenv$jnp$square(strenv$jnp$take(surrogate_diff, 0L, axis = 1L) - target)
+  loss <- if (is.null(weights)) {
+    strenv$jnp$mean(err)
+  } else {
+    w <- strenv$jnp$reshape(strenv$jnp$asarray(weights, dtype = err$dtype), list(-1L))
+    w <- strenv$jnp$broadcast_to(w, err$shape)
+    strenv$jnp$sum(w * err) / strenv$jnp$maximum(strenv$jnp$sum(w), strenv$jnp$array(1e-6, dtype = err$dtype))
+  }
+  strenv$tower_sufficiency_pending <- c(strenv$tower_sufficiency_pending %||% list(), list(loss))
+  invisible(NULL)
+}
+
+# Emitted like the MoE penalty: one factor outside the data plates, scaled by
+# n_obs_total * weight so its strength tracks the likelihood magnitude.
+neural_emit_tower_sufficiency_factor <- function(n_obs_total) {
+  pending <- strenv$tower_sufficiency_pending
+  strenv$tower_sufficiency_pending <- list()
+  weight <- suppressWarnings(as.numeric(strenv$tower_sufficiency_weight %||% 0))
+  if (!isTRUE(strenv$tower_sufficiency_active) || length(pending) < 1L ||
+      length(weight) != 1L || !is.finite(weight) || weight <= 0) {
+    return(invisible(NULL))
+  }
+  n_scale <- suppressWarnings(as.numeric(n_obs_total))
+  if (length(n_scale) != 1L || !is.finite(n_scale) || n_scale < 1) {
+    n_scale <- 1
+  }
+  loss <- Reduce(`+`, pending) / as.numeric(length(pending))
+  strenv$numpyro$factor(
+    "tower_sufficiency",
+    strenv$jnp$negative(strenv$jnp$array(weight * n_scale, dtype = strenv$dtj) * loss)
   )
   invisible(NULL)
 }
@@ -8783,10 +8922,14 @@ neural_low_rank_interaction_logits <- function(respondent_final,
                                                out_dim = NULL,
                                                dtype = NULL,
                                                model_info = NULL,
-                                               pairwise_obs = FALSE) {
+                                               pairwise_obs = FALSE,
+                                               surrogate = FALSE) {
+  # Under tower sufficiency the towers are a distilled summary of the joint
+  # utility, not a logit term: only the distillation surrogate evaluates them.
   if (is.null(params$W_rc_r) ||
       is.null(params$W_rc_c) ||
-      is.null(params$W_rc_out)) {
+      is.null(params$W_rc_out) ||
+      (!isTRUE(surrogate) && neural_has_tower_sufficiency(params))) {
     dtype_use <- dtype %||% strenv$dtj
     n_batch <- ai(candidate_final$shape[[1]])
     out_dim <- out_dim %||% 1L
@@ -8851,7 +8994,9 @@ neural_low_rank_pair_delta_prepared <- function(params,
                                                 transformer_model_info = NULL,
                                                 out_dim = NULL,
                                                 dtype = NULL,
-                                                context_info = NULL, candidate_info = NULL) {
+                                                context_info = NULL, candidate_info = NULL,
+                                                surrogate = FALSE) {
+  surrogate <- isTRUE(surrogate) || neural_tower_only(params)
   if (!isTRUE(neural_has_low_rank_interaction(params, model_info))) {
     n_batch <- ai(Xl$shape[[1]])
     out_dim_use <- out_dim %||% 1L
@@ -8920,7 +9065,8 @@ neural_low_rank_pair_delta_prepared <- function(params,
     out_dim = out_dim_use,
     dtype = dtype,
     model_info = model_info,
-    pairwise_obs = TRUE
+    pairwise_obs = TRUE,
+    surrogate = surrogate
   )
   right_logits <- neural_low_rank_interaction_logits(
     respondent_final = resp_readout$final,
@@ -8929,8 +9075,16 @@ neural_low_rank_pair_delta_prepared <- function(params,
     out_dim = out_dim_use,
     dtype = dtype,
     model_info = model_info,
-    pairwise_obs = TRUE
+    pairwise_obs = TRUE,
+    surrogate = surrogate
   )
+  if (isTRUE(surrogate)) {
+    # Tower surrogate of the joint utility difference: bilinear term plus a
+    # candidate-only main effect, so (r, c) alone reproduce u_L - u_R.
+    return(left_logits - right_logits + strenv$jnp$einsum(
+      "nm,mo->no", cand_left_final - cand_right_final, neural_tower_candidate_head(params)
+    ))
+  }
   left_logits - right_logits
 }
 
@@ -8993,13 +9147,18 @@ neural_low_rank_single_utility_prepared <- function(params,
     transformer_model_info = transformer_model_info,
     candidate_info = candidate_info
   )
-  neural_low_rank_interaction_logits(
+  delta <- neural_low_rank_interaction_logits(
     respondent_final = resp_readout$final,
     candidate_final = cand_readout$final,
     params = params,
     out_dim = out_dim %||% ai(params$W_rc_out$shape[[2]]),
-    dtype = dtype
+    dtype = dtype,
+    surrogate = neural_tower_only(params)
   )
+  if (!neural_tower_only(params)) {
+    return(delta)
+  }
+  delta + strenv$jnp$einsum("nm,mo->no", cand_readout$final, params$W_to_cand)
 }
 
 neural_run_transformer_scan_standard <- function(tokens,
@@ -9675,7 +9834,7 @@ neural_predict_pair_core_prepared <- function(params,
       logits <- 0.5 * (logits - logits_rev)
     }
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
-      logits <- logits + neural_low_rank_pair_delta_prepared(
+      logits <- neural_combine_tower_term(logits, neural_low_rank_pair_delta_prepared(
         params = params,
         model_info = model_info,
         Xl = Xl,
@@ -9695,7 +9854,7 @@ neural_predict_pair_core_prepared <- function(params,
         context_present = context_present,
         out_dim = ai(logits$shape[[2]]),
         dtype = logits$dtype
-      )
+      ), params)
     }
     logits <- logits + neural_additive_pair_delta_prepared(
       params = params,
@@ -9847,7 +10006,7 @@ neural_predict_pair_core_prepared <- function(params,
     )
     logits <- u_l - u_r
     if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
-      logits <- logits + neural_low_rank_pair_delta_prepared(
+      logits <- neural_combine_tower_term(logits, neural_low_rank_pair_delta_prepared(
         params = params,
         model_info = model_info,
         Xl = Xl,
@@ -9867,7 +10026,7 @@ neural_predict_pair_core_prepared <- function(params,
         context_present = context_present,
         out_dim = ai(logits$shape[[2]]),
         dtype = logits$dtype
-      )
+      ), params)
     }
     if (isTRUE(use_cross_term)) {
       logits <- neural_apply_cross_term(
@@ -9990,7 +10149,7 @@ neural_predict_single_core_prepared <- function(params,
   )
   logits <- neural_linear_head(choice_out, params$W_out, params$b_out)
   if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
-    logits <- logits + neural_low_rank_single_utility_prepared(
+    logits <- neural_combine_tower_term(logits, neural_low_rank_single_utility_prepared(
       params = params,
       model_info = model_info,
       X_idx = Xb,
@@ -10005,7 +10164,7 @@ neural_predict_single_core_prepared <- function(params,
       factor_order = factor_order,
       out_dim = ai(logits$shape[[2]]),
       dtype = logits$dtype
-    )
+    ), params)
   }
   logits <- logits + neural_additive_single_logits_prepared(
     params = params,
@@ -11735,6 +11894,8 @@ generate_ModelOutcome_neural <- function(){
     transformer_moe = NULL,
     residual_weight_depth_scale = "floor_one",
     svi_lr_plate_rescale = TRUE,
+    svi_lr_batch_scaling = "none",
+    svi_lr_reference_batch_size = 64L,
     # For single-candidate normal outcomes, optimize/report the average-case
     # linear (main + 2-way OLS) Q surrogate instead of the neural soft
     # prediction. Announced via message when active; set FALSE to optimize the
@@ -12846,6 +13007,17 @@ generate_ModelOutcome_neural <- function(){
       0L
   )
   neural_token_info_use$low_rank_interaction_rank <- low_rank_interaction_rank
+  tower_sufficiency <- neural_resolve_tower_sufficiency(
+    mcmc_control$tower_sufficiency %||% NULL,
+    low_rank_interaction_rank = low_rank_interaction_rank
+  )
+  mcmc_control$tower_sufficiency <- tower_sufficiency
+  if (isTRUE(tower_sufficiency$enabled) && strategize_dp_enabled()) {
+    stop("tower_sufficiency is currently qualified for one device; disable data parallelism.", call. = FALSE)
+  }
+  strenv$tower_sufficiency_weight <- tower_sufficiency$weight
+  strenv$tower_sufficiency_active <- FALSE
+  strenv$tower_sufficiency_pending <- list()
   low_rank_logit_transform <- if (isTRUE(low_rank_logit_transform_supplied)) {
     neural_normalize_low_rank_logit_transform(low_rank_logit_transform_control)
   } else {
@@ -15581,6 +15753,8 @@ generate_ModelOutcome_neural <- function(){
     }
 
     alpha_rc <- NULL
+    W_ts_cand <- NULL
+    W_to_cand <- NULL
     W_rc_r <- NULL
     W_rc_c <- NULL
     W_rc_out <- NULL
@@ -15630,6 +15804,28 @@ generate_ModelOutcome_neural <- function(){
         is_output_layer = TRUE
       )
       alpha_rc <- p2d_deterministic_gate("alpha_rc")
+      if (isTRUE(tower_sufficiency$enabled)) {
+        # Candidate main-effect head of the tower utility. Tower-only mode
+        # (W_to_cand) predicts with it for every output column; distillation
+        # (W_ts_cand) only needs the pairwise column.
+        ts_name <- if (identical(tower_sufficiency$mode, "tower_only")) "W_to_cand" else "W_ts_cand"
+        ts_shape <- reticulate::tuple(ModelDims, if (identical(ts_name, "W_to_cand")) output_dim else 1L)
+        ts_head <- p2d(
+          name = ts_name,
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              ts_name,
+              strenv$numpyro$distributions$Normal(0., rc_out_sd),
+              sample_shape = ts_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal(ts_name, rc_out_sd, ts_shape)
+          },
+          is_output_layer = TRUE
+        )
+        if (identical(ts_name, "W_to_cand")) W_to_cand <- ts_head else W_ts_cand <- ts_head
+      }
     }
 
     sigma <- NULL
@@ -15789,6 +15985,8 @@ generate_ModelOutcome_neural <- function(){
       params_view$W_rc_r <- W_rc_r
       params_view$W_rc_c <- W_rc_c
       params_view$W_rc_out <- W_rc_out
+      if (!is.null(W_ts_cand)) params_view$W_ts_cand <- W_ts_cand
+      if (!is.null(W_to_cand)) params_view$W_to_cand <- W_to_cand
     }
     if (!is.null(log_pairwise_bernoulli_logit_scale)) {
       params_view$log_pairwise_bernoulli_logit_scale <- log_pairwise_bernoulli_logit_scale
@@ -16518,7 +16716,7 @@ generate_ModelOutcome_neural <- function(){
           logits <- 0.5 * (logits - logits_rev)
         }
         if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
-          logits <- logits + neural_low_rank_pair_delta_prepared(
+          low_rank_term <- neural_low_rank_pair_delta_prepared(
             params = params_view,
             model_info = model_info_local,
             Xl = Xl,
@@ -16537,8 +16735,16 @@ generate_ModelOutcome_neural <- function(){
             schema_dropout_right = schema_dropout_right,
             transformer_model_info = transformer_model_info,
             out_dim = ai(logits$shape[[2]]),
-            dtype = logits$dtype
+            dtype = logits$dtype,
+            surrogate = neural_has_tower_sufficiency(params_view)
           )
+          if (neural_tower_only(params_view)) {
+            logits <- low_rank_term
+          } else if (neural_has_tower_sufficiency(params_view)) {
+            neural_collect_tower_sufficiency(logits, low_rank_term, obs_scale_b)
+          } else {
+            logits <- logits + low_rank_term
+          }
         }
         logits <- logits + neural_additive_pair_delta_prepared(
           params = params_view,
@@ -16597,7 +16803,7 @@ generate_ModelOutcome_neural <- function(){
         )
         logits <- u_l - u_r
         if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
-          logits <- logits + neural_low_rank_pair_delta_prepared(
+          low_rank_term <- neural_low_rank_pair_delta_prepared(
             params = params_view,
             model_info = model_info_local,
             Xl = Xl,
@@ -16618,8 +16824,16 @@ generate_ModelOutcome_neural <- function(){
             out_dim = ai(logits$shape[[2]]),
             dtype = logits$dtype,
             context_info = phi_pair$context_info,
-            candidate_info = phi_pair$candidate_info
+            candidate_info = phi_pair$candidate_info,
+            surrogate = neural_has_tower_sufficiency(params_view)
           )
+          if (neural_tower_only(params_view)) {
+            logits <- low_rank_term
+          } else if (neural_has_tower_sufficiency(params_view)) {
+            neural_collect_tower_sufficiency(logits, low_rank_term, obs_scale_b)
+          } else {
+            logits <- logits + low_rank_term
+          }
         }
         if (isTRUE(use_cross_term)) {
           logits <- neural_apply_cross_term(logits, phi_l, phi_r,
@@ -16719,7 +16933,7 @@ generate_ModelOutcome_neural <- function(){
       )
       logits <- neural_linear_head(phi, W_out, b_out)
       if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
-        logits <- logits + neural_low_rank_single_utility_prepared(
+        logits <- neural_combine_tower_term(logits, neural_low_rank_single_utility_prepared(
           params = params_view,
           model_info = model_info_local,
           X_idx = Xb,
@@ -16734,7 +16948,7 @@ generate_ModelOutcome_neural <- function(){
           out_dim = ai(logits$shape[[2]]),
           dtype = logits$dtype,
           context_info = ctx_info, candidate_info = cand_info
-        )
+        ), params_view)
       }
       logits <- logits + neural_additive_single_logits_prepared(
         params = params_view,
@@ -16878,6 +17092,7 @@ generate_ModelOutcome_neural <- function(){
       n_tot
     }
     neural_emit_moe_load_balance_factor(moe_n_total)
+    neural_emit_tower_sufficiency_factor(moe_n_total)
   }
 
   BayesianSingleTransformerModel <- function(X, party, resp_party, resp_cov,
@@ -17094,7 +17309,7 @@ generate_ModelOutcome_neural <- function(){
       )
       logits <- neural_linear_head(choice_out, W_out, b_out)
       if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
-        logits <- logits + neural_low_rank_single_utility_prepared(
+        logits <- neural_combine_tower_term(logits, neural_low_rank_single_utility_prepared(
           params = params_view,
           model_info = model_info_local,
           X_idx = Xb,
@@ -17109,7 +17324,7 @@ generate_ModelOutcome_neural <- function(){
           out_dim = ai(logits$shape[[2]]),
           dtype = logits$dtype,
           context_info = ctx_info, candidate_info = cand_info
-        )
+        ), params_view)
       }
       logits <- logits + neural_additive_single_logits_prepared(
         params = params_view,
@@ -17189,6 +17404,9 @@ generate_ModelOutcome_neural <- function(){
       } else {
         as.numeric(N_local)
       }
+    )
+    neural_emit_tower_sufficiency_factor(
+      if (isTRUE(compact_training)) as.numeric(compact_model_n_obs) else as.numeric(N_local)
     )
   }
 
@@ -18788,7 +19006,7 @@ generate_ModelOutcome_neural <- function(){
         "sigma",
         "W_cross_out",
         "M_cross", "M_cross_raw", "tau_cross",
-        "alpha_rc", "W_rc_out",
+        "alpha_rc", "W_rc_out", "W_ts_cand", "W_to_cand",
         "log_pairwise_bernoulli_logit_scale",
         "log_calibration_scale"
       )
@@ -18943,6 +19161,8 @@ generate_ModelOutcome_neural <- function(){
     W_rc_c_value <- get_loc_scale_site_value("W_rc_c", "tau_rc")
     maybe_site("W_rc_c", value = W_rc_c_value)
     maybe_site("W_rc_out")
+    maybe_site("W_ts_cand")
+    maybe_site("W_to_cand")
     maybe_site("log_pairwise_bernoulli_logit_scale")
     if (!is.null(params_out$log_pairwise_bernoulli_logit_scale)) {
       params_out$pairwise_bernoulli_logit_scale <- strenv$jnp$exp(
@@ -19966,6 +20186,27 @@ generate_ModelOutcome_neural <- function(){
         ))
       }
     }
+    svi_lr_batch_base <- svi_lr
+    svi_lr_batch_factor <- 1
+    # Compact training minibatches with batch_size even though its plate
+    # method is "full", so gate on the requested subsampling method.
+    if (identical(svi_subsample_method, "batch_vi")) {
+      svi_lr_batch_factor <- neural_svi_lr_batch_scale(
+        batch_size = mcmc_control$batch_size,
+        n_obs = n_obs_svi,
+        mode = mcmc_control$svi_lr_batch_scaling,
+        reference = mcmc_control$svi_lr_reference_batch_size
+      )
+      if (!isTRUE(all.equal(svi_lr_batch_factor, 1))) {
+        svi_lr <- svi_lr * svi_lr_batch_factor
+        message(sprintf(
+          "SVI LR batch scaling (%s): batch=%d, reference=%s -> lr %.5g x %.4f = %.5g",
+          mcmc_control$svi_lr_batch_scaling, as.integer(min(as.numeric(mcmc_control$batch_size), n_obs_svi)),
+          format(mcmc_control$svi_lr_reference_batch_size), svi_lr_batch_base, svi_lr_batch_factor, svi_lr
+        ))
+      }
+    }
+    mcmc_control$svi_lr_batch_scale_factor <- svi_lr_batch_factor
     svi_budget_info <- neural_resolve_svi_budget(
       svi_steps_input = mcmc_control$svi_steps,
       svi_num_draws_input = mcmc_control$svi_num_draws,
@@ -20282,6 +20523,8 @@ generate_ModelOutcome_neural <- function(){
     # prediction so it never perturbs predictive outputs.
     strenv$moe_aux_active <- TRUE
     on.exit(strenv$moe_aux_active <- FALSE, add = TRUE)
+    strenv$tower_sufficiency_active <- TRUE
+    on.exit(strenv$tower_sufficiency_active <- FALSE, add = TRUE)
     svi_model_args <- if (isTRUE(compact_training)) {
       compact_batch_args(compact_sample_obs_idx())
     } else if (isTRUE(universal_mixed_mode)) {
@@ -22485,6 +22728,12 @@ generate_ModelOutcome_neural <- function(){
       "ok"
     }
     optimizer_diagnostics$universal_loss_weighting <- universal_loss_weighting_diagnostics
+    optimizer_diagnostics$svi_lr_batch_scaling <- list(
+      mode = as.character(mcmc_control$svi_lr_batch_scaling %||% "none"),
+      reference_batch_size = mcmc_control$svi_lr_reference_batch_size %||% NA,
+      factor = mcmc_control$svi_lr_batch_scale_factor %||% 1,
+      base_lr = suppressWarnings(as.numeric(mcmc_control$svi_lr))
+    )
     if (!is.null(transformer_moe) && !is.null(svi_state)) {
       optimizer_diagnostics$transformer_moe <- lapply(
         strenv$jax_moe$diagnostics(strategize_dp_local(svi_state)), cs2step_neural_to_r_array)
@@ -22944,6 +23193,8 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_rc_r")
   maybe_site("W_rc_c")
   maybe_site("W_rc_out")
+  maybe_site("W_ts_cand")
+  maybe_site("W_to_cand")
   maybe_site("log_pairwise_bernoulli_logit_scale")
   maybe_site("log_calibration_scale")
   if (!is.null(ParamsMean$log_calibration_scale)) {
@@ -23923,7 +24174,7 @@ generate_ModelOutcome_neural <- function(){
   }
   if (uncertainty_scope == "output") {
     keep <- param_names %in% c(
-      "W_out", "W_add_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out",
+      "W_out", "W_add_out", "b_out", "sigma", "W_cross_out", "alpha_rc", "W_rc_out", "W_ts_cand", "W_to_cand",
       "log_pairwise_bernoulli_logit_scale", "log_calibration_scale",
       "ordinal_threshold_raw", "ordinal_thresholds"
     )
