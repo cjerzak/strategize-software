@@ -109,6 +109,7 @@ cs2step_neural_factor_schema_known_fields <- function() {
     "p_list",
     "factor_name_text",
     "level_name_text",
+    "level_aux_text",
     "factor_struct_matrix",
     "level_struct_matrices",
     "factor_struct_feature_names",
@@ -1293,6 +1294,37 @@ cs2step_neural_schema_level_text <- function(schema,
   }), factor_names)
 }
 
+# Auxiliary level text for a prediction-time schema: supplied rows, or the
+# distinctive part of each level (neural_level_distinctive_text) embedded with
+# text_embedding_fn. Without either, the auxiliary pathway is dropped (its
+# projection then adds nothing) and a warning says so.
+cs2step_neural_schema_level_aux_text <- function(schema, names_list, text_dim, text_embedding_fn = NULL) {
+  factor_names <- names(names_list)
+  if (!is.null(schema$level_aux_text)) {
+    supplied <- schema$level_aux_text
+    if (!is.null(names(supplied))) supplied <- supplied[factor_names]
+    return(lapply(supplied, as.matrix))
+  }
+  if (is.null(text_embedding_fn)) {
+    warning("The model uses auxiliary level text but no text_embedding_fn or factor_schema$level_aux_text ",
+            "was supplied; predicting without it.", call. = FALSE)
+    return(NULL)
+  }
+  setNames(lapply(factor_names, function(factor_name) {
+    levels_here <- as.character(names_list[[factor_name]][[1]])
+    out <- matrix(0, nrow = length(levels_here) + 1L, ncol = text_dim)
+    rownames(out) <- c(levels_here, "__holdout__")
+    if (length(levels_here) > 0L) {
+      emb <- cs_foundation_text_embed(text_embedding_fn, neural_level_distinctive_text(levels_here))
+      if (ncol(emb) != text_dim) {
+        stop("text_embedding_fn returned auxiliary level embeddings with incompatible width.", call. = FALSE)
+      }
+      out[seq_along(levels_here), ] <- emb
+    }
+    out
+  }), factor_names)
+}
+
 cs2step_neural_struct_feature_names <- function(model_info,
                                                 kind = c("factor", "level")) {
   kind <- match.arg(kind)
@@ -1607,6 +1639,18 @@ cs2step_neural_prepare_factor_schema_prediction <- function(object,
   )
   model_info_new$factor_name_text <- factor_name_text
   model_info_new$level_name_text <- level_name_text
+  # A model trained with auxiliary level text needs it for the new schema too;
+  # the training-schema list must never carry over to new factor positions.
+  model_info_new$level_aux_text <- if (is.null(model_info$level_aux_text)) {
+    NULL
+  } else {
+    cs2step_neural_schema_level_aux_text(
+      schema,
+      names_list = names_list,
+      text_dim = text_dim,
+      text_embedding_fn = text_fn
+    )
+  }
   model_info_new$factor_struct_matrix <- structural_info$factor_struct_matrix
   model_info_new$factor_struct_feature_names <- structural_info$factor_struct_feature_names
   model_info_new$factor_struct_dim <- as.integer(ncol(structural_info$factor_struct_matrix))
@@ -3575,6 +3619,11 @@ cs2step_neural_pack_model_info <- function(model_info, drop_params = TRUE) {
   }
   if (!is.null(out$level_name_text)) {
     out$level_name_text <- lapply(out$level_name_text, function(x) {
+      as.matrix(cs2step_neural_to_r_array(x))
+    })
+  }
+  if (!is.null(out$level_aux_text)) {
+    out$level_aux_text <- lapply(out$level_aux_text, function(x) {
       as.matrix(cs2step_neural_to_r_array(x))
     })
   }

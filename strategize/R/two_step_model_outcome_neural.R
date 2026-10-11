@@ -477,6 +477,7 @@ neural_text_pathway_specs <- function() {
     factor_name = list(weight = "W_factor_name_text", field = "factor_name_text"),
     level_name = list(weight = "W_level_name_text", field = "level_name_text"),
     level_contrast = list(weight = "W_level_contrast_text", field = "level_name_text"),
+    level_aux = list(weight = "W_level_aux_text", field = "level_aux_text"),
     experiment = list(weight = "W_experiment_text", field = "experiment_description_text"),
     covariate_name = list(weight = "W_covariate_name_text", field = "covariate_name_text"),
     covariate_value = list(weight = "W_covariate_value_text", field = "covariate_value_text")
@@ -1993,6 +1994,9 @@ neural_build_param_schema <- function(params,
   if (!is.null(params$W_level_contrast_text)) {
     param_names <- c(param_names, "W_level_contrast_text")
   }
+  if (!is.null(params$W_level_aux_text)) {
+    param_names <- c(param_names, "W_level_aux_text")
+  }
   if (!is.null(params$W_factor_struct)) {
     param_names <- c(param_names, "W_factor_struct")
   }
@@ -2649,7 +2653,7 @@ neural_level_text_contrast <- function(model_info) {
   identical(model_info$level_text_encoding %||% "global", "factor_contrast")
 }
 
-neural_project_level_text <- function(text_matrix, params, model_info) {
+neural_project_level_text <- function(text_matrix, params, model_info, aux_matrix = NULL) {
   normalizer <- model_info$text_embedding_normalizer
   proj <- neural_project_text_matrix(
     text_matrix,
@@ -2665,7 +2669,48 @@ neural_project_level_text <- function(text_matrix, params, model_info) {
       contrast = TRUE
     )
   }
+  # Auxiliary level text (the level's distinctive part within its factor)
+  # enters through its own projection; absent rows are zero and stay zero.
+  if (!is.null(proj) && !is.null(params$W_level_aux_text) && !is.null(aux_matrix)) {
+    aux <- neural_project_text_matrix(aux_matrix, params$W_level_aux_text, normalizer = normalizer)
+    if (!is.null(aux)) {
+      proj <- proj + aux
+    }
+  }
   proj
+}
+
+# The distinctive part of each level within its factor: the level minus the
+# longest runs of leading and trailing whitespace-separated tokens shared by
+# every level ("Stronger than in Nicaragua" -> "Stronger than in" next to
+# "Weaker than in Nicaragua"). Falls back to the full level when a remainder
+# would be empty or the remainders are not unique.
+neural_level_distinctive_text <- function(levels) {
+  levels <- as.character(levels)
+  if (length(levels) < 2L) {
+    return(levels)
+  }
+  tokens <- strsplit(trimws(levels), "[[:space:]]+")
+  lens <- lengths(tokens)
+  if (any(lens == 0L)) {
+    return(levels)
+  }
+  shared_at <- function(pick) length(unique(vapply(tokens, pick, character(1)))) == 1L
+  pre <- 0L
+  while (all(lens > pre) && shared_at(function(t) t[[pre + 1L]])) {
+    pre <- pre + 1L
+  }
+  suf <- 0L
+  while (all(lens > pre + suf) && shared_at(function(t) t[[length(t) - suf]])) {
+    suf <- suf + 1L
+  }
+  out <- vapply(tokens, function(t) {
+    paste(t[seq.int(pre + 1L, length.out = length(t) - pre - suf)], collapse = " ")
+  }, character(1))
+  if (any(!nzchar(out)) || anyDuplicated(out)) {
+    return(levels)
+  }
+  out
 }
 
 neural_bounded_signed_log1p <- function(x, scale = 4) {
@@ -3183,7 +3228,8 @@ neural_make_runtime_token_model_info <- function(model_dims,
                                                  schema_dropout = NULL,
                                                  text_embedding_normalizer = NULL,
                                                  struct_feature_encoding = NULL,
-                                                 level_text_encoding = NULL) {
+                                                 level_text_encoding = NULL,
+                                                 level_aux_text = NULL) {
   text_matrix <- function(x) neural_as_jnp_matrix(x, dtype = strenv$dtj)
   text_matrix_list <- function(x) {
     if (is.null(x)) {
@@ -3342,7 +3388,31 @@ neural_make_runtime_token_model_info <- function(model_dims,
   if (!is.null(level_text_encoding)) {
     info$level_text_encoding <- neural_resolve_level_text_encoding(level_text_encoding)
   }
+  # Auxiliary level rows belong to the level text they were built with: when
+  # level_name_text is supplied, level_aux_text is always present (NULL when
+  # absent), so patching a saved model info replaces or removes stale rows.
+  if (!is.null(level_aux_text)) {
+    neural_validate_level_aux_text(level_aux_text, level_name_text)
+    info$level_aux_text <- text_matrix_list(level_aux_text)
+  } else if (!is.null(level_name_text)) {
+    info["level_aux_text"] <- list(NULL)
+  }
   info
+}
+
+neural_validate_level_aux_text <- function(level_aux_text, level_name_text) {
+  if (is.null(level_aux_text)) {
+    return(invisible(TRUE))
+  }
+  rows <- function(x) as.integer(neural_dim2(x)[[1L]])
+  if (!is.list(level_aux_text) || length(level_aux_text) != length(level_name_text) ||
+      !all(vapply(seq_along(level_aux_text), function(d) {
+        rows(level_aux_text[[d]]) == rows(level_name_text[[d]])
+      }, logical(1)))) {
+    stop("level_aux_text must hold one matrix per factor with the rows of level_name_text.",
+         call. = FALSE)
+  }
+  invisible(TRUE)
 }
 
 neural_set_pairwise_context_model_info <- function(info,
@@ -8266,7 +8336,8 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
       level_text_proj <- neural_project_level_text(
         model_info$level_name_text[[d_]],
         params,
-        model_info
+        model_info,
+        aux_matrix = if (length(model_info$level_aux_text) >= d_) model_info$level_aux_text[[d_]]
       )
       if (!is.null(level_text_proj)) {
         idx_d <- strenv$jnp$take(X_idx, ai(d_ - 1L), axis = 1L)
@@ -8540,7 +8611,8 @@ neural_build_factor_fused_tokens_soft <- function(pi_vec,
       level_text_proj <- neural_project_level_text(
         model_info$level_name_text[[d_]],
         params,
-        model_info
+        model_info,
+        aux_matrix = if (length(model_info$level_aux_text) >= d_) model_info$level_aux_text[[d_]]
       )
       if (!is.null(level_text_proj)) {
         p_text <- match_probability_width(p_full, level_text_proj$shape[[1]])
@@ -12906,6 +12978,8 @@ generate_ModelOutcome_neural <- function(){
   max_covariate_tokens <- as.integer(neural_token_info_use$max_covariate_tokens)
   factor_name_text <- neural_token_info_use$factor_name_text %||% NULL
   level_name_text <- neural_token_info_use$level_name_text %||% NULL
+  level_aux_text <- neural_token_info_use$level_aux_text %||% NULL
+  neural_validate_level_aux_text(level_aux_text, level_name_text)
   factor_struct_matrix <- neural_token_info_use$factor_struct_matrix %||% NULL
   level_struct_matrices <- neural_token_info_use$level_struct_matrices %||% NULL
   factor_struct_feature_names <- as.character(
@@ -14951,6 +15025,7 @@ generate_ModelOutcome_neural <- function(){
     W_factor_name_text <- NULL
     W_level_name_text <- NULL
     W_level_contrast_text <- NULL
+    W_level_aux_text <- NULL
     W_factor_struct <- NULL
     W_level_struct <- NULL
     W_covariate_name_text <- NULL
@@ -15032,6 +15107,21 @@ generate_ModelOutcome_neural <- function(){
           },
           init_fxn = function() {
             p2d_init_normal("W_level_contrast_text", text_proj_sd, text_proj_shape)
+          }
+        )
+      }
+      if (!is.null(level_aux_text)) {
+        W_level_aux_text <- p2d(
+          name = "W_level_aux_text",
+          sample_fxn = function() {
+            strenv$numpyro$sample(
+              "W_level_aux_text",
+              strenv$numpyro$distributions$Normal(0., text_proj_sd),
+              sample_shape = text_proj_shape
+            )
+          },
+          init_fxn = function() {
+            p2d_init_normal("W_level_aux_text", text_proj_sd, text_proj_shape)
           }
         )
       }
@@ -16031,6 +16121,9 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(W_level_contrast_text)) {
       params_view$W_level_contrast_text <- W_level_contrast_text
     }
+    if (!is.null(W_level_aux_text)) {
+      params_view$W_level_aux_text <- W_level_aux_text
+    }
     if (!is.null(W_factor_struct)) {
       params_view$W_factor_struct <- W_factor_struct
     }
@@ -16473,6 +16566,7 @@ generate_ModelOutcome_neural <- function(){
       n_party_levels = ai(n_party_levels),
       factor_name_text = factor_name_text,
       level_name_text = level_name_text,
+      level_aux_text = level_aux_text,
       factor_struct_matrix = factor_struct_matrix,
       level_struct_matrices = level_struct_matrices,
       factor_struct_feature_names = factor_struct_feature_names,
@@ -17286,6 +17380,7 @@ generate_ModelOutcome_neural <- function(){
       n_party_levels = ai(n_party_levels),
       factor_name_text = factor_name_text,
       level_name_text = level_name_text,
+      level_aux_text = level_aux_text,
       factor_struct_matrix = factor_struct_matrix,
       level_struct_matrices = level_struct_matrices,
       factor_struct_feature_names = factor_struct_feature_names,
@@ -19243,6 +19338,7 @@ generate_ModelOutcome_neural <- function(){
     maybe_site("W_factor_name_text")
     maybe_site("W_level_name_text")
     maybe_site("W_level_contrast_text")
+    maybe_site("W_level_aux_text")
     maybe_site("W_factor_struct")
     maybe_site("W_level_struct")
     maybe_site("W_covariate_name_text")
@@ -19433,6 +19529,7 @@ generate_ModelOutcome_neural <- function(){
   validation_model_info$pairwise_bernoulli_logit_scale_prior_sd <- pairwise_bernoulli_logit_scale_prior_sd
   validation_model_info$factor_name_text <- factor_name_text
   validation_model_info$level_name_text <- level_name_text
+  validation_model_info$level_aux_text <- level_aux_text
   validation_model_info$factor_struct_matrix <- factor_struct_matrix
   validation_model_info$level_struct_matrices <- level_struct_matrices
   validation_model_info$factor_struct_feature_names <- factor_struct_feature_names
@@ -23269,6 +23366,7 @@ generate_ModelOutcome_neural <- function(){
   maybe_site("W_factor_name_text")
   maybe_site("W_level_name_text")
   maybe_site("W_level_contrast_text")
+  maybe_site("W_level_aux_text")
   maybe_site("W_factor_struct")
   maybe_site("W_level_struct")
   maybe_site("W_covariate_name_text")
@@ -23511,6 +23609,7 @@ generate_ModelOutcome_neural <- function(){
   predict_model_info$pairwise_bernoulli_logit_scale_prior_sd <- pairwise_bernoulli_logit_scale_prior_sd
   predict_model_info$factor_name_text <- factor_name_text
   predict_model_info$level_name_text <- level_name_text
+  predict_model_info$level_aux_text <- level_aux_text
   predict_model_info$factor_struct_matrix <- factor_struct_matrix
   predict_model_info$level_struct_matrices <- level_struct_matrices
   predict_model_info$factor_struct_feature_names <- factor_struct_feature_names
@@ -24618,6 +24717,7 @@ generate_ModelOutcome_neural <- function(){
     has_time_context = !is.null(ParamsMean$W_time_context),
     has_factor_name_text = !is.null(ParamsMean$W_factor_name_text) && text_semantic_dim > 0L,
     has_level_name_text = !is.null(ParamsMean$W_level_name_text) && text_semantic_dim > 0L,
+    has_level_aux_text = !is.null(ParamsMean$W_level_aux_text),
     has_factor_struct_projection = !is.null(ParamsMean$W_factor_struct) && factor_struct_dim > 0L,
     has_level_struct_projection = !is.null(ParamsMean$W_level_struct) && level_struct_dim > 0L,
     has_covariate_name_text = !is.null(ParamsMean$W_covariate_name_text) && text_semantic_dim > 0L,
@@ -24715,6 +24815,9 @@ generate_ModelOutcome_neural <- function(){
     transformer_attention = transformer_attention,
     transformer_loop = transformer_loop
   )
+  if (!is.null(level_aux_text)) {
+    neural_model_info$level_aux_text <- level_aux_text
+  }
 
   if (isTRUE(save_outcome_model) && !isTRUE(neural_oos_eval_internal_flag)) {
     dir.create("./StrategizeInternals", showWarnings = FALSE)

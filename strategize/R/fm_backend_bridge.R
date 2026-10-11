@@ -38,7 +38,8 @@ strategize_fm_backend <- function() {
       "checkpoint_restore_helpers",
       "training_row_validity_guard",
       "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1", "mla_dsa_v1",
-      "looped_transformer_v1", "looped_transformer_v2", "strict_muon_optimizer_v1"
+      "looped_transformer_v1", "looped_transformer_v2", "strict_muon_optimizer_v1",
+      "level_aux_text_v1"
     ),
     `%||%` = `%||%`,
     initialize_jax = initialize_jax,
@@ -78,6 +79,7 @@ strategize_fm_backend <- function() {
     neural_validate_text_embedding_normalizer = neural_validate_text_embedding_normalizer,
     neural_resolve_struct_feature_encoding = neural_resolve_struct_feature_encoding,
     neural_resolve_level_text_encoding = neural_resolve_level_text_encoding,
+    neural_level_distinctive_text = neural_level_distinctive_text,
     neural_struct_cardinality_feature = neural_struct_cardinality_feature,
     neural_struct_raw_value_feature = neural_struct_raw_value_feature,
     neural_validate_factor_token_budget = neural_validate_factor_token_budget,
