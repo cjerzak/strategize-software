@@ -77,6 +77,7 @@ strategize_fm_backend <- function() {
     neural_resolve_text_embedding_normalization = neural_resolve_text_embedding_normalization,
     neural_validate_text_embedding_normalizer = neural_validate_text_embedding_normalizer,
     neural_resolve_struct_feature_encoding = neural_resolve_struct_feature_encoding,
+    neural_resolve_level_text_encoding = neural_resolve_level_text_encoding,
     neural_struct_cardinality_feature = neural_struct_cardinality_feature,
     neural_struct_raw_value_feature = neural_struct_raw_value_feature,
     neural_validate_factor_token_budget = neural_validate_factor_token_budget,
