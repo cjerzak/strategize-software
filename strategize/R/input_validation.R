@@ -686,9 +686,9 @@ validate_strategize_inputs <- function(Y, W, X = NULL, lambda,
   if (!is.null(neural_mcmc_control) &&
       !is.null(neural_mcmc_control$uncertainty_scope)) {
     scope_val <- tolower(as.character(neural_mcmc_control$uncertainty_scope))
-    if (!scope_val %in% c("all", "output")) {
+    if (!scope_val %in% c("all", "output", "none")) {
       stop(
-        "'neural_mcmc_control$uncertainty_scope' must be 'all' or 'output'.",
+        "'neural_mcmc_control$uncertainty_scope' must be 'all', 'output', or 'none'.",
         call. = FALSE
       )
     }

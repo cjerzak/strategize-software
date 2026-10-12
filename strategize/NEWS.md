@@ -1,3 +1,20 @@
+# Development: October 11, 2026 maximum-likelihood fits and residual init policy
+
+- `neural_mcmc_control$uncertainty_scope = "none"` fits every site as a point
+  estimate: no priors or hyperpriors, no KL term and no variational guide, so
+  the objective is the per-observation-normalized log-likelihood plus the
+  existing auxiliary factors. `theta_var` is zero; interval draws and
+  `compute_se = TRUE` stop with an explicit error. The default remains `"all"`.
+- `neural_mcmc_control$residual_gate_init` sets the initial value of the trunk
+  residual gates (`alpha_attn_l*`, `alpha_ff_l*`; still trained), and
+  `output_proj_init = "depth_scaled"` multiplies the init sd of the projections
+  that write into the residual stream (`W_o`, `W_ff2`, MoE `expert2`/`shared2`)
+  by `1/sqrt(2 * effective depth)`. Both default to the previous behaviour. In
+  the v2r3 foundation fit the 0.035-0.05 gates left the 14-block trunk
+  functionally inert (removing it changed held-out AUC by 0.002).
+- `strategize_fm_backend()` advertises `uncertainty_scope_none_v1` and
+  `residual_init_policy_v1`.
+
 # Development: September 12, 2026 text-embedding input normalization
 
 - Schema text embeddings are centered with the mean of the training schema

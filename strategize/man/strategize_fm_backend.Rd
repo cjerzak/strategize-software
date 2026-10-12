@@ -34,5 +34,12 @@ previously had to infer by source-sniffing or \code{formals()} probing:
     dependencies or guides and verifies the actual momentum partition.}
   \item{\code{training_row_validity_guard}}{Universal training validates
     outcome rows against their declared family at ingestion.}
+  \item{\code{uncertainty_scope_none_v1}}{\code{uncertainty_scope = "none"}
+    fits every site as a point estimate (pure maximum likelihood: no priors,
+    no KL term, no variational guide); \code{theta_var} is zero.}
+  \item{\code{residual_init_policy_v1}}{\code{neural_mcmc_control} accepts
+    \code{residual_gate_init} (initial value of the trunk residual gates) and
+    \code{output_proj_init = "depth_scaled"} (residual-writing projections
+    start at \eqn{1/\sqrt{2 \cdot depth}} of their regular init sd).}
 }
 }

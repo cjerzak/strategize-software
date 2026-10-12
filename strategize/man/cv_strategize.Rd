@@ -216,7 +216,8 @@ for a neural-network approximation. Defaults to \code{"glm"}.}
 \item{neural_mcmc_control}{Optional list overriding default MCMC settings used when
 \code{outcome_model_type = "neural"}. Use
 \code{neural_mcmc_control$uncertainty_scope = "output"} to restrict delta-method
-uncertainty to output-layer parameters. In adversarial neural mode, set
+uncertainty to output-layer parameters, or \code{"none"} for a pure
+maximum-likelihood fit (requires \code{compute_se = FALSE}). In adversarial neural mode, set
 \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG models
 (default is 1 for a single differential model). Use
 \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth}

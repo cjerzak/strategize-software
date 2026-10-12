@@ -11,6 +11,15 @@ import optax
 _tree_norm = getattr(getattr(optax, "tree", None), "norm", optax.global_norm)
 
 
+def point_estimate_guide(*args, **kwargs):
+    """Empty guide for uncertainty_scope = "none" (pure maximum likelihood).
+
+    The model then has no latent sites, so Trace_ELBO reduces to the scaled
+    log-likelihood plus any auxiliary factors, and SVI only optimizes params.
+    """
+    return None
+
+
 def _states(tree, name):
     """Inspect named Optax states without transferring parameter arrays to host."""
     match = lambda x: type(x).__name__ == name

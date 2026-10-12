@@ -3273,6 +3273,14 @@ cs2step_neural_predict_internal <- function(object,
     return(pred)
   }
 
+  if (identical(tolower(as.character(model_info$uncertainty_scope %||% "")), "none")) {
+    stop(
+      "This neural predictor was fit by maximum likelihood (uncertainty_scope = 'none') ",
+      "and has no posterior for interval draws; refit with uncertainty_scope = 'output' ",
+      "or use interval = 'none'.",
+      call. = FALSE
+    )
+  }
   theta_mean <- object$fit$theta_mean
   theta_var <- object$fit$theta_var
   if (length(theta_mean) != length(theta_var) || length(theta_mean) == 0L) {

@@ -229,7 +229,12 @@ best parameters on the host, and saves full-state checkpoints with raw,
 parameter-free metadata. Legacy parameter-only checkpoints remain readable.
 Set
 \code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
-uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
+uncertainty using only the output-layer parameters (default is \code{"all"}), or
+\code{"none"} for a pure maximum-likelihood fit with no posterior (requires
+\code{compute_se = FALSE}). \code{neural_mcmc_control$residual_gate_init} sets the
+initial trunk residual gate and \code{neural_mcmc_control$output_proj_init =
+"depth_scaled"} starts the residual-writing projections at
+\eqn{1/\sqrt{2 \cdot depth}} of their regular init sd. In adversarial
 neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
 models (default is 1 for a single differential model). Use
 \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override

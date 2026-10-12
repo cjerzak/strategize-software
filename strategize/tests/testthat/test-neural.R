@@ -93,6 +93,34 @@ test_that("neural init policy resolves RMS and residual depth defaults", {
     strategize:::neural_resolve_residual_weight_depth_scale("wide"),
     "residual_weight_depth_scale"
   )
+
+  # Legacy residual init: gates start at gate_sd_scale, projections unscaled.
+  expect_null(deep_default$residual_gate_init)
+  expect_equal(deep_default$gate_init_value, deep_default$gate_sd_scale)
+  expect_identical(deep_default$output_proj_init, "none")
+  expect_equal(deep_default$output_proj_multiplier, 1)
+
+  # FM policy at the looped effective depth 15.2: gates at 1 and the
+  # residual-writing projections at 1/sqrt(2 * 15.2) of their regular sd.
+  fm_policy <- strategize:::neural_resolve_init_policy(
+    model_depth = 15.2,
+    model_dims = 120L,
+    residual_gate_init = 1,
+    output_proj_init = "depth_scaled"
+  )
+  expect_equal(fm_policy$gate_init_value, 1)
+  expect_equal(fm_policy$gate_sd_scale, 0.1 * sqrt(2 / 15.2))
+  expect_identical(fm_policy$output_proj_init, "depth_scaled")
+  expect_equal(fm_policy$output_proj_multiplier, 1 / sqrt(2 * 15.2))
+  expect_equal(round(fm_policy$output_proj_multiplier, 4), 0.1814)
+  expect_error(
+    strategize:::neural_resolve_init_policy(4L, 16L, residual_gate_init = 0),
+    "residual_gate_init"
+  )
+  expect_error(
+    strategize:::neural_resolve_init_policy(4L, 16L, output_proj_init = "zero"),
+    "output_proj_init"
+  )
 })
 
 test_that("schema dropout helper scales unit masks and keeps token masks binary", {
@@ -1253,7 +1281,8 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
                                         nMonte_Qglm = 4L,
                                         svi_steps = 20L,
                                         force_reinforce = FALSE,
-                                        seed = 20260326) {
+                                        seed = 20260326,
+                                        uncertainty_scope = "output") {
   skip_on_cran()
   skip_if_no_jax()
 
@@ -1278,7 +1307,7 @@ run_average_case_neural_fit <- function(vi_guide = "auto_diagonal",
     base_neural_control,
     list(
       subsample_method = "batch_vi",
-      uncertainty_scope = "output",
+      uncertainty_scope = uncertainty_scope,
       vi_guide = vi_guide,
       optimizer = "adam",
       ModelDims = 8L,
@@ -5513,6 +5542,18 @@ test_that("AutoDelta is rejected when neural SEs are requested", {
       svi_steps = 5L
     ),
     "compute_se = TRUE is not supported when neural_mcmc_control\\$vi_guide = 'auto_delta'"
+  )
+})
+
+test_that("pure maximum likelihood is rejected when neural SEs are requested", {
+  expect_error(
+    run_average_case_neural_fit(
+      vi_guide = "auto_normal",
+      uncertainty_scope = "none",
+      compute_se = TRUE,
+      svi_steps = 5L
+    ),
+    "compute_se = TRUE is not supported when neural_mcmc_control\\$uncertainty_scope = 'none'"
   )
 })
 

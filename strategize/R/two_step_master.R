@@ -154,7 +154,12 @@
 #'   prediction uses exact selected experts with frozen router biases. Saved
 #'   models retain their architecture during adaptation. Set
 #'   \code{neural_mcmc_control$uncertainty_scope = "output"} to compute delta-method
-#'   uncertainty using only the output-layer parameters (default is \code{"all"}). In adversarial
+#'   uncertainty using only the output-layer parameters (default is \code{"all"}), or
+#'   \code{"none"} for a pure maximum-likelihood fit with no posterior (requires
+#'   \code{compute_se = FALSE}). \code{neural_mcmc_control$residual_gate_init} sets the
+#'   initial trunk residual gate and \code{neural_mcmc_control$output_proj_init =
+#'   "depth_scaled"} starts the residual-writing projections at
+#'   \eqn{1/\sqrt{2 \cdot depth}} of their regular init sd. In adversarial
 #'   neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
 #'   models (default is 1 for a single differential model). Use
 #'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override
@@ -698,6 +703,25 @@ strategize       <-          function(
     stop(
       "compute_se = TRUE is not supported when neural_mcmc_control$vi_guide = 'auto_delta'. ",
       "AutoDelta is a point-mass variational guide and does not provide posterior uncertainty for Q/pi SEs.",
+      call. = FALSE
+    )
+  }
+  neural_uncertainty_scope <- NULL
+  if (identical(outcome_model_type, "neural")) {
+    scope_env <- Sys.getenv("STRATEGIZE_NEURAL_UNCERTAINTY_SCOPE")
+    neural_uncertainty_scope <- if (nzchar(scope_env)) {
+      tolower(scope_env)
+    } else if (!is.null(neural_mcmc_control) && !is.null(neural_mcmc_control$uncertainty_scope)) {
+      tolower(as.character(neural_mcmc_control$uncertainty_scope)[1L])
+    } else {
+      NULL
+    }
+  }
+  if (isTRUE(compute_se) && identical(neural_uncertainty_scope, "none")) {
+    stop(
+      "compute_se = TRUE is not supported when neural_mcmc_control$uncertainty_scope = 'none'. ",
+      "Pure maximum-likelihood fits have no posterior uncertainty for Q/pi SEs; ",
+      "set compute_se = FALSE or use uncertainty_scope = 'output'.",
       call. = FALSE
     )
   }

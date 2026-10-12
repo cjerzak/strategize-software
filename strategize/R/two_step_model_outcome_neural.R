@@ -4241,7 +4241,9 @@ neural_resolve_init_policy <- function(model_depth,
                                        model_dims,
                                        RMS_scale = NULL,
                                        residual_weight_depth_scale = NULL,
-                                       qk_rms_scale = NULL) {
+                                       qk_rms_scale = NULL,
+                                       residual_gate_init = NULL,
+                                       output_proj_init = NULL) {
   depth <- suppressWarnings(as.numeric(model_depth))
   dims <- suppressWarnings(as.numeric(model_dims))
   if (length(depth) != 1L || is.na(depth) || !is.finite(depth) || depth < 1) {
@@ -4261,6 +4263,18 @@ neural_resolve_init_policy <- function(model_depth,
     none = 1
   )
   weight_sd_scale <- sqrt(2) / sqrt(dims)
+  gate_sd_scale <- 0.1 * depth_prior_scale
+  gate_init <- neural_resolve_residual_gate_init(residual_gate_init)
+  output_proj_policy <- neural_resolve_output_proj_init(output_proj_init)
+  # GPT-2/DeepSeek-style residual scaling: each of the 2*depth residual writes
+  # (attention and feed-forward per block application, recurrence included)
+  # starts at 1/sqrt(2*depth) of the regular init, so the stream's variance
+  # grows by about one branch variance over the whole depth.
+  output_proj_multiplier <- if (identical(output_proj_policy, "depth_scaled")) {
+    1 / sqrt(2 * depth)
+  } else {
+    1
+  }
   list(
     RMS_scale = rms_scale,
     qk_rms_scale = qk_rms_scale_resolved,
@@ -4270,8 +4284,41 @@ neural_resolve_init_policy <- function(model_depth,
     gate_depth_multiplier = as.numeric(depth_prior_scale),
     weight_sd_scale = as.numeric(weight_sd_scale),
     residual_weight_sd_scale = as.numeric(weight_sd_scale * residual_weight_multiplier),
-    gate_sd_scale = as.numeric(0.1 * depth_prior_scale)
+    gate_sd_scale = as.numeric(gate_sd_scale),
+    residual_gate_init = gate_init,
+    gate_init_value = as.numeric(gate_init %||% gate_sd_scale),
+    output_proj_init = output_proj_policy,
+    output_proj_multiplier = as.numeric(output_proj_multiplier)
   )
+}
+
+# Initial value of the trunk's ReZero-style residual gates (alpha_attn_l*,
+# alpha_ff_l*). NULL keeps the legacy depth-scaled gate_sd_scale.
+neural_resolve_residual_gate_init <- function(value = NULL) {
+  if (is.null(value)) {
+    return(NULL)
+  }
+  value <- suppressWarnings(as.numeric(value))
+  if (length(value) != 1L || is.na(value) || !is.finite(value) || value <= 0) {
+    stop("'neural_mcmc_control$residual_gate_init' must be NULL or one positive number.",
+         call. = FALSE)
+  }
+  value
+}
+
+# Init policy for the projections that write into the residual stream (W_o,
+# W_ff2, W_moe_expert2, W_moe_shared2): "none" keeps their regular init sd;
+# "depth_scaled" multiplies it by 1/sqrt(2 * effective depth).
+neural_resolve_output_proj_init <- function(value = NULL) {
+  if (is.null(value)) {
+    return("none")
+  }
+  value <- tolower(trimws(as.character(value)))
+  if (length(value) != 1L || is.na(value) || !value %in% c("none", "depth_scaled")) {
+    stop("'neural_mcmc_control$output_proj_init' must be 'none' or 'depth_scaled'.",
+         call. = FALSE)
+  }
+  value
 }
 
 neural_pairwise_bernoulli_logit_scale_enabled <- function(model_info = NULL) {
@@ -12506,10 +12553,15 @@ generate_ModelOutcome_neural <- function(){
       is.finite(nFolds_glm)) {
     eval_control$n_folds <- as.integer(nFolds_glm)
   }
-  if (!uncertainty_scope %in% c("all", "output")) {
-    stop("'neural_mcmc_control$uncertainty_scope' must be 'all' or 'output'.",
+  if (!uncertainty_scope %in% c("all", "output", "none")) {
+    stop("'neural_mcmc_control$uncertainty_scope' must be 'all', 'output', or 'none'.",
          call. = FALSE)
   }
+  # "output" point-estimates the trunk and keeps a variational posterior on the
+  # output heads; "none" point-estimates every site (pure maximum likelihood: no
+  # priors, no KL term, no guide).
+  point_trunk_mode <- uncertainty_scope %in% c("output", "none")
+  point_head_mode <- identical(uncertainty_scope, "none")
   subsample_method <- if (!is.null(mcmc_control$subsample_method)) {
     tolower(as.character(mcmc_control$subsample_method))
   } else {
@@ -12634,7 +12686,7 @@ generate_ModelOutcome_neural <- function(){
     ))
   }
   if (identical(transformer_attention$architecture, "mla_dsa") &&
-      !(identical(tolower(as.character(uncertainty_scope)), "output") || identical(subsample_method, "batch_vi")))
+      !(isTRUE(point_trunk_mode) || identical(subsample_method, "batch_vi")))
     stop("MLA/DSA requires the joint SVI objective; use mla or mha for full MCMC.", call. = FALSE)
   if (!identical(transformer_attention$architecture, "mha")) {
     if (!identical(residual_mode, "standard")) stop("MLA requires residual_mode='standard'.", call. = FALSE)
@@ -12681,7 +12733,7 @@ generate_ModelOutcome_neural <- function(){
   ))
   transformer_config <- neural_resolve_transformer_moe(
     mcmc_control, ModelDims, ModelDepth,
-    use_svi = identical(tolower(as.character(uncertainty_scope)), "output") ||
+    use_svi = isTRUE(point_trunk_mode) ||
       identical(subsample_method, "batch_vi")
   )
   transformer_moe <- transformer_config$transformer_moe
@@ -12695,8 +12747,20 @@ generate_ModelOutcome_neural <- function(){
     model_dims = ModelDims,
     RMS_scale = mcmc_control$RMS_scale,
     residual_weight_depth_scale = mcmc_control$residual_weight_depth_scale,
-    qk_rms_scale = mcmc_control$qk_rms_scale
+    qk_rms_scale = mcmc_control$qk_rms_scale,
+    residual_gate_init = mcmc_control$residual_gate_init,
+    output_proj_init = mcmc_control$output_proj_init
   )
+  if (!is.null(init_policy$residual_gate_init) ||
+      !identical(init_policy$output_proj_init, "none")) {
+    message(sprintf(
+      "Residual init: trunk gate=%.3f; residual-writing projection sd x%.4f (%s; effective depth %.1f).",
+      init_policy$gate_init_value,
+      init_policy$output_proj_multiplier,
+      init_policy$output_proj_init,
+      neural_transformer_effective_depth(transformer_loop, ModelDepth)
+    ))
+  }
   RMS_scale <- init_policy$RMS_scale
   # QK-norm gets its own (tighter) prior scale, distinct from the general RMS_scale
   # (Issue 6): a loose QK-norm scale lets attention logits amplify at init, causing
@@ -12725,6 +12789,11 @@ generate_ModelOutcome_neural <- function(){
   depth_prior_scale <- init_policy$depth_prior_scale
   residual_weight_sd_scale <- init_policy$residual_weight_sd_scale
   gate_sd_scale <- init_policy$gate_sd_scale
+  # Trunk residual gates start at residual_gate_init when set (else gate_sd_scale);
+  # residual-writing projections (W_o, W_ff2, MoE expert2/shared2) scale their sd
+  # by output_proj_multiplier (1 unless output_proj_init = "depth_scaled").
+  residual_gate_init_value <- init_policy$gate_init_value %||% gate_sd_scale
+  output_proj_multiplier <- init_policy$output_proj_multiplier %||% 1
   embed_sd_scale <- 4 * weight_sd_scale
   context_embed_sd_scale <- embed_sd_scale
   choice_embed_sd_scale <- 0.25 * context_embed_sd_scale
@@ -14607,7 +14676,9 @@ generate_ModelOutcome_neural <- function(){
                   uncertainty_scope_arg = uncertainty_scope,
                   is_output_layer = FALSE) {
     scope <- tolower(as.character(uncertainty_scope_arg))
-    if (identical(scope, "output") && !isTRUE(is_output_layer)) {
+    # "none" (pure MLE) point-estimates every site, output heads included.
+    if (identical(scope, "none") ||
+        (identical(scope, "output") && !isTRUE(is_output_layer))) {
       init_val <- init_fxn()
       warm <- p2d_warm_start_values[[name]]
       if (!is.null(warm)) {
@@ -14717,7 +14788,8 @@ generate_ModelOutcome_neural <- function(){
   }
 
   sample_shared_transformer_params <- function(D_local, pairwise = FALSE) {
-    output_only_mode <- identical(tolower(as.character(uncertainty_scope)), "output")
+    # Point-estimated trunk ("output" or "none"): hyperprior scales are constants.
+    output_only_mode <- isTRUE(point_trunk_mode)
 
     tau_context <- if (isTRUE(output_only_mode)) {
       as.numeric(context_embed_sd_scale)
@@ -15489,10 +15561,12 @@ generate_ModelOutcome_neural <- function(){
         )
       } else {
         alpha_attn_name <- paste0("alpha_attn_l", l_)
-        alpha_attn_l <- p2d_deterministic_gate(alpha_attn_name)
+        alpha_attn_l <- p2d_deterministic_gate(alpha_attn_name,
+                                               init_value = residual_gate_init_value)
 
         alpha_ff_name <- paste0("alpha_ff_l", l_)
-        alpha_ff_l <- p2d_deterministic_gate(alpha_ff_name)
+        alpha_ff_l <- p2d_deterministic_gate(alpha_ff_name,
+                                             init_value = residual_gate_init_value)
       }
 
       RMS_attn_name <- paste0("RMS_attn_l", l_)
@@ -15605,13 +15679,14 @@ generate_ModelOutcome_neural <- function(){
 
       W_o_name <- paste0("W_o_l", l_)
       W_o_shape <- reticulate::tuple(ModelDims, ModelDims)
+      W_o_sd_l <- tau_w_l * output_proj_multiplier
       W_o_l <- p2d(
         name = W_o_name,
         sample_fxn = function() {
-          sample_loc_scale(W_o_name, tau_w_l, W_o_shape)
+          sample_loc_scale(W_o_name, W_o_sd_l, W_o_shape)
         },
         init_fxn = function() {
-          p2d_init_normal(W_o_name, tau_w_l, W_o_shape)
+          p2d_init_normal(W_o_name, W_o_sd_l, W_o_shape)
         }
       )
 
@@ -15631,8 +15706,8 @@ generate_ModelOutcome_neural <- function(){
         for (kind in names(shapes)) {
           name <- paste0("W_moe_", kind, "_l", l_)
           sd <- if (kind == "router") 1 / sqrt(as.numeric(ModelDims)) else tau_w_l
-          if (kind == "expert2") sd <- sd * sqrt(as.numeric(ModelDims) / expert_width) * output_scale
-          if (kind == "shared2") sd <- sd * sqrt(as.numeric(ModelDims) / shared_width) * output_scale
+          if (kind == "expert2") sd <- sd * sqrt(as.numeric(ModelDims) / expert_width) * output_scale * output_proj_multiplier
+          if (kind == "shared2") sd <- sd * sqrt(as.numeric(ModelDims) / shared_width) * output_scale * output_proj_multiplier
           shape <- shapes[[kind]]
           layer_params[[name]] <- p2d(name,
             sample_fxn = function() strenv$numpyro$sample(name, strenv$numpyro$distributions$Normal(0., sd)$expand(shape)),
@@ -15654,7 +15729,7 @@ generate_ModelOutcome_neural <- function(){
         W_ff2_name <- paste0("W_ff2_l", l_)
         W_ff2_shape <- reticulate::tuple(FFDim, ModelDims)
         ff2_fan_scale <- as.numeric(sqrt(as.numeric(ModelDims) / max(1, as.numeric(FFDim))))
-        tau_w_ff2_l <- tau_w_l * ff2_fan_scale
+        tau_w_ff2_l <- tau_w_l * ff2_fan_scale * output_proj_multiplier
         W_ff2_l <- p2d(
           name = W_ff2_name,
           sample_fxn = function() {
@@ -15888,25 +15963,52 @@ generate_ModelOutcome_neural <- function(){
       loop_input_gain <- p2d_deterministic_gate("loop_input_gain", init_value = 1)
     }
     output_dim <- if (isTRUE(universal_enabled)) ai(universal_global_out_dim) else nOutcomes
-    tau_w_out <- strenv$numpyro$sample(
-      "tau_w_out",
-      strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale))
-    )
-    W_out <- sample_loc_scale("W_out", tau_w_out,
-                              reticulate::tuple(ModelDims, output_dim))
     W_add_out <- NULL
-    if (identical(additive_utility_mode, "on")) {
-      W_add_out <- sample_loc_scale(
-        "W_add_out",
-        tau_w_out,
-        reticulate::tuple(ModelDims, output_dim)
+    if (isTRUE(point_head_mode)) {
+      # Pure MLE: the heads are point estimates with no hyperpriors. W_out and
+      # b_out start at 0 unless p2d_warm_start_values seeds them.
+      W_out_shape <- reticulate::tuple(ModelDims, output_dim)
+      W_out <- p2d(
+        name = "W_out",
+        sample_fxn = function() NULL,
+        init_fxn = function() strenv$jnp$zeros(W_out_shape, dtype = ddtype_),
+        is_output_layer = TRUE
       )
+      if (identical(additive_utility_mode, "on")) {
+        W_add_out <- p2d(
+          name = "W_add_out",
+          sample_fxn = function() NULL,
+          init_fxn = function() p2d_init_normal("W_add_out", weight_sd_scale, W_out_shape),
+          is_output_layer = TRUE
+        )
+      }
+      b_out_shape <- reticulate::tuple(output_dim)
+      b_out <- p2d(
+        name = "b_out",
+        sample_fxn = function() NULL,
+        init_fxn = function() strenv$jnp$zeros(b_out_shape, dtype = ddtype_),
+        is_output_layer = TRUE
+      )
+    } else {
+      tau_w_out <- strenv$numpyro$sample(
+        "tau_w_out",
+        strenv$numpyro$distributions$HalfNormal(as.numeric(weight_sd_scale))
+      )
+      W_out <- sample_loc_scale("W_out", tau_w_out,
+                                reticulate::tuple(ModelDims, output_dim))
+      if (identical(additive_utility_mode, "on")) {
+        W_add_out <- sample_loc_scale(
+          "W_add_out",
+          tau_w_out,
+          reticulate::tuple(ModelDims, output_dim)
+        )
+      }
+      tau_b <- strenv$numpyro$sample(
+        "tau_b",
+        strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale))
+      )
+      b_out <- sample_loc_scale("b_out", tau_b, reticulate::tuple(output_dim))
     }
-    tau_b <- strenv$numpyro$sample(
-      "tau_b",
-      strenv$numpyro$distributions$HalfNormal(as.numeric(tau_b_scale))
-    )
-    b_out <- sample_loc_scale("b_out", tau_b, reticulate::tuple(output_dim))
 
     ordinal_threshold_raw <- NULL
     ordinal_thresholds <- NULL
@@ -15958,11 +16060,20 @@ generate_ModelOutcome_neural <- function(){
       )
       M_cross <- 0.5 * (M_cross_raw - strenv$jnp$transpose(M_cross_raw))
       M_cross <- strenv$numpyro$deterministic("M_cross", M_cross)
-      W_cross_out <- strenv$numpyro$sample(
-        "W_cross_out",
-        strenv$numpyro$distributions$Normal(0., 0.25),
-        sample_shape = reticulate::tuple(output_dim)
-      )
+      if (isTRUE(point_head_mode)) {
+        W_cross_out <- p2d(
+          name = "W_cross_out",
+          sample_fxn = function() NULL,
+          init_fxn = function() p2d_init_normal("W_cross_out", 0.25, reticulate::tuple(output_dim)),
+          is_output_layer = TRUE
+        )
+      } else {
+        W_cross_out <- strenv$numpyro$sample(
+          "W_cross_out",
+          strenv$numpyro$distributions$Normal(0., 0.25),
+          sample_shape = reticulate::tuple(output_dim)
+        )
+      }
     }
 
     alpha_rc <- NULL
@@ -16043,34 +16154,60 @@ generate_ModelOutcome_neural <- function(){
 
     sigma <- NULL
     if (likelihood == "normal" || isTRUE(universal_has_normal)) {
-      sigma <- strenv$numpyro$sample(
-        "sigma",
-        strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale))
-      )
+      sigma <- if (isTRUE(point_head_mode)) {
+        p2d(
+          name = "sigma",
+          sample_fxn = function() NULL,
+          init_fxn = function() strenv$jnp$array(as.numeric(sigma_prior_scale), dtype = ddtype_),
+          constraint = p2d_constraint_positive,
+          is_output_layer = TRUE
+        )
+      } else {
+        strenv$numpyro$sample(
+          "sigma",
+          strenv$numpyro$distributions$HalfNormal(as.numeric(sigma_prior_scale))
+        )
+      }
       sigma <- neural_floor_sigma(sigma, dtype = ddtype_)
+    }
+    point_scalar_head <- function(name) {
+      p2d(
+        name = name,
+        sample_fxn = function() NULL,
+        init_fxn = function() strenv$jnp$array(0., dtype = ddtype_),
+        is_output_layer = TRUE
+      )
     }
     log_pairwise_bernoulli_logit_scale <- NULL
     if (isTRUE(learned_pairwise_bernoulli_logit_scale) &&
         isTRUE(pairwise) &&
         likelihood %in% c("bernoulli", "mixed")) {
-      log_pairwise_bernoulli_logit_scale <- strenv$numpyro$sample(
-        "log_pairwise_bernoulli_logit_scale",
-        strenv$numpyro$distributions$Normal(
-          0.,
-          as.numeric(pairwise_bernoulli_logit_scale_prior_sd)
+      log_pairwise_bernoulli_logit_scale <- if (isTRUE(point_head_mode)) {
+        point_scalar_head("log_pairwise_bernoulli_logit_scale")
+      } else {
+        strenv$numpyro$sample(
+          "log_pairwise_bernoulli_logit_scale",
+          strenv$numpyro$distributions$Normal(
+            0.,
+            as.numeric(pairwise_bernoulli_logit_scale_prior_sd)
+          )
         )
-      )
+      }
     }
     log_calibration_scale <- NULL
     if (isTRUE(calibration_control$enabled) &&
         identical(calibration_control$method %||% NULL, "logit_scale")) {
-      log_calibration_scale <- strenv$numpyro$sample(
-        "log_calibration_scale",
-        strenv$numpyro$distributions$Normal(
-          0.,
-          as.numeric(calibration_control$prior_sd %||% 0.5)
+      log_calibration_scale <- if (isTRUE(point_head_mode)) {
+        point_scalar_head("log_calibration_scale")
+      } else {
+        strenv$numpyro$sample(
+          "log_calibration_scale",
+          strenv$numpyro$distributions$Normal(
+            0.,
+            as.numeric(calibration_control$prior_sd %||% 0.5)
+          )
         )
-      )
+      }
     }
 
     params_view <- if (isTRUE(pairwise)) {
@@ -19925,7 +20062,11 @@ generate_ModelOutcome_neural <- function(){
       error = function(e) NULL
     )
   }
-  if (!is.null(locscale_reparam) &&
+  if (isTRUE(point_head_mode)) {
+    # Pure MLE has no sample sites, so there is nothing to reparameterize.
+    model_fn <- model_fn_base
+    manual_noncentered_loc_scale <- FALSE
+  } else if (!is.null(locscale_reparam) &&
       reticulate::py_has_attr(strenv$numpyro, "handlers")) {
     reparam_config <- list()
     for (l_ in 1L:ModelDepth) {
@@ -19997,8 +20138,17 @@ generate_ModelOutcome_neural <- function(){
     # foundation-model adaptation warm-starts the trunk in both scopes.
     p2d_warm_start_values <- user_site_init_values
   }
+  if (isTRUE(point_head_mode)) {
+    # Under pure MLE the output heads are numpyro.param too: seed them from the
+    # data-informed head inits (W_out = 0; base-rate b_out and MAD sigma for a
+    # single normal outcome) unless a user or adaptation warm start supplies them.
+    head_warm_start <- output_site_init_values[
+      intersect(names(output_site_init_values), c("W_out", "b_out", "sigma"))
+    ]
+    p2d_warm_start_values <- modifyList(head_warm_start, user_site_init_values %||% list())
+  }
   init_to_value <- neural_get_init_to_value()
-  use_svi <- isTRUE(output_only_mode) || identical(subsample_method, "batch_vi")
+  use_svi <- isTRUE(point_trunk_mode) || identical(subsample_method, "batch_vi")
   if (isTRUE(universal_mixed_mode) && !isTRUE(use_svi)) {
     stop(
       "Universal mixed-mode foundation training requires SVI/batch_vi so pairwise and single losses share one optimizer run.",
@@ -20258,7 +20408,9 @@ generate_ModelOutcome_neural <- function(){
     validation_steps = integer(0)
   )
   if (isTRUE(use_svi)) {
-    if (isTRUE(output_only_mode)) {
+    if (isTRUE(point_head_mode)) {
+      message("Fitting point estimates by maximum likelihood (uncertainty_scope = 'none'; no priors, no variational guide)...")
+    } else if (isTRUE(output_only_mode)) {
       message("Enlisting SVI with autoguide for output-only uncertainty...")
     } else {
       message("Enlisting SVI with autoguide for minibatched likelihood...")
@@ -20289,7 +20441,15 @@ generate_ModelOutcome_neural <- function(){
     if (!is.null(init_to_value) && length(output_site_init_values) > 0L) {
       guide_init_loc_fn <- init_to_value(values = output_site_init_values)
     }
-    guide <- if (is.null(guide_init_loc_fn)) {
+    guide <- if (isTRUE(point_head_mode)) {
+      if (!is.null(mcmc_control$vi_guide)) {
+        message("uncertainty_scope = 'none' fits point estimates; neural_mcmc_control$vi_guide is ignored.")
+      }
+      guide_name <- "none"
+      reticulate::import_from_path(
+        "strategize_optim", path = system.file("python", package = "strategize"), convert = FALSE
+      )$point_estimate_guide
+    } else if (is.null(guide_init_loc_fn)) {
       switch(guide_name,
              auto_delta = strenv$numpyro$infer$autoguide$AutoDelta(model_fn),
              auto_normal = strenv$numpyro$infer$autoguide$AutoNormal(model_fn),
@@ -21042,6 +21202,11 @@ generate_ModelOutcome_neural <- function(){
       )
     }
     extract_svi_param_sites <- function(svi_params_current) {
+      if (isTRUE(point_head_mode)) {
+        # Pure MLE: every site is a (constrained) param in the store, the MoE
+        # router bias included; there is no guide to query.
+        return(svi_params_current)
+      }
       param_sites <- NULL
       if (reticulate::py_has_attr(guide, "median")) {
         param_sites <- tryCatch(guide$median(svi_params_current), error = function(e) NULL)
@@ -22991,6 +23156,10 @@ generate_ModelOutcome_neural <- function(){
     sample_key <- neural_training_prng_key(neural_training_seed, stream = 2L)
     if (isTRUE(run_mcmc_after_svi)) {
       SVIInitValues <- extract_svi_param_sites(params)
+    } else if (isTRUE(point_head_mode)) {
+      # Pure MLE: no posterior to draw from. ParamsMean reads the point
+      # estimates from the param store and theta_var is identically zero.
+      PosteriorDraws <- list()
     } else if (!is.null(SVIPosteriorDraws)) {
       # Checkpoint-restored fits arrive here with single-point pseudo-draws
       # (guide medians), whose variance is exactly zero. Resample the guide
@@ -23287,7 +23456,7 @@ generate_ModelOutcome_neural <- function(){
     PosteriorDraws[[name]]
   }
 
-  p2d_output_only <- isTRUE(output_only_mode)
+  p2d_output_only <- isTRUE(point_trunk_mode)
   get_svi_param <- function(name) {
     if (is.null(SVIParams)) {
       return(NULL)
@@ -23297,6 +23466,12 @@ generate_ModelOutcome_neural <- function(){
         reticulate::is_py_object(value) &&
         inherits(value, "python.builtin.NoneType")) {
       return(NULL)
+    }
+    if (isTRUE(point_head_mode) && !is.null(value)) {
+      # Pure MLE reads every estimate from the param store, whose entries are
+      # non-converting Python objects; R-side shape indexing below (e.g. the
+      # ordinal thresholds) expects the converting arrays posterior means give.
+      value <- strenv$jnp$asarray(value)
     }
     value
   }
@@ -23328,19 +23503,19 @@ generate_ModelOutcome_neural <- function(){
     invisible(value)
   }
 
-  get_gate_mean_or_fixed <- function(name) {
+  get_gate_mean_or_fixed <- function(name, fixed_value = p2d_gate_init_value) {
     value <- get_site_mean_or_param(name)
     if (!is.null(value)) {
       return(value)
     }
     if (!isTRUE(use_svi)) {
-      return(p2d_fixed_gate_value())
+      return(p2d_fixed_gate_value(fixed_value))
     }
     NULL
   }
 
-  maybe_gate <- function(name, assign_as = name) {
-    value <- get_gate_mean_or_fixed(name)
+  maybe_gate <- function(name, assign_as = name, fixed_value = p2d_gate_init_value) {
+    value <- get_gate_mean_or_fixed(name, fixed_value = fixed_value)
     if (!is.null(value)) {
       ParamsMean[[assign_as]] <<- value
     }
@@ -23384,6 +23559,8 @@ generate_ModelOutcome_neural <- function(){
   W_out_draws <- get_loc_scale_draws("W_out", "tau_w_out")
   if (!is.null(W_out_draws)) {
     ParamsMean$W_out <- mean_param(W_out_draws)
+  } else if (isTRUE(point_head_mode)) {
+    maybe_site("W_out")
   }
   W_add_out_draws <- get_loc_scale_draws("W_add_out", "tau_w_out")
   if (!is.null(W_add_out_draws)) {
@@ -23394,6 +23571,8 @@ generate_ModelOutcome_neural <- function(){
   b_out_draws <- get_loc_scale_draws("b_out", "tau_b")
   if (!is.null(b_out_draws)) {
     ParamsMean$b_out <- mean_param(b_out_draws)
+  } else if (isTRUE(point_head_mode)) {
+    maybe_site("b_out")
   }
   ordinal_threshold_raw_mean <- get_site_mean_or_param("ordinal_threshold_raw")
   if (!is.null(ordinal_threshold_raw_mean)) {
@@ -23415,6 +23594,8 @@ generate_ModelOutcome_neural <- function(){
 
   if (!is.null(PosteriorDraws$W_cross_out)) {
     ParamsMean$W_cross_out <- mean_param(PosteriorDraws$W_cross_out)
+  } else if (isTRUE(point_head_mode)) {
+    maybe_site("W_cross_out")
   }
   if (low_rank_interaction_rank > 0L) {
     maybe_gate("alpha_rc")
@@ -23430,7 +23611,13 @@ generate_ModelOutcome_neural <- function(){
     ParamsMean$calibration_scale <- strenv$jnp$exp(ParamsMean$log_calibration_scale)
   }
   if (likelihood == "normal" || isTRUE(universal_has_normal)) {
-    ParamsMean$sigma <- mean_param(PosteriorDraws$sigma)
+    ParamsMean$sigma <- if (!is.null(PosteriorDraws$sigma)) {
+      mean_param(PosteriorDraws$sigma)
+    } else if (isTRUE(point_head_mode)) {
+      get_svi_param("sigma")
+    } else {
+      mean_param(PosteriorDraws$sigma)
+    }
   }
 
   if (n_resp_covariates > 0L) {
@@ -23455,8 +23642,8 @@ generate_ModelOutcome_neural <- function(){
     alpha_attn_name <- paste0("alpha_attn_l", l_)
     alpha_ff_name <- paste0("alpha_ff_l", l_)
     if (!isTRUE(use_full_attn_residual)) {
-      maybe_gate(alpha_attn_name)
-      maybe_gate(alpha_ff_name)
+      maybe_gate(alpha_attn_name, fixed_value = residual_gate_init_value)
+      maybe_gate(alpha_ff_name, fixed_value = residual_gate_init_value)
     }
 
     maybe_site(paste0("RMS_attn_l", l_))
