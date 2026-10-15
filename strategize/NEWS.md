@@ -1,3 +1,12 @@
+# Development: October 14, 2026 canonical id maps match by name
+
+- `cs_foundation_normalize_factor_ids()` and `cs_foundation_normalize_level_ids()`
+  match named `canonical_factor_id` / `canonical_level_id` maps by name. A bare
+  `as.character()` had dropped the names, so a map listed in a different order
+  than the experiment's factors or levels was applied by position (the
+  postbrexit crosswalk swapped two factor ids and, in cj2, two level ids). Only
+  unnamed maps are positional. preference.fm carries the same fix.
+
 # Development: October 11, 2026 maximum-likelihood fits and residual init policy
 
 - `neural_mcmc_control$uncertainty_scope = "none"` fits every site as a point

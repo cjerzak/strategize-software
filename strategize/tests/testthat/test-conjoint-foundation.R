@@ -302,3 +302,23 @@ test_that("internal checkpoint directory loader restores direct params", {
   expect_false(is.null(loaded_direct$groups[[group_key]]$fit$neural_model_info$params$W_out))
   expect_equal(loaded_direct$groups[[group_key]]$fit$theta_mean, 42)
 })
+
+test_that("named canonical ids map by name, not position", {
+  fn <- c("social", "immigration", "education")
+  want <- c(social = "s_id", immigration = "i_id", education = "e_id")
+  reordered <- c(social = "s_id", education = "e_id", immigration = "i_id")
+  expect_identical(strategize:::cs_foundation_normalize_factor_ids(reordered, fn), want)
+  expect_identical(strategize:::cs_foundation_normalize_factor_ids(as.list(reordered), fn), want)
+  expect_identical(strategize:::cs_foundation_normalize_factor_ids(unname(want), fn), want)
+  expect_error(strategize:::cs_foundation_normalize_factor_ids(c("a", "b"), fn), "length 3")
+
+  names_list <- list(immigration = list(c("Deportation", "Point system", "Visa centres")))
+  level_ids <- c("Visa centres" = "visa", "Point system" = "points", "Deportation" = "deport")
+  want_levels <- c("Deportation" = "deport", "Point system" = "points", "Visa centres" = "visa")
+  for (values in list(level_ids, as.list(level_ids), list(level_ids))) {
+    mapped <- strategize:::cs_foundation_normalize_level_ids(
+      list(immigration = values), "immigration", names_list
+    )
+    expect_identical(mapped$immigration, want_levels)
+  }
+})

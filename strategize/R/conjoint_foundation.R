@@ -329,19 +329,35 @@ cs_foundation_validate_numeric_matrix <- function(X, n, arg = "X") {
   X_mat
 }
 
+# Coerce a canonical id map to character while keeping its names. A bare
+# as.character() drops names, which silently turned named maps into positional
+# ones: a crosswalk listed in a different order than the experiment's factors
+# or levels was mis-keyed. Named maps match by name; only unnamed input is
+# positional.
+cs_foundation_canonical_id_values <- function(values, arg) {
+  if (is.list(values) && !is.atomic(values)) {
+    if (any(lengths(values) > 1L)) {
+      stop(sprintf("'%s' entries must each be a single id.", arg), call. = FALSE)
+    }
+    values <- vapply(values, function(v) {
+      if (length(v)) as.character(v[[1L]]) else NA_character_
+    }, character(1))
+  }
+  value_names <- names(values)
+  values <- as.character(values)
+  if (!is.null(value_names) && any(!is.na(value_names) & nzchar(value_names))) {
+    names(values) <- value_names
+  }
+  values
+}
+
 cs_foundation_normalize_factor_ids <- function(values, factor_names, arg = "canonical_factor_id") {
   out <- rep(NA_character_, length(factor_names))
   names(out) <- factor_names
   if (is.null(values)) {
     return(out)
   }
-  if (is.list(values) && !is.atomic(values)) {
-    if (!is.null(names(values))) {
-      values <- values[factor_names]
-    }
-    values <- unlist(values, recursive = FALSE, use.names = TRUE)
-  }
-  values <- as.character(values)
+  values <- cs_foundation_canonical_id_values(values, arg)
   if (!is.null(names(values))) {
     idx <- match(names(values), factor_names)
     ok <- which(!is.na(idx))
@@ -375,10 +391,14 @@ cs_foundation_normalize_level_ids <- function(values, factor_names, names_list) 
   for (factor_name in intersect(names(values), factor_names)) {
     levs <- names_list[[factor_name]][[1]]
     raw <- values[[factor_name]]
-    if (is.list(raw) && length(raw) == 1L && is.atomic(raw[[1]])) {
+    if (is.list(raw) && length(raw) == 1L && is.atomic(raw[[1]]) &&
+        (is.null(names(raw)) || length(raw[[1]]) > 1L)) {
       raw <- raw[[1]]
     }
-    raw <- as.character(raw)
+    raw <- cs_foundation_canonical_id_values(
+      raw,
+      sprintf("canonical_level_id[['%s']]", factor_name)
+    )
     mapped <- rep(NA_character_, length(levs))
     names(mapped) <- levs
     if (!is.null(names(raw))) {
