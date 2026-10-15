@@ -280,8 +280,13 @@ cs_prepare_cv_folds <- function(folds,
 #'   cause an error; select another optimizer explicitly to use that guide.
 #'   Learning-rate decay is controlled by
 #'   \code{neural_mcmc_control$svi_steps} (integer steps, or \code{"optimal"} for
-#'   a scaling-law heuristic based on model/data size; for minibatched VI this
-#'   also scales with \code{batch_size}) and
+#'   a heuristic targeting 20 non-padding encoder token positions per stored model
+#'   parameter, using the resolved architecture and global training batch). Shared
+#'   recurrent weights count once; active MoE parameters and recurrent layer passes
+#'   are reported separately in \code{svi_budget_info$accounting}. Token exposure is
+#'   measured before schema dropout and excludes validation rows. This is not a
+#'   validated compute optimum. Explicit budgets and compatible checkpoint resumes
+#'   retain their step counts. The schedule is selected with
 #'   \code{neural_mcmc_control$svi_lr_schedule} (default \code{"warmup_cosine"}), with optional
 #'   \code{svi_lr_warmup_frac} and \code{svi_lr_end_factor}. Validation-based
 #'   early stopping is enabled by default for SVI-backed neural fits; set

@@ -1,3 +1,16 @@
+# Development: October 15, 2026 linear-cost MoE expert backward
+
+- The routed-expert blocks in `strategize_moe.selected_experts` return their
+  rows and are scattered once after the loop. The loop used to carry the whole
+  `(assignments, d)` output, so each backward iteration touched every
+  assignment: quadratic in the routing-group size (4x per doubling on GPU at
+  width 576). Results are bit-identical. On the 88.9M production model at batch
+  32, expert forward+backward is 1.4-1.8x faster, single-GPU training 11-13%
+  faster, and the scanned update compiles in about half the time.
+- `strategize_moe.py` is part of the runtime identity recorded in full-state
+  checkpoints, so checkpoints written before this change cannot be resumed
+  with it.
+
 # Development: October 14, 2026 canonical id maps match by name
 
 - `cs_foundation_normalize_factor_ids()` and `cs_foundation_normalize_level_ids()`

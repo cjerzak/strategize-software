@@ -2640,6 +2640,19 @@ test_that("pairwise context tokens are masked for context-absent rows", {
   ctx_mask <- reticulate::py_to_r(strategize:::strenv$np$array(ctx_info$mask))
   expect_equal(ctx_mask, matrix(c(1, 1, 1, 0, 0, 0), nrow = 2L, byrow = TRUE))
   expect_equal(ctx_tokens[2, , ], matrix(0, nrow = 3L, ncol = 2L), tolerance = 1e-6)
+
+  # Budget accounting must agree with the masks produced by the real packers.
+  count_tokens <- function(info) strategize:::neural_svi_tokens_per_observation(
+    info, names(params), c(TRUE, TRUE), party_left = c(0L, 2L),
+    party_right = c(0L, 2L), resp_party = c(0L, 2L))
+  model_info$cross_candidate_encoder_mode <- "none"
+  expect_equal(count_tokens(model_info), 2 * (1 + rowSums(ctx_mask) + rowSums(cand_mask)))
+  model_info$cross_candidate_encoder_mode <- "full"
+  model_info$pairwise_antisymmetry <- "none"
+  cross_tokens <- 3 + rowSums(ctx_mask) + 2 * rowSums(cand_mask)
+  expect_equal(count_tokens(model_info), cross_tokens)
+  model_info$pairwise_antisymmetry <- "strict"
+  expect_equal(count_tokens(model_info), 2 * cross_tokens)
 })
 
 test_that("stage diagnostics ignore context-absent pairwise rows", {
@@ -4778,6 +4791,7 @@ test_that("SVI ELBO plot title reports the rounded last-20 finite mean", {
 test_that("output-only single-model normal batch_vi keeps the production step floor without inflating draws", {
   budget <- strategize:::neural_resolve_svi_budget(
     svi_steps_input = "optimal",
+    accounting = list(stored_model_parameters = 100000, expected_global_tokens_per_update = 5120),
     svi_num_draws_input = 100L,
     user_supplied_svi_steps = FALSE,
     user_supplied_svi_num_draws = FALSE,

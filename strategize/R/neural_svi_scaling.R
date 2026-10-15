@@ -1,221 +1,192 @@
-neural_optimal_svi_steps <- function(n_obs,
-                                     n_factors,
-                                     factor_levels,
-                                     model_dims,
-                                     model_depth,
-                                     n_party_levels = 1L,
-                                     n_resp_party_levels = 1L,
-                                     n_resp_covariates = 0L,
-                                     n_outcomes = 1L,
-                                     pairwise_mode = FALSE,
-                                     use_matchup_token = FALSE,
-                                     use_cross_encoder = FALSE,
-                                     use_cross_term = FALSE,
-                                     use_cross_attn = FALSE,
-                                     use_qk_norm = TRUE,
-                                     batch_size = 512L,
+# Automatic step counts are a token-exposure heuristic, not an empirically
+# established compute optimum. All accounting arithmetic is double precision;
+# only the final, bounded count is converted to an R integer.
+neural_optimal_svi_steps <- function(accounting,
                                      subsample_method = "full",
                                      tokens_per_param = 20,
                                      min_steps_full = 50L,
                                      max_steps_full = 1000L,
                                      min_steps_batch_vi = 200L,
-                                     max_steps_batch_vi = 40000L) {
-  n_obs <- suppressWarnings(as.integer(n_obs))
-  if (length(n_obs) != 1L || is.na(n_obs) || n_obs < 1L) {
-    return(1L)
-  }
-
-  n_factors <- suppressWarnings(as.integer(n_factors))
-  if (length(n_factors) != 1L || is.na(n_factors) || n_factors < 1L) {
-    n_factors <- suppressWarnings(as.integer(length(factor_levels)))
-    if (length(n_factors) != 1L || is.na(n_factors) || n_factors < 1L) {
-      n_factors <- 1L
+                                     max_steps_batch_vi = 40000L,
+                                     return_info = FALSE) {
+  positive <- function(x, label) {
+    x <- as.numeric(x)
+    if (length(x) != 1L || !is.finite(x) || x <= 0) {
+      stop(sprintf("Automatic SVI budget requires a positive finite %s.", label), call. = FALSE)
     }
+    x
   }
-
-  factor_levels <- suppressWarnings(as.integer(factor_levels))
-  if (length(factor_levels) < 1L) {
-    factor_levels <- rep(1L, n_factors)
-  } else if (length(factor_levels) != n_factors) {
-    factor_levels <- rep_len(factor_levels, n_factors)
+  if (is.null(accounting)) {
+    stop("Automatic SVI budget requires resolved model and token accounting.", call. = FALSE)
   }
-  factor_levels[is.na(factor_levels) | factor_levels < 1L] <- 1L
-
-  model_dims <- suppressWarnings(as.integer(model_dims))
-  if (length(model_dims) != 1L || is.na(model_dims) || model_dims < 1L) {
-    model_dims <- 1L
+  parameters <- positive(accounting$stored_model_parameters, "model parameter count")
+  tokens <- positive(accounting$expected_global_tokens_per_update, "token count per update")
+  ratio <- positive(tokens_per_param, "tokens_per_param")
+  batched <- tolower(subsample_method) %in% c("batch", "batch_vi")
+  lower <- positive(if (batched) min_steps_batch_vi else min_steps_full, "minimum steps")
+  upper <- positive(if (batched) max_steps_batch_vi else max_steps_full, "maximum steps")
+  if (lower != floor(lower) || upper != floor(upper) || upper < lower ||
+      upper > .Machine$integer.max) {
+    stop("Automatic SVI budget bounds must be ordered positive R integers.", call. = FALSE)
   }
-  model_depth <- suppressWarnings(as.integer(model_depth))
-  if (length(model_depth) != 1L || is.na(model_depth) || model_depth < 1L) {
-    model_depth <- 1L
-  }
-
-  n_party_levels <- suppressWarnings(as.integer(n_party_levels))
-  if (length(n_party_levels) != 1L || is.na(n_party_levels) || n_party_levels < 1L) {
-    n_party_levels <- 1L
-  }
-  n_resp_party_levels <- suppressWarnings(as.integer(n_resp_party_levels))
-  if (length(n_resp_party_levels) != 1L || is.na(n_resp_party_levels) || n_resp_party_levels < 1L) {
-    n_resp_party_levels <- 1L
-  }
-  n_resp_covariates <- suppressWarnings(as.integer(n_resp_covariates))
-  if (length(n_resp_covariates) != 1L || is.na(n_resp_covariates) || n_resp_covariates < 0L) {
-    n_resp_covariates <- 0L
-  }
-  n_outcomes <- suppressWarnings(as.integer(n_outcomes))
-  if (length(n_outcomes) != 1L || is.na(n_outcomes) || n_outcomes < 1L) {
-    n_outcomes <- 1L
-  }
-
-  batch_size <- suppressWarnings(as.integer(batch_size))
-  if (length(batch_size) != 1L || is.na(batch_size) || batch_size < 1L) {
-    batch_size <- 1L
-  }
-
-  tokens_per_param <- as.numeric(tokens_per_param)
-  if (length(tokens_per_param) != 1L || is.na(tokens_per_param) ||
-      !is.finite(tokens_per_param) || tokens_per_param <= 0) {
-    tokens_per_param <- 20
-  }
-
-  subsample_method <- tolower(as.character(subsample_method))
-  if (length(subsample_method) != 1L || is.na(subsample_method) || !nzchar(subsample_method)) {
-    subsample_method <- "full"
-  }
-  is_batch_vi <- isTRUE(subsample_method %in% c("batch_vi", "batch"))
-
-  ff_dim <- suppressWarnings(as.integer(round(as.numeric(model_dims) * 3.75)))
-  if (is.na(ff_dim) || ff_dim < 1L) {
-    ff_dim <- model_dims
-  }
-  use_qk_norm <- isTRUE(use_qk_norm)
-  cand_heads <- (1:model_dims)[(model_dims %% (1:model_dims)) == 0L]
-  n_heads <- cand_heads[which.min(abs(cand_heads - 8L))]
-  head_dim <- as.integer(model_dims / n_heads)
-
-  # Approximate learned-parameter count (enough for scaling).
-  n_params_factor_embed <- sum((factor_levels + 1L) * model_dims)
-  n_params_feature_id <- n_factors * model_dims
-  n_params_party <- n_party_levels * model_dims
-  n_params_rel <- 3L * model_dims
-  n_params_resp_party <- n_resp_party_levels * model_dims
-  n_params_stage <- if (isTRUE(pairwise_mode)) n_resp_party_levels * 2L * model_dims else 0L
-  n_params_matchup <- if (isTRUE(pairwise_mode) && isTRUE(use_matchup_token)) {
-    as.integer(n_party_levels * (n_party_levels + 1L) / 2L) * model_dims
-  } else {
-    0L
-  }
-  n_params_choice <- model_dims
-  n_params_sep <- if (isTRUE(pairwise_mode) && isTRUE(use_cross_encoder)) model_dims else 0L
-  n_params_segment <- if (isTRUE(pairwise_mode) && isTRUE(use_cross_encoder)) 2L * model_dims else 0L
-  n_params_resp_cov <- n_resp_covariates * model_dims
-  n_params_transformer_layer <- 4L * model_dims * model_dims +
-    2L * model_dims * ff_dim +
-    4L * model_dims
-  if (isTRUE(use_qk_norm)) {
-    n_params_transformer_layer <- n_params_transformer_layer + 2L * head_dim
-  }
-  n_params_transformer <- model_depth * n_params_transformer_layer
-  n_params_final_norm <- model_dims
-  n_params_out <- model_dims * n_outcomes + n_outcomes
-  n_params_cross <- if (isTRUE(pairwise_mode) && isTRUE(use_cross_term)) {
-    model_dims * model_dims + n_outcomes
-  } else {
-    0L
-  }
-  n_params_cross_attn <- if (isTRUE(pairwise_mode) && isTRUE(use_cross_attn)) {
-    4L * model_dims * model_dims + model_dims + 1L
-  } else {
-    0L
-  }
-  if (isTRUE(pairwise_mode) && isTRUE(use_cross_attn) && isTRUE(use_qk_norm)) {
-    n_params_cross_attn <- n_params_cross_attn + 2L * head_dim
-  }
-  n_params_total <- n_params_factor_embed +
-    n_params_feature_id +
-    n_params_party +
-    n_params_rel +
-    n_params_resp_party +
-    n_params_stage +
-    n_params_matchup +
-    n_params_choice +
-    n_params_sep +
-    n_params_segment +
-    n_params_resp_cov +
-    n_params_transformer +
-    n_params_final_norm +
-    n_params_out +
-    n_params_cross +
-    n_params_cross_attn
-  n_params_total <- max(1L, as.integer(n_params_total))
-
-  # Approximate token length per observation passed through the transformer.
-  # Here "token" refers to an input embedding position (choice token, context tokens,
-  # factor tokens, plus party/rel tokens). Even though the factor levels are exogenous,
-  # they still determine which embeddings/paths are exercised and they drive the
-  # per-step compute.
-  ctx_len <- 1L
-  if (isTRUE(pairwise_mode)) {
-    ctx_len <- ctx_len + 1L
-    if (isTRUE(use_matchup_token)) {
-      ctx_len <- ctx_len + 1L
-    }
-  }
-  if (n_resp_covariates > 0L) {
-    ctx_len <- ctx_len + 1L
-  }
-  cand_len <- n_factors + 2L
-  tokens_single <- cand_len + ctx_len + 1L
-  tokens_per_obs <- if (isTRUE(pairwise_mode) && isTRUE(use_cross_encoder)) {
-    # choice + ctx + sep + left + sep + right
-    1L + ctx_len + 1L + cand_len + 1L + cand_len
-  } else if (isTRUE(pairwise_mode)) {
-    # Two independent encoder passes.
-    2L * tokens_single
-  } else {
-    tokens_single
-  }
-  tokens_per_obs <- max(1L, as.integer(tokens_per_obs))
-
-  tokens_target <- tokens_per_param * as.numeric(n_params_total)
-  if (!is.finite(tokens_target) || tokens_target <= 0) {
-    tokens_target <- 1
-  }
-
-  eff_batch <- if (is_batch_vi) min(batch_size, n_obs) else n_obs
-  eff_batch <- max(1L, eff_batch)
-  tokens_per_step <- as.numeric(eff_batch) * as.numeric(tokens_per_obs)
-  steps_raw <- as.integer(ceiling(tokens_target / tokens_per_step))
-  if (length(steps_raw) != 1L || is.na(steps_raw) || steps_raw < 1L) {
-    steps_raw <- 1L
-  }
-
-  if (is_batch_vi) {
-    min_steps <- suppressWarnings(as.integer(min_steps_batch_vi))
-    max_steps <- suppressWarnings(as.integer(max_steps_batch_vi))
-  } else {
-    min_steps <- suppressWarnings(as.integer(min_steps_full))
-    max_steps <- suppressWarnings(as.integer(max_steps_full))
-  }
-  if (length(min_steps) != 1L || is.na(min_steps) || min_steps < 1L) {
-    min_steps <- 1L
-  }
-  if (length(max_steps) != 1L || is.na(max_steps) || max_steps < min_steps) {
-    max_steps <- max(min_steps, steps_raw)
-  }
-
-  max(min_steps, min(steps_raw, max_steps))
+  # Divide before multiplying to avoid unnecessary overflow. A positive Inf
+  # quotient still saturates at the cap; it must never fall back to the floor.
+  raw_steps <- ceiling((parameters / tokens) * ratio)
+  steps <- as.integer(max(lower, min(raw_steps, upper)))
+  if (!return_info) return(steps)
+  c(accounting, list(
+    accounting_version = 2L, budget_basis = "stored_model_parameters",
+    token_basis = "nonpadding_encoder_positions_before_schema_dropout",
+    tokens_per_param = ratio, unclamped_steps = raw_steps,
+    min_steps = lower, max_steps = upper,
+    applied_bound = if (raw_steps < lower) "minimum" else if (raw_steps > upper) "maximum" else "none",
+    resolved_steps = steps
+  ))
 }
 
+# Used by both the actual mixed-task sampler and its expected token accounting.
+neural_svi_mixed_batch_counts <- function(n_pair, n_single, batch_size) {
+  if (n_pair < 1 || n_single < 1 || batch_size < 2) {
+    stop("Universal mixed-mode compact SVI batches must include pairwise and single rows.", call. = FALSE)
+  }
+  pair <- max(1, min(n_pair, round(as.double(batch_size) * n_pair / (n_pair + n_single))))
+  single <- max(1, min(n_single, batch_size - pair))
+  if (pair + single > batch_size) {
+    if (pair > single) pair <- pair - 1 else single <- single - 1
+  }
+  c(pair = pair, single = single)
+}
+
+neural_svi_budget_accounting <- function(parameters, tokens_per_observation,
+                                         train_idx = seq_along(tokens_per_observation),
+                                         batch_size = 512L, subsample_method = "full",
+                                         mixed_pair_count = NULL, balanced_state = NULL,
+                                         model_depth = 1L, transformer_loop = list(enabled = FALSE),
+                                         mixed_sampling = c("stratified", "independent")) {
+  tokens <- as.double(tokens_per_observation)
+  if (!length(train_idx) || anyNA(train_idx) || any(train_idx < 1 | train_idx > length(tokens)) ||
+      any(!is.finite(tokens[train_idx]) | tokens[train_idx] <= 0)) {
+    stop("Automatic SVI budget requires valid training rows and token counts.", call. = FALSE)
+  }
+  batch_size <- as.double(batch_size)
+  if (length(batch_size) != 1L || !is.finite(batch_size) || batch_size < 1) {
+    stop("Automatic SVI budget requires a positive batch size.", call. = FALSE)
+  }
+  batched <- tolower(subsample_method) %in% c("batch", "batch_vi")
+  effective_batch <- if (batched) min(batch_size, length(train_idx)) else length(train_idx)
+  sampling <- "uniform"
+  if (!batched) {
+    per_update <- sum(tokens[train_idx])
+  } else if (!is.null(balanced_state)) {
+    # The sampler draws a study, then a respondent, then one of their rows.
+    unit_means <- vapply(balanced_state$obs_by_unit, function(idx) mean(tokens[idx]), numeric(1))
+    study_means <- vapply(balanced_state$units_by_study, function(idx) mean(unit_means[idx]), numeric(1))
+    effective_batch <- batch_size # sampling with replacement
+    per_update <- effective_batch * mean(study_means)
+    sampling <- "study_equal_respondent"
+  } else if (!is.null(mixed_pair_count)) {
+    pair <- train_idx[train_idx <= mixed_pair_count]
+    single <- train_idx[train_idx > mixed_pair_count]
+    mixed_sampling <- match.arg(mixed_sampling)
+    counts <- if (mixed_sampling == "independent") {
+      # Non-compact NumPyro uses a separate subsampling plate for each task.
+      c(pair = min(batch_size, length(pair)), single = min(batch_size, length(single)))
+    } else neural_svi_mixed_batch_counts(length(pair), length(single), batch_size)
+    effective_batch <- sum(counts)
+    per_update <- counts[["pair"]] * mean(tokens[pair]) + counts[["single"]] * mean(tokens[single])
+    sampling <- paste0("mixed_task_", mixed_sampling)
+  } else {
+    per_update <- effective_batch * mean(tokens[train_idx])
+  }
+  loop <- transformer_loop
+  effective_depth <- neural_transformer_effective_depth(loop, as.double(model_depth))
+  max_depth <- if (isTRUE(loop$enabled)) {
+    loop$prelude_layers + loop$coda_layers +
+      (as.double(model_depth) - loop$prelude_layers - loop$coda_layers) *
+      neural_transformer_training_max_iterations(loop)
+  } else as.double(model_depth)
+  c(parameters, list(n_training_observations = as.double(length(train_idx)),
+    expected_global_batch_size = effective_batch, sampling = sampling,
+    expected_global_tokens_per_update = per_update,
+    mean_tokens_per_training_observation = mean(tokens[train_idx]),
+    expected_layer_passes = effective_depth, max_layer_passes = max_depth))
+}
+
+# Count the valid positions assembled by the candidate/context packers, before
+# schema dropout. Missing covariate values still have a learned missing-value
+# token; absent schema slots (-1 in the order) are padding and do not count.
+neural_svi_tokens_per_observation <- function(model_info, parameter_names, pairwise,
+                                              experiment_index = NULL,
+                                              party_left = NULL, party_right = NULL,
+                                              resp_party = NULL) {
+  n <- length(pairwise)
+  has <- function(name) name %in% parameter_names
+  order_count <- function(orders, default, index) {
+    count <- function(order) sum(as.double(order) >= 0)
+    if (is.null(index) || !length(orders)) return(rep(count(default), n))
+    counts <- vapply(orders, count, numeric(1))
+    index <- pmax(0, pmin(length(counts) - 1, as.integer(index)))
+    rep_len(counts[index + 1L], n)
+  }
+  factors <- order_count(model_info$factor_order_by_experiment,
+    model_info$default_factor_order %||% integer(0), experiment_index)
+  ctx_index <- experiment_index %||% model_info$default_experiment_index
+  covariates <- if (has("E_covariate_fused_base")) {
+    order_count(model_info$covariate_order_by_experiment,
+      model_info$default_covariate_order %||% (seq_along(model_info$covariate_names) - 1L), ctx_index)
+  } else rep(0, n)
+  present <- function(party = NULL, other = NULL, respondent = NULL) {
+    out <- rep(TRUE, n)
+    if (identical(model_info$context_present_masking, FALSE)) return(out)
+    for (value in list(party, other)) {
+      if (!is.null(value)) out <- out & (rep_len(value, n) != model_info$party_missing_index)
+    }
+    if (!is.null(respondent)) out <- out & (rep_len(respondent, n) != model_info$resp_party_missing_index)
+    out
+  }
+  pair_present <- present(party_left, party_right, resp_party)
+  context_present <- ifelse(pairwise, pair_present, present(respondent = resp_party))
+  left_present <- ifelse(pairwise, pair_present, present(party_left, respondent = resp_party))
+  right_present <- pair_present
+  mode <- neural_experiment_token_mode(model_info)
+  experiment <- (mode %in% c("legacy_id", "hybrid") && has("E_experiment") && !is.null(ctx_index)) ||
+    (mode %in% c("description", "hybrid") && has("W_experiment_text") &&
+      ((!is.null(ctx_index) && !is.null(model_info$experiment_description_text)) ||
+        (!is.null(model_info$default_experiment_text) && isTRUE(model_info$default_experiment_text_present))))
+  context <- covariates + as.double(experiment) +
+    as.double(has("W_place_context") && neural_place_context_enabled(model_info)) +
+    as.double(has("W_time_context") && neural_time_context_enabled(model_info)) +
+    context_present * (as.double(has("E_resp_party")) +
+      pairwise * (as.double(has("E_stage")) + as.double(has("E_matchup"))))
+  auxiliary <- as.double(has("E_party")) + as.double(has("E_rel"))
+  left <- factors + auxiliary * left_present
+  right <- factors + auxiliary * right_present
+  cross <- identical(model_info$cross_candidate_encoder_mode, "full")
+  joint <- ifelse(pairwise,
+    if (cross) 3 + context + left + right else 2 + 2 * context + left + right,
+    1 + context + left)
+  if (cross && isTRUE(neural_pairwise_antisymmetry_strict(model_info))) {
+    joint[pairwise] <- 2 * joint[pairwise]
+  }
+  if (has("W_to_cand")) joint[] <- 0
+  if (has("W_rc_r") && has("W_rc_c") && has("W_rc_out")) {
+    # One respondent tower and one/two candidate towers, with shared weights.
+    joint <- joint + 1 + context + 1 + left + ifelse(pairwise, 1 + right, 0)
+  }
+  as.double(joint)
+}
+
+# Dimensional arguments remain accepted for older internal callers, but automatic
+# budgets require actual accounting; no dense-only fallback is inferred.
 neural_resolve_svi_budget <- function(svi_steps_input,
                                       svi_num_draws_input,
                                       user_supplied_svi_steps = FALSE,
                                       user_supplied_svi_num_draws = FALSE,
-                                      n_obs,
-                                      n_factors,
-                                      factor_levels,
-                                      model_dims,
-                                      model_depth,
+                                      n_obs = NULL,
+                                      n_factors = NULL,
+                                      factor_levels = NULL,
+                                      model_dims = NULL,
+                                      model_depth = NULL,
                                       n_party_levels = 1L,
                                       n_resp_party_levels = 1L,
                                       n_resp_covariates = 0L,
@@ -231,34 +202,35 @@ neural_resolve_svi_budget <- function(svi_steps_input,
                                       output_only_mode = FALSE,
                                       likelihood = NULL,
                                       output_single_normal_batch_vi_floor = 2000L,
-                                      output_single_normal_batch_vi_draw_floor = 200L) {
+                                      output_single_normal_batch_vi_draw_floor = 200L,
+                                      accounting = NULL,
+                                      resume_budget = NULL) {
   steps_input <- svi_steps_input
   used_optimal <- FALSE
+  budget_details <- NULL
 
   if (is.character(steps_input)) {
     steps_tag <- tolower(as.character(steps_input))
     if (length(steps_tag) == 1L && !is.na(steps_tag) && nzchar(steps_tag) &&
         identical(steps_tag, "optimal")) {
       used_optimal <- TRUE
-      resolved_steps <- neural_optimal_svi_steps(
-        n_obs = n_obs,
-        n_factors = n_factors,
-        factor_levels = factor_levels,
-        model_dims = model_dims,
-        model_depth = model_depth,
-        n_party_levels = n_party_levels,
-        n_resp_party_levels = n_resp_party_levels,
-        n_resp_covariates = n_resp_covariates,
-        n_outcomes = n_outcomes,
-        pairwise_mode = pairwise_mode,
-        use_matchup_token = use_matchup_token,
-        use_cross_encoder = use_cross_encoder,
-        use_cross_term = use_cross_term,
-        use_cross_attn = use_cross_attn,
-        use_qk_norm = use_qk_norm,
-        batch_size = batch_size,
-        subsample_method = subsample_method
-      )
+      if (!is.null(resume_budget)) {
+        if (!isTRUE(resume_budget$used_optimal) ||
+            length(resume_budget$svi_steps) != 1L ||
+            !is.finite(resume_budget$svi_steps) || resume_budget$svi_steps < 1 ||
+            resume_budget$svi_steps != floor(resume_budget$svi_steps) ||
+            resume_budget$svi_steps > .Machine$integer.max) {
+          stop("Checkpoint does not contain a valid automatic SVI budget.", call. = FALSE)
+        }
+        budget_details <- resume_budget$accounting
+        resolved_steps <- as.integer(resume_budget$svi_steps)
+      } else {
+        budget_details <- neural_optimal_svi_steps(
+          accounting = accounting, subsample_method = subsample_method,
+          return_info = TRUE
+        )
+        resolved_steps <- budget_details$resolved_steps
+      }
     } else {
       resolved_steps <- suppressWarnings(as.integer(steps_input))
     }
@@ -294,7 +266,7 @@ neural_resolve_svi_budget <- function(svi_steps_input,
   # output-only normal batch_vi should not silently allocate larger posterior draws.
   applied_draw_floor <- FALSE
 
-  list(
+  result <- list(
     svi_steps = as.integer(resolved_steps),
     svi_num_draws = as.integer(resolved_draws),
     used_optimal = isTRUE(used_optimal),
@@ -304,4 +276,13 @@ neural_resolve_svi_budget <- function(svi_steps_input,
     applied_output_single_normal_batch_vi_draw_floor = isTRUE(applied_draw_floor),
     output_single_normal_batch_vi = isTRUE(output_single_normal_batch_vi)
   )
+  if (!is.null(resume_budget) && used_optimal) {
+    result$applied_output_single_normal_batch_vi_floor <-
+      resume_budget$applied_output_single_normal_batch_vi_floor
+  }
+  if (!is.null(budget_details)) {
+    budget_details$resolved_steps <- as.integer(resolved_steps)
+    result$accounting <- budget_details
+  }
+  result
 }

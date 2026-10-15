@@ -620,8 +620,8 @@ neural_build_gradient_diagnostics <- function(status = "ok",
     checkpoint_global_l2_norm = numeric(0),
     checkpoint_global_rms = numeric(0),
     checkpoint_global_max_abs = numeric(0),
-    checkpoint_n_nonfinite = integer(0),
-    checkpoint_n_elements = integer(0),
+    checkpoint_n_nonfinite = numeric(0),
+    checkpoint_n_elements = numeric(0),
     global_l2_norm = NA_real_,
     global_rms = NA_real_,
     global_max_abs = NA_real_,
@@ -645,8 +645,8 @@ neural_append_gradient_checkpoint <- function(diagnostics, step, checkpoint) {
   grad_l2 <- suppressWarnings(as.numeric(checkpoint$grad_l2 %||% NA_real_))
   grad_rms <- suppressWarnings(as.numeric(checkpoint$grad_rms %||% NA_real_))
   grad_max_abs <- suppressWarnings(as.numeric(checkpoint$grad_max_abs %||% NA_real_))
-  grad_n_nonfinite <- suppressWarnings(as.integer(checkpoint$grad_n_nonfinite %||% NA_integer_))
-  grad_n_elements <- suppressWarnings(as.integer(checkpoint$grad_n_elements %||% NA_integer_))
+  grad_n_nonfinite <- suppressWarnings(as.numeric(checkpoint$grad_n_nonfinite %||% NA_real_))
+  grad_n_elements <- suppressWarnings(as.numeric(checkpoint$grad_n_elements %||% NA_real_))
 
   diagnostics$checkpoint_steps <- c(
     as.integer(diagnostics$checkpoint_steps %||% integer(0)),
@@ -665,11 +665,11 @@ neural_append_gradient_checkpoint <- function(diagnostics, step, checkpoint) {
     grad_max_abs
   )
   diagnostics$checkpoint_n_nonfinite <- c(
-    as.integer(diagnostics$checkpoint_n_nonfinite %||% integer(0)),
+    as.numeric(diagnostics$checkpoint_n_nonfinite %||% numeric(0)),
     grad_n_nonfinite
   )
   diagnostics$checkpoint_n_elements <- c(
-    as.integer(diagnostics$checkpoint_n_elements %||% integer(0)),
+    as.numeric(diagnostics$checkpoint_n_elements %||% numeric(0)),
     grad_n_elements
   )
   diagnostics$global_l2_norm <- grad_l2
@@ -18964,18 +18964,9 @@ generate_ModelOutcome_neural <- function(){
     if (length(pair_pool) < 1L || length(single_pool) < 1L) {
       stop("Universal mixed-mode compact SVI batches must include pairwise and single rows.", call. = FALSE)
     }
-    pool_n <- length(pool)
-    pair_target <- max(1L, min(length(pair_pool), as.integer(round(
-      compact_svi_batch_size * length(pair_pool) / pool_n
-    ))))
-    single_target <- max(1L, min(length(single_pool), compact_svi_batch_size - pair_target))
-    if (pair_target + single_target > compact_svi_batch_size) {
-      if (pair_target > single_target) {
-        pair_target <- pair_target - 1L
-      } else {
-        single_target <- single_target - 1L
-      }
-    }
+    counts <- neural_svi_mixed_batch_counts(length(pair_pool), length(single_pool), compact_svi_batch_size)
+    pair_target <- as.integer(counts[["pair"]])
+    single_target <- as.integer(counts[["single"]])
     pair_idx <- if (length(pair_pool) <= pair_target) {
       pair_pool
     } else {
@@ -20594,324 +20585,6 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     mcmc_control$svi_lr_batch_scale_factor <- svi_lr_batch_factor
-    svi_budget_info <- neural_resolve_svi_budget(
-      svi_steps_input = mcmc_control$svi_steps,
-      svi_num_draws_input = mcmc_control$svi_num_draws,
-      user_supplied_svi_steps = user_supplied_svi_steps,
-      user_supplied_svi_num_draws = user_supplied_svi_num_draws,
-      n_obs = n_obs_svi,
-      n_factors = length(factor_levels_int),
-      factor_levels = factor_levels_int,
-      model_dims = ModelDims,
-      model_depth = ModelDepth,
-      n_party_levels = n_party_levels,
-      n_resp_party_levels = n_resp_party_levels,
-      n_resp_covariates = n_resp_covariates,
-      n_outcomes = nOutcomes,
-      pairwise_mode = pairwise_scaling,
-      use_matchup_token = use_matchup_token,
-      use_cross_encoder = use_cross_encoder,
-      use_cross_term = use_cross_term,
-      use_cross_attn = use_cross_attn,
-      use_qk_norm = qk_norm_enabled,
-      batch_size = mcmc_control$batch_size,
-      subsample_method = svi_subsample_method,
-      output_only_mode = output_only_mode,
-      likelihood = likelihood
-    )
-    svi_steps <- as.integer(svi_budget_info$svi_steps)
-    resolved_svi_steps <- svi_steps
-    resolved_svi_num_draws <- as.integer(svi_budget_info$svi_num_draws)
-    mcmc_control$svi_steps <- svi_steps
-    mcmc_control$svi_num_draws <- resolved_svi_num_draws
-    if (isTRUE(svi_budget_info$used_optimal)) {
-      message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
-    }
-    if (isTRUE(svi_budget_info$applied_output_single_normal_batch_vi_floor)) {
-      message(sprintf(
-        "Applying output-only single-model normal batch_vi SVI floor => %d steps.",
-        svi_steps
-      ))
-    }
-    warmup_frac <- if (!is.null(mcmc_control$svi_lr_warmup_frac)) {
-      as.numeric(mcmc_control$svi_lr_warmup_frac)
-    } else {
-      0.1
-    }
-    if (length(warmup_frac) != 1L || is.na(warmup_frac) || !is.finite(warmup_frac)) {
-      warmup_frac <- 0.1
-    }
-    warmup_frac <- max(0, min(warmup_frac, 0.9))
-    decay_steps <- max(2L, svi_steps)
-    warmup_steps <- if (schedule_tag == "warmup_cosine") {
-      max(1L, min(as.integer(round(svi_steps * warmup_frac)), decay_steps - 1L))
-    } else {
-      0L
-    }
-    end_factor <- if (!is.null(mcmc_control$svi_lr_end_factor)) {
-      as.numeric(mcmc_control$svi_lr_end_factor)
-    } else {
-      0.01
-    }
-    if (length(end_factor) != 1L || is.na(end_factor) || !is.finite(end_factor)) {
-      end_factor <- 0.01
-    }
-    end_factor <- max(0, min(end_factor, 1))
-    # Validate the requested optimizer before fingerprinting or restoring state.
-    # Muon must never silently change optimizer or scientific settings.
-    optimizer_tag <- strategize_dp_all_call(function() neural_resolve_svi_optimizer_tag(
-      optimizer_tag = optimizer_tag,
-      guide_name = guide_name,
-      user_supplied_optimizer = user_supplied_optimizer
-    ), "optimizer preflight")
-    # The checkpoint is restored BEFORE the LR schedule is built so that a
-    # partial-run resume can continue the schedule from the completed step
-    # (offset below) instead of re-entering warmup at peak LR mid-run.
-    svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
-    svi_checkpoint_fingerprint <- NULL
-    svi_checkpoint_latest <- NULL
-    svi_checkpoint_best <- NULL
-    if (isTRUE(svi_checkpoint$enabled)) {
-      svi_checkpoint_fingerprint <- neural_svi_checkpoint_fingerprint(list(
-        data = list(
-          Y = Y_use,
-          W = W_,
-          W_idx_compact = if (isTRUE(compact_training)) W_idx_compact_use else NULL,
-          X = X_use,
-          X_compact = if (isTRUE(compact_training)) X_compact_use else NULL,
-          X_present = X_present_use,
-          X_present_compact = if (isTRUE(compact_training)) X_present_compact_use else NULL,
-          pair_id = pair_id_ %||% NULL,
-          profile_order = profile_order_ %||% NULL,
-          competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
-          competing_group_variable_respondent = competing_group_variable_respondent_ %||% NULL,
-          respondent_id = respondent_id %||% NULL,
-          respondent_task_id = respondent_task_id %||% NULL
-        ),
-        model = list(
-          likelihood = likelihood,
-          n_outcomes = as.integer(nOutcomes),
-          factor_levels = factor_levels_int,
-          pairwise_mode = isTRUE(pairwise_mode),
-          pairwise_context_mode = pairwise_context_mode,
-          model_dims = as.integer(ModelDims),
-          model_depth = as.integer(ModelDepth),
-          residual_mode = residual_mode,
-          cross_candidate_encoder_mode = cross_candidate_encoder_mode,
-          qk_norm = isTRUE(qk_norm_enabled),
-          subsample_method = subsample_method,
-          output_only_mode = isTRUE(output_only_mode),
-          guide = guide_name,
-          optimizer = optimizer_tag,
-          svi_lr = svi_lr,
-          schedule = schedule_tag,
-          warmup_frac = warmup_frac,
-          end_factor = end_factor,
-          n_particles = as.integer(n_particles),
-          svi_budget_info = svi_budget_info,
-          validation_split_version = 2L
-        ),
-        control = neural_svi_checkpoint_strip_control(mcmc_control),
-        token = neural_token_info_use
-      ))
-      if (isTRUE(svi_checkpoint$resume)) {
-        svi_checkpoint_latest <- neural_svi_checkpoint_restore_latest(
-          svi_checkpoint$path,
-          svi_checkpoint_fingerprint
-        )
-        svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
-          svi_checkpoint$path,
-          svi_checkpoint_fingerprint
-        )
-        if (!is.null(svi_checkpoint_latest)) {
-          message(sprintf(
-            "Resuming neural SVI checkpoint from %s at step %d/%d.",
-            svi_checkpoint$path,
-            as.integer(svi_checkpoint_latest$completed_step %||% 0L),
-            as.integer(svi_checkpoint_latest$resolved_svi_steps %||% svi_steps)
-          ))
-        }
-      }
-    }
-    lr_schedule_step_offset <- 0L
-    if (!is.null(svi_checkpoint_latest) &&
-        !identical(svi_checkpoint_latest$checkpoint_semantics, "full_svi_state")) {
-      resume_completed_for_lr <- as.integer(svi_checkpoint_latest$completed_step %||% 0L)
-      if (!is.na(resume_completed_for_lr) &&
-          resume_completed_for_lr > 0L &&
-          resume_completed_for_lr < as.integer(svi_steps)) {
-        lr_schedule_step_offset <- resume_completed_for_lr
-      }
-    }
-    lr_schedule <- if (schedule_tag == "warmup_cosine") {
-      strenv$optax$warmup_cosine_decay_schedule(
-        init_value = svi_lr * end_factor,
-        peak_value = svi_lr,
-        warmup_steps = warmup_steps,
-        decay_steps = decay_steps,
-        end_value = svi_lr * end_factor
-      )
-    } else if (schedule_tag == "cosine") {
-      strenv$optax$cosine_decay_schedule(
-        init_value = svi_lr,
-        decay_steps = decay_steps,
-        alpha = end_factor
-      )
-    } else {
-      svi_lr
-    }
-    if (lr_schedule_step_offset > 0L && !is.numeric(lr_schedule) &&
-        !is.null(strenv$jax_offset_schedule)) {
-      lr_schedule <- strenv$jax_offset_schedule(lr_schedule, ai(lr_schedule_step_offset))
-      message(sprintf(
-        "Resumed LR schedule continues from step %d (no re-warmup).",
-        as.integer(lr_schedule_step_offset)
-      ))
-    }
-    clip_global_norm <- as.numeric(mcmc_control$svi_clip_global_norm %||% 10)
-    if (length(clip_global_norm) != 1L ||
-        is.na(clip_global_norm) ||
-        !is.finite(clip_global_norm) ||
-        clip_global_norm <= 0) {
-      clip_global_norm <- NA_real_
-    }
-    optax_clip_available <- reticulate::py_has_attr(strenv$optax, "clip_by_global_norm") &&
-      reticulate::py_has_attr(strenv$optax, "chain")
-    optax_to_numpyro_available <- reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")
-    clip_enabled <- isTRUE(optax_clip_available) && is.finite(clip_global_norm)
-    optim_module <- reticulate::import_from_path(
-      "strategize_optim", path = system.file("python", package = "strategize"), convert = FALSE
-    )
-    final_update_diagnostics <- NULL
-    gradient_prelude_layers <- if (isTRUE(transformer_loop$enabled)) {
-      as.integer(seq_len(transformer_loop$prelude_layers))
-    } else integer(0)
-    gradient_core_layers <- if (isTRUE(transformer_loop$enabled)) {
-      as.integer(seq.int(
-        transformer_loop$prelude_layers + 1L,
-        ModelDepth - transformer_loop$coda_layers
-      ))
-    } else integer(0)
-    gradient_coda_layers <- if (isTRUE(transformer_loop$enabled) &&
-                                transformer_loop$coda_layers > 0L) {
-      as.integer(seq.int(ModelDepth - transformer_loop$coda_layers + 1L, ModelDepth))
-    } else integer(0)
-    recurrent_gradient_scale <- if (isTRUE(transformer_loop$enabled) &&
-                                      isTRUE(transformer_loop$normalize_core_gradients)) {
-      1 / neural_transformer_training_mean_iterations(transformer_loop)
-    } else 1
-    wrap_optax_optimizer <- function(optax_optim) {
-      optim_module$normalized_optimizer(
-        optax_optim, objective_scale = objective_scale,
-        clip_global_norm = if (isTRUE(clip_enabled)) clip_global_norm else NULL,
-        prelude_layers = gradient_prelude_layers,
-        recurrent_core_layers = gradient_core_layers,
-        coda_layers = gradient_coda_layers,
-        recurrent_gradient_scale = recurrent_gradient_scale
-      )
-    }
-    optax_to_numpyro_optimizer <- function(optax_optim) {
-      optax_optim <- wrap_optax_optimizer(optax_optim)
-      if (isTRUE(optax_to_numpyro_available)) {
-        return(strenv$numpyro$optim$optax_to_numpyro(optax_optim))
-      }
-      optax_optim
-    }
-    # optimizer_tag was resolved above, before the checkpoint fingerprint.
-    optimizer_diagnostics <- list(
-      optimizer_status = "configured",
-      optimizer = optimizer_tag,
-      optimizer_requested = optimizer_tag,
-      muon_parameter_count = NA_real_,
-      auxiliary_adam_parameter_count = NA_real_,
-      user_supplied_optimizer = isTRUE(user_supplied_optimizer),
-      schedule_name = schedule_tag,
-      svi_lr = svi_lr,
-      warmup_frac = warmup_frac,
-      warmup_steps = as.integer(warmup_steps),
-      decay_steps = as.integer(decay_steps),
-      end_factor = end_factor,
-      clip_global_norm = if (is.finite(clip_global_norm)) clip_global_norm else NA_real_,
-      clip_status = if (isTRUE(clip_enabled)) "enabled" else if (!is.finite(clip_global_norm)) "disabled" else "unavailable",
-      objective_normalization = objective_normalization,
-      objective_gradient_scale = objective_scale,
-      recurrent_gradient_scale = recurrent_gradient_scale,
-      recurrent_gradient_normalization = isTRUE(transformer_loop$enabled) &&
-        isTRUE(transformer_loop$normalize_core_gradients),
-      gradient_monitor_layer_groups = list(
-        prelude = gradient_prelude_layers,
-        recurrent_core = gradient_core_layers,
-        coda = gradient_coda_layers
-      ),
-      objective_normalization_n = as.integer(n_obs_svi),
-      steps_completed = NA_integer_,
-      lr_trace = numeric(0),
-      lr_trace_status = "pending"
-    )
-    svi_optim <- if (optimizer_tag == "adam") {
-      if (reticulate::py_has_attr(strenv$optax, "adam")) {
-        optax_to_numpyro_optimizer(strenv$optax$adam(learning_rate = lr_schedule))
-      } else {
-        stop("SVI normalization requires optax.adam.", call. = FALSE)
-      }
-    } else if (optimizer_tag == "adamw") {
-      # optax.adamw defaults to weight_decay=1e-4 with mask=None, which applies
-      # decoupled decay to EVERY optimized leaf -- including the AutoNormal
-      # posterior stddevs (*_auto_scale), RMSNorm/QK gains, and the deterministic
-      # ReZero gates (init small) -- decaying gates toward 0 silently undoes the
-      # ReZero fix and mis-calibrates the variational posterior. Set weight_decay=0
-      # to match the muon default (adam_weight_decay=0). A name-masked nonzero decay
-      # restricted to true weight matrices would be the richer alternative.
-      if (reticulate::py_has_attr(strenv$optax, "adamw")) {
-        optax_to_numpyro_optimizer(strenv$optax$adamw(learning_rate = lr_schedule,
-                                                      weight_decay = 0))
-      } else {
-        stop(
-          "optimizer='adamw' requested, but neither numpyro.optim.AdamW nor optax.adamw is available.",
-          call. = FALSE
-        )
-      }
-    } else if (optimizer_tag == "muon") {
-      strategize_dp_all_call(function() optax_to_numpyro_optimizer(
-        optim_module$strict_muon_optimizer(
-          learning_rate = lr_schedule,
-          dimension_numbers = neural_get_muon_dimension_numbers_callable()
-        )), "Muon construction")
-    } else {
-      optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
-      optax_to_numpyro_optimizer(optax_optim)
-    }
-    # With a mean-field AutoNormal/AutoDiagonalNormal guide, every weight latent is
-    # Normal-prior / Normal-posterior, so the per-site KL is available in closed
-    # form. TraceMeanField_ELBO substitutes that analytic KL for Trace_ELBO's
-    # single-sample MC estimate of the entropy/cross-entropy term (num_particles=1
-    # by default), removing avoidable gradient variance at no extra cost. Fall back
-    # to Trace_ELBO for non-mean-field guides or if the class is unavailable.
-    elbo_loss <- local({
-      mean_field_guide <- guide_name %in% c("auto_normal", "auto_diagonal")
-      if (isTRUE(mean_field_guide) &&
-          reticulate::py_has_attr(strenv$numpyro$infer, "TraceMeanField_ELBO")) {
-        tryCatch(
-          strenv$numpyro$infer$TraceMeanField_ELBO(num_particles = n_particles),
-          error = function(e) strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
-        )
-      } else {
-        strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
-      }
-    })
-    svi <- if (is.null(transformer_moe)) {
-      strenv$numpyro$infer$SVI(model = model_fn, guide = guide, optim = svi_optim, loss = elbo_loss)
-    } else {
-      strenv$jax_moe$MoESVI(model = model_fn, guide = guide, optim = svi_optim,
-                           loss = elbo_loss, cfg = transformer_moe)
-    }
-    # Activate the MoE load-balancing auxiliary factor (Issue 5) for the duration of
-    # SVI training so it enters the ELBO; deactivated before posterior sampling /
-    # prediction so it never perturbs predictive outputs.
-    strenv$moe_aux_active <- TRUE
-    on.exit(strenv$moe_aux_active <- FALSE, add = TRUE)
-    strenv$tower_sufficiency_active <- TRUE
-    on.exit(strenv$tower_sufficiency_active <- FALSE, add = TRUE)
     svi_model_args <- if (isTRUE(compact_training)) {
       compact_batch_args(compact_sample_obs_idx())
     } else if (isTRUE(universal_mixed_mode)) {
@@ -21201,6 +20874,437 @@ generate_ModelOutcome_neural <- function(){
         n_outcomes_all = n_outcomes_all
       )
     }
+    validation_split <- NULL
+    early_stopping_running <- FALSE
+    early_stopping_n_checks <- if (!is.null(mcmc_control$early_stopping_n_checks)) {
+      as.integer(mcmc_control$early_stopping_n_checks)
+    } else {
+      10L
+    }
+    if (length(early_stopping_n_checks) != 1L ||
+        is.na(early_stopping_n_checks) ||
+        !is.finite(early_stopping_n_checks) ||
+        early_stopping_n_checks < 1L) {
+      early_stopping_n_checks <- 10L
+    }
+    early_stopping_patience <- if (!is.null(mcmc_control$early_stopping_patience)) {
+      as.integer(mcmc_control$early_stopping_patience)
+    } else {
+      3L
+    }
+    if (length(early_stopping_patience) != 1L ||
+        is.na(early_stopping_patience) ||
+        !is.finite(early_stopping_patience) ||
+        early_stopping_patience < 1L) {
+      early_stopping_patience <- 3L
+    }
+    early_stopping_info$n_checks <- early_stopping_n_checks
+    early_stopping_info$patience <- early_stopping_patience
+    early_stopping_validation_frac <- if (!is.null(mcmc_control$early_stopping_validation_frac)) {
+      as.numeric(mcmc_control$early_stopping_validation_frac)
+    } else {
+      0.05
+    }
+    if (length(early_stopping_validation_frac) != 1L ||
+        is.na(early_stopping_validation_frac) ||
+        !is.finite(early_stopping_validation_frac) ||
+        early_stopping_validation_frac <= 0) {
+      early_stopping_validation_frac <- 0.05
+    }
+    early_stopping_validation_frac <- min(early_stopping_validation_frac, 1)
+    early_stopping_validation_max_n <- if ("early_stopping_validation_max_n" %in% names(mcmc_control)) {
+      mcmc_control$early_stopping_validation_max_n
+    } else {
+      2048L
+    }
+    if (!is.null(early_stopping_validation_max_n)) {
+      early_stopping_validation_max_n <- as.integer(early_stopping_validation_max_n)
+      if (length(early_stopping_validation_max_n) != 1L ||
+          is.na(early_stopping_validation_max_n) ||
+          !is.finite(early_stopping_validation_max_n) ||
+          early_stopping_validation_max_n < 1L) {
+        early_stopping_validation_max_n <- 2048L
+      }
+    }
+    early_stopping_info$validation_frac <- as.numeric(early_stopping_validation_frac)
+    early_stopping_info$validation_max_n <- if (is.null(early_stopping_validation_max_n)) {
+      NULL
+    } else {
+      as.integer(early_stopping_validation_max_n)
+    }
+    early_stopping_validation_batch_size <- if ("early_stopping_validation_batch_size" %in% names(mcmc_control)) {
+      mcmc_control$early_stopping_validation_batch_size
+    } else {
+      128L
+    }
+    if (!is.null(early_stopping_validation_batch_size)) {
+      early_stopping_validation_batch_size <- as.integer(early_stopping_validation_batch_size)
+      if (length(early_stopping_validation_batch_size) != 1L ||
+          is.na(early_stopping_validation_batch_size) ||
+          !is.finite(early_stopping_validation_batch_size) ||
+          early_stopping_validation_batch_size < 1L) {
+        early_stopping_validation_batch_size <- 128L
+      }
+    }
+    early_stopping_validation_batch_size_supplied <- !is.null(mcmc_overrides) &&
+      "early_stopping_validation_batch_size" %in% names(mcmc_overrides) &&
+      !is.null(mcmc_overrides$early_stopping_validation_batch_size)
+    early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
+      "validation_split_unavailable"
+    } else {
+      "disabled"
+    }
+    if (isTRUE(early_stopping_enabled)) validation_split <- build_svi_validation_split()
+    # Read metadata first, but accept it only after the unchanged fingerprint
+    # and execution-identity checks below. Automatic resumes use the saved
+    # budget rather than recalculating a different learning-rate schedule.
+    svi_checkpoint <- neural_svi_checkpoint_control(mcmc_control)
+    svi_checkpoint_latest <- if (isTRUE(svi_checkpoint$enabled) && isTRUE(svi_checkpoint$resume)) {
+      neural_svi_checkpoint_load_snapshot(svi_checkpoint$path, "latest")
+    } else NULL
+    resume_budget <- svi_checkpoint_latest$svi_budget_info %||% NULL
+    if (!is.null(svi_checkpoint_latest) &&
+        !identical(as.integer(svi_checkpoint_latest$resolved_svi_steps), as.integer(resume_budget$svi_steps))) {
+      stop("Checkpoint resolved step count does not match its saved SVI budget.", call. = FALSE)
+    }
+    budget_accounting <- NULL
+    if (identical(tolower(as.character(mcmc_control$svi_steps)), "optimal") && is.null(resume_budget)) {
+      accounting_module <- reticulate::import_from_path(
+        "strategize_accounting", path = system.file("python", package = "strategize"), convert = TRUE
+      )
+      parameter_factory <- function() {
+        shared <- sample_shared_transformer_params(length(factor_levels_int), pairwise = pairwise_scaling)
+        params <- shared$params_view
+        if (!is.null(shared$sigma)) params$sigma <- shared$sigma
+        reticulate::r_to_py(params, convert = FALSE)
+      }
+      inventory <- strategize_dp_all_call(function() {
+        accounting_module$parameter_inventory(parameter_factory, transformer_moe)
+      }, "model budget accounting")
+      is_pair <- if (isTRUE(universal_mixed_mode)) {
+        c(rep(TRUE, n_universal_pair_obs), rep(FALSE, n_universal_single_obs))
+      } else rep(isTRUE(pairwise_mode), length(Y_use))
+      budget_party_left <- if (isTRUE(universal_mixed_mode)) c(party_left, party_single) else {
+        if (isTRUE(pairwise_mode)) party_left else party_single
+      }
+      budget_party_right <- if (isTRUE(universal_mixed_mode)) c(party_right, party_single) else {
+        if (isTRUE(pairwise_mode)) party_right else party_single
+      }
+      token_counts <- neural_svi_tokens_per_observation(validation_model_info,
+        names(inventory$parameter_shapes), is_pair, experiment_index_use,
+        budget_party_left, budget_party_right, resp_party_use)
+      budget_train_idx <- validation_split$train_idx %||% seq_along(Y_use)
+      # Balanced sampling's cached state must describe the same training pool.
+      if (isTRUE(compact_training)) compact_sampling_obs_idx <- budget_train_idx
+      budget_accounting <- neural_svi_budget_accounting(inventory, token_counts,
+        train_idx = budget_train_idx,
+        batch_size = if (isTRUE(compact_training)) compact_svi_batch_size else mcmc_control$batch_size,
+        subsample_method = svi_subsample_method,
+        mixed_pair_count = if (isTRUE(universal_mixed_mode)) n_universal_pair_obs else NULL,
+        mixed_sampling = if (isTRUE(compact_training)) "stratified" else "independent",
+        balanced_state = if (isTRUE(compact_training)) compact_balanced_sampling_state() else NULL,
+        model_depth = ModelDepth, transformer_loop = transformer_loop)
+    }
+    svi_budget_info <- neural_resolve_svi_budget(
+      svi_steps_input = mcmc_control$svi_steps,
+      svi_num_draws_input = mcmc_control$svi_num_draws,
+      user_supplied_svi_steps = user_supplied_svi_steps,
+      user_supplied_svi_num_draws = user_supplied_svi_num_draws,
+      accounting = budget_accounting,
+      resume_budget = resume_budget,
+      pairwise_mode = pairwise_scaling,
+      batch_size = mcmc_control$batch_size,
+      subsample_method = svi_subsample_method,
+      output_only_mode = output_only_mode,
+      likelihood = likelihood
+    )
+    svi_steps <- as.integer(svi_budget_info$svi_steps)
+    resolved_svi_steps <- svi_steps
+    resolved_svi_num_draws <- as.integer(svi_budget_info$svi_num_draws)
+    mcmc_control$svi_steps <- svi_steps
+    mcmc_control$svi_num_draws <- resolved_svi_num_draws
+    if (isTRUE(svi_budget_info$used_optimal)) {
+      message(sprintf("Using svi_steps='optimal' => %d steps.", svi_steps))
+    }
+    if (isTRUE(svi_budget_info$applied_output_single_normal_batch_vi_floor)) {
+      message(sprintf(
+        "Applying output-only single-model normal batch_vi SVI floor => %d steps.",
+        svi_steps
+      ))
+    }
+    warmup_frac <- if (!is.null(mcmc_control$svi_lr_warmup_frac)) {
+      as.numeric(mcmc_control$svi_lr_warmup_frac)
+    } else {
+      0.1
+    }
+    if (length(warmup_frac) != 1L || is.na(warmup_frac) || !is.finite(warmup_frac)) {
+      warmup_frac <- 0.1
+    }
+    warmup_frac <- max(0, min(warmup_frac, 0.9))
+    decay_steps <- max(2L, svi_steps)
+    warmup_steps <- if (schedule_tag == "warmup_cosine") {
+      max(1L, min(as.integer(round(svi_steps * warmup_frac)), decay_steps - 1L))
+    } else {
+      0L
+    }
+    end_factor <- if (!is.null(mcmc_control$svi_lr_end_factor)) {
+      as.numeric(mcmc_control$svi_lr_end_factor)
+    } else {
+      0.01
+    }
+    if (length(end_factor) != 1L || is.na(end_factor) || !is.finite(end_factor)) {
+      end_factor <- 0.01
+    }
+    end_factor <- max(0, min(end_factor, 1))
+    # Validate the requested optimizer before fingerprinting or restoring state.
+    # Muon must never silently change optimizer or scientific settings.
+    optimizer_tag <- strategize_dp_all_call(function() neural_resolve_svi_optimizer_tag(
+      optimizer_tag = optimizer_tag,
+      guide_name = guide_name,
+      user_supplied_optimizer = user_supplied_optimizer
+    ), "optimizer preflight")
+    # Validate the saved budget and run identity before constructing the LR schedule.
+    svi_checkpoint_fingerprint <- NULL
+    svi_checkpoint_best <- NULL
+    if (isTRUE(svi_checkpoint$enabled)) {
+      svi_checkpoint_fingerprint <- neural_svi_checkpoint_fingerprint(list(
+        data = list(
+          Y = Y_use,
+          W = W_,
+          W_idx_compact = if (isTRUE(compact_training)) W_idx_compact_use else NULL,
+          X = X_use,
+          X_compact = if (isTRUE(compact_training)) X_compact_use else NULL,
+          X_present = X_present_use,
+          X_present_compact = if (isTRUE(compact_training)) X_present_compact_use else NULL,
+          pair_id = pair_id_ %||% NULL,
+          profile_order = profile_order_ %||% NULL,
+          competing_group_variable_candidate = competing_group_variable_candidate_ %||% NULL,
+          competing_group_variable_respondent = competing_group_variable_respondent_ %||% NULL,
+          respondent_id = respondent_id %||% NULL,
+          respondent_task_id = respondent_task_id %||% NULL
+        ),
+        model = list(
+          likelihood = likelihood,
+          n_outcomes = as.integer(nOutcomes),
+          factor_levels = factor_levels_int,
+          pairwise_mode = isTRUE(pairwise_mode),
+          pairwise_context_mode = pairwise_context_mode,
+          model_dims = as.integer(ModelDims),
+          model_depth = as.integer(ModelDepth),
+          residual_mode = residual_mode,
+          cross_candidate_encoder_mode = cross_candidate_encoder_mode,
+          qk_norm = isTRUE(qk_norm_enabled),
+          subsample_method = subsample_method,
+          output_only_mode = isTRUE(output_only_mode),
+          guide = guide_name,
+          optimizer = optimizer_tag,
+          svi_lr = svi_lr,
+          schedule = schedule_tag,
+          warmup_frac = warmup_frac,
+          end_factor = end_factor,
+          n_particles = as.integer(n_particles),
+          svi_budget_info = svi_budget_info,
+          validation_split_version = 2L
+        ),
+        control = neural_svi_checkpoint_strip_control(mcmc_control),
+        token = neural_token_info_use
+      ))
+      if (isTRUE(svi_checkpoint$resume)) {
+        neural_svi_checkpoint_assert_fingerprint(svi_checkpoint_latest,
+          svi_checkpoint_fingerprint, svi_checkpoint$path)
+        svi_checkpoint_best <- neural_svi_checkpoint_restore_best(
+          svi_checkpoint$path,
+          svi_checkpoint_fingerprint
+        )
+        if (!is.null(svi_checkpoint_latest)) {
+          message(sprintf(
+            "Resuming neural SVI checkpoint from %s at step %d/%d.",
+            svi_checkpoint$path,
+            as.integer(svi_checkpoint_latest$completed_step %||% 0L),
+            as.integer(svi_checkpoint_latest$resolved_svi_steps %||% svi_steps)
+          ))
+        }
+      }
+    }
+    lr_schedule_step_offset <- 0L
+    if (!is.null(svi_checkpoint_latest) &&
+        !identical(svi_checkpoint_latest$checkpoint_semantics, "full_svi_state")) {
+      resume_completed_for_lr <- as.integer(svi_checkpoint_latest$completed_step %||% 0L)
+      if (!is.na(resume_completed_for_lr) &&
+          resume_completed_for_lr > 0L &&
+          resume_completed_for_lr < as.integer(svi_steps)) {
+        lr_schedule_step_offset <- resume_completed_for_lr
+      }
+    }
+    lr_schedule <- if (schedule_tag == "warmup_cosine") {
+      strenv$optax$warmup_cosine_decay_schedule(
+        init_value = svi_lr * end_factor,
+        peak_value = svi_lr,
+        warmup_steps = warmup_steps,
+        decay_steps = decay_steps,
+        end_value = svi_lr * end_factor
+      )
+    } else if (schedule_tag == "cosine") {
+      strenv$optax$cosine_decay_schedule(
+        init_value = svi_lr,
+        decay_steps = decay_steps,
+        alpha = end_factor
+      )
+    } else {
+      svi_lr
+    }
+    if (lr_schedule_step_offset > 0L && !is.numeric(lr_schedule) &&
+        !is.null(strenv$jax_offset_schedule)) {
+      lr_schedule <- strenv$jax_offset_schedule(lr_schedule, ai(lr_schedule_step_offset))
+      message(sprintf(
+        "Resumed LR schedule continues from step %d (no re-warmup).",
+        as.integer(lr_schedule_step_offset)
+      ))
+    }
+    clip_global_norm <- as.numeric(mcmc_control$svi_clip_global_norm %||% 10)
+    if (length(clip_global_norm) != 1L ||
+        is.na(clip_global_norm) ||
+        !is.finite(clip_global_norm) ||
+        clip_global_norm <= 0) {
+      clip_global_norm <- NA_real_
+    }
+    optax_clip_available <- reticulate::py_has_attr(strenv$optax, "clip_by_global_norm") &&
+      reticulate::py_has_attr(strenv$optax, "chain")
+    optax_to_numpyro_available <- reticulate::py_has_attr(strenv$numpyro$optim, "optax_to_numpyro")
+    clip_enabled <- isTRUE(optax_clip_available) && is.finite(clip_global_norm)
+    optim_module <- reticulate::import_from_path(
+      "strategize_optim", path = system.file("python", package = "strategize"), convert = FALSE
+    )
+    final_update_diagnostics <- NULL
+    gradient_prelude_layers <- if (isTRUE(transformer_loop$enabled)) {
+      as.integer(seq_len(transformer_loop$prelude_layers))
+    } else integer(0)
+    gradient_core_layers <- if (isTRUE(transformer_loop$enabled)) {
+      as.integer(seq.int(
+        transformer_loop$prelude_layers + 1L,
+        ModelDepth - transformer_loop$coda_layers
+      ))
+    } else integer(0)
+    gradient_coda_layers <- if (isTRUE(transformer_loop$enabled) &&
+                                transformer_loop$coda_layers > 0L) {
+      as.integer(seq.int(ModelDepth - transformer_loop$coda_layers + 1L, ModelDepth))
+    } else integer(0)
+    recurrent_gradient_scale <- if (isTRUE(transformer_loop$enabled) &&
+                                      isTRUE(transformer_loop$normalize_core_gradients)) {
+      1 / neural_transformer_training_mean_iterations(transformer_loop)
+    } else 1
+    wrap_optax_optimizer <- function(optax_optim) {
+      optim_module$normalized_optimizer(
+        optax_optim, objective_scale = objective_scale,
+        clip_global_norm = if (isTRUE(clip_enabled)) clip_global_norm else NULL,
+        prelude_layers = gradient_prelude_layers,
+        recurrent_core_layers = gradient_core_layers,
+        coda_layers = gradient_coda_layers,
+        recurrent_gradient_scale = recurrent_gradient_scale
+      )
+    }
+    optax_to_numpyro_optimizer <- function(optax_optim) {
+      optax_optim <- wrap_optax_optimizer(optax_optim)
+      if (isTRUE(optax_to_numpyro_available)) {
+        return(strenv$numpyro$optim$optax_to_numpyro(optax_optim))
+      }
+      optax_optim
+    }
+    # optimizer_tag was resolved above, before the checkpoint fingerprint.
+    optimizer_diagnostics <- list(
+      optimizer_status = "configured",
+      optimizer = optimizer_tag,
+      optimizer_requested = optimizer_tag,
+      muon_parameter_count = NA_real_,
+      auxiliary_adam_parameter_count = NA_real_,
+      user_supplied_optimizer = isTRUE(user_supplied_optimizer),
+      schedule_name = schedule_tag,
+      svi_lr = svi_lr,
+      warmup_frac = warmup_frac,
+      warmup_steps = as.integer(warmup_steps),
+      decay_steps = as.integer(decay_steps),
+      end_factor = end_factor,
+      clip_global_norm = if (is.finite(clip_global_norm)) clip_global_norm else NA_real_,
+      clip_status = if (isTRUE(clip_enabled)) "enabled" else if (!is.finite(clip_global_norm)) "disabled" else "unavailable",
+      objective_normalization = objective_normalization,
+      objective_gradient_scale = objective_scale,
+      recurrent_gradient_scale = recurrent_gradient_scale,
+      recurrent_gradient_normalization = isTRUE(transformer_loop$enabled) &&
+        isTRUE(transformer_loop$normalize_core_gradients),
+      gradient_monitor_layer_groups = list(
+        prelude = gradient_prelude_layers,
+        recurrent_core = gradient_core_layers,
+        coda = gradient_coda_layers
+      ),
+      objective_normalization_n = as.integer(n_obs_svi),
+      steps_completed = NA_integer_,
+      lr_trace = numeric(0),
+      lr_trace_status = "pending"
+    )
+    svi_optim <- if (optimizer_tag == "adam") {
+      if (reticulate::py_has_attr(strenv$optax, "adam")) {
+        optax_to_numpyro_optimizer(strenv$optax$adam(learning_rate = lr_schedule))
+      } else {
+        stop("SVI normalization requires optax.adam.", call. = FALSE)
+      }
+    } else if (optimizer_tag == "adamw") {
+      # optax.adamw defaults to weight_decay=1e-4 with mask=None, which applies
+      # decoupled decay to EVERY optimized leaf -- including the AutoNormal
+      # posterior stddevs (*_auto_scale), RMSNorm/QK gains, and the deterministic
+      # ReZero gates (init small) -- decaying gates toward 0 silently undoes the
+      # ReZero fix and mis-calibrates the variational posterior. Set weight_decay=0
+      # to match the muon default (adam_weight_decay=0). A name-masked nonzero decay
+      # restricted to true weight matrices would be the richer alternative.
+      if (reticulate::py_has_attr(strenv$optax, "adamw")) {
+        optax_to_numpyro_optimizer(strenv$optax$adamw(learning_rate = lr_schedule,
+                                                      weight_decay = 0))
+      } else {
+        stop(
+          "optimizer='adamw' requested, but neither numpyro.optim.AdamW nor optax.adamw is available.",
+          call. = FALSE
+        )
+      }
+    } else if (optimizer_tag == "muon") {
+      strategize_dp_all_call(function() optax_to_numpyro_optimizer(
+        optim_module$strict_muon_optimizer(
+          learning_rate = lr_schedule,
+          dimension_numbers = neural_get_muon_dimension_numbers_callable()
+        )), "Muon construction")
+    } else {
+      optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)
+      optax_to_numpyro_optimizer(optax_optim)
+    }
+    # With a mean-field AutoNormal/AutoDiagonalNormal guide, every weight latent is
+    # Normal-prior / Normal-posterior, so the per-site KL is available in closed
+    # form. TraceMeanField_ELBO substitutes that analytic KL for Trace_ELBO's
+    # single-sample MC estimate of the entropy/cross-entropy term (num_particles=1
+    # by default), removing avoidable gradient variance at no extra cost. Fall back
+    # to Trace_ELBO for non-mean-field guides or if the class is unavailable.
+    elbo_loss <- local({
+      mean_field_guide <- guide_name %in% c("auto_normal", "auto_diagonal")
+      if (isTRUE(mean_field_guide) &&
+          reticulate::py_has_attr(strenv$numpyro$infer, "TraceMeanField_ELBO")) {
+        tryCatch(
+          strenv$numpyro$infer$TraceMeanField_ELBO(num_particles = n_particles),
+          error = function(e) strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
+        )
+      } else {
+        strenv$numpyro$infer$Trace_ELBO(num_particles = n_particles)
+      }
+    })
+    svi <- if (is.null(transformer_moe)) {
+      strenv$numpyro$infer$SVI(model = model_fn, guide = guide, optim = svi_optim, loss = elbo_loss)
+    } else {
+      strenv$jax_moe$MoESVI(model = model_fn, guide = guide, optim = svi_optim,
+                           loss = elbo_loss, cfg = transformer_moe)
+    }
+    # Activate the MoE load-balancing auxiliary factor (Issue 5) for the duration of
+    # SVI training so it enters the ELBO; deactivated before posterior sampling /
+    # prediction so it never perturbs predictive outputs.
+    strenv$moe_aux_active <- TRUE
+    on.exit(strenv$moe_aux_active <- FALSE, add = TRUE)
+    strenv$tower_sufficiency_active <- TRUE
+    on.exit(strenv$tower_sufficiency_active <- FALSE, add = TRUE)
     extract_svi_param_sites <- function(svi_params_current) {
       if (isTRUE(point_head_mode)) {
         # Pure MLE: every site is a (constrained) param in the store, the MoE
@@ -21452,7 +21556,7 @@ generate_ModelOutcome_neural <- function(){
       grad_l2 <- suppressWarnings(as.numeric(checkpoint$grad_l2 %||% NA_real_))
       grad_rms <- suppressWarnings(as.numeric(checkpoint$grad_rms %||% NA_real_))
       grad_max_abs <- suppressWarnings(as.numeric(checkpoint$grad_max_abs %||% NA_real_))
-      grad_bad <- suppressWarnings(as.integer(checkpoint$grad_n_nonfinite %||% NA_integer_))
+      grad_bad <- suppressWarnings(as.numeric(checkpoint$grad_n_nonfinite %||% NA_real_))
       paste0(
         "; grad_l2=", format_svi_grad_value(grad_l2),
         "; grad_rms=", format_svi_grad_value(grad_rms),
@@ -21472,90 +21576,9 @@ generate_ModelOutcome_neural <- function(){
       rss_bytes / (1024^2)
     }
 
-    validation_split <- NULL
-    early_stopping_running <- FALSE
-    early_stopping_n_checks <- if (!is.null(mcmc_control$early_stopping_n_checks)) {
-      as.integer(mcmc_control$early_stopping_n_checks)
-    } else {
-      10L
-    }
-    if (length(early_stopping_n_checks) != 1L ||
-        is.na(early_stopping_n_checks) ||
-        !is.finite(early_stopping_n_checks) ||
-        early_stopping_n_checks < 1L) {
-      early_stopping_n_checks <- 10L
-    }
-    early_stopping_patience <- if (!is.null(mcmc_control$early_stopping_patience)) {
-      as.integer(mcmc_control$early_stopping_patience)
-    } else {
-      3L
-    }
-    if (length(early_stopping_patience) != 1L ||
-        is.na(early_stopping_patience) ||
-        !is.finite(early_stopping_patience) ||
-        early_stopping_patience < 1L) {
-      early_stopping_patience <- 3L
-    }
-    early_stopping_info$n_checks <- early_stopping_n_checks
-    early_stopping_info$patience <- early_stopping_patience
-    early_stopping_validation_frac <- if (!is.null(mcmc_control$early_stopping_validation_frac)) {
-      as.numeric(mcmc_control$early_stopping_validation_frac)
-    } else {
-      0.05
-    }
-    if (length(early_stopping_validation_frac) != 1L ||
-        is.na(early_stopping_validation_frac) ||
-        !is.finite(early_stopping_validation_frac) ||
-        early_stopping_validation_frac <= 0) {
-      early_stopping_validation_frac <- 0.05
-    }
-    early_stopping_validation_frac <- min(early_stopping_validation_frac, 1)
-    early_stopping_validation_max_n <- if ("early_stopping_validation_max_n" %in% names(mcmc_control)) {
-      mcmc_control$early_stopping_validation_max_n
-    } else {
-      2048L
-    }
-    if (!is.null(early_stopping_validation_max_n)) {
-      early_stopping_validation_max_n <- as.integer(early_stopping_validation_max_n)
-      if (length(early_stopping_validation_max_n) != 1L ||
-          is.na(early_stopping_validation_max_n) ||
-          !is.finite(early_stopping_validation_max_n) ||
-          early_stopping_validation_max_n < 1L) {
-        early_stopping_validation_max_n <- 2048L
-      }
-    }
-    early_stopping_info$validation_frac <- as.numeric(early_stopping_validation_frac)
-    early_stopping_info$validation_max_n <- if (is.null(early_stopping_validation_max_n)) {
-      NULL
-    } else {
-      as.integer(early_stopping_validation_max_n)
-    }
-    early_stopping_validation_batch_size <- if ("early_stopping_validation_batch_size" %in% names(mcmc_control)) {
-      mcmc_control$early_stopping_validation_batch_size
-    } else {
-      128L
-    }
-    if (!is.null(early_stopping_validation_batch_size)) {
-      early_stopping_validation_batch_size <- as.integer(early_stopping_validation_batch_size)
-      if (length(early_stopping_validation_batch_size) != 1L ||
-          is.na(early_stopping_validation_batch_size) ||
-          !is.finite(early_stopping_validation_batch_size) ||
-          early_stopping_validation_batch_size < 1L) {
-        early_stopping_validation_batch_size <- 128L
-      }
-    }
-    early_stopping_validation_batch_size_supplied <- !is.null(mcmc_overrides) &&
-      "early_stopping_validation_batch_size" %in% names(mcmc_overrides) &&
-      !is.null(mcmc_overrides$early_stopping_validation_batch_size)
-    early_stopping_reason <- if (isTRUE(early_stopping_enabled)) {
-      "validation_split_unavailable"
-    } else {
-      "disabled"
-    }
     svi_train_model_args <- svi_model_args
 
     if (isTRUE(early_stopping_enabled)) {
-      validation_split <- build_svi_validation_split()
       if (!is.null(validation_split) &&
           reticulate::py_has_attr(svi, "init") &&
           reticulate::py_has_attr(svi, "run") &&

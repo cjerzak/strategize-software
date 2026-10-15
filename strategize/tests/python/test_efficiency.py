@@ -51,6 +51,21 @@ def test_expert_backward_does_not_save_token_copies_of_weights(n):
     assert elements * 4 < 64 * 1024**2, stream.getvalue()
 
 
+def test_expert_backward_carries_no_assignment_buffer():
+    n, d = 257, 8
+    keys = jax.random.split(jax.random.PRNGKey(26), 3)
+    args = (jax.random.normal(keys[0], (n, d)),
+            jax.random.normal(keys[1], (4, d, 2 * d)) * .1,
+            jax.random.normal(keys[2], (4, d, d)) * .1)
+    indices = jnp.arange(n * 2).reshape(n, 2) % 4
+    grad = jax.grad(lambda *a: jnp.square(selected_experts(*a, indices)).sum(), (0, 1, 2))
+    text = jax.jit(grad).lower(*args).as_text()
+    loops = [line.split(") : ", 1)[1] for line in text.splitlines() if "stablehlo.while" in line]
+    # A loop that carries the (assignments, d) output makes every backward
+    # iteration touch all of it: quadratic in the routing-group size.
+    assert loops and not any(f"tensor<{n * 2}x{d}xf32>" in carry for carry in loops), loops
+
+
 def transformer_fixture(dtype, checkpointing):
     d, depth, heads = 8, 3, 2
     key = jax.random.PRNGKey(37)

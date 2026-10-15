@@ -183,6 +183,11 @@ def test_distributed_update_gradients_and_recovery(particles, tmp_path):
     expected = jax.jit(lambda s: svi.stable_update(s, **args))(state)
     rt.configure_svi_sharding()
     batch = rt.place_batch(args)
+    original = jax.tree.map(lambda a: np.array(a), state)
+    stats = rt.gradients(svi, rt.replicate(state), batch)
+    assert stats["grad_n_nonfinite"] == 0
+    assert stats["grad_n_elements"] == sum(a.size for a in jax.tree.leaves(svi.optim.get_params(state.optim_state)))
+    close(state, original) # including the RNG, router bias and mutable statistics
     actual = rt.update(svi, rt.replicate(state), batch)
     close(actual, expected)
     generation = rt.save_checkpoint(tmp_path, "latest", actual[0], [1, 2])

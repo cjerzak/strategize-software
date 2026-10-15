@@ -42,6 +42,8 @@ def selected_experts(x, w1, w2, indices, keep=None):
     reverse-mode AD retains neither gathered weights nor expanded FFN values.
     The loop bound allows at most one partial block per expert; it is independent
     of the global routing capacity and works under grad, jvp, vmap and scan.
+    Blocks return their rows and one scatter follows the loop, so no iteration
+    carries (or, in reverse mode, differentiates) the whole output.
     """
     n, k = indices.shape
     if not n:
@@ -65,22 +67,28 @@ def selected_experts(x, w1, w2, indices, keep=None):
         return jnp.where(valid[:, None], values, 0)
 
     # The conditional belongs INSIDE remat. Otherwise its backward residuals
-    # save all closed-over weights on every scan iteration, even though the
+    # save all closed-over weights on every iteration, even though the
     # active branch checkpoints its matrix multiplies.
     @functools.partial(jax.checkpoint, prevent_cse=False)
-    def block(i, out):
-        def active(out):
+    def block(i):
+        # Padding and idle blocks target distinct rows past the end, which the
+        # scatter drops, so every index is unique.
+        unused = assignments + i * block_size + offsets
+        def active(_):
             expert = jnp.sum(i >= block_ends)
             within = (i - (block_ends[expert] - blocks[expert])) * block_size + offsets
             valid = within < counts[expert]
             positions = order[jnp.minimum(starts[expert] + within, assignments - 1)]
-            values = compute(expert, positions, valid)
-            # All accepted positions are unique. The partial-block padding is
-            # dropped rather than writing repeatedly into a shared sentinel.
-            return out.at[jnp.where(valid, positions, assignments)].set(values, mode="drop")
-        return jax.lax.cond(i < block_ends[-1], active, lambda out: out, out)
+            return compute(expert, positions, valid), jnp.where(valid, positions, unused)
+        def idle(_):
+            return jnp.zeros((block_size, x.shape[-1]), x.dtype), unused
+        return jax.lax.cond(i < block_ends[-1], active, idle, None)
 
-    out = jax.lax.fori_loop(0, max_blocks, block, jnp.zeros((assignments, x.shape[-1]), x.dtype))
+    # Carrying the output through the loop made each backward iteration touch
+    # every assignment, quadratic in the routing-group size.
+    values, positions = jax.lax.map(block, jnp.arange(max_blocks))
+    out = jnp.zeros((assignments, x.shape[-1]), x.dtype).at[positions.reshape(-1)].set(
+        values.reshape(-1, x.shape[-1]), mode="drop", unique_indices=True)
     return out.reshape(n, k, x.shape[-1])
 
 

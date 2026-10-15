@@ -24,6 +24,10 @@ import jax.numpy as jnp
 import numpy as np
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
+# reticulate.import_from_path only exposes sibling modules during this import.
+# The helpers define functions without initializing a JAX backend.
+from strategize_diagnostics import gradient_summary, gradient_statistics
+
 
 @dataclasses.dataclass(frozen=True)
 class Config:
@@ -438,9 +442,12 @@ class Runtime:
                 self.collective_chain = None
         return (lambda state, args: jax.lax.scan(step, state, args)) if scan else step
 
-    def _compile(self, svi, args, state, scan=False, gradients=False, donate=False):
+    def _compile(self, svi, args, state, scan=False, gradients=False, donate=False,
+                 gradient_stats=False):
+        if gradient_stats and (not gradients or scan or donate):
+            raise ValueError("Gradient summaries require gradients=True without scan or donation")
         shapes = dict(self.shapes)
-        key = (id(svi), scan, gradients, donate, tuple(
+        key = (id(svi), scan, gradients, donate, gradient_stats, tuple(
             (k, shapes.get(k), None if v is None else (v.shape, str(v.dtype)))
             for k, v in args.items()))
         if key in self.executables:
@@ -467,6 +474,11 @@ class Runtime:
             fn = jax.shard_map(self._manual_function(svi, scan, gradients), mesh=self.mesh,
                                in_specs=(P(), specs), out_specs=P() if gradients else (P(), P()),
                                check_vma=False)
+        if gradient_stats:
+            gradient_fn = fn
+            # The shard_map has already averaged gradients globally. Taking
+            # norms of replica-local gradients would change the statistic.
+            fn = lambda s, a: gradient_summary(gradient_fn(s, a))
         compile_start = time.monotonic()
         if os.environ.get("STRATEGIZE_DP_PROFILE_DIR"):
             print(f"SVI rank {self.rank}: compiling {'gradients' if gradients else 'scan' if scan else 'update'}", flush=True)
@@ -490,7 +502,7 @@ class Runtime:
         memory = compiled.memory_analysis()
         cost = compiled.cost_analysis() or {}
         self.profiles.append({"compile_seconds": time.monotonic() - compile_start,
-            "scan": scan, "gradients": gradients,
+            "scan": scan, "gradients": gradients, "gradient_stats": gradient_stats,
             "logical_shapes": shapes,
             "input_shapes": {k: None if v is None else list(v.shape) for k,v in args.items()},
             "state_bytes_per_replica": sum(int(a.size * a.dtype.itemsize) for a in jax.tree.leaves(state)),
@@ -544,13 +556,15 @@ class Runtime:
                 self.trace_active = False
 
     def gradients(self, svi, state, args):
-        grads = self._compile(svi, dict(args), state, gradients=True)(state, dict(args))
-        leaves = [np.asarray(a) for a in jax.tree.leaves(self.local_tree(grads))]
-        n = sum(a.size for a in leaves)
-        sq = sum(float(np.sum(np.square(np.where(np.isfinite(a), a, 0).astype(np.float64)))) for a in leaves)
-        return {"grad_l2": sq ** .5, "grad_rms": (sq / max(n, 1)) ** .5,
-                "grad_max_abs": max((float(np.max(np.abs(np.where(np.isfinite(a), a, 0)))) for a in leaves if a.size), default=0.),
-                "grad_n_nonfinite": sum(int(np.sum(~np.isfinite(a))) for a in leaves), "grad_n_elements": n}
+        args = dict(args)
+        summary = self._compile(svi, args, state, gradients=True, gradient_stats=True)(state, args)
+        n = sum(a.size for a in jax.tree.leaves(svi.optim.get_params(state.optim_state)))
+        stats = gradient_statistics(jax.device_get(self.local_tree(summary)), n)
+        # reticulate narrows Python ints to R int32. Doubles preserve practical
+        # model counts (exact through 2**53) across the R/Python boundary.
+        stats["grad_n_elements"] = float(stats["grad_n_elements"])
+        stats["grad_n_nonfinite"] = float(stats["grad_n_nonfinite"])
+        return stats
 
     def check_replicas(self, tree, label="replicas"):
         # Qualification can inspect a large optimizer state. Never expand it
@@ -592,7 +606,8 @@ class Runtime:
                 "runtime_sha256": hashlib.sha256("".join(
                     _sha(Path(__file__).with_name(name)) for name in
                     ("strategize_distributed.py", "strategize_moe.py", "strategize_optim.py",
-                     "strategize_attention.py", "strategize_transformer.py")
+                     "strategize_attention.py", "strategize_transformer.py",
+                     "strategize_accounting.py", "strategize_diagnostics.py")
                 ).encode()).hexdigest()}
 
     def acquire_lock(self, path):
