@@ -31,6 +31,10 @@
 #'     \code{residual_gate_init} (initial value of the trunk residual gates) and
 #'     \code{output_proj_init = "depth_scaled"} (residual-writing projections
 #'     start at \eqn{1/\sqrt{2 \cdot depth}} of their regular init sd).}
+#'   \item{\code{svi_weight_decay_v1}}{\code{neural_mcmc_control} accepts
+#'     \code{svi_weight_decay} (decoupled decay on Muon hidden matrices, applied
+#'     as \eqn{lr(t) \cdot decay \cdot p}) and
+#'     \code{svi_weight_decay_batch_scaling} (also apply the LR batch factor).}
 #' }
 #'
 #' @return A named list of helper functions, the shared JAX environment,
@@ -46,7 +50,8 @@ strategize_fm_backend <- function() {
       "training_row_validity_guard",
       "data_parallel_svi_v1", "full_svi_state_resume", "transformer_moe_v1", "mla_dsa_v1",
       "looped_transformer_v1", "looped_transformer_v2", "strict_muon_optimizer_v1",
-      "level_aux_text_v1", "uncertainty_scope_none_v1", "residual_init_policy_v1"
+      "level_aux_text_v1", "uncertainty_scope_none_v1", "residual_init_policy_v1",
+      "svi_weight_decay_v1"
     ),
     `%||%` = `%||%`,
     initialize_jax = initialize_jax,

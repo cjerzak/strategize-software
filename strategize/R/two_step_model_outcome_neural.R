@@ -4120,6 +4120,26 @@ neural_svi_lr_batch_scale <- function(batch_size, n_obs, mode = "none", referenc
   sqrt(batch / reference)
 }
 
+# Decoupled weight decay for Muon's hidden matrices. Optax applies it as
+# lr(t) * decay * p per update, so with batch_scaling the decay takes the LR's
+# batch factor too: peak lr * decay then grows in proportion to the batch and
+# decay per epoch matches the reference batch. Turning LR batch scaling off
+# (factor 1) also leaves the decay unscaled. Keys are read with %||% rather
+# than added to the control defaults, which feed checkpoint fingerprints.
+neural_resolve_svi_weight_decay <- function(mcmc_control, lr_batch_factor = 1) {
+  base <- mcmc_control$svi_weight_decay %||% 0
+  if (!is.numeric(base) || length(base) != 1L || !is.finite(base) || base < 0) {
+    stop("svi_weight_decay must be a finite nonnegative number.", call. = FALSE)
+  }
+  batch_scaling <- mcmc_control$svi_weight_decay_batch_scaling %||% TRUE
+  if (!is.logical(batch_scaling) || length(batch_scaling) != 1L || is.na(batch_scaling)) {
+    stop("svi_weight_decay_batch_scaling must be TRUE or FALSE.", call. = FALSE)
+  }
+  factor <- if (isTRUE(batch_scaling)) as.numeric(lr_batch_factor) else 1
+  list(base = as.numeric(base), batch_scaling = batch_scaling,
+       factor = factor, effective = as.numeric(base) * factor)
+}
+
 # Tower sufficiency: distil the joint utility into the respondent/candidate
 # towers so their embeddings summarize what the model actually uses. The
 # towers then leave the logit (see neural_low_rank_interaction_logits); the
@@ -20585,6 +20605,7 @@ generate_ModelOutcome_neural <- function(){
       }
     }
     mcmc_control$svi_lr_batch_scale_factor <- svi_lr_batch_factor
+    svi_weight_decay <- neural_resolve_svi_weight_decay(mcmc_control, svi_lr_batch_factor)
     svi_model_args <- if (isTRUE(compact_training)) {
       compact_batch_args(compact_sample_obs_idx())
     } else if (isTRUE(universal_mixed_mode)) {
@@ -21241,6 +21262,26 @@ generate_ModelOutcome_neural <- function(){
       lr_trace = numeric(0),
       lr_trace_status = "pending"
     )
+    svi_weight_decay$applied_to <- "muon_hidden_matrices"
+    svi_weight_decay$status <- if (svi_weight_decay$effective <= 0) {
+      "disabled"
+    } else if (identical(optimizer_tag, "muon")) {
+      "applied"
+    } else {
+      "not_applied_optimizer"
+    }
+    optimizer_diagnostics$weight_decay <- svi_weight_decay
+    if (identical(svi_weight_decay$status, "applied")) {
+      message(sprintf(
+        "SVI weight decay (Muon hidden matrices): %.5g x %.4f = %.5g; applied as lr(t) * decay per update.",
+        svi_weight_decay$base, svi_weight_decay$factor, svi_weight_decay$effective
+      ))
+    } else if (identical(svi_weight_decay$status, "not_applied_optimizer")) {
+      message(sprintf(
+        "svi_weight_decay = %.5g is not applied: decay covers Muon hidden matrices only, and optimizer = '%s'.",
+        svi_weight_decay$base, optimizer_tag
+      ))
+    }
     svi_optim <- if (optimizer_tag == "adam") {
       if (reticulate::py_has_attr(strenv$optax, "adam")) {
         optax_to_numpyro_optimizer(strenv$optax$adam(learning_rate = lr_schedule))
@@ -21268,7 +21309,8 @@ generate_ModelOutcome_neural <- function(){
       strategize_dp_all_call(function() optax_to_numpyro_optimizer(
         optim_module$strict_muon_optimizer(
           learning_rate = lr_schedule,
-          dimension_numbers = neural_get_muon_dimension_numbers_callable()
+          dimension_numbers = neural_get_muon_dimension_numbers_callable(),
+          weight_decay = svi_weight_decay$effective
         )), "Muon construction")
     } else {
       optax_optim <- strenv$optax$adabelief(learning_rate = lr_schedule)

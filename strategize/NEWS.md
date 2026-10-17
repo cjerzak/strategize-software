@@ -1,3 +1,15 @@
+# Development: October 17, 2026 decoupled weight decay for Muon
+
+- `neural_mcmc_control$svi_weight_decay` (default 0) applies decoupled weight
+  decay to Muon's hidden matrices. Optax applies it as `lr(t) * decay * p`
+  per update; the auxiliary Adam branch is never decayed. With
+  `svi_weight_decay_batch_scaling = TRUE` (the default) the decay also takes
+  the LR batch factor from `svi_lr_batch_scaling`, so peak `lr * decay` grows
+  in proportion to the batch and decay per epoch matches the reference batch.
+  The rule follows sailfast-software. Other optimizers record the decay as not
+  applied. `optimizer_diagnostics$weight_decay` reports base, factor,
+  effective value and status, and the bridge advertises `svi_weight_decay_v1`.
+
 # Development: October 15, 2026 linear-cost MoE expert backward
 
 - The routed-expert blocks in `strategize_moe.selected_experts` return their

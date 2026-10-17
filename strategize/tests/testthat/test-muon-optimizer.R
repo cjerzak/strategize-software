@@ -163,3 +163,46 @@ test_that("direct dense neural SVI uses Muon when the optimizer is omitted", {
   expect_identical(diagnostics$muon_partition_status, "verified")
   expect_gt(diagnostics$muon_parameter_count, 0)
 })
+
+test_that("Muon weight decay takes the LR batch factor only when both scale", {
+  resolve <- strategize:::neural_resolve_svi_weight_decay
+  expect_identical(resolve(list())$effective, 0)
+  expect_identical(resolve(list())$batch_scaling, TRUE)
+  scaled <- resolve(list(svi_weight_decay = 0.1), lr_batch_factor = sqrt(2))
+  expect_equal(scaled$factor, sqrt(2))
+  expect_equal(scaled$effective, 0.1 * sqrt(2))
+  # LR batch scaling "none" yields factor 1, so the decay stays at its base.
+  expect_equal(resolve(list(svi_weight_decay = 0.1), lr_batch_factor = 1)$effective, 0.1)
+  fixed <- resolve(list(svi_weight_decay = 0.1, svi_weight_decay_batch_scaling = FALSE), sqrt(8))
+  expect_identical(fixed$factor, 1)
+  expect_equal(fixed$effective, 0.1)
+  for (bad in list(-0.1, NA_real_, Inf, "0.1", c(0.1, 0.2))) {
+    expect_error(resolve(list(svi_weight_decay = bad)), "finite nonnegative")
+  }
+  expect_error(resolve(list(svi_weight_decay = 0.1, svi_weight_decay_batch_scaling = "yes")),
+               "TRUE or FALSE")
+})
+
+test_that("direct dense neural SVI applies batch-scaled decay to Muon", {
+  skip_on_cran()
+  skip_if_no_jax()
+  withr::local_envvar(c(STRATEGIZE_NEURAL_SKIP_EVAL = "1"))
+  W <- data.frame(feature = rep(c("A", "B"), 8L))
+  names_list <- strategize:::cs2step_build_names_list(W)
+  W_idx <- strategize:::cs2step_encode_W_indices(W, names_list = names_list, unknown = "error")
+  fit <- strategize:::cs2step_eval_outcome_model_neural(
+    Y = rep(c(1, 0, 0, 1), 4L), W_idx = W_idx, names_list = names_list,
+    factor_levels = vapply(names_list, function(x) length(x[[1L]]), integer(1)),
+    diff = TRUE, pair_id = rep(seq_len(8L), each = 2L), profile_order = rep(1:2, 8L),
+    neural_mcmc_control = list(ModelDims = 8L, ModelDepth = 1L,
+      subsample_method = "batch_vi", uncertainty_scope = "output", transformer_ffn = "swiglu",
+      svi_steps = 2L, svi_num_draws = 1L, batch_size = 4L,
+      svi_lr_batch_scaling = "sqrt", svi_lr_reference_batch_size = 1L, svi_weight_decay = 0.1,
+      early_stopping = FALSE, eval_enabled = FALSE, gradient_diagnostics = FALSE))
+  diagnostics <- fit$neural_model_info$optimizer_diagnostics
+  expect_identical(diagnostics$muon_partition_status, "verified")
+  expect_equal(diagnostics$svi_lr_batch_scaling$factor, 2)
+  expect_identical(diagnostics$weight_decay$status, "applied")
+  expect_equal(diagnostics$weight_decay$factor, 2)
+  expect_equal(diagnostics$weight_decay$effective, 0.2)
+})

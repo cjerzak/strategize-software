@@ -71,6 +71,29 @@ class StrictMuonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explicit"):
             strict_muon_optimizer(.001, None)
 
+    def test_weight_decay_reaches_muon_and_is_validated(self):
+        with patch.object(optax.contrib, "muon", side_effect=TypeError("stop")) as factory:
+            with self.assertRaises(ValueError):
+                strict_muon_optimizer(.001, dims, weight_decay=.1)
+            self.assertEqual(factory.call_args.kwargs["weight_decay"], .1)
+            self.assertEqual(factory.call_args.kwargs["adam_weight_decay"], 0)
+        for bad in (-.1, float("nan"), float("inf")):
+            with self.assertRaisesRegex(ValueError, "finite nonnegative"):
+                strict_muon_optimizer(.001, dims, weight_decay=bad)
+
+    def test_weight_decay_changes_only_muon_matrices(self):
+        lr, wd = .01, .3
+        grads = jax.tree.map(lambda x: x * .2, self.params)
+        plain = strict_muon_optimizer(lr, dims)
+        decayed = strict_muon_optimizer(lr, dims, weight_decay=wd)
+        base, base_state = plain.update(grads, plain.init(self.params), self.params)
+        extra, extra_state = decayed.update(grads, decayed.init(self.params), self.params)
+        for key in self.params:
+            expected = base[key] - lr * wd * self.params[key] if key.startswith("hidden") else base[key]
+            np.testing.assert_allclose(extra[key], expected, rtol=1e-6, atol=1e-7)
+        for a, b in zip(jax.tree.leaves(base_state), jax.tree.leaves(extra_state)):
+            np.testing.assert_array_equal(a, b)
+
     def test_empty_or_substituted_muon_state_fails(self):
         optim = strict_muon_optimizer(.001, dims)
         with self.assertRaisesRegex(ValueError, "no eligible"):

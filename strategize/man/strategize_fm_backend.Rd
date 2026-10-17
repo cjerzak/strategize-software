@@ -41,5 +41,9 @@ previously had to infer by source-sniffing or \code{formals()} probing:
     \code{residual_gate_init} (initial value of the trunk residual gates) and
     \code{output_proj_init = "depth_scaled"} (residual-writing projections
     start at \eqn{1/\sqrt{2 \cdot depth}} of their regular init sd).}
+  \item{\code{svi_weight_decay_v1}}{\code{neural_mcmc_control} accepts
+    \code{svi_weight_decay} (decoupled decay on Muon hidden matrices, applied
+    as \eqn{lr(t) \cdot decay \cdot p}) and
+    \code{svi_weight_decay_batch_scaling} (also apply the LR batch factor).}
 }
 }

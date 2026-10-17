@@ -159,7 +159,11 @@
 #'   \code{compute_se = FALSE}). \code{neural_mcmc_control$residual_gate_init} sets the
 #'   initial trunk residual gate and \code{neural_mcmc_control$output_proj_init =
 #'   "depth_scaled"} starts the residual-writing projections at
-#'   \eqn{1/\sqrt{2 \cdot depth}} of their regular init sd. In adversarial
+#'   \eqn{1/\sqrt{2 \cdot depth}} of their regular init sd.
+#'   \code{neural_mcmc_control$svi_weight_decay} (default 0) applies decoupled
+#'   weight decay to the Muon hidden matrices as \eqn{lr(t) \cdot decay \cdot p}; with
+#'   \code{svi_weight_decay_batch_scaling = TRUE} (the default) it also takes the
+#'   \code{svi_lr_batch_scaling} factor. In adversarial
 #'   neural mode, set \code{neural_mcmc_control$n_bayesian_models = 2} to fit separate AST/DAG
 #'   models (default is 1 for a single differential model). Use
 #'   \code{neural_mcmc_control$ModelDims} and \code{neural_mcmc_control$ModelDepth} to override

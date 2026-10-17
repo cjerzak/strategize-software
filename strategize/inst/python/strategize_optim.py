@@ -55,13 +55,21 @@ def muon_partition_diagnostics(state, params=None, dimension_numbers=None):
             "auxiliary_adam_parameter_count": sum(math.prod(s) for s in actual_adam.values())}
 
 
-def strict_muon_optimizer(learning_rate, dimension_numbers):
-    """Construct Muon with fixed scientific settings; never substitute an optimizer."""
+def strict_muon_optimizer(learning_rate, dimension_numbers, weight_decay=0.0):
+    """Construct Muon with fixed scientific settings; never substitute an optimizer.
+
+    weight_decay is decoupled: Optax applies it as lr(t) * weight_decay * p to
+    the Muon-routed hidden matrices only. The auxiliary Adam branch (embeddings,
+    routers, heads, biases, gains, gates) is never decayed.
+    """
     if not callable(dimension_numbers):
         raise ValueError("Strict Muon requires an explicit weight dimension-number callable")
+    weight_decay = float(weight_decay)
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError("Strict Muon weight_decay must be a finite nonnegative number")
     try:
         optimizer = optax.contrib.muon(
-            learning_rate=learning_rate, weight_decay=0, adam_weight_decay=0,
+            learning_rate=learning_rate, weight_decay=weight_decay, adam_weight_decay=0,
             consistent_rms=0.2, muon_weight_dimension_numbers=dimension_numbers)
     except Exception as exc:
         raise ValueError("Cannot construct strict Muon with the required settings; update Optax "
