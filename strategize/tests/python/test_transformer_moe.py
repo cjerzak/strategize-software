@@ -23,6 +23,13 @@ CFG = dict(n_routed_experts=4, n_experts_per_tok=2, n_shared_experts=1,
            routed_scaling_factor=1., capacity_factor=.2, router_bias_rate=.001)
 
 
+@pytest.fixture(params=["blocks", "grouped"])
+def expert_kernel(request, monkeypatch):
+    """Training expert kernel; CPU 'auto' would always select the blocks."""
+    monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", request.param)
+    return request.param
+
+
 def weights(seed=1):
     keys = jax.random.split(jax.random.PRNGKey(seed), 5)
     shapes = [(4, 4), (4, 4, 8), (4, 4, 4), (4, 8), (4, 4)]
@@ -73,7 +80,7 @@ def test_router_bias_changes_selection_but_not_mixture_weights():
 
 
 @pytest.mark.parametrize("training,n", [(False, 9), (True, 2), (True, 9)])
-def test_dispatch_reference_masks_overflow_and_gradients(training, n):
+def test_dispatch_reference_masks_overflow_and_gradients(training, n, expert_kernel):
     w = weights()
     x = jax.random.normal(jax.random.PRNGKey(8), (n, 80, 4))
     mask = jnp.ones(x.shape[:-1]).at[-1].set(0)
@@ -143,7 +150,7 @@ def fixture(runtime=None, particles=1, n=5):
 
 
 @pytest.mark.parametrize("particles", [1, 3])
-def test_svi_state_particles_rejection_and_scan(particles):
+def test_svi_state_particles_rejection_and_scan(particles, expert_kernel):
     svi, state, args = fixture(particles=particles)
     assert _context.get() is None
     original_bias = np.asarray(router_bias(state)).copy()
@@ -174,8 +181,34 @@ def test_svi_state_particles_rejection_and_scan(particles):
     close(router_bias(reversed_state), -router_bias(updated))
 
 
+@pytest.mark.parametrize("vectorize", [True, False])
+def test_batched_particles_and_forward_mode_keep_expert_blocks(vectorize, monkeypatch):
+    """Grouped matmuls cannot batch particle-dependent tokens over shared expert weights."""
+    monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", "grouped")
+    w = weights()
+    def model(X):
+        scale = numpyro.sample("scale", dist.Normal(1., .1))
+        params = {f"W_moe_{name}_l1": numpyro.param(name, value) for name, value in
+                  zip(("router", "expert1", "expert2", "shared1", "shared2"), w)}
+        set_branch("single", None, X.shape[0])
+        z = ffn(X * scale, jnp.ones(X.shape[:-1]), params, CFG, 1)
+        numpyro.factor("fit", -jnp.square(z).sum())
+    wrapped = wrap_model(model, CFG, initial_bias=jnp.array([[2., 1., -1., -2.]]))
+    svi = MoESVI(wrapped, AutoNormal(wrapped), optax_to_numpyro(optax.adam(1e-3)),
+                 TraceMeanField_ELBO(num_particles=3, vectorize_particles=vectorize), CFG)
+    X = np.asarray(jax.random.normal(jax.random.PRNGKey(4), (3, 20, 4)))
+    state = svi.init(jax.random.PRNGKey(5), X=X)
+    # Vectorized particles batch the tokens; jax.lax.map does not.
+    assert ("ragged_dot_general" in str(jax.make_jaxpr(lambda s: svi.stable_update(s, X=X))(state))) == (not vectorize)
+    updated, loss = jax.jit(lambda s: svi.stable_update(s, X=X))(state)
+    assert np.isfinite(loss)
+    forward, forward_loss = jax.jit(lambda s: svi.stable_update(s, X=X, forward_mode_differentiation=True))(state)
+    close(forward_loss, loss)
+    close(forward.optim_state, updated.optim_state)
+
+
 @pytest.mark.parametrize("particles", [1, 2])
-def test_distributed_update_gradients_and_recovery(particles, tmp_path):
+def test_distributed_update_gradients_and_recovery(particles, tmp_path, expert_kernel):
     if len(jax.devices()) < 2:
         pytest.skip("requires simulated devices")
     rt = Runtime(dict(enabled=True))

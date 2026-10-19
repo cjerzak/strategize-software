@@ -4,7 +4,17 @@ Attention implementations supply one residual block; this executor owns the
 layer order, routing statistics and auxiliary-loss reduction for every tower.
 """
 import jax
+from jax.ad_checkpoint import checkpoint_name
 import jax.numpy as jnp
+
+# Sublayer boundaries (layer input, FFN input, FFN output). A recurrence
+# checkpoint saves only these and the MoE routing decisions; the sublayer
+# rematerializations inside it are unchanged.
+CORE_BOUNDARY = "strategize_core_boundary"
+# Checkpoint each recurrence. Without it, the sampled-depth cond turns the
+# loop-invariant layer weights saved by the sublayer rematerializations into
+# cond outputs, and the iteration scan stacks a copy of them per iteration.
+_ITERATION_REMAT = True
 
 
 def rms_norm(x, gain):
@@ -194,13 +204,14 @@ def run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg=None,
 
     def routed(carry, layer):
         x, chain = carry
-        h, z, alpha, loss, n = attention(x, layer)
+        h, z, alpha, loss, n = attention(checkpoint_name(x, CORE_BOUNDARY), layer)
         weights = [layer["W_moe_" + name] for name in ("router", "expert1", "expert2", "shared1", "shared2")]
         y, stats, chain, routes = moe.dispatch(
-            z, mask, *weights, layer["bias"], cfg,
+            checkpoint_name(z, CORE_BOUNDARY), mask, *weights, layer["bias"], cfg,
             training=ctx is not None, row_mask=None if ctx is None else ctx.row_mask,
             runtime=None if ctx is None else ctx.runtime, chain=chain,
             return_routes=True)
+        y = checkpoint_name(y, CORE_BOUNDARY)
         return (h + alpha.astype(h.dtype) * y, chain), (stats, loss, n, routes)
 
     route_k = 0 if cfg is None else int(cfg["n_experts_per_tok"])
@@ -214,7 +225,8 @@ def run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg=None,
         if start < stop:
             layers = {name: value[start:stop] for name, value in common.items()}
             layers.update({name: p[name + "_layers"][start:stop] for name in ("W_ff1", "W_ff2")})
-            x, (ll, nn) = jax.lax.scan(dense_step, x, layers)
+            x, (ll, nn) = jax.lax.scan(
+                lambda x, layer: dense_step(checkpoint_name(x, CORE_BOUNDARY), layer), x, layers)
             loss, n = loss + ll.sum(), n + nn.sum()
         routes = empty_routes(x)
         begin = max(start, prefix)
@@ -269,15 +281,7 @@ def run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg=None,
         routed_core_layers = max(0, (depth - coda) - max(prelude, prefix))
         route_shape = (routed_core_layers, *tokens.shape[:-1], route_k)
 
-        def recur(state, iteration):
-            if backprop:
-                should_detach = (active_iterations > backprop) & (iteration == detach_at)
-                state = jax.lax.cond(
-                    should_detach,
-                    lambda value: jax.tree.map(jax.lax.stop_gradient, value),
-                    lambda value: value,
-                    state)
-
+        def step(state, iteration):
             def active(value):
                 before_stats = value[2]
                 result, routes = segment(
@@ -289,6 +293,23 @@ def run_layers(tokens, mask, params, ffn_cfg, bias, attention, loop_cfg=None,
                 return value, (value[0], routes, jnp.zeros_like(value[2]))
 
             return jax.lax.cond(iteration < active_iterations, active, inactive, state)
+
+        if remat and _ITERATION_REMAT:
+            # Its residuals are its inputs, whose loop-invariant weights the scan
+            # does not stack, plus the named sublayer boundaries and routing
+            # decisions. Saving those leaves the same recomputation as before.
+            step = jax.checkpoint(step, prevent_cse=False, policy=jax.checkpoint_policies.save_only_these_names(
+                CORE_BOUNDARY, moe.ROUTING_DECISION))
+
+        def recur(state, iteration):
+            if backprop:
+                should_detach = (active_iterations > backprop) & (iteration == detach_at)
+                state = jax.lax.cond(
+                    should_detach,
+                    lambda value: jax.tree.map(jax.lax.stop_gradient, value),
+                    lambda value: value,
+                    state)
+            return step(state, iteration)
 
         carry, (states, routes, pass_stats) = jax.lax.scan(
             recur, carry, jnp.arange(max_iterations, dtype=jnp.int32))

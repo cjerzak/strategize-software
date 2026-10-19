@@ -10,13 +10,15 @@ import numpy as np
 import pytest
 from jax.ad_checkpoint import print_saved_residuals
 
-from test_transformer_moe import CFG, close, fixture
-from strategize_moe import selected_experts, swiglu, transformer_scan
+from test_transformer_moe import CFG, close, fixture, weights
+import strategize_moe as moe
+from strategize_moe import dispatch, grouped_experts, selected_experts, swiglu, transformer_scan
 from strategize_distributed import Runtime
 
 
-@pytest.mark.parametrize("n", [1, 38, 128, 257])
-def test_compact_experts_preserve_assignments_and_derivatives(n):
+@pytest.mark.parametrize("experts", [selected_experts, grouped_experts])
+@pytest.mark.parametrize("n", [0, 1, 38, 128, 257])
+def test_compact_experts_preserve_assignments_and_derivatives(experts, n):
     keys = jax.random.split(jax.random.PRNGKey(25), 3)
     args = (jax.random.normal(keys[0], (n, 8)),
             jax.random.normal(keys[1], (4, 8, 16)) * .1,
@@ -29,11 +31,64 @@ def test_compact_experts_preserve_assignments_and_derivatives(n):
         chosen = jnp.take_along_axis(all_values, indices[..., None], axis=1)
         return jnp.where(keep[..., None], chosen, 0)
 
-    fn = lambda x, a, b: selected_experts(x, a, b, indices, keep)
+    fn = lambda x, a, b: experts(x, a, b, indices, keep)
     close(jax.jit(fn)(*args), reference(*args))
-    close(jax.jit(jax.grad(lambda *a: jnp.square(fn(*a)).sum(), (0, 1, 2)))(*args),
-          jax.jit(jax.grad(lambda *a: jnp.square(reference(*a)).sum(), (0, 1, 2)))(*args))
-    close(selected_experts(*args, indices, jnp.zeros_like(keep)), jnp.zeros((n, 2, 8)))
+    grad = lambda f: jax.grad(lambda *a: jnp.square(f(*a)).sum(), (0, 1, 2))
+    close(jax.jit(grad(fn))(*args), jax.jit(grad(reference))(*args))
+    # Second derivatives along the arguments themselves.
+    close(jax.jit(lambda *a: jax.jvp(grad(fn), a, a)[1])(*args),
+          jax.jit(lambda *a: jax.jvp(grad(reference), a, a)[1])(*args))
+    close(experts(*args, indices, jnp.zeros_like(keep)), jnp.zeros((n, 2, 8)))
+
+
+def test_grouped_experts_mixed_precision():
+    keys = jax.random.split(jax.random.PRNGKey(27), 3)
+    x = jax.random.normal(keys[0], (65, 8))
+    w1, w2 = jax.random.normal(keys[1], (4, 8, 16)) * .1, jax.random.normal(keys[2], (4, 8, 8)) * .1
+    indices = jnp.stack((jnp.arange(65) % 4, (jnp.arange(65) + 1) % 4), -1)
+    keep = jnp.arange(130).reshape(65, 2) % 5 != 0
+    out = grouped_experts(x.astype(jnp.bfloat16), w1, w2, indices, keep)
+    assert out.dtype == jnp.bfloat16
+    close(out.astype(jnp.float32), selected_experts(x, w1, w2, indices, keep), rtol=.05, atol=.02)
+    grads = jax.grad(lambda a, b: jnp.square(grouped_experts(
+        x.astype(jnp.bfloat16), a, b, indices, keep).astype(jnp.float32)).sum(), (0, 1))(w1, w2)
+    assert all(g.dtype == jnp.float32 and np.isfinite(g).all() for g in grads)
+
+
+def test_grouped_expert_remat_saves_only_its_inputs():
+    """dispatch rematerializes the experts: no gathered rows or FFN values survive."""
+    args = (jax.ShapeDtypeStruct((2048, 576), jnp.float32),
+            jax.ShapeDtypeStruct((8, 576, 1152), jnp.float32),
+            jax.ShapeDtypeStruct((8, 576, 576), jnp.float32),
+            jax.ShapeDtypeStruct((2048, 2), jnp.int32))
+    stream = io.StringIO()
+    with contextlib.redirect_stdout(stream):
+        print_saved_residuals(jax.checkpoint(lambda x, a, b, i: grouped_experts(x, a, b, i).sum()), *args)
+    lines = [line for line in stream.getvalue().splitlines() if line.strip()]
+    assert lines and all("from the argument" in line for line in lines), stream.getvalue()
+
+
+def test_training_dispatch_selects_grouped_experts_without_loops(monkeypatch):
+    w, bias = weights(), jnp.array([2., 1., -1., -2.])
+    x = jax.random.normal(jax.random.PRNGKey(8), (3, 20, 4))
+    def program(training):
+        loss = lambda x, w: jnp.square(dispatch(x, None, *w, bias, CFG, training=training)[0]).sum()
+        return str(jax.make_jaxpr(jax.grad(loss, (0, 1)))(x, w))
+    monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", "grouped")
+    training, inference = program(True), program(False)
+    assert "ragged_dot_general" in training and "scan[" not in training and "while[" not in training
+    assert "ragged_dot_general" not in inference and "scan[" in inference
+    monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", "auto")
+    assert moe.use_grouped_experts(True) == (jax.default_backend() in ("gpu", "tpu"))
+    token = moe._blocks_only.set(True)
+    try:
+        monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", "grouped")
+        assert not moe.use_grouped_experts(True)
+    finally:
+        moe._blocks_only.reset(token)
+    monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", "ragged")
+    with pytest.raises(ValueError, match="STRATEGIZE_MOE_EXPERT_KERNEL"):
+        moe.use_grouped_experts(True)
 
 
 @pytest.mark.parametrize("n", [38, 128, 2048])

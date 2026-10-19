@@ -1,3 +1,33 @@
+# Development: October 18, 2026 grouped MoE experts and checkpointed recurrences
+
+- Training traces on GPU/TPU compute routed experts with grouped
+  `jax.lax.ragged_dot` matmuls (`strategize_moe.grouped_experts`). The block
+  loop's backward zero-filled, added and copied full-size expert-weight and token
+  cotangents for every 64-assignment block, about half of all GPU time per
+  update. The un-permute scatter declares `unique_indices`.
+- Prediction, inference and other vmapped callers keep the block loop and are
+  unchanged. So do vectorized particles, forward-mode SVI updates and CPU, where
+  ragged_dot lowers to one dense product per expert.
+  `STRATEGIZE_MOE_EXPERT_KERNEL` (`auto`, `grouped` or `blocks`) overrides the
+  training choice.
+- `run_layers` checkpoints each recurrence and saves only its layer boundaries
+  and MoE routing decisions. The sampled-depth `cond` had made reverse mode
+  stack a copy of the loop-invariant core weights per iteration. Gradients,
+  rematerialization work and the routing `all_gather` count are unchanged.
+- Measured on the 576-wide, 8-layer looped MoE foundation model (RTX 4090
+  Laptop, batch 16, FP32), against the previous implementation:
+  - grouped experts: updates 27% faster;
+  - recurrence checkpoint: peak memory 12.85 to 9.78 GB;
+  - both: updates 32% faster (1.43 to 0.97 s);
+  - batch 32 now fits at the default memory fraction (peak 9.55 GB; it
+    previously failed to allocate 11 GiB);
+  - validation NLL agreed within GPU run-to-run noise.
+- On XLA GPU (JAX 0.11.1) ragged_dot still costs E times the useful expert
+  FLOPs, so a true grouped-GEMM kernel would be faster again.
+- `strategize_moe.py` and `strategize_transformer.py` are part of the runtime
+  identity recorded in full-state checkpoints, so checkpoints written before
+  this change cannot be resumed with it.
+
 # Development: October 17, 2026 decoupled weight decay for Muon
 
 - `neural_mcmc_control$svi_weight_decay` (default 0) applies decoupled weight

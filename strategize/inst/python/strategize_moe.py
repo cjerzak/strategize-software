@@ -2,14 +2,17 @@
 
 The trace context only connects the R model's transformer calls while tracing.
 All changing numerical state is an input/output of SVI, never a cached Python
-array. Prediction uses the same routing with exact, bounded-memory dispatch.
+array. Training traces on accelerators compute experts with grouped matmuls;
+prediction uses the same routing with exact, bounded-memory block dispatch.
 """
 from __future__ import annotations
 
 from contextvars import ContextVar
 import functools
+import os
 
 import jax
+from jax.ad_checkpoint import checkpoint_name
 import jax.numpy as jnp
 import numpyro
 from numpyro.primitives import mutable as mutable_site
@@ -18,12 +21,21 @@ from numpyro.infer.elbo import ELBO
 from numpyro.infer.svi import SVIState, _make_loss_fn
 
 STATE = "_strategize_transformer_moe"
+# Routing decisions (selected experts and capacity acceptance). A recurrence
+# checkpoint saves them, so its backward recompute never reruns top-k or the
+# distributed capacity all_gather.
+ROUTING_DECISION = "strategize_moe_routing"
 _context = ContextVar("strategize_moe_trace", default=None)
+# Set while a training trace is batched (vectorized particles) or differentiated
+# in forward mode; native ragged_dot supports neither with shared weights.
+_blocks_only = ContextVar("strategize_moe_blocks_only", default=False)
+EXPERT_KERNELS = ("auto", "grouped", "blocks")
 
 
 def route(x, router, bias, top_k, scale):
     scores = jax.nn.sigmoid(x.astype(jnp.float32) @ router.astype(jnp.float32))
     _, indices = jax.lax.top_k(scores + jax.lax.stop_gradient(bias), top_k)
+    indices = checkpoint_name(indices, ROUTING_DECISION)
     gates = jnp.take_along_axis(scores, indices, axis=-1)
     gates = gates / jnp.maximum(gates.sum(-1, keepdims=True), 1e-9) * scale
     return indices, gates
@@ -92,14 +104,59 @@ def selected_experts(x, w1, w2, indices, keep=None):
     return out.reshape(n, k, x.shape[-1])
 
 
+def grouped_experts(x, w1, w2, indices, keep=None):
+    """Compute accepted assignments with grouped (ragged) expert matmuls.
+
+    Same values as ``selected_experts``, without its block loop: each block's
+    backward there materializes full-size weight and token cotangents. Dropped
+    assignments sort after every expert group, where ragged_dot returns zero
+    rows, and are masked again. Native ragged_dot only batches when every operand
+    is batched, so vmapped callers and forward mode keep ``selected_experts``.
+    """
+    n, k = indices.shape
+    if not n:
+        return jnp.zeros((n, k, x.shape[-1]), x.dtype)
+    experts = w1.shape[0]
+    keep = jnp.ones_like(indices, bool) if keep is None else keep
+    accepted = keep.reshape(-1)
+    expert_ids = jnp.where(accepted, indices.reshape(-1), experts)
+    order = jnp.argsort(expert_ids, stable=True)
+    sizes = jnp.bincount(expert_ids, length=experts + 1)[:experts].astype(jnp.int32)
+    rows = jnp.where(accepted[order, None], x[order // k], 0)
+    gate, value = jnp.split(jax.lax.ragged_dot(rows, w1.astype(x.dtype), sizes), 2, axis=-1)
+    values = jax.lax.ragged_dot(jax.nn.silu(gate) * value, w2.astype(x.dtype), sizes)
+    # order is a permutation. Without the declaration, differentiating the
+    # scatter uses JAX's general rule and builds an operand-sized ID buffer.
+    out = jnp.zeros_like(values).at[order].set(values, unique_indices=True)
+    return jnp.where(keep[..., None], out.reshape(n, k, x.shape[-1]), 0)
+
+
+def use_grouped_experts(training):
+    """Grouped matmuls for the training trace on accelerators; blocks otherwise.
+
+    STRATEGIZE_MOE_EXPERT_KERNEL ('auto', 'grouped' or 'blocks') overrides the
+    choice, except where grouped matmuls cannot run (outside training, batched
+    particles, forward mode). CPU lowers ragged_dot to one dense product per
+    expert, so 'auto' keeps the blocks there.
+    """
+    kernel = os.environ.get("STRATEGIZE_MOE_EXPERT_KERNEL", "auto")
+    if kernel not in EXPERT_KERNELS:
+        raise ValueError(f"STRATEGIZE_MOE_EXPERT_KERNEL must be one of {EXPERT_KERNELS}")
+    if not training or _blocks_only.get():
+        return False
+    if kernel != "auto":
+        return kernel == "grouped"
+    return jax.default_backend() in ("gpu", "tpu")
+
+
 def compute_dtype(cfg, fallback):
     # Missing metadata belongs to an older FP32 model. New fits explicitly save
     # their compute dtype; inference never chooses precision from its hardware.
     return jnp.bfloat16 if cfg.get("compute_dtype", "float32") == "bfloat16" else fallback
 
 
-def expert_output(x, w1, w2, shared1, shared2, indices, gates, keep):
-    out = selected_experts(x, w1, w2, indices, keep)
+def expert_output(x, w1, w2, shared1, shared2, indices, gates, keep, grouped=False):
+    out = (grouped_experts if grouped else selected_experts)(x, w1, w2, indices, keep)
     return (out.astype(jnp.float32) * gates[..., None]).sum(1).astype(x.dtype) + swiglu(
         x, shared1.astype(x.dtype), shared2.astype(x.dtype))
 
@@ -171,9 +228,13 @@ def dispatch(x, mask, router, w1, w2, shared1, shared2, bias, cfg,
         keep = ((global_rank < cutoff) & (ranks >= 0)).reshape(n, k) & valid[:, None]
     else:
         keep = jnp.broadcast_to(valid[:, None], (n, k))
+    keep = checkpoint_name(keep, ROUTING_DECISION)
     # This remat boundary contains no collectives. Routing/all_gather above runs
-    # exactly once in the forward pass, in the qualified global order.
-    compute = jax.checkpoint(expert_output, prevent_cse=False) if cfg.get("activation_checkpointing", True) else expert_output
+    # exactly once in the forward pass, in the qualified global order; an
+    # enclosing recurrence checkpoint saves ROUTING_DECISION rather than rerun it.
+    compute = functools.partial(expert_output, grouped=use_grouped_experts(training))
+    if cfg.get("activation_checkpointing", True):
+        compute = jax.checkpoint(compute, prevent_cse=False)
     y = compute(x2.astype(compute_dtype(cfg, x2.dtype)), w1, w2, shared1, shared2, indices, gates, keep)
     y = y.astype(x.dtype)
     y = jnp.where(valid[:, None], y, 0).reshape(shape)
@@ -272,7 +333,12 @@ class MoEELBO(ELBO):
             return self.base.loss_with_mutable_state(key, params, model, guide, *args, **kwargs)
         if self.num_particles == 1:
             return one(rng_key)
-        result = self.vectorize_particles_fn(one, jax.random.split(rng_key, self.num_particles))
+        # Only False selects jax.lax.map; True and custom mappers batch the trace.
+        token = _blocks_only.set(_blocks_only.get() or self.vectorize_particles is not False)
+        try:
+            result = self.vectorize_particles_fn(one, jax.random.split(rng_key, self.num_particles))
+        finally:
+            _blocks_only.reset(token)
         states = result["mutable_state"]
         state = jax.tree.map(lambda x: x[0], states)
         state[STATE]["stats"] = states[STATE]["stats"].sum(0)
@@ -324,8 +390,13 @@ class MoESVI(SVI):
                                args, kwargs, self.static_kwargs, mutable_state=state.mutable_state)
         derivative = jax.jacfwd if forward_mode_differentiation else jax.value_and_grad
         if forward_mode_differentiation:
-            (loss, mutable) = loss_fn(self.optim.get_params(state.optim_state))
-            grads = derivative(lambda p: loss_fn(p)[0])(self.optim.get_params(state.optim_state))
+            # jacfwd batches tangents over shared weights: keep the expert blocks.
+            token = _blocks_only.set(True)
+            try:
+                (loss, mutable) = loss_fn(self.optim.get_params(state.optim_state))
+                grads = derivative(lambda p: loss_fn(p)[0])(self.optim.get_params(state.optim_state))
+            finally:
+                _blocks_only.reset(token)
         else:
             (loss, mutable), grads = derivative(loss_fn, has_aux=True)(self.optim.get_params(state.optim_state))
         candidate = self.optim.update(grads, state.optim_state, value=loss)
