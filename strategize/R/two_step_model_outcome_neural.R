@@ -2680,6 +2680,88 @@ neural_project_level_text <- function(text_matrix, params, model_info, aux_matri
   proj
 }
 
+# Every factor's level tokens, gathered from ONE projected table per source.
+# Projecting each factor's small level table separately traces one matmul per
+# factor; XLA merges the forward dots (they share the weight) but not their
+# transposes, so the backward wrote a weight-sized cotangent per factor and then
+# summed them all (~80 ms of a ~0.94 s update at 719 factor slots). Row
+# transforms (corpus normalization, within-factor contrast) stay per factor, so
+# every row's projection is the one neural_project_level_text computes. NULL
+# when a factor's auxiliary rows do not line up; the caller keeps the loop.
+neural_gather_level_tokens <- function(X_idx, model_info, params, D_local) {
+  n_batch <- ai(X_idx$shape[[1]])
+  dims <- ai(model_info$model_dims)
+  normalizer <- model_info$text_embedding_normalizer
+  contrast <- neural_level_text_contrast(model_info)
+  name_parts <- contrast_parts <- aux_parts <- struct_parts <- list()
+  text_rows <- struct_rows <- integer(D_local)
+  any_aux <- FALSE
+  text_on <- !is.null(params$W_level_name_text) && !is.null(model_info$level_name_text)
+  struct_on <- !is.null(params$W_level_struct) && !is.null(model_info$level_struct_matrices)
+  for (d_ in seq_len(D_local)) {
+    text <- if (text_on && length(model_info$level_name_text) >= d_) {
+      neural_text_matrix_jnp(model_info$level_name_text[[d_]])
+    }
+    if (!is.null(text)) {
+      text <- neural_apply_text_embedding_normalizer(text, normalizer)
+      rows <- ai(text$shape[[1]])
+      name_parts[[length(name_parts) + 1L]] <- if (contrast) neural_apply_level_text_contrast(text) else text
+      if (!is.null(params$W_level_contrast_text)) {
+        contrast_parts[[length(contrast_parts) + 1L]] <- neural_apply_level_text_contrast(text)
+      }
+      if (!is.null(params$W_level_aux_text)) {
+        aux <- if (length(model_info$level_aux_text) >= d_) {
+          neural_text_matrix_jnp(model_info$level_aux_text[[d_]])
+        }
+        if (!is.null(aux)) {
+          if (ai(aux$shape[[1]]) != rows) {
+            return(NULL)
+          }
+          any_aux <- TRUE
+          aux <- neural_apply_text_embedding_normalizer(aux, normalizer)
+        } else {
+          aux <- strenv$jnp$zeros(list(rows, ai(text$shape[[2]])), dtype = text$dtype)
+        }
+        aux_parts[[length(aux_parts) + 1L]] <- aux
+      }
+      text_rows[[d_]] <- rows
+    }
+    struct <- if (struct_on && length(model_info$level_struct_matrices) >= d_) {
+      neural_text_matrix_jnp(model_info$level_struct_matrices[[d_]])
+    }
+    if (!is.null(struct)) {
+      struct_parts[[length(struct_parts) + 1L]] <- struct
+      struct_rows[[d_]] <- ai(struct$shape[[1]])
+    }
+  }
+  project <- function(parts, weight) {
+    strenv$jnp$einsum("td,dm->tm", strenv$jnp$concatenate(parts, axis = 0L), weight)
+  }
+  gather <- function(table, rows) {
+    if (is.null(table)) {
+      return(strenv$jnp$zeros(list(n_batch, D_local, dims), dtype = strenv$dtj))
+    }
+    offsets <- cumsum(c(0L, rows))[seq_len(D_local)]
+    idx <- strenv$jnp$clip(X_idx, 0L, strenv$jnp$array(as.integer(pmax(rows - 1L, 0L)), dtype = X_idx$dtype)) +
+      strenv$jnp$array(as.integer(offsets), dtype = X_idx$dtype)
+    tokens <- strenv$jnp$take(table, idx, axis = 0L, mode = "clip")
+    present <- strenv$jnp$reshape(strenv$jnp$array(rows > 0L), list(1L, D_local, 1L))
+    strenv$jnp$where(present, tokens, strenv$jnp$zeros_like(tokens))
+  }
+  text_table <- NULL
+  if (length(name_parts)) {
+    text_table <- project(name_parts, params$W_level_name_text)
+    if (length(contrast_parts)) {
+      text_table <- text_table + project(contrast_parts, params$W_level_contrast_text)
+    }
+    if (any_aux) {
+      text_table <- text_table + project(aux_parts, params$W_level_aux_text)
+    }
+  }
+  struct_table <- if (length(struct_parts)) project(struct_parts, params$W_level_struct)
+  list(text = gather(text_table, text_rows), struct = gather(struct_table, struct_rows))
+}
+
 # The distinctive part of each level within its factor: the level minus the
 # longest runs of leading and trailing whitespace-separated tokens shared by
 # every level ("Stronger than in Nicaragua" -> "Stronger than in" next to
@@ -8393,6 +8475,13 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
     "structural_factor"
   )
 
+  gathered <- if (!identical(Sys.getenv("STRATEGIZE_LEVEL_TEXT_GATHER"), "0")) {
+    neural_gather_level_tokens(X_idx, model_info, params, D_local)
+  }
+  if (!is.null(gathered)) {
+    level_text_tok_all <- gathered$text
+    level_struct_tok_all <- gathered$struct
+  } else {
   level_text_token_list <- vector("list", D_local)
   level_struct_token_list <- vector("list", D_local)
   for (d_ in seq_len(D_local)) {
@@ -8438,6 +8527,7 @@ neural_build_factor_fused_tokens_hard <- function(X_idx,
   }
   level_text_tok_all <- strenv$jnp$stack(level_text_token_list, axis = 1L)
   level_struct_tok_all <- strenv$jnp$stack(level_struct_token_list, axis = 1L)
+  }
   level_text_tok <- strenv$jnp$take_along_axis(
     level_text_tok_all,
     gather_idx,

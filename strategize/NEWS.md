@@ -1,3 +1,55 @@
+# Development: October 19, 2026 exact grouped MoE GEMM and one level-text gather
+
+- Training traces on GPU compute routed experts with an exact grouped GEMM
+  written in Pallas Triton (`strategize_moe_gmm.py`). XLA GPU (JAX 0.11.1)
+  lowered `ragged_dot` as a dense product over all 8 experts, with
+  expert-sized mask and transpose temporaries. The new layout is expert-major,
+  and each expert starts on a 64-row tile, so every tile multiplies by one
+  expert's weights. A `custom_vjp` runs the same kernel for dX and a grouped
+  `x^T dy` kernel for dW.
+  - Work is now proportional to the routed assignments: one MoE layer's
+    forward+backward at batch 16 fell from 16-21 ms to 3.0 ms.
+  - `STRATEGIZE_MOE_EXPERT_KERNEL=auto` now means `pallas` on GPU. TPUs keep
+    `grouped`, and `grouped` or `blocks` still override it.
+  - Shapes the kernel does not tile (width or expert hidden size not a
+    multiple of 64) fall back to `grouped`.
+  - JAX's Pallas Triton backend looks GPUs up in a fixed name table. Unlisted
+    CUDA GPUs, such as the GeForce RTX 5080 Laptop (sm_120), are registered
+    by compute capability through a private JAX module (`register_device`).
+- The hard factor-fused token path projects every factor's level text with
+  one concatenated table per weight and gathers rows once
+  (`neural_gather_level_tokens`). The per-factor loop's backward wrote one
+  weight-sized cotangent per factor slot (719 in the foundation pool) and
+  summed them.
+  - Values and gradients agree with the loop to FP32 rounding (at most
+    5e-7 absolute and 2e-7 relative on GPU).
+  - `STRATEGIZE_LEVEL_TEXT_GATHER=0` restores the loop. The soft path is
+    unchanged.
+- Two opt-in reduced-precision switches (both default to float32):
+  - `STRATEGIZE_MUON_NS_DTYPE=bfloat16` runs Muon's Newton-Schulz
+    orthogonalization in bf16: 74 to 24 ms per step, update cosine 0.9993. It
+    changes the optimizer trajectory and needs a longer A/B before adoption.
+  - `STRATEGIZE_DP_REDUCE_DTYPE=bfloat16` all-reduces data-parallel gradients
+    in bf16 (the loss stays f32).
+- Measured on the 576-wide, 8-layer looped MoE foundation model (RTX 4090
+  Laptop, batch 16, FP32 at highest precision, 48 updates):
+
+  | Configuration | s per 8 updates | Peak memory | Compile |
+  | --- | ---: | ---: | ---: |
+  | Previous implementation | 7.2 | 9.76 GB | 336 s |
+  | Pallas experts | 4.05 | 9.76 GB | 316 s |
+  | Pallas experts + level-text gather | 3.42 | 5.39 GB | 233 s |
+
+  - Validation NLL agreed within GPU run-to-run noise (0.7518-0.7524).
+  - Two-GPU data parallel over Thunderbolt (global batch 32) fell from 11.25
+    to 6.1 s per 8 updates (5.3 s with the bf16 reduce).
+  - A single 4090 at batch 32 is faster still: 4.5 s per 8 updates and 7.7 GB
+    peak, because the f32 all-reduce of the 352 MB of gradients takes about
+    270 ms over the link.
+- `strategize_moe_gmm.py` joins the runtime identity recorded in full-state
+  checkpoints, so checkpoints written before this change cannot be resumed
+  with it.
+
 # Development: October 18, 2026 grouped MoE experts and checkpointed recurrences
 
 - Training traces on GPU/TPU compute routed experts with grouped

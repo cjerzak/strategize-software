@@ -1,6 +1,8 @@
 """Full-objective gradient normalization and diagnostics for SVI optimizers."""
 
+import contextlib
 import math
+import os
 import re
 from typing import NamedTuple
 
@@ -83,9 +85,34 @@ def strict_muon_optimizer(learning_rate, dimension_numbers, weight_decay=0.0):
     def update(grads, state, params=None, **extra_args):
         # Shape/tree checks also validate restored states, once per JIT trace.
         muon_partition_diagnostics(state, params, dimension_numbers)
-        return optimizer.update(grads, state, params, **extra_args)
+        with _newton_schulz_dtype(os.environ.get("STRATEGIZE_MUON_NS_DTYPE", "float32")):
+            return optimizer.update(grads, state, params, **extra_args)
 
     return optax.GradientTransformationExtraArgs(init, update)
+
+
+@contextlib.contextmanager
+def _newton_schulz_dtype(dtype):
+    """Trace Muon's Newton-Schulz iteration in bfloat16 (as reference Muon does).
+
+    The orthogonalization is approximate by design (singular values land in
+    roughly [0.5, 1.5]); momentum and the update stay in the parameter dtype.
+    """
+    if dtype == "float32":
+        yield
+        return
+    if dtype != "bfloat16":
+        raise ValueError("STRATEGIZE_MUON_NS_DTYPE must be 'float32' or 'bfloat16'")
+    from optax.contrib import _muon
+    original = _muon.orthogonalize_via_newton_schulz
+
+    def orthogonalize(x, *args, **kwargs):
+        return original(x.astype(jnp.bfloat16), *args, **kwargs).astype(x.dtype)
+    _muon.orthogonalize_via_newton_schulz = orthogonalize
+    try:
+        yield
+    finally:
+        _muon.orthogonalize_via_newton_schulz = original
 
 
 class UpdateDiagnosticsState(NamedTuple):

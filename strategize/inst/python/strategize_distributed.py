@@ -424,7 +424,16 @@ class Runtime:
                 if moe_config is not None:
                     from strategize_moe import _depend
                     packed = _depend(packed, self.collective_chain)
-                packed = jax.lax.psum(packed, "data") / self.device_count
+                if os.environ.get("STRATEGIZE_DP_REDUCE_DTYPE", "float32") == "bfloat16":
+                    # Half the bytes over a bandwidth-bound link. The loss
+                    # reduces in f32 afterwards, ordered after the gradients so
+                    # every rank issues the two collectives in the same order.
+                    from strategize_moe import _depend
+                    total = jax.lax.psum(packed[:-1].astype(jnp.bfloat16), "data").astype(flat.dtype)
+                    loss = jax.lax.psum(_depend(packed[-1:], total.sum()), "data")
+                    packed = jnp.concatenate((total, loss)) / self.device_count
+                else:
+                    packed = jax.lax.psum(packed, "data") / self.device_count
                 grads, loss = unravel(packed[:-1]), packed[-1]
                 if gradients:
                     return grads
@@ -605,8 +614,8 @@ class Runtime:
                 "device_memory": {str(d.id): d.memory_stats() for d in jax.local_devices()},
                 "runtime_sha256": hashlib.sha256("".join(
                     _sha(Path(__file__).with_name(name)) for name in
-                    ("strategize_distributed.py", "strategize_moe.py", "strategize_optim.py",
-                     "strategize_attention.py", "strategize_transformer.py",
+                    ("strategize_distributed.py", "strategize_moe.py", "strategize_moe_gmm.py",
+                     "strategize_optim.py", "strategize_attention.py", "strategize_transformer.py",
                      "strategize_accounting.py", "strategize_diagnostics.py")
                 ).encode()).hexdigest()}
 

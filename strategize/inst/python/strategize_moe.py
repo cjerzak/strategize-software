@@ -29,7 +29,7 @@ _context = ContextVar("strategize_moe_trace", default=None)
 # Set while a training trace is batched (vectorized particles) or differentiated
 # in forward mode; native ragged_dot supports neither with shared weights.
 _blocks_only = ContextVar("strategize_moe_blocks_only", default=False)
-EXPERT_KERNELS = ("auto", "grouped", "blocks")
+EXPERT_KERNELS = ("auto", "grouped", "blocks", "pallas")
 
 
 def route(x, router, bias, top_k, scale):
@@ -131,22 +131,31 @@ def grouped_experts(x, w1, w2, indices, keep=None):
     return jnp.where(keep[..., None], out.reshape(n, k, x.shape[-1]), 0)
 
 
-def use_grouped_experts(training):
-    """Grouped matmuls for the training trace on accelerators; blocks otherwise.
+def expert_kernel(training):
+    """Grouped matmuls for the training trace on accelerators; 'blocks' otherwise.
 
-    STRATEGIZE_MOE_EXPERT_KERNEL ('auto', 'grouped' or 'blocks') overrides the
-    choice, except where grouped matmuls cannot run (outside training, batched
-    particles, forward mode). CPU lowers ragged_dot to one dense product per
-    expert, so 'auto' keeps the blocks there.
+    'auto' picks 'pallas', the exact grouped GEMM (Triton), on GPUs, where XLA
+    lowers ragged_dot as a dense product over every expert; TPUs keep 'grouped'
+    ragged_dot. CPU lowers ragged_dot to one dense product per expert, so 'auto'
+    keeps the blocks there. STRATEGIZE_MOE_EXPERT_KERNEL ('auto', 'grouped',
+    'blocks' or 'pallas') overrides the choice, except where grouped matmuls
+    cannot run (outside training, batched particles, forward mode). 'pallas'
+    means 'grouped' off GPU and for shapes the kernel does not tile.
     """
     kernel = os.environ.get("STRATEGIZE_MOE_EXPERT_KERNEL", "auto")
     if kernel not in EXPERT_KERNELS:
         raise ValueError(f"STRATEGIZE_MOE_EXPERT_KERNEL must be one of {EXPERT_KERNELS}")
     if not training or _blocks_only.get():
-        return False
-    if kernel != "auto":
-        return kernel == "grouped"
-    return jax.default_backend() in ("gpu", "tpu")
+        return "blocks"
+    if kernel == "auto":
+        return {"gpu": "pallas", "tpu": "grouped"}.get(jax.default_backend(), "blocks")
+    if kernel == "pallas" and jax.default_backend() != "gpu":
+        return "grouped"
+    return kernel
+
+
+def use_grouped_experts(training):
+    return expert_kernel(training) != "blocks"
 
 
 def compute_dtype(cfg, fallback):
@@ -155,8 +164,12 @@ def compute_dtype(cfg, fallback):
     return jnp.bfloat16 if cfg.get("compute_dtype", "float32") == "bfloat16" else fallback
 
 
-def expert_output(x, w1, w2, shared1, shared2, indices, gates, keep, grouped=False):
-    out = (grouped_experts if grouped else selected_experts)(x, w1, w2, indices, keep)
+def expert_output(x, w1, w2, shared1, shared2, indices, gates, keep, kernel="blocks"):
+    impl = {"blocks": selected_experts, "grouped": grouped_experts}.get(kernel)
+    if kernel == "pallas":
+        import strategize_moe_gmm as gmm
+        impl = gmm.gmm_experts if gmm.supported(x, w1, w2) else grouped_experts
+    out = impl(x, w1, w2, indices, keep)
     return (out.astype(jnp.float32) * gates[..., None]).sum(1).astype(x.dtype) + swiglu(
         x, shared1.astype(x.dtype), shared2.astype(x.dtype))
 
@@ -232,7 +245,7 @@ def dispatch(x, mask, router, w1, w2, shared1, shared2, bias, cfg,
     # This remat boundary contains no collectives. Routing/all_gather above runs
     # exactly once in the forward pass, in the qualified global order; an
     # enclosing recurrence checkpoint saves ROUTING_DECISION rather than rerun it.
-    compute = functools.partial(expert_output, grouped=use_grouped_experts(training))
+    compute = functools.partial(expert_output, kernel=expert_kernel(training))
     if cfg.get("activation_checkpointing", True):
         compute = jax.checkpoint(compute, prevent_cse=False)
     y = compute(x2.astype(compute_dtype(cfg, x2.dtype)), w1, w2, shared1, shared2, indices, gates, keep)
