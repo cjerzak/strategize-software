@@ -33,13 +33,17 @@ def supported(x, w1, w2):
 
 def register_device():
     """Pallas Triton picks its target from a fixed device-name table. Register
-    other CUDA GPUs (e.g. the GeForce RTX 5080 Laptop, sm_120) by capability."""
+    other CUDA GPUs (e.g. the GeForce RTX 5080 Laptop, sm_120) by capability.
+    ROCm devices report a gfx name (e.g. 'gfx1100') and need no registration."""
     from jax._src.pallas.triton import gpu_info
     device = jax.devices()[0]
     kind = device.device_kind
     if device.platform != "gpu" or kind in gpu_info.registry or gpu_info.gpu_version_from_device_kind(kind):
         return
-    major, minor = (int(v) for v in str(device.compute_capability).split("."))
+    version = str(device.compute_capability).split(".")
+    if len(version) != 2 or not all(v.isdigit() for v in version):
+        return
+    major, minor = (int(v) for v in version)
     gpu_info.registry[kind] = lambda: gpu_info.GpuInfo(
         gpu_version=None, arch_name=f"{major}.{minor}", compute_capability=10 * major + minor)
 
