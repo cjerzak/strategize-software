@@ -253,7 +253,12 @@ def normalized_optimizer(optimizer, objective_scale=1.0, clip_global_norm=None,
         updates, inner_state = optimizer.update(clipped, state.inner_state, params, **extra_args)
         ratio = jnp.asarray(jnp.nan, dtype=jnp.float32)
         if params is not None:
-            ratio = _tree_norm(updates) / jnp.maximum(_tree_norm(params), 1e-12)
+            # Read the parameters for this diagnostic through a barrier. With weight
+            # decay the Muon update also reads them, and XLA would fuse every leaf's
+            # update into the single-block parameter-norm reduction: a kernel ROCm
+            # cannot launch on the RX 7600M XT (ROCM_ERROR_LAUNCH_OUT_OF_RESOURCES).
+            ratio = _tree_norm(updates) / jnp.maximum(
+                _tree_norm(jax.lax.optimization_barrier(params)), 1e-12)
         return updates, UpdateDiagnosticsState(
             inner_state, optax.safe_int32_increment(state.count),
             state.clipped_count + (factor < 1).astype(jnp.int32),

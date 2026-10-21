@@ -94,6 +94,20 @@ class StrictMuonTests(unittest.TestCase):
         for a, b in zip(jax.tree.leaves(base_state), jax.tree.leaves(extra_state)):
             np.testing.assert_array_equal(a, b)
 
+    def test_parameter_norm_reads_params_through_a_barrier(self):
+        # With weight decay each Muon update reads its parameter; the diagnostic
+        # parameter norm must not share that read, or XLA fuses every leaf's update
+        # into one single-block reduction that ROCm cannot launch.
+        optim = normalized_optimizer(strict_muon_optimizer(1e-3, dims, weight_decay=.1), 1., 10.)
+        state = optim.init(self.params)
+        grads = jax.tree.map(lambda x: x * .2, self.params)
+        jaxpr = jax.make_jaxpr(optim.update)(grads, state, self.params)
+        barriers = [e for e in jaxpr.jaxpr.eqns if e.primitive.name == "optimization_barrier"]
+        self.assertEqual([len(e.invars) for e in barriers], [len(self.params)])
+        updates, state = optim.update(grads, state, self.params)
+        expected = optax.tree.norm(updates) / optax.tree.norm(self.params)
+        self.assertAlmostEqual(update_diagnostics(state)["last_update_parameter_ratio"], float(expected), places=6)
+
     def test_empty_or_substituted_muon_state_fails(self):
         optim = strict_muon_optimizer(.001, dims)
         with self.assertRaisesRegex(ValueError, "no eligible"):
