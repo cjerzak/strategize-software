@@ -2,7 +2,11 @@
 import contextlib
 import io
 import math
+import os
 import re
+import subprocess
+import sys
+import tempfile
 
 import jax
 import jax.numpy as jnp
@@ -89,6 +93,19 @@ def test_training_dispatch_selects_grouped_experts_without_loops(monkeypatch):
     monkeypatch.setenv("STRATEGIZE_MOE_EXPERT_KERNEL", "ragged")
     with pytest.raises(ValueError, match="STRATEGIZE_MOE_EXPERT_KERNEL"):
         moe.use_grouped_experts(True)
+
+
+def test_pallas_module_loads_without_package_directory_on_sys_path():
+    # R imports strategize_moe with import_from_path, which takes this directory
+    # off sys.path again, so a plain `import strategize_moe_gmm` fails in training.
+    code = ("import importlib.util, sys; "
+            "spec = importlib.util.spec_from_file_location('strategize_moe', sys.argv[1]); "
+            "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); "
+            "g = m._gmm_module(); assert m._gmm_module() is g; print(g.BM)")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    out = subprocess.run([sys.executable, "-c", code, moe.__file__], cwd=tempfile.gettempdir(),
+                         env={**env, "JAX_PLATFORMS": "cpu"}, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr[-2000:]
 
 
 @pytest.mark.parametrize("n", [38, 128, 2048])

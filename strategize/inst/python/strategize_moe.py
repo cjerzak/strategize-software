@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 import functools
+import importlib.util
 import os
+import sys
 
 import jax
 from jax.ad_checkpoint import checkpoint_name
@@ -164,10 +166,23 @@ def compute_dtype(cfg, fallback):
     return jnp.bfloat16 if cfg.get("compute_dtype", "float32") == "bfloat16" else fallback
 
 
+def _gmm_module():
+    """The sibling Pallas kernel module, loaded by path: R imports these modules
+    with import_from_path, which leaves this directory off sys.path."""
+    module = sys.modules.get("strategize_moe_gmm")
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            "strategize_moe_gmm", os.path.join(os.path.dirname(os.path.abspath(__file__)), "strategize_moe_gmm.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
 def expert_output(x, w1, w2, shared1, shared2, indices, gates, keep, kernel="blocks"):
     impl = {"blocks": selected_experts, "grouped": grouped_experts}.get(kernel)
     if kernel == "pallas":
-        import strategize_moe_gmm as gmm
+        gmm = _gmm_module()
         impl = gmm.gmm_experts if gmm.supported(x, w1, w2) else grouped_experts
     out = impl(x, w1, w2, indices, keep)
     return (out.astype(jnp.float32) * gates[..., None]).sum(1).astype(x.dtype) + swiglu(
