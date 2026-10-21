@@ -4283,6 +4283,23 @@ neural_combine_tower_term <- function(logits, term, params) {
   if (neural_tower_only(params)) term else logits + term
 }
 
+# Per-candidate tower utility g(r, c) = Delta(r, c) + c . W_to_cand (or the
+# distillation head): the tower-only prediction and the surrogate target.
+neural_tower_utility <- function(respondent_final, candidate_final, params,
+                                 out_dim = NULL, dtype = NULL, model_info = NULL,
+                                 pairwise_obs = FALSE) {
+  neural_low_rank_interaction_logits(
+    respondent_final = respondent_final,
+    candidate_final = candidate_final,
+    params = params,
+    out_dim = out_dim,
+    dtype = dtype,
+    model_info = model_info,
+    pairwise_obs = pairwise_obs,
+    surrogate = TRUE
+  ) + strenv$jnp$einsum("nm,mo->no", candidate_final, neural_tower_candidate_head(params))
+}
+
 # Collect the row-weighted squared error between the tower surrogate and the
 # joint pairwise utility difference (column 0, the pairwise logit). The target
 # is stop-gradient, so distillation never pulls the joint predictor.
@@ -9480,18 +9497,18 @@ neural_low_rank_single_utility_prepared <- function(params,
     transformer_model_info = transformer_model_info,
     candidate_info = candidate_info
   )
-  delta <- neural_low_rank_interaction_logits(
+  out_dim_use <- out_dim %||% ai(params$W_rc_out$shape[[2]])
+  if (neural_tower_only(params)) {
+    return(neural_tower_utility(resp_readout$final, cand_readout$final, params,
+                                out_dim = out_dim_use, dtype = dtype))
+  }
+  neural_low_rank_interaction_logits(
     respondent_final = resp_readout$final,
     candidate_final = cand_readout$final,
     params = params,
-    out_dim = out_dim %||% ai(params$W_rc_out$shape[[2]]),
-    dtype = dtype,
-    surrogate = neural_tower_only(params)
+    out_dim = out_dim_use,
+    dtype = dtype
   )
-  if (!neural_tower_only(params)) {
-    return(delta)
-  }
-  delta + strenv$jnp$einsum("nm,mo->no", cand_readout$final, params$W_to_cand)
 }
 
 neural_run_transformer_scan_standard <- function(tokens,
@@ -10966,13 +10983,11 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
   if (is.null(params)) {
     params <- model_info$params
   }
-  phi <- neural_encode_candidate_soft(pi_vec, party_idx, model_info,
-                                      resp_party_idx = resp_party_idx,
-                                      stage_idx = stage_idx,
-                                      matchup_idx = matchup_idx,
-                                      resp_cov_vec = resp_cov_vec,
-                                      params = params,
-                                      context_present = context_present)
+  has_low_rank <- isTRUE(neural_has_low_rank_interaction(params, model_info))
+  # Tower-only models predict from the towers alone (W_out stays zero), so the
+  # joint soft encoder is skipped, as neural_combine_tower_term drops it in the
+  # hard path.
+  tower_only <- has_low_rank && neural_tower_only(params)
   # For a pairwise-trained model, apply the same head/low-rank RMS
   # normalization the pair logit path uses (pairwise_obs = TRUE at 9988-10001):
   # under low_rank_logit_normalization = "rms" the raw W_out column scales are
@@ -10981,14 +10996,24 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
   # softmax at an arbitrary temperature. All ops are jnp -- the utility stays
   # differentiable in pi_vec.
   utility_pairwise_obs <- isTRUE(model_info$pairwise_mode)
-  utility <- neural_linear_head(
-    phi,
-    params$W_out,
-    params$b_out,
-    model_info = model_info,
-    pairwise_obs = utility_pairwise_obs
-  )
-  if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
+  utility <- NULL
+  if (!tower_only) {
+    phi <- neural_encode_candidate_soft(pi_vec, party_idx, model_info,
+                                        resp_party_idx = resp_party_idx,
+                                        stage_idx = stage_idx,
+                                        matchup_idx = matchup_idx,
+                                        resp_cov_vec = resp_cov_vec,
+                                        params = params,
+                                        context_present = context_present)
+    utility <- neural_linear_head(
+      phi,
+      params$W_out,
+      params$b_out,
+      model_info = model_info,
+      pairwise_obs = utility_pairwise_obs
+    )
+  }
+  if (has_low_rank) {
     resp_readout <- neural_encode_respondent_tower_prepared(
       params = params,
       model_info = model_info,
@@ -11006,15 +11031,24 @@ neural_candidate_utility_soft <- function(pi_vec, party_idx,
       resp_party_idx = resp_party_idx,
       context_present = context_present
     )
-    utility <- utility + neural_low_rank_interaction_logits(
-      respondent_final = resp_readout$final,
-      candidate_final = cand_readout$final,
-      params = params,
-      out_dim = ai(utility$shape[[2]]),
-      dtype = utility$dtype,
-      model_info = model_info,
-      pairwise_obs = utility_pairwise_obs
-    )
+    utility <- if (tower_only) {
+      neural_tower_utility(
+        resp_readout$final, cand_readout$final, params,
+        out_dim = ai(params$W_out$shape[[2]]),
+        model_info = model_info,
+        pairwise_obs = utility_pairwise_obs
+      )
+    } else {
+      utility + neural_low_rank_interaction_logits(
+        respondent_final = resp_readout$final,
+        candidate_final = cand_readout$final,
+        params = params,
+        out_dim = ai(utility$shape[[2]]),
+        dtype = utility$dtype,
+        model_info = model_info,
+        pairwise_obs = utility_pairwise_obs
+      )
+    }
   }
   # Additive main-effects head + calibration temperature (train/serve parity with
   # neural_predict_single_core_prepared at 9094/9105). neural_predict_single_soft
@@ -11065,7 +11099,79 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
     resp_party_idx,
     model_info
   )
-  if (isTRUE(use_cross_encoder)) {
+  has_low_rank <- isTRUE(neural_has_low_rank_interaction(params, model_info))
+  # Respondent-candidate tower delta. Tower-only models predict from the towers
+  # alone, g(r, c) = Delta(r, c) + c . W_to_cand (parity with the hard path's
+  # neural_combine_tower_term); other models add only the low-rank term.
+  soft_tower_delta <- function(out_dim, dtype) {
+    resp_readout <- neural_encode_respondent_tower_prepared(
+      params = params,
+      model_info = model_info,
+      resp_party_idx = resp_party_idx,
+      resp_cov = resp_cov_vec,
+      stage_idx = stage_idx,
+      matchup_idx = matchup_idx,
+      context_present = context_present
+    )
+    side <- function(pi_vec, party_idx) {
+      readout <- neural_encode_candidate_profile_tower_soft(
+        params = params,
+        model_info = model_info,
+        pi_vec = pi_vec,
+        party_idx = party_idx,
+        resp_party_idx = resp_party_idx,
+        context_present = context_present
+      )
+      if (neural_tower_only(params)) {
+        return(neural_tower_utility(
+          resp_readout$final, readout$final, params, out_dim = out_dim, dtype = dtype,
+          model_info = model_info, pairwise_obs = TRUE
+        ))
+      }
+      neural_low_rank_interaction_logits(
+        respondent_final = resp_readout$final,
+        candidate_final = readout$final,
+        params = params,
+        out_dim = out_dim,
+        dtype = dtype,
+        model_info = model_info,
+        pairwise_obs = TRUE
+      )
+    }
+    side(pi_left, party_left_idx) - side(pi_right, party_right_idx)
+  }
+  # Additive main-effects head (train/serve parity with the hard cores),
+  # self-gated by the callers on neural_additive_utility_enabled.
+  soft_additive_delta <- function(logits) {
+    add_out_dim <- ai(logits$shape[[2]])
+    left_add_info <- neural_build_candidate_tokens_soft(
+      pi_left, party_left_idx, 0L, model_info, params,
+      resp_party_idx = resp_party_idx, return_mask = TRUE,
+      context_present = context_present
+    )
+    right_add_info <- neural_build_candidate_tokens_soft(
+      pi_right, party_right_idx, 1L, model_info, params,
+      resp_party_idx = resp_party_idx, return_mask = TRUE,
+      context_present = context_present
+    )
+    neural_additive_logits_from_candidate_tokens(
+      tokens = left_add_info$tokens, token_mask = left_add_info$mask,
+      params = params, model_info = model_info,
+      out_dim = add_out_dim, dtype = logits$dtype
+    ) -
+      neural_additive_logits_from_candidate_tokens(
+        tokens = right_add_info$tokens, token_mask = right_add_info$mask,
+        params = params, model_info = model_info,
+        out_dim = add_out_dim, dtype = logits$dtype
+      )
+  }
+  if (has_low_rank && neural_tower_only(params) && !isTRUE(use_cross_term)) {
+    # Tower-only: the joint encoder feeds only the unused W_out head, so skip it.
+    logits <- soft_tower_delta(ai(params$W_out$shape[[2]]), strenv$dtj)
+    if (isTRUE(neural_additive_utility_enabled(model_info, params))) {
+      logits <- logits + soft_additive_delta(logits)
+    }
+  } else if (isTRUE(use_cross_encoder)) {
     choice_tok <- neural_build_choice_token(model_info, params)
     choice_mask <- strenv$jnp$ones(list(1L, 1L), dtype = strenv$dtj)
     # Cross-encoder CLS logits for a given candidate ordering (a = left/segment0,
@@ -11141,77 +11247,15 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
                                      stage_idx_rev, matchup_idx_rev, context_present_rev)
       logits <- 0.5 * (logits - logits_rev)
     }
-    if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
-      resp_readout <- neural_encode_respondent_tower_prepared(
-        params = params,
-        model_info = model_info,
-        resp_party_idx = resp_party_idx,
-        resp_cov = resp_cov_vec,
-        stage_idx = stage_idx,
-        matchup_idx = matchup_idx,
-        context_present = context_present
+    if (has_low_rank) {
+      logits <- neural_combine_tower_term(
+        logits, soft_tower_delta(ai(logits$shape[[2]]), logits$dtype), params
       )
-      left_readout <- neural_encode_candidate_profile_tower_soft(
-        params = params,
-        model_info = model_info,
-        pi_vec = pi_left,
-        party_idx = party_left_idx,
-        resp_party_idx = resp_party_idx,
-        context_present = context_present
-      )
-      right_readout <- neural_encode_candidate_profile_tower_soft(
-        params = params,
-        model_info = model_info,
-        pi_vec = pi_right,
-        party_idx = party_right_idx,
-        resp_party_idx = resp_party_idx,
-        context_present = context_present
-      )
-      logits <- logits +
-        neural_low_rank_interaction_logits(
-          respondent_final = resp_readout$final,
-          candidate_final = left_readout$final,
-          params = params,
-          out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype,
-          model_info = model_info,
-          pairwise_obs = TRUE
-        ) -
-        neural_low_rank_interaction_logits(
-          respondent_final = resp_readout$final,
-          candidate_final = right_readout$final,
-          params = params,
-          out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype,
-          model_info = model_info,
-          pairwise_obs = TRUE
-        )
     }
     # Additive main-effects head (parity with the hard cross-encoder core at 8797),
     # added after the antisymmetry averaging and the low-rank delta.
     if (isTRUE(neural_additive_utility_enabled(model_info, params))) {
-      add_out_dim <- ai(logits$shape[[2]])
-      left_add_info <- neural_build_candidate_tokens_soft(
-        pi_left, party_left_idx, 0L, model_info, params,
-        resp_party_idx = resp_party_idx, return_mask = TRUE,
-        context_present = context_present
-      )
-      right_add_info <- neural_build_candidate_tokens_soft(
-        pi_right, party_right_idx, 1L, model_info, params,
-        resp_party_idx = resp_party_idx, return_mask = TRUE,
-        context_present = context_present
-      )
-      logits <- logits +
-        neural_additive_logits_from_candidate_tokens(
-          tokens = left_add_info$tokens, token_mask = left_add_info$mask,
-          params = params, model_info = model_info,
-          out_dim = add_out_dim, dtype = logits$dtype
-        ) -
-        neural_additive_logits_from_candidate_tokens(
-          tokens = right_add_info$tokens, token_mask = right_add_info$mask,
-          params = params, model_info = model_info,
-          out_dim = add_out_dim, dtype = logits$dtype
-        )
+      logits <- logits + soft_additive_delta(logits)
     }
   } else {
     phi_pair <- neural_encode_pair_soft_batched(pi_left, pi_right,
@@ -11257,51 +11301,10 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
       pairwise_obs = TRUE
     )
     logits <- u_left - u_right
-    if (isTRUE(neural_has_low_rank_interaction(params, model_info))) {
-      resp_readout <- neural_encode_respondent_tower_prepared(
-        params = params,
-        model_info = model_info,
-        resp_party_idx = resp_party_idx,
-        resp_cov = resp_cov_vec,
-        stage_idx = stage_idx,
-        matchup_idx = matchup_idx,
-        context_present = context_present
+    if (has_low_rank) {
+      logits <- neural_combine_tower_term(
+        logits, soft_tower_delta(ai(logits$shape[[2]]), logits$dtype), params
       )
-      left_readout <- neural_encode_candidate_profile_tower_soft(
-        params = params,
-        model_info = model_info,
-        pi_vec = pi_left,
-        party_idx = party_left_idx,
-        resp_party_idx = resp_party_idx,
-        context_present = context_present
-      )
-      right_readout <- neural_encode_candidate_profile_tower_soft(
-        params = params,
-        model_info = model_info,
-        pi_vec = pi_right,
-        party_idx = party_right_idx,
-        resp_party_idx = resp_party_idx,
-        context_present = context_present
-      )
-      logits <- logits +
-        neural_low_rank_interaction_logits(
-          respondent_final = resp_readout$final,
-          candidate_final = left_readout$final,
-          params = params,
-          out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype,
-          model_info = model_info,
-          pairwise_obs = TRUE
-        ) -
-        neural_low_rank_interaction_logits(
-          respondent_final = resp_readout$final,
-          candidate_final = right_readout$final,
-          params = params,
-          out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype,
-          model_info = model_info,
-          pairwise_obs = TRUE
-        )
     }
     if (isTRUE(use_cross_term)) {
       logits <- neural_apply_cross_term(logits, phi_left, phi_right,
@@ -11313,28 +11316,7 @@ neural_predict_pair_soft <- function(pi_left, pi_right,
     # the shared transform/scale/calibration. Self-gates via
     # neural_additive_utility_enabled, so it is a no-op when the additive head is off.
     if (isTRUE(neural_additive_utility_enabled(model_info, params))) {
-      add_out_dim <- ai(logits$shape[[2]])
-      left_add_info <- neural_build_candidate_tokens_soft(
-        pi_left, party_left_idx, 0L, model_info, params,
-        resp_party_idx = resp_party_idx, return_mask = TRUE,
-        context_present = context_present
-      )
-      right_add_info <- neural_build_candidate_tokens_soft(
-        pi_right, party_right_idx, 1L, model_info, params,
-        resp_party_idx = resp_party_idx, return_mask = TRUE,
-        context_present = context_present
-      )
-      logits <- logits +
-        neural_additive_logits_from_candidate_tokens(
-          tokens = left_add_info$tokens, token_mask = left_add_info$mask,
-          params = params, model_info = model_info,
-          out_dim = add_out_dim, dtype = logits$dtype
-        ) -
-        neural_additive_logits_from_candidate_tokens(
-          tokens = right_add_info$tokens, token_mask = right_add_info$mask,
-          params = params, model_info = model_info,
-          out_dim = add_out_dim, dtype = logits$dtype
-        )
+      logits <- logits + soft_additive_delta(logits)
     }
   }
   logits <- neural_apply_pairwise_classification_logit_transform(

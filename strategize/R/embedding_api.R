@@ -592,11 +592,10 @@ cs2step_neural_extract_prepared <- function(params,
     out <- c(out, candidate)
     # Distilled tower utility g(r, c): the tower summary of the joint utility.
     if (neural_has_tower_sufficiency(params)) {
-      tower_utility <- function(c) strenv$jnp$take(neural_low_rank_interaction_logits(
+      tower_utility <- function(c) strenv$jnp$take(neural_tower_utility(
         respondent$respondent_final, c, params, model_info = model_info,
-        pairwise_obs = isTRUE(prep$pairwise), surrogate = TRUE
-      ), 0L, axis = 1L) + strenv$jnp$take(
-        strenv$jnp$einsum("nm,mo->no", c, neural_tower_candidate_head(params)), 0L, axis = 1L)
+        pairwise_obs = isTRUE(prep$pairwise)
+      ), 0L, axis = 1L)
       if (isTRUE(prep$pairwise)) {
         out$tower_utility_left <- tower_utility(candidate$candidate_left_final)
         out$tower_utility_right <- tower_utility(candidate$candidate_right_final)
