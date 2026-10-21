@@ -1,3 +1,34 @@
+# Development: October 21, 2026 tower-only policy utility, GPU launch fixes, and a faster tower-only step
+
+- Soft policy paths now score tower-only models with the tower utility
+  g(r, c) = Delta(r, c) + c . W_to_cand, the same quantity as the hard path
+  and `extract_embeddings` (one helper, `neural_tower_utility`).
+  - `neural_candidate_utility_soft` and both soft pair branches read the joint
+    `W_out` head, which stays zero in tower-only fits, and skipped
+    `W_to_cand`. Policy optimization therefore saw Q = 0.5 and a zero gradient
+    with respect to the policy.
+  - The unused joint soft encoder is no longer evaluated in tower-only mode.
+  - A new test checks that soft one-hot policies reproduce the hard tower
+    prediction and that the policy gradient is nonzero.
+- Tower-only training skips the joint encoder pass whose output it discarded.
+  The pass stayed alive through its MoE routing statistics, which also mixed
+  joint-sequence loads into load balancing. Step-1 loss is unchanged and d120
+  training runs 1.20x faster.
+- GPU training launched from R no longer fails on its first step with the
+  Pallas expert kernel. `reticulate::import_from_path` takes `inst/python` off
+  `sys.path` again, so the trace-time import of `strategize_moe_gmm` raised
+  `ModuleNotFoundError`; `strategize_moe` now loads it by file path.
+- Pallas device registration skips ROCm devices, whose compute capability is a
+  gfx name (e.g. `gfx1102`) rather than `major.minor`.
+- ROCm training with `svi_weight_decay > 0` no longer faults on the first
+  update. With weight decay, the Muon update and the update-ratio diagnostic
+  both read the parameters, and XLA fused every leaf's update into the
+  single-block parameter-norm reduction (71 operands), which the RX 7600M XT
+  could not launch (`ROCM_ERROR_LAUNCH_OUT_OF_RESOURCES`, then an illegal
+  opcode). The diagnostic now reads the parameters through
+  `jax.lax.optimization_barrier`; updates are unchanged, and weight decay 0.1
+  trains at the weight-decay-0 speed.
+
 # Development: October 19, 2026 exact grouped MoE GEMM and one level-text gather
 
 - Training traces on GPU compute routed experts with an exact grouped GEMM
