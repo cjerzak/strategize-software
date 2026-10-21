@@ -16997,7 +16997,8 @@ generate_ModelOutcome_neural <- function(){
                                  experiment_idx = NULL, stage_idx, matchup_idx = NULL,
                                  return_tokens = FALSE, context_present = NULL,
                                  schema_dropout_context = NULL,
-                                 schema_dropout_candidate = NULL) {
+                                 schema_dropout_candidate = NULL,
+                                 skip_transformer = FALSE) {
       N_batch <- ai(Xa$shape[[1]])
       choice_tok <- neural_build_choice_token(model_info_local, params_view)
       choice_tok <- choice_tok * strenv$jnp$ones(list(N_batch, 1L, 1L))
@@ -17021,6 +17022,12 @@ generate_ModelOutcome_neural <- function(){
                                    schema_dropout_masks = schema_dropout_candidate)
       cand_tokens <- cand_info$tokens
       cand_mask <- cand_info$mask
+      if (isTRUE(skip_transformer)) {
+        # Tower-only fits reuse only these token builds. The joint trunk pass
+        # would feed discarded logits, yet its MoE routing statistics would
+        # keep it live (router-bias updates and the load-balance factor).
+        return(list(phi = NULL, context_info = ctx_info, candidate_info = cand_info))
+      }
       seq_info <- neural_pack_candidate_sequence(
         choice_tok = choice_tok,
         choice_mask = choice_mask,
@@ -17056,7 +17063,8 @@ generate_ModelOutcome_neural <- function(){
                                       context_present = NULL,
                                       schema_dropout_context = NULL,
                                       schema_dropout_left = NULL,
-                                      schema_dropout_right = NULL) {
+                                      schema_dropout_right = NULL,
+                                      skip_transformer = FALSE) {
       N_batch <- ai(Xl$shape[[1]])
       X_all <- strenv$jnp$concatenate(list(Xl, Xr), axis = 0L)
       p_all <- strenv$jnp$concatenate(list(pl, pr), axis = 0L)
@@ -17092,15 +17100,16 @@ generate_ModelOutcome_neural <- function(){
                                     stage_all, matchup_all,
                                     context_present = context_present_all,
                                     schema_dropout_context = schema_dropout_context_all,
-                                    schema_dropout_candidate = schema_dropout_all)
+                                    schema_dropout_candidate = schema_dropout_all,
+                                    skip_transformer = skip_transformer)
         phi_all <- enc_all$phi
         cand_all <- NULL
       }
       idx_left <- strenv$jnp$arange(N_batch)
       idx_right <- strenv$jnp$arange(N_batch, 2L * N_batch)
       out <- list(
-        phi_left = strenv$jnp$take(phi_all, idx_left, axis = 0L),
-        phi_right = strenv$jnp$take(phi_all, idx_right, axis = 0L),
+        phi_left = if (!is.null(phi_all)) strenv$jnp$take(phi_all, idx_left, axis = 0L),
+        phi_right = if (!is.null(phi_all)) strenv$jnp$take(phi_all, idx_right, axis = 0L),
         context_info = neural_take_token_info(enc_all$context_info, idx_left),
         candidate_info = enc_all$candidate_info
       )
@@ -17212,13 +17221,18 @@ generate_ModelOutcome_neural <- function(){
           dtype = logits$dtype
         )
       } else {
+        # Tower-only logits come from the towers alone, so skip the joint pass.
+        tower_fast <- neural_tower_only(params_view) && !isTRUE(use_cross_attn) &&
+          !isTRUE(use_cross_term) &&
+          isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))
         phi_pair <- encode_candidate_pair(Xl, Xr, pl, pr, resp_p, resp_c,
                                           resp_c_present, experiment_idx,
                                           stage_idx, matchup_idx,
                                           context_present = context_present,
                                           schema_dropout_context = schema_dropout_context,
                                           schema_dropout_left = schema_dropout_left,
-                                          schema_dropout_right = schema_dropout_right)
+                                          schema_dropout_right = schema_dropout_right,
+                                          skip_transformer = tower_fast)
         phi_l <- phi_pair$phi_left
         phi_r <- phi_pair$phi_right
         if (isTRUE(use_cross_attn)) {
@@ -17237,21 +17251,11 @@ generate_ModelOutcome_neural <- function(){
             phi_r, ctx_right, params_view, transformer_model_info$model_dims
           )
         }
-        u_l <- neural_linear_head(
-          phi_l,
-          W_out,
-          b_out,
-          model_info = model_info_local,
-          pairwise_obs = TRUE
+        logits <- if (!tower_fast) neural_linear_head(
+          phi_l, W_out, b_out, model_info = model_info_local, pairwise_obs = TRUE
+        ) - neural_linear_head(
+          phi_r, W_out, b_out, model_info = model_info_local, pairwise_obs = TRUE
         )
-        u_r <- neural_linear_head(
-          phi_r,
-          W_out,
-          b_out,
-          model_info = model_info_local,
-          pairwise_obs = TRUE
-        )
-        logits <- u_l - u_r
         if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
           low_rank_term <- neural_low_rank_pair_delta_prepared(
             params = params_view,
@@ -17271,8 +17275,8 @@ generate_ModelOutcome_neural <- function(){
             schema_dropout_left = schema_dropout_left,
             schema_dropout_right = schema_dropout_right,
             transformer_model_info = transformer_model_info,
-            out_dim = ai(logits$shape[[2]]),
-            dtype = logits$dtype,
+            out_dim = ai(W_out$shape[[2]]),
+            dtype = if (is.null(logits)) ddtype_ else logits$dtype,
             context_info = phi_pair$context_info,
             candidate_info = phi_pair$candidate_info,
             surrogate = neural_has_tower_sufficiency(params_view)
@@ -17365,23 +17369,29 @@ generate_ModelOutcome_neural <- function(){
         return_mask = TRUE,
         schema_dropout_masks = schema_dropout_candidate
       )
-      seq_info <- neural_pack_candidate_sequence(
-        choice_tok = choice_tok,
-        choice_mask = choice_mask,
-        ctx_tokens = ctx_info$tokens %||% NULL,
-        ctx_mask = ctx_info$mask %||% NULL,
-        cand_tokens = cand_info$tokens,
-        cand_mask = cand_info$mask,
-        model_info = model_info_local,
-        preserve_candidate_tail = FALSE
-      )
-      transformer_out <- run_transformer(seq_info$tokens, token_mask = seq_info$mask, return_details = TRUE)
-      phi <- neural_extract_choice_representation(
-        transformer_out,
-        token_mask = seq_info$mask,
-        include_tail_summary = neural_fused_classification_summary_enabled(model_info_local)
-      )
-      logits <- neural_linear_head(phi, W_out, b_out)
+      # Tower-only logits come from the towers alone, so skip the joint pass.
+      tower_fast <- neural_tower_only(params_view) &&
+        isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))
+      logits <- NULL
+      if (!tower_fast) {
+        seq_info <- neural_pack_candidate_sequence(
+          choice_tok = choice_tok,
+          choice_mask = choice_mask,
+          ctx_tokens = ctx_info$tokens %||% NULL,
+          ctx_mask = ctx_info$mask %||% NULL,
+          cand_tokens = cand_info$tokens,
+          cand_mask = cand_info$mask,
+          model_info = model_info_local,
+          preserve_candidate_tail = FALSE
+        )
+        transformer_out <- run_transformer(seq_info$tokens, token_mask = seq_info$mask, return_details = TRUE)
+        phi <- neural_extract_choice_representation(
+          transformer_out,
+          token_mask = seq_info$mask,
+          include_tail_summary = neural_fused_classification_summary_enabled(model_info_local)
+        )
+        logits <- neural_linear_head(phi, W_out, b_out)
+      }
       if (isTRUE(neural_has_low_rank_interaction(params_view, model_info_local))) {
         logits <- neural_combine_tower_term(logits, neural_low_rank_single_utility_prepared(
           params = params_view,
@@ -17395,8 +17405,8 @@ generate_ModelOutcome_neural <- function(){
           schema_dropout_context = schema_dropout_context,
           schema_dropout_candidate = schema_dropout_candidate,
           transformer_model_info = transformer_model_info,
-          out_dim = ai(logits$shape[[2]]),
-          dtype = logits$dtype,
+          out_dim = ai(W_out$shape[[2]]),
+          dtype = if (is.null(logits)) ddtype_ else logits$dtype,
           context_info = ctx_info, candidate_info = cand_info
         ), params_view)
       }
